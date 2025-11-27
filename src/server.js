@@ -24,7 +24,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
 app.use(express.json());
 // 過濾掉 /ws 請求的日誌，避免日誌被刷屏
 app.use(
