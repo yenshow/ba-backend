@@ -3,6 +3,8 @@ const cors = require("cors");
 const morgan = require("morgan");
 const config = require("./config");
 const modbusRoutes = require("./routes/modbusRoutes");
+const userRoutes = require("./routes/userRoutes");
+const db = require("./database/db");
 
 const app = express();
 
@@ -16,6 +18,7 @@ app.use(
 );
 
 app.use("/api/modbus", modbusRoutes);
+app.use("/api/users", userRoutes);
 
 // 處理 WebSocket 升級請求（來自 Nuxt Content 熱重載等）
 // 靜默返回 404，不記錄日誌
@@ -26,13 +29,80 @@ app.get("/ws", (_req, res) => {
 app.use((err, _req, res, _next) => {
 	// eslint-disable-next-line no-console
 	console.error(err);
-	res.status(500).json({
-		message: "Modbus request failed",
-		details: err.message
+	
+	// 根據錯誤類型決定 HTTP 狀態碼
+	let statusCode = 500;
+	
+	// 認證錯誤
+	if (err.message && (
+		err.message.includes("未提供認證") ||
+		err.message.includes("無效的 Token") ||
+		err.message.includes("認證失敗")
+	)) {
+		statusCode = 401; // Unauthorized
+	} 
+	// 權限錯誤
+	else if (err.message && (
+		err.message.includes("權限不足") ||
+		err.message.includes("只有管理員") ||
+		err.message.includes("只能修改")
+	)) {
+		statusCode = 403; // Forbidden
+	}
+	// 參數錯誤
+	else if (err.message && (
+		err.message.includes("must be") ||
+		err.message.includes("required") ||
+		err.message.includes("必須") ||
+		err.message.includes("格式不正確") ||
+		err.message.includes("已存在") ||
+		err.message.includes("不存在")
+	)) {
+		statusCode = 400; // Bad Request
+	}
+	// 服務不可用（Modbus 相關）
+	else if (err.message && (
+		err.message.includes("連接超時") ||
+		err.message.includes("連接被拒絕") ||
+		err.message.includes("無法到達設備") ||
+		err.message.includes("連接已斷開")
+	)) {
+		statusCode = 503; // Service Unavailable
+	}
+	
+	res.status(statusCode).json({
+		error: true,
+		message: err.message || "Request failed",
+		details: err.message,
+		timestamp: new Date().toISOString()
 	});
 });
 
+// 啟動伺服器
+async function startServer() {
+	// 測試資料庫連線
+	const dbConnected = await db.testConnection();
+	if (!dbConnected) {
+		console.error("⚠️  警告: 資料庫連線失敗，但伺服器仍會啟動");
+	}
+
 app.listen(config.serverPort, () => {
 	// eslint-disable-next-line no-console
-	console.log(`Modbus test backend listening on port ${config.serverPort}`);
+		console.log(`🚀 BA 系統後端服務已啟動，監聽 port ${config.serverPort}`);
 });
+}
+
+// 優雅關閉
+process.on("SIGTERM", async () => {
+	console.log("收到 SIGTERM，正在關閉伺服器...");
+	await db.close();
+	process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+	console.log("收到 SIGINT，正在關閉伺服器...");
+	await db.close();
+	process.exit(0);
+});
+
+startServer();
