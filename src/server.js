@@ -8,7 +8,23 @@ const db = require("./database/db");
 
 const app = express();
 
-app.use(cors());
+const allowedOrigins = ["http://localhost:3000", "http://192.168.10.124:3000"];
+const corsOptions = {
+	origin: (origin, callback) => {
+		// 允許無來源（如 Postman）以及白名單網域
+		if (!origin || allowedOrigins.includes(origin)) {
+			return callback(null, true);
+		}
+		return callback(new Error("不被允許的跨域來源"), false);
+	},
+	credentials: true,
+	methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+	allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+	exposedHeaders: ["Authorization"]
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json());
 // 過濾掉 /ws 請求的日誌，避免日誌被刷屏
 app.use(

@@ -18,6 +18,7 @@ cp .env.example .env
 
 | 變數                  | 說明                      | 預設        |
 | --------------------- | ------------------------- | ----------- |
+| `HOST`                | 後端服務監聽位址          | `0.0.0.0`   |
 | `PORT`                | 後端服務監聽 port         | `4000`      |
 | `MODBUS_TIMEOUT`      | Modbus 請求超時時間（ms） | `2000`      |
 | `DB_HOST`             | MySQL 資料庫主機位址      | `127.0.0.1` |
@@ -61,6 +62,7 @@ npm run admin:create
 ```
 
 此命令會引導您輸入：
+
 - 用戶名
 - Email
 - 密碼（至少 6 個字元）
@@ -86,16 +88,16 @@ npm start
 
 ### 用戶管理 API
 
-| Method | Path                    | 說明                 | 認證需求     |
-| ------ | ----------------------- | -------------------- | ------------ |
-| `POST` | `/api/users/register`   | 註冊新用戶           | 無           |
-| `POST` | `/api/users/login`      | 用戶登入             | 無           |
-| `GET`  | `/api/users/me`         | 取得當前用戶資訊     | 需要認證     |
-| `GET`  | `/api/users`            | 取得用戶列表         | 需要管理員   |
-| `GET`  | `/api/users/:id`        | 取得單一用戶         | 需要管理員   |
-| `PUT`  | `/api/users/:id`        | 更新用戶資訊         | 需要認證     |
-| `PUT`  | `/api/users/:id/password` | 更新密碼           | 需要認證     |
-| `DELETE` | `/api/users/:id`      | 刪除用戶             | 需要管理員   |
+| Method   | Path                      | 說明             | 認證需求   |
+| -------- | ------------------------- | ---------------- | ---------- |
+| `POST`   | `/api/users/register`     | 註冊新用戶       | 無         |
+| `POST`   | `/api/users/login`        | 用戶登入         | 無         |
+| `GET`    | `/api/users/me`           | 取得當前用戶資訊 | 需要認證   |
+| `GET`    | `/api/users`              | 取得用戶列表     | 需要管理員 |
+| `GET`    | `/api/users/:id`          | 取得單一用戶     | 需要管理員 |
+| `PUT`    | `/api/users/:id`          | 更新用戶資訊     | 需要認證   |
+| `PUT`    | `/api/users/:id/password` | 更新密碼         | 需要認證   |
+| `DELETE` | `/api/users/:id`          | 刪除用戶         | 需要管理員 |
 
 **認證方式**: 在請求 Header 中加入 `Authorization: Bearer <token>`
 
