@@ -29,47 +29,38 @@ app.get("/ws", (_req, res) => {
 app.use((err, _req, res, _next) => {
 	// eslint-disable-next-line no-console
 	console.error(err);
-	
+
 	// 根據錯誤類型決定 HTTP 狀態碼
 	let statusCode = 500;
-	
+
 	// 認證錯誤
-	if (err.message && (
-		err.message.includes("未提供認證") ||
-		err.message.includes("無效的 Token") ||
-		err.message.includes("認證失敗")
-	)) {
+	if (err.message && (err.message.includes("未提供認證") || err.message.includes("無效的 Token") || err.message.includes("認證失敗"))) {
 		statusCode = 401; // Unauthorized
-	} 
+	}
 	// 權限錯誤
-	else if (err.message && (
-		err.message.includes("權限不足") ||
-		err.message.includes("只有管理員") ||
-		err.message.includes("只能修改")
-	)) {
+	else if (err.message && (err.message.includes("權限不足") || err.message.includes("只有管理員") || err.message.includes("只能修改"))) {
 		statusCode = 403; // Forbidden
 	}
 	// 參數錯誤
-	else if (err.message && (
-		err.message.includes("must be") ||
-		err.message.includes("required") ||
-		err.message.includes("必須") ||
-		err.message.includes("格式不正確") ||
-		err.message.includes("已存在") ||
-		err.message.includes("不存在")
-	)) {
+	else if (
+		err.message &&
+		(err.message.includes("must be") ||
+			err.message.includes("required") ||
+			err.message.includes("必須") ||
+			err.message.includes("格式不正確") ||
+			err.message.includes("已存在") ||
+			err.message.includes("不存在"))
+	) {
 		statusCode = 400; // Bad Request
 	}
 	// 服務不可用（Modbus 相關）
-	else if (err.message && (
-		err.message.includes("連接超時") ||
-		err.message.includes("連接被拒絕") ||
-		err.message.includes("無法到達設備") ||
-		err.message.includes("連接已斷開")
-	)) {
+	else if (
+		err.message &&
+		(err.message.includes("連接超時") || err.message.includes("連接被拒絕") || err.message.includes("無法到達設備") || err.message.includes("連接已斷開"))
+	) {
 		statusCode = 503; // Service Unavailable
 	}
-	
+
 	res.status(statusCode).json({
 		error: true,
 		message: err.message || "Request failed",
@@ -86,10 +77,11 @@ async function startServer() {
 		console.error("⚠️  警告: 資料庫連線失敗，但伺服器仍會啟動");
 	}
 
-app.listen(config.serverPort, () => {
-	// eslint-disable-next-line no-console
-		console.log(`🚀 BA 系統後端服務已啟動，監聽 port ${config.serverPort}`);
-});
+	app.listen(config.serverPort, config.serverHost, () => {
+		// eslint-disable-next-line no-console
+		console.log(`🚀 BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`);
+		console.log(`📍 區域網路連線: http://[您的IP]:${config.serverPort}`);
+	});
 }
 
 // 優雅關閉

@@ -6,13 +6,14 @@ dotenv.config({
 });
 
 const toNumber = (value, fallback) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 module.exports = {
-  serverPort: toNumber(process.env.PORT, 4000),
-  modbus: {
+	serverHost: process.env.HOST || "0.0.0.0",
+	serverPort: toNumber(process.env.PORT, 4000),
+	modbus: {
 		// 設備連線資訊由前端 API 請求中提供，此處僅保留全域設定
 		timeout: toNumber(process.env.MODBUS_TIMEOUT, 2000)
 	},
