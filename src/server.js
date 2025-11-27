@@ -8,14 +8,17 @@ const db = require("./database/db");
 
 const app = express();
 
-const allowedOrigins = ["http://localhost:3000", "http://192.168.10.124:3000"];
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000")
+	.split(",")
+	.map((origin) => origin.trim())
+	.filter(Boolean);
 const corsOptions = {
 	origin: (origin, callback) => {
 		// 允許無來源（如 Postman）以及白名單網域
-		if (!origin || allowedOrigins.includes(origin)) {
+		if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
 			return callback(null, true);
 		}
-		return callback(new Error("不被允許的跨域來源"), false);
+		return callback(new Error(`不被允許的跨域來源: ${origin}`), false);
 	},
 	credentials: true,
 	methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
