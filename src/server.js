@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
+const os = require("os");
 const config = require("./config");
 const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
@@ -87,6 +88,23 @@ app.use((err, _req, res, _next) => {
 	});
 });
 
+// 獲取區域網路 IP 地址
+function getLocalIPAddress() {
+	const interfaces = os.networkInterfaces();
+	const addresses = [];
+
+	for (const name of Object.keys(interfaces)) {
+		for (const iface of interfaces[name]) {
+			// 跳過內部（localhost）和非 IPv4 地址
+			if (iface.family === "IPv4" && !iface.internal) {
+				addresses.push(iface.address);
+			}
+		}
+	}
+
+	return addresses.length > 0 ? addresses[0] : "localhost";
+}
+
 // 啟動伺服器
 async function startServer() {
 	// 測試資料庫連線
@@ -95,10 +113,17 @@ async function startServer() {
 		console.error("⚠️  警告: 資料庫連線失敗，但伺服器仍會啟動");
 	}
 
+	const localIP = getLocalIPAddress();
+
 	app.listen(config.serverPort, config.serverHost, () => {
 		// eslint-disable-next-line no-console
 		console.log(`🚀 BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`);
-		console.log(`📍 區域網路連線: http://[您的IP]:${config.serverPort}`);
+		console.log(`📍 本機連線: http://localhost:${config.serverPort}`);
+		console.log(`📍 區域網路連線: http://${localIP}:${config.serverPort}`);
+		if (localIP !== "localhost") {
+			console.log(`\n💡 其他裝置可透過以下網址訪問:`);
+			console.log(`   http://${localIP}:${config.serverPort}`);
+		}
 	});
 }
 
