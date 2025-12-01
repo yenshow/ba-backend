@@ -11,7 +11,8 @@
     "db:test": "node -e \"require('./src/database/db').testConnection().then(() => process.exit(0)).catch(() => process.exit(1))\"",
     "db:backup": "node scripts/backupData.js",
     "db:cleanup": "node scripts/cleanupOldData.js",
-    "admin:create": "node scripts/createAdmin.js"
+    "admin:create": "node scripts/createAdmin.js",
+    "diagnose": "node scripts/diagnoseConnection.js"
   },
   "keywords": [],
   "author": "",
