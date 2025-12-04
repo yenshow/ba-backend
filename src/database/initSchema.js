@@ -41,18 +41,69 @@ async function initSchema() {
     `);
 		console.log("✅ users 表已建立");
 
-		// 建立 devices 表
+		// 建立 modbus_device_types 表（設備類型：DI/DO or sensor）
+		await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`modbus_device_types\` (
+        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        \`name\` VARCHAR(50) NOT NULL UNIQUE,
+        \`code\` VARCHAR(20) NOT NULL UNIQUE,
+        \`description\` TEXT DEFAULT NULL,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`idx_code\` (\`code\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+		console.log("✅ modbus_device_types 表已建立");
+
+		// 建立 modbus_device_models 表（設備型號）
+		await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`modbus_device_models\` (
+        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        \`name\` VARCHAR(100) NOT NULL,
+        \`manufacturer\` VARCHAR(100) DEFAULT NULL,
+        \`model_number\` VARCHAR(50) DEFAULT NULL,
+        \`description\` TEXT DEFAULT NULL,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`idx_name\` (\`name\`),
+        INDEX \`idx_manufacturer\` (\`manufacturer\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+		console.log("✅ modbus_device_models 表已建立");
+
+		// 建立 modbus_ports 表（端口配置）
+		await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`modbus_ports\` (
+        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        \`port\` INT UNSIGNED NOT NULL UNIQUE,
+        \`name\` VARCHAR(50) DEFAULT NULL,
+        \`description\` TEXT DEFAULT NULL,
+        \`is_default\` BOOLEAN NOT NULL DEFAULT FALSE,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`idx_port\` (\`port\`),
+        INDEX \`idx_is_default\` (\`is_default\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+		console.log("✅ modbus_ports 表已建立");
+
+		// 建立 devices 表（修改後版本，加入型號和類型外鍵）
 		await connection.query(`
       CREATE TABLE IF NOT EXISTS \`devices\` (
         \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
         \`name\` VARCHAR(100) NOT NULL,
-        \`device_type\` VARCHAR(50) NOT NULL,
+        \`model_id\` INT UNSIGNED DEFAULT NULL,
+        \`type_id\` INT UNSIGNED NOT NULL,
         \`modbus_host\` VARCHAR(255) NOT NULL,
         \`modbus_port\` INT UNSIGNED NOT NULL,
+        \`port_id\` INT UNSIGNED DEFAULT NULL,
         \`modbus_unit_id\` INT UNSIGNED NOT NULL,
         \`location\` VARCHAR(255) DEFAULT NULL,
         \`description\` TEXT DEFAULT NULL,
-        \`status\` ENUM('online', 'offline', 'maintenance', 'error') NOT NULL DEFAULT 'offline',
+        \`status\` ENUM('active', 'inactive', 'error') NOT NULL DEFAULT 'inactive',
         \`last_seen_at\` TIMESTAMP NULL DEFAULT NULL,
         \`created_by\` INT UNSIGNED DEFAULT NULL,
         \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -60,11 +111,64 @@ async function initSchema() {
         PRIMARY KEY (\`id\`),
         INDEX \`idx_modbus_connection\` (\`modbus_host\`, \`modbus_port\`, \`modbus_unit_id\`),
         INDEX \`idx_status\` (\`status\`),
-        INDEX \`idx_device_type\` (\`device_type\`),
-        FOREIGN KEY (\`created_by\`) REFERENCES \`users\`(\`id\`) ON DELETE SET NULL
+        INDEX \`idx_type_id\` (\`type_id\`),
+        INDEX \`idx_model_id\` (\`model_id\`),
+        FOREIGN KEY (\`created_by\`) REFERENCES \`users\`(\`id\`) ON DELETE SET NULL,
+        FOREIGN KEY (\`model_id\`) REFERENCES \`modbus_device_models\`(\`id\`) ON DELETE SET NULL,
+        FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT,
+        FOREIGN KEY (\`port_id\`) REFERENCES \`modbus_ports\`(\`id\`) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 		console.log("✅ devices 表已建立");
+
+		// 建立 modbus_device_addresses 表（儲存 DI/DO 位址等內層資料）
+		await connection.query(`
+      CREATE TABLE IF NOT EXISTS \`modbus_device_addresses\` (
+        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        \`device_id\` INT UNSIGNED NOT NULL,
+        \`register_type\` ENUM('coil', 'discrete', 'holding', 'input') NOT NULL,
+        \`address\` INT UNSIGNED NOT NULL,
+        \`length\` INT UNSIGNED NOT NULL DEFAULT 1,
+        \`name\` VARCHAR(100) DEFAULT NULL,
+        \`description\` TEXT DEFAULT NULL,
+        \`is_active\` BOOLEAN NOT NULL DEFAULT TRUE,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`id\`),
+        INDEX \`idx_device_register\` (\`device_id\`, \`register_type\`),
+        INDEX \`idx_address\` (\`address\`),
+        INDEX \`idx_is_active\` (\`is_active\`),
+        FOREIGN KEY (\`device_id\`) REFERENCES \`devices\`(\`id\`) ON DELETE CASCADE,
+        UNIQUE KEY \`unique_device_register_address\` (\`device_id\`, \`register_type\`, \`address\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+		console.log("✅ modbus_device_addresses 表已建立");
+
+		// 插入預設的設備類型資料
+		const deviceTypes = [
+			{ name: "DI/DO", code: "DI_DO", description: "數位輸入/輸出設備" },
+			{ name: "Sensor", code: "SENSOR", description: "感測器設備" }
+		];
+		for (const type of deviceTypes) {
+			await connection.query(
+				"INSERT IGNORE INTO modbus_device_types (name, code, description) VALUES (?, ?, ?)",
+				[type.name, type.code, type.description]
+			);
+		}
+		console.log("✅ 預設設備類型資料已插入");
+
+		// 插入預設的端口資料
+		const ports = [
+			{ port: 502, name: "Modbus TCP 標準端口", description: "Modbus TCP/IP 標準端口", is_default: true },
+			{ port: 503, name: "Modbus TCP 備用端口", description: "Modbus TCP/IP 備用端口", is_default: false }
+		];
+		for (const portData of ports) {
+			await connection.query(
+				"INSERT IGNORE INTO modbus_ports (port, name, description, is_default) VALUES (?, ?, ?, ?)",
+				[portData.port, portData.name, portData.description, portData.is_default]
+			);
+		}
+		console.log("✅ 預設端口資料已插入");
 
 		// 建立 device_data_logs 表（用於儲存歷史資料）
 		await connection.query(`
