@@ -77,31 +77,80 @@ async function initSchema() {
 
 		// 如果 modbus_device_models 表已存在但沒有 type_id 和 port 欄位，則添加它們
 		try {
-			await connection.query(`
-        ALTER TABLE \`modbus_device_models\`
-        ADD COLUMN IF NOT EXISTS \`type_id\` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '設備類型 ID' AFTER \`name\`,
-        ADD COLUMN IF NOT EXISTS \`port\` INT UNSIGNED NOT NULL DEFAULT 502 COMMENT 'Modbus 端口' AFTER \`type_id\`,
-        ADD INDEX IF NOT EXISTS \`idx_type_id\` (\`type_id\`),
-        ADD INDEX IF NOT EXISTS \`idx_port\` (\`port\`)
-      `);
-			// 添加外鍵（如果不存在）
-			try {
+			// 檢查欄位是否存在
+			const [columns] = await connection.query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = ? 
+        AND TABLE_NAME = 'modbus_device_models' 
+        AND COLUMN_NAME IN ('type_id', 'port')
+      `, [config.database.database]);
+			
+			const existingColumns = columns.map(col => col.COLUMN_NAME);
+			
+			// 添加 type_id 欄位（如果不存在）
+			if (!existingColumns.includes('type_id')) {
+				await connection.query(`
+          ALTER TABLE \`modbus_device_models\`
+          ADD COLUMN \`type_id\` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '設備類型 ID' AFTER \`name\`
+        `);
+				console.log("✅ 已添加 type_id 欄位到 modbus_device_models 表");
+			}
+			
+			// 添加 port 欄位（如果不存在）
+			if (!existingColumns.includes('port')) {
+				await connection.query(`
+          ALTER TABLE \`modbus_device_models\`
+          ADD COLUMN \`port\` INT UNSIGNED NOT NULL DEFAULT 502 COMMENT 'Modbus 端口' AFTER \`type_id\`
+        `);
+				console.log("✅ 已添加 port 欄位到 modbus_device_models 表");
+			}
+			
+			// 檢查並添加索引
+			const [indexes] = await connection.query(`
+        SELECT INDEX_NAME 
+        FROM INFORMATION_SCHEMA.STATISTICS 
+        WHERE TABLE_SCHEMA = ? 
+        AND TABLE_NAME = 'modbus_device_models' 
+        AND INDEX_NAME IN ('idx_type_id', 'idx_port')
+      `, [config.database.database]);
+			
+			const existingIndexes = indexes.map(idx => idx.INDEX_NAME);
+			
+			if (!existingIndexes.includes('idx_type_id')) {
+				await connection.query(`
+          ALTER TABLE \`modbus_device_models\`
+          ADD INDEX \`idx_type_id\` (\`type_id\`)
+        `);
+			}
+			
+			if (!existingIndexes.includes('idx_port')) {
+				await connection.query(`
+          ALTER TABLE \`modbus_device_models\`
+          ADD INDEX \`idx_port\` (\`port\`)
+        `);
+			}
+			
+			// 檢查並添加外鍵
+			const [foreignKeys] = await connection.query(`
+        SELECT CONSTRAINT_NAME 
+        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
+        WHERE TABLE_SCHEMA = ? 
+        AND TABLE_NAME = 'modbus_device_models' 
+        AND CONSTRAINT_NAME = 'fk_model_type'
+      `, [config.database.database]);
+			
+			if (foreignKeys.length === 0) {
 				await connection.query(`
           ALTER TABLE \`modbus_device_models\`
           ADD CONSTRAINT \`fk_model_type\` FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT
         `);
-			} catch (fkError) {
-				// 外鍵可能已存在，忽略錯誤
-				if (!fkError.message.includes("Duplicate foreign key")) {
-					console.warn("⚠️  添加外鍵時出現警告:", fkError.message);
-				}
+				console.log("✅ 已添加外鍵約束到 modbus_device_models 表");
 			}
+			
 			console.log("✅ modbus_device_models 表的欄位已更新");
 		} catch (error) {
-			// MySQL 不支援 IF NOT EXISTS，所以如果欄位已存在會報錯，這是正常的
-			if (!error.message.includes("Duplicate column name")) {
-				console.warn("⚠️  更新 modbus_device_models 欄位時出現警告:", error.message);
-			}
+			console.warn("⚠️  更新 modbus_device_models 欄位時出現警告:", error.message);
 		}
 
 		// 建立 modbus_ports 表（端口配置）
