@@ -60,6 +60,7 @@ async function createDevice(deviceData, userId) {
 		name,
 		model_id,
 		type_id,
+		device_type: device_type_from_data,
 		host,
 		modbus_host,
 		port,
@@ -72,21 +73,17 @@ async function createDevice(deviceData, userId) {
 		status = "inactive"
 	} = deviceData;
 
-	// 統一使用後端欄位名稱
+	// 統一使用後端欄位名稱（port 會從 model 繼承，這裡先不處理）
 	const finalHost = modbus_host || host;
-	const finalPort = modbus_port !== undefined ? modbus_port : port;
 	const finalUnitId = modbus_unit_id !== undefined ? modbus_unit_id : unitId;
 
-	// 驗證必填欄位
-	if (!name || !type_id || !finalHost || finalPort === undefined || finalUnitId === undefined) {
-		throw new Error("name, type_id, host (或 modbus_host), port (或 modbus_port), unitId (或 modbus_unit_id) 為必填欄位");
+	// 驗證必填欄位：model_id 是必填的
+	if (!name || !model_id || !finalHost || finalUnitId === undefined) {
+		throw new Error("name, model_id, host (或 modbus_host), unitId (或 modbus_unit_id) 為必填欄位");
 	}
 
 	// 驗證 IP 格式
 	validateIP(finalHost);
-
-	// 驗證端口
-	validatePort(finalPort);
 
 	// 驗證 Unit ID
 	validateUnitId(finalUnitId);
@@ -96,19 +93,26 @@ async function createDevice(deviceData, userId) {
 		validateStatus(status);
 	}
 
-	// 檢查類型是否存在
-	const types = await db.query("SELECT id FROM modbus_device_types WHERE id = ?", [type_id]);
+	// 檢查型號是否存在並獲取型號資訊（包含 type_id 和 port）
+	const models = await db.query("SELECT id, type_id, port FROM modbus_device_models WHERE id = ?", [model_id]);
+	if (models.length === 0) {
+		throw new Error("設備型號不存在");
+	}
+	const model = models[0];
+	
+	// 從型號繼承 type_id 和 port
+	const finalTypeId = type_id || model.type_id;
+	const finalPort = modbus_port !== undefined ? modbus_port : (port !== undefined ? port : model.port);
+
+	// 驗證端口
+	validatePort(finalPort);
+
+	// 檢查類型是否存在並取得 code
+	const types = await db.query("SELECT id, code FROM modbus_device_types WHERE id = ?", [finalTypeId]);
 	if (types.length === 0) {
 		throw new Error("設備類型不存在");
 	}
-
-	// 檢查型號是否存在（如果提供）
-	if (model_id) {
-		const models = await db.query("SELECT id FROM modbus_device_models WHERE id = ?", [model_id]);
-		if (models.length === 0) {
-			throw new Error("設備型號不存在");
-		}
-	}
+	const device_type = types[0].code;
 
 	// 檢查端口是否存在（如果提供）
 	if (port_id) {
@@ -127,11 +131,14 @@ async function createDevice(deviceData, userId) {
 		throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
 	}
 
-	// 建立設備
+	// 建立設備（端口從型號繼承，type_id 也從型號繼承）
+	const finalDeviceType = device_type_from_data || device_type;
+	const insertFields = ["name", "model_id", "type_id", "device_type", "modbus_host", "modbus_port", "port_id", "modbus_unit_id", "location", "description", "status", "created_by"];
+	const insertValues = [name, model_id, finalTypeId, finalDeviceType || null, finalHost, finalPort, port_id || null, finalUnitId, location || null, description || null, status, userId || null];
+	
 	const result = await db.query(
-		`INSERT INTO devices (name, model_id, type_id, modbus_host, modbus_port, port_id, modbus_unit_id, location, description, status, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		[name, model_id || null, type_id, finalHost, finalPort, port_id || null, finalUnitId, location || null, description || null, status, userId || null]
+		`INSERT INTO devices (${insertFields.join(", ")}) VALUES (${insertFields.map(() => "?").join(", ")})`,
+		insertValues
 	);
 
 	// 取得建立的設備（包含關聯資料）
@@ -264,7 +271,6 @@ async function updateDevice(deviceId, updateData, userId) {
 
 	// 統一使用後端欄位名稱（如果提供則使用，否則為 undefined）
 	const finalHost = modbus_host !== undefined ? modbus_host : host;
-	const finalPort = modbus_port !== undefined ? modbus_port : port;
 	const finalUnitId = modbus_unit_id !== undefined ? modbus_unit_id : unitId;
 
 	// 檢查設備是否存在
@@ -273,11 +279,6 @@ async function updateDevice(deviceId, updateData, userId) {
 	// 驗證 IP 格式（如果提供）
 	if (finalHost !== undefined) {
 		validateIP(finalHost);
-	}
-
-	// 驗證端口（如果提供）
-	if (finalPort !== undefined) {
-		validatePort(finalPort);
 	}
 
 	// 驗證 Unit ID（如果提供）
@@ -290,20 +291,53 @@ async function updateDevice(deviceId, updateData, userId) {
 		validateStatus(status);
 	}
 
-	// 檢查類型是否存在（如果提供）
-	if (type_id) {
-		const types = await db.query("SELECT id FROM modbus_device_types WHERE id = ?", [type_id]);
-		if (types.length === 0) {
-			throw new Error("設備類型不存在");
-		}
-	}
+	// 處理 model_id：如果更新 model_id，從型號獲取 type_id 和 port
+	let finalModelId = model_id !== undefined ? model_id : existingDevice.model_id;
+	let finalTypeId = type_id;
+	let finalPort;
+	let device_type;
 
-	// 檢查型號是否存在（如果提供）
-	if (model_id !== undefined && model_id !== null) {
-		const models = await db.query("SELECT id FROM modbus_device_models WHERE id = ?", [model_id]);
+	if (finalModelId) {
+		// 檢查型號是否存在並獲取型號資訊
+		const models = await db.query("SELECT id, type_id, port FROM modbus_device_models WHERE id = ?", [finalModelId]);
 		if (models.length === 0) {
 			throw new Error("設備型號不存在");
 		}
+		const model = models[0];
+		// 從型號繼承 type_id 和 port（端口由型號綁定，不可手動修改）
+		finalTypeId = type_id || model.type_id;
+		// 如果更新了 model_id，強制使用型號的 port；否則如果提供了 port，使用提供的值；否則使用型號的 port
+		if (model_id !== undefined && model_id !== existingDevice.model_id) {
+			// 更新型號時，強制使用型號的端口
+			finalPort = model.port;
+		} else {
+			// 沒有更新型號，但可以手動提供端口（向後兼容）
+			finalPort = modbus_port !== undefined ? modbus_port : (port !== undefined ? port : model.port);
+		}
+	} else {
+		// 如果沒有 model_id，使用原有的邏輯（向後兼容）
+		finalPort = modbus_port !== undefined ? modbus_port : (port !== undefined ? port : existingDevice.port);
+		if (finalTypeId) {
+			const types = await db.query("SELECT id, code FROM modbus_device_types WHERE id = ?", [finalTypeId]);
+			if (types.length === 0) {
+				throw new Error("設備類型不存在");
+			}
+			device_type = types[0].code;
+		}
+	}
+
+	// 如果從型號獲取了 type_id，獲取對應的 device_type
+	if (finalTypeId && !device_type) {
+		const types = await db.query("SELECT id, code FROM modbus_device_types WHERE id = ?", [finalTypeId]);
+		if (types.length === 0) {
+			throw new Error("設備類型不存在");
+		}
+		device_type = types[0].code;
+	}
+
+	// 驗證端口（從型號繼承或手動提供）
+	if (finalPort !== undefined) {
+		validatePort(finalPort);
 	}
 
 	// 檢查端口是否存在（如果提供）
@@ -339,14 +373,21 @@ async function updateDevice(deviceId, updateData, userId) {
 		params.push(name);
 	}
 
-	if (model_id !== undefined) {
+	if (finalModelId !== undefined) {
 		updates.push("model_id = ?");
-		params.push(model_id || null);
+		params.push(finalModelId || null);
 	}
 
-	if (type_id !== undefined) {
+	// 如果從型號獲取了 type_id，更新它
+	if (finalTypeId !== undefined && finalTypeId !== existingDevice.type_id) {
 		updates.push("type_id = ?");
-		params.push(type_id);
+		params.push(finalTypeId);
+	}
+
+	// 如果從型號獲取了 device_type，更新它
+	if (device_type !== undefined) {
+		updates.push("device_type = ?");
+		params.push(device_type);
 	}
 
 	if (finalHost !== undefined) {
@@ -354,7 +395,8 @@ async function updateDevice(deviceId, updateData, userId) {
 		params.push(finalHost);
 	}
 
-	if (finalPort !== undefined) {
+	// 端口從型號繼承，如果型號有變更，必須更新端口
+	if (finalPort !== undefined && finalPort !== existingDevice.port) {
 		updates.push("modbus_port = ?");
 		params.push(finalPort);
 	}

@@ -61,17 +61,48 @@ async function initSchema() {
       CREATE TABLE IF NOT EXISTS \`modbus_device_models\` (
         \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
         \`name\` VARCHAR(100) NOT NULL,
-        \`manufacturer\` VARCHAR(100) DEFAULT NULL,
-        \`model_number\` VARCHAR(50) DEFAULT NULL,
-        \`description\` TEXT DEFAULT NULL,
+        \`type_id\` INT UNSIGNED NOT NULL COMMENT '設備類型 ID (DI/DO or Sensor)',
+        \`port\` INT UNSIGNED NOT NULL DEFAULT 502 COMMENT 'Modbus 端口',
+        \`description\` TEXT DEFAULT NULL COMMENT '備註',
         \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (\`id\`),
         INDEX \`idx_name\` (\`name\`),
-        INDEX \`idx_manufacturer\` (\`manufacturer\`)
+        INDEX \`idx_type_id\` (\`type_id\`),
+        INDEX \`idx_port\` (\`port\`),
+        FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 		console.log("✅ modbus_device_models 表已建立");
+
+		// 如果 modbus_device_models 表已存在但沒有 type_id 和 port 欄位，則添加它們
+		try {
+			await connection.query(`
+        ALTER TABLE \`modbus_device_models\`
+        ADD COLUMN IF NOT EXISTS \`type_id\` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '設備類型 ID' AFTER \`name\`,
+        ADD COLUMN IF NOT EXISTS \`port\` INT UNSIGNED NOT NULL DEFAULT 502 COMMENT 'Modbus 端口' AFTER \`type_id\`,
+        ADD INDEX IF NOT EXISTS \`idx_type_id\` (\`type_id\`),
+        ADD INDEX IF NOT EXISTS \`idx_port\` (\`port\`)
+      `);
+			// 添加外鍵（如果不存在）
+			try {
+				await connection.query(`
+          ALTER TABLE \`modbus_device_models\`
+          ADD CONSTRAINT \`fk_model_type\` FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT
+        `);
+			} catch (fkError) {
+				// 外鍵可能已存在，忽略錯誤
+				if (!fkError.message.includes("Duplicate foreign key")) {
+					console.warn("⚠️  添加外鍵時出現警告:", fkError.message);
+				}
+			}
+			console.log("✅ modbus_device_models 表的欄位已更新");
+		} catch (error) {
+			// MySQL 不支援 IF NOT EXISTS，所以如果欄位已存在會報錯，這是正常的
+			if (!error.message.includes("Duplicate column name")) {
+				console.warn("⚠️  更新 modbus_device_models 欄位時出現警告:", error.message);
+			}
+		}
 
 		// 建立 modbus_ports 表（端口配置）
 		await connection.query(`
@@ -97,8 +128,9 @@ async function initSchema() {
         \`name\` VARCHAR(100) NOT NULL,
         \`model_id\` INT UNSIGNED DEFAULT NULL,
         \`type_id\` INT UNSIGNED NOT NULL,
+        \`device_type\` VARCHAR(50) DEFAULT NULL,
         \`modbus_host\` VARCHAR(255) NOT NULL,
-        \`modbus_port\` INT UNSIGNED NOT NULL,
+        \`modbus_port\` INT UNSIGNED NOT NULL COMMENT '端口由型號綁定，從 model 繼承',
         \`port_id\` INT UNSIGNED DEFAULT NULL,
         \`modbus_unit_id\` INT UNSIGNED NOT NULL,
         \`location\` VARCHAR(255) DEFAULT NULL,
@@ -113,6 +145,7 @@ async function initSchema() {
         INDEX \`idx_status\` (\`status\`),
         INDEX \`idx_type_id\` (\`type_id\`),
         INDEX \`idx_model_id\` (\`model_id\`),
+        INDEX \`idx_device_type\` (\`device_type\`),
         FOREIGN KEY (\`created_by\`) REFERENCES \`users\`(\`id\`) ON DELETE SET NULL,
         FOREIGN KEY (\`model_id\`) REFERENCES \`modbus_device_models\`(\`id\`) ON DELETE SET NULL,
         FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT,
@@ -120,6 +153,21 @@ async function initSchema() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 		console.log("✅ devices 表已建立");
+
+		// 如果 devices 表已存在但沒有 device_type 欄位，則添加它
+		try {
+			await connection.query(`
+        ALTER TABLE \`devices\` 
+        ADD COLUMN IF NOT EXISTS \`device_type\` VARCHAR(50) DEFAULT NULL AFTER \`type_id\`,
+        ADD INDEX IF NOT EXISTS \`idx_device_type\` (\`device_type\`)
+      `);
+			console.log("✅ devices 表的 device_type 欄位已更新");
+		} catch (error) {
+			// MySQL 不支援 IF NOT EXISTS，所以如果欄位已存在會報錯，這是正常的
+			if (!error.message.includes("Duplicate column name")) {
+				console.warn("⚠️  更新 device_type 欄位時出現警告:", error.message);
+			}
+		}
 
 		// 建立 modbus_device_addresses 表（儲存 DI/DO 位址等內層資料）
 		await connection.query(`

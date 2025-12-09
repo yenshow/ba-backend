@@ -1,6 +1,8 @@
 const express = require("express");
 const modbusClient = require("../services/modbusClient");
 const modbusDeviceService = require("../services/modbusDeviceService");
+const deviceTypeService = require("../services/deviceTypeService");
+const deviceModelService = require("../services/deviceModelService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 
 const router = express.Router();
@@ -195,6 +197,111 @@ router.delete("/devices/:id", authenticate, requireAdmin, async (req, res, next)
 		const result = await modbusDeviceService.deleteDevice(deviceId);
 		res.json(result);
 	} catch (error) {
+		next(error);
+	}
+});
+
+// ==================== 設備類型讀取路由（僅供設備型號管理選擇類型使用）===================
+
+// 取得所有設備類型（公開，不需要認證）- 僅供讀取，用於設備型號管理選擇類型
+router.get("/device-types", async (req, res, next) => {
+	try {
+		const result = await deviceTypeService.getAllDeviceTypes();
+		res.json(result);
+	} catch (error) {
+		next(error);
+	}
+});
+
+// 取得單一設備類型（公開）- 僅供讀取
+router.get("/device-types/:id", async (req, res, next) => {
+	try {
+		const id = parseInt(req.params.id, 10);
+		if (isNaN(id)) {
+			return res.status(400).json({ error: "設備類型 ID 必須是數字" });
+		}
+		const result = await deviceTypeService.getDeviceTypeById(id);
+		res.json(result);
+	} catch (error) {
+		if (error.statusCode === 404) {
+			return res.status(404).json({ error: error.message });
+		}
+		next(error);
+	}
+});
+
+// ==================== 設備型號管理路由 ====================
+
+// 取得所有設備型號（公開）
+router.get("/device-models", async (req, res, next) => {
+	try {
+		const result = await deviceModelService.getAllDeviceModels();
+		res.json(result);
+	} catch (error) {
+		next(error);
+	}
+});
+
+// 取得單一設備型號（公開）
+router.get("/device-models/:id", async (req, res, next) => {
+	try {
+		const id = parseInt(req.params.id, 10);
+		if (isNaN(id)) {
+			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
+		}
+		const result = await deviceModelService.getDeviceModelById(id);
+		res.json(result);
+	} catch (error) {
+		if (error.statusCode === 404) {
+			return res.status(404).json({ error: error.message });
+		}
+		next(error);
+	}
+});
+
+// 建立設備型號（需要管理員權限）
+router.post("/device-models", authenticate, requireAdmin, async (req, res, next) => {
+	try {
+		const result = await deviceModelService.createDeviceModel(req.body, req.user.id);
+		res.status(201).json(result);
+	} catch (error) {
+		if (error.statusCode === 400) {
+			return res.status(400).json({ error: error.message });
+		}
+		next(error);
+	}
+});
+
+// 更新設備型號（需要管理員權限）
+router.put("/device-models/:id", authenticate, requireAdmin, async (req, res, next) => {
+	try {
+		const id = parseInt(req.params.id, 10);
+		if (isNaN(id)) {
+			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
+		}
+		const result = await deviceModelService.updateDeviceModel(id, req.body, req.user.id);
+		res.json(result);
+	} catch (error) {
+		if (error.statusCode === 400 || error.statusCode === 404) {
+			return res.status(error.statusCode).json({ error: error.message });
+		}
+		next(error);
+	}
+});
+
+// 刪除設備型號（需要管理員權限）
+router.delete("/device-models/:id", authenticate, requireAdmin, async (req, res, next) => {
+	try {
+		const id = parseInt(req.params.id, 10);
+		if (isNaN(id)) {
+			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
+		}
+		const result = await deviceModelService.deleteDeviceModel(id);
+		res.json(result);
+	} catch (error) {
+		if (error.statusCode === 400 || error.statusCode === 404) {
+			return res.status(error.statusCode).json({ error: error.message });
+		}
 		next(error);
 	}
 });
