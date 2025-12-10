@@ -3,3 +3,6 @@ node_modules
 .DS_Store
 .vscode
 backups/
+
+# HLS 串流文件（運行時生成，不需要版本控制）
+public/hls/

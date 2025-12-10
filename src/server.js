@@ -2,9 +2,13 @@ const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
 const os = require("os");
+const path = require("path");
 const config = require("./config");
 const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
+const rtspRoutes = require("./routes/rtspRoutes");
+const deviceRoutes = require("./routes/deviceRoutes");
+const rtspStreamService = require("./services/rtspStreamService");
 const db = require("./database/db");
 
 const app = express();
@@ -38,6 +42,27 @@ app.use(
 
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/rtsp", rtspRoutes);
+app.use("/api/devices", deviceRoutes);
+
+// 提供 HLS 串流文件的靜態服務
+app.use(
+	"/hls",
+	express.static(path.join(__dirname, "../public/hls"), {
+		setHeaders: (res, filePath) => {
+			// 設置正確的 MIME 類型
+			if (filePath.endsWith(".m3u8")) {
+				res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+			} else if (filePath.endsWith(".ts")) {
+				res.setHeader("Content-Type", "video/mp2t");
+			}
+			// 允許跨域訪問（CORS）
+			res.setHeader("Access-Control-Allow-Origin", "*");
+			res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+			res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+		}
+	})
+);
 
 // 處理 WebSocket 升級請求（來自 Nuxt Content 熱重載等）
 // 靜默返回 404，不記錄日誌
@@ -130,12 +155,14 @@ async function startServer() {
 // 優雅關閉
 process.on("SIGTERM", async () => {
 	console.log("收到 SIGTERM，正在關閉伺服器...");
+	await rtspStreamService.stopAllStreams();
 	await db.close();
 	process.exit(0);
 });
 
 process.on("SIGINT", async () => {
 	console.log("收到 SIGINT，正在關閉伺服器...");
+	await rtspStreamService.stopAllStreams();
 	await db.close();
 	process.exit(0);
 });

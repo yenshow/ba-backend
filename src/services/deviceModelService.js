@@ -1,55 +1,167 @@
 const db = require("../database/db");
+const { parseConfig, stringifyConfig } = require("../utils/deviceHelpers");
 
-// 取得所有設備型號
-async function getAllDeviceModels() {
+// 取得所有設備型號（支援按類型篩選）
+async function getAllDeviceModels(filters = {}) {
 	try {
-		const models = await db.query(`
-      SELECT 
-        m.id,
-        m.name,
-        m.type_id,
-        m.port,
-        m.description,
-        m.created_at,
-        m.updated_at,
-        t.name as type_name,
-        t.code as type_code
-      FROM modbus_device_models m
-      LEFT JOIN modbus_device_types t ON m.type_id = t.id
-      ORDER BY m.id
-    `);
-		return { device_models: models };
+		const { type_id, type_code } = filters;
+
+		// 先嘗試從 device_models 讀取（新的通用表）
+		let query = `
+			SELECT 
+				dm.*,
+				dt.name as type_name,
+				dt.code as type_code
+			FROM device_models dm
+			INNER JOIN device_types dt ON dm.type_id = dt.id
+			WHERE 1=1
+		`;
+		const params = [];
+
+		if (type_id) {
+			query += " AND dm.type_id = ?";
+			params.push(type_id);
+		}
+
+		if (type_code) {
+			query += " AND dt.code = ?";
+			params.push(type_code);
+		}
+
+		query += " ORDER BY dm.id";
+
+		let models = await db.query(query, params);
+
+		// 如果 device_models 表不存在或為空，從 modbus_device_models 讀取（向後兼容）
+		if (models.length === 0) {
+			query = `
+				SELECT 
+					m.id,
+					m.name,
+					m.type_id,
+					m.port,
+					m.description,
+					m.created_at,
+					m.updated_at,
+					t.name as type_name,
+					t.code as type_code
+				FROM modbus_device_models m
+				LEFT JOIN modbus_device_types t ON m.type_id = t.id
+				WHERE 1=1
+			`;
+			const modbusParams = [];
+
+			if (type_id) {
+				query += " AND m.type_id = ?";
+				modbusParams.push(type_id);
+			}
+
+			if (type_code) {
+				query += " AND t.code = ?";
+				modbusParams.push(type_code);
+			}
+
+			query += " ORDER BY m.id";
+			models = await db.query(query, modbusParams);
+		}
+
+		// 解析 config JSON（如果存在）
+		const modelsWithConfig = models.map((model) => ({
+			...model,
+			config: parseConfig(model.config)
+		}));
+
+		return { device_models: modelsWithConfig };
 	} catch (error) {
-		console.error("取得設備型號失敗:", error);
-		throw new Error("取得設備型號失敗: " + error.message);
+		// 如果 device_models 表不存在，嘗試從 modbus_device_models 讀取
+		try {
+			const { type_id, type_code } = filters;
+			let query = `
+				SELECT 
+					m.id,
+					m.name,
+					m.type_id,
+					m.port,
+					m.description,
+					m.created_at,
+					m.updated_at,
+					t.name as type_name,
+					t.code as type_code
+				FROM modbus_device_models m
+				LEFT JOIN modbus_device_types t ON m.type_id = t.id
+				WHERE 1=1
+			`;
+			const params = [];
+
+			if (type_id) {
+				query += " AND m.type_id = ?";
+				params.push(type_id);
+			}
+
+			if (type_code) {
+				query += " AND t.code = ?";
+				params.push(type_code);
+			}
+
+			query += " ORDER BY m.id";
+			const models = await db.query(query, params);
+
+			return { device_models: models };
+		} catch (fallbackError) {
+			console.error("取得設備型號失敗:", error);
+			throw new Error("取得設備型號失敗: " + error.message);
+		}
 	}
 }
 
 // 取得單一設備型號
 async function getDeviceModelById(id) {
 	try {
-		const models = await db.query(`
-      SELECT 
-        m.id,
-        m.name,
-        m.type_id,
-        m.port,
-        m.description,
-        m.created_at,
-        m.updated_at,
-        t.name as type_name,
-        t.code as type_code
-      FROM modbus_device_models m
-      LEFT JOIN modbus_device_types t ON m.type_id = t.id
-      WHERE m.id = ?
-    `, [id]);
-		
+		let models = await db.query(
+			`
+			SELECT 
+				dm.*,
+				dt.name as type_name,
+				dt.code as type_code
+			FROM device_models dm
+			INNER JOIN device_types dt ON dm.type_id = dt.id
+			WHERE dm.id = ?
+		`,
+			[id]
+		);
+
+		// 如果 device_models 中找不到，嘗試從 modbus_device_models 讀取
+		if (models.length === 0) {
+			models = await db.query(
+				`
+				SELECT 
+					m.id,
+					m.name,
+					m.type_id,
+					m.port,
+					m.description,
+					m.created_at,
+					m.updated_at,
+					t.name as type_name,
+					t.code as type_code
+				FROM modbus_device_models m
+				LEFT JOIN modbus_device_types t ON m.type_id = t.id
+				WHERE m.id = ?
+			`,
+				[id]
+			);
+		}
+
 		if (models.length === 0) {
 			const error = new Error("設備型號不存在");
 			error.statusCode = 404;
 			throw error;
 		}
-		return { device_model: models[0] };
+
+		const model = models[0];
+		model.config = parseConfig(model.config);
+
+		return { device_model: model };
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
@@ -62,56 +174,60 @@ async function getDeviceModelById(id) {
 // 建立設備型號
 async function createDeviceModel(data, userId) {
 	try {
-		const { name, type_id, port, description } = data;
+		const { name, type_id, description, config } = data;
 
 		// 驗證必填欄位
-		if (!name || !type_id || port === undefined) {
-			const error = new Error("設備型號名稱、類型和端口為必填欄位");
-			error.statusCode = 400;
-			throw error;
+		if (!name || name.trim().length === 0) {
+			throw new Error("設備型號名稱不能為空");
 		}
 
-		// 驗證端口範圍
-		if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-			const error = new Error("端口必須是 1-65535 之間的整數");
-			error.statusCode = 400;
-			throw error;
+		if (!type_id) {
+			throw new Error("設備類型 ID 不能為空");
 		}
 
-		// 檢查類型是否存在
-		const types = await db.query("SELECT id FROM modbus_device_types WHERE id = ?", [type_id]);
+		// 驗證設備類型是否存在
+		const types = await db.query("SELECT id FROM device_types WHERE id = ?", [type_id]);
 		if (types.length === 0) {
-			const error = new Error("設備類型不存在");
-			error.statusCode = 400;
-			throw error;
+			// 嘗試從 modbus_device_types 檢查
+			const modbusTypes = await db.query("SELECT id FROM modbus_device_types WHERE id = ?", [type_id]);
+			if (modbusTypes.length === 0) {
+				throw new Error("設備類型不存在");
+			}
 		}
 
-		// 插入資料
-		const result = await db.query(
-			"INSERT INTO modbus_device_models (name, type_id, port, description) VALUES (?, ?, ?, ?)",
-			[name, type_id, port, description || null]
+		// 嘗試插入到 device_models（新的通用表）
+		let result;
+		try {
+			result = await db.query("INSERT INTO device_models (name, type_id, description, config) VALUES (?, ?, ?, ?)", [
+				name.trim(),
+				type_id,
+				description || null,
+				stringifyConfig(config)
+			]);
+		} catch (insertError) {
+			// 如果 device_models 表不存在，可能需要先創建表
+			throw new Error("設備型號表不存在，請先執行資料庫遷移腳本");
+		}
+
+		const models = await db.query(
+			`
+			SELECT 
+				dm.*,
+				dt.name as type_name,
+				dt.code as type_code
+			FROM device_models dm
+			INNER JOIN device_types dt ON dm.type_id = dt.id
+			WHERE dm.id = ?
+		`,
+			[result.insertId]
 		);
 
-		// 取得新建立的設備型號
-		const models = await db.query(`
-      SELECT 
-        m.id,
-        m.name,
-        m.type_id,
-        m.port,
-        m.description,
-        m.created_at,
-        m.updated_at,
-        t.name as type_name,
-        t.code as type_code
-      FROM modbus_device_models m
-      LEFT JOIN modbus_device_types t ON m.type_id = t.id
-      WHERE m.id = ?
-    `, [result.insertId]);
+		const model = models[0];
+		model.config = parseConfig(model.config);
 
 		return {
 			message: "設備型號建立成功",
-			device_model: models[0]
+			device_model: model
 		};
 	} catch (error) {
 		if (error.statusCode) {
@@ -125,85 +241,93 @@ async function createDeviceModel(data, userId) {
 // 更新設備型號
 async function updateDeviceModel(id, data, userId) {
 	try {
-		const { name, type_id, port, description } = data;
+		const { name, type_id, description, config } = data;
 
 		// 檢查設備型號是否存在
-		const existing = await db.query("SELECT * FROM modbus_device_models WHERE id = ?", [id]);
+		let existing = await db.query("SELECT * FROM device_models WHERE id = ?", [id]);
+
+		// 如果 device_models 中找不到，嘗試從 modbus_device_models 讀取
+		if (existing.length === 0) {
+			existing = await db.query("SELECT * FROM modbus_device_models WHERE id = ?", [id]);
+			if (existing.length > 0) {
+				throw new Error("此設備型號存在於舊表中，請先遷移到新表");
+			}
+		}
+
 		if (existing.length === 0) {
 			const error = new Error("設備型號不存在");
 			error.statusCode = 404;
 			throw error;
 		}
 
-		// 驗證端口（如果提供）
-		if (port !== undefined) {
-			if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-				const error = new Error("端口必須是 1-65535 之間的整數");
-				error.statusCode = 400;
-				throw error;
-			}
-		}
-
-		// 檢查類型是否存在（如果提供）
-		if (type_id !== undefined) {
-			const types = await db.query("SELECT id FROM modbus_device_types WHERE id = ?", [type_id]);
-			if (types.length === 0) {
-				const error = new Error("設備類型不存在");
-				error.statusCode = 400;
-				throw error;
-			}
-		}
-
-		// 構建更新語句
-		const updateFields = [];
-		const updateValues = [];
+		const updates = [];
+		const params = [];
 
 		if (name !== undefined) {
-			updateFields.push("name = ?");
-			updateValues.push(name);
+			if (name.trim().length === 0) {
+				throw new Error("設備型號名稱不能為空");
+			}
+			updates.push("name = ?");
+			params.push(name.trim());
 		}
+
 		if (type_id !== undefined) {
-			updateFields.push("type_id = ?");
-			updateValues.push(type_id);
+			// 驗證設備類型是否存在
+			const types = await db.query("SELECT id FROM device_types WHERE id = ?", [type_id]);
+			if (types.length === 0) {
+				const modbusTypes = await db.query("SELECT id FROM modbus_device_types WHERE id = ?", [type_id]);
+				if (modbusTypes.length === 0) {
+					throw new Error("設備類型不存在");
+				}
+			}
+
+			// 檢查是否有設備使用此型號
+			const devices = await db.query("SELECT id FROM devices WHERE model_id = ? LIMIT 1", [id]);
+			if (devices.length > 0) {
+				throw new Error("無法更改類型：仍有設備使用此型號");
+			}
+
+			updates.push("type_id = ?");
+			params.push(type_id);
 		}
-		if (port !== undefined) {
-			updateFields.push("port = ?");
-			updateValues.push(port);
-		}
+
 		if (description !== undefined) {
-			updateFields.push("description = ?");
-			updateValues.push(description);
+			updates.push("description = ?");
+			params.push(description || null);
 		}
 
-		if (updateFields.length === 0) {
-			const error = new Error("沒有提供要更新的欄位");
-			error.statusCode = 400;
-			throw error;
+		if (config !== undefined) {
+			updates.push("config = ?");
+			params.push(stringifyConfig(config));
 		}
 
-		updateValues.push(id);
-		await db.query(`UPDATE modbus_device_models SET ${updateFields.join(", ")} WHERE id = ?`, updateValues);
+		if (updates.length === 0) {
+			throw new Error("沒有提供要更新的欄位");
+		}
 
-		// 取得更新後的設備型號
-		const models = await db.query(`
-      SELECT 
-        m.id,
-        m.name,
-        m.type_id,
-        m.port,
-        m.description,
-        m.created_at,
-        m.updated_at,
-        t.name as type_name,
-        t.code as type_code
-      FROM modbus_device_models m
-      LEFT JOIN modbus_device_types t ON m.type_id = t.id
-      WHERE m.id = ?
-    `, [id]);
+		params.push(id);
+
+		await db.query(`UPDATE device_models SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, params);
+
+		const models = await db.query(
+			`
+			SELECT 
+				dm.*,
+				dt.name as type_name,
+				dt.code as type_code
+			FROM device_models dm
+			INNER JOIN device_types dt ON dm.type_id = dt.id
+			WHERE dm.id = ?
+		`,
+			[id]
+		);
+
+		const model = models[0];
+		model.config = parseConfig(model.config);
 
 		return {
 			message: "設備型號更新成功",
-			device_model: models[0]
+			device_model: model
 		};
 	} catch (error) {
 		if (error.statusCode) {
@@ -218,8 +342,17 @@ async function updateDeviceModel(id, data, userId) {
 async function deleteDeviceModel(id) {
 	try {
 		// 檢查設備型號是否存在
-		const existing = await db.query("SELECT * FROM modbus_device_models WHERE id = ?", [id]);
-		if (existing.length === 0) {
+		let models = await db.query("SELECT id FROM device_models WHERE id = ?", [id]);
+
+		// 如果 device_models 中找不到，嘗試從 modbus_device_models 讀取
+		if (models.length === 0) {
+			models = await db.query("SELECT id FROM modbus_device_models WHERE id = ?", [id]);
+			if (models.length > 0) {
+				throw new Error("此設備型號存在於舊表中，請先遷移到新表");
+			}
+		}
+
+		if (models.length === 0) {
 			const error = new Error("設備型號不存在");
 			error.statusCode = 404;
 			throw error;
@@ -228,16 +361,13 @@ async function deleteDeviceModel(id) {
 		// 檢查是否有設備使用此型號
 		const devices = await db.query("SELECT id FROM devices WHERE model_id = ? LIMIT 1", [id]);
 		if (devices.length > 0) {
-			const error = new Error("無法刪除：仍有設備使用此型號");
-			error.statusCode = 400;
-			throw error;
+			throw new Error("無法刪除：仍有設備使用此型號");
 		}
 
-		// 刪除設備型號
-		await db.query("DELETE FROM modbus_device_models WHERE id = ?", [id]);
+		await db.query("DELETE FROM device_models WHERE id = ?", [id]);
 
 		return {
-			message: "設備型號刪除成功"
+			message: "設備型號已刪除"
 		};
 	} catch (error) {
 		if (error.statusCode) {
@@ -255,4 +385,3 @@ module.exports = {
 	updateDeviceModel,
 	deleteDeviceModel
 };
-
