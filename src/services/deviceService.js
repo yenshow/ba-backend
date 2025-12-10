@@ -174,18 +174,13 @@ async function createDevice(deviceData, userId) {
 		}
 
 		// 建立設備
-		const result = await db.query("INSERT INTO devices (name, type_id, model_id, description, status, config, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)", [
-			name.trim(),
-			type_id,
-			model_id || null,
-			description || null,
-			status || "inactive",
-			stringifyConfig(config),
-			userId || null
-		]);
+		const result = await db.query(
+			"INSERT INTO devices (name, type_id, model_id, description, status, config, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+			[name.trim(), type_id, model_id || null, description || null, status || "inactive", stringifyConfig(config), userId || null]
+		);
 
 		// 取得建立的設備
-		return await getDeviceById(result.insertId);
+		return await getDeviceById(result[0].id);
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;

@@ -198,7 +198,7 @@ async function createDeviceModel(data, userId) {
 		// 嘗試插入到 device_models（新的通用表）
 		let result;
 		try {
-			result = await db.query("INSERT INTO device_models (name, type_id, description, config) VALUES (?, ?, ?, ?)", [
+			result = await db.query("INSERT INTO device_models (name, type_id, description, config) VALUES (?, ?, ?, ?) RETURNING id", [
 				name.trim(),
 				type_id,
 				description || null,
@@ -219,7 +219,7 @@ async function createDeviceModel(data, userId) {
 			INNER JOIN device_types dt ON dm.type_id = dt.id
 			WHERE dm.id = ?
 		`,
-			[result.insertId]
+			[result[0].id]
 		);
 
 		const model = models[0];

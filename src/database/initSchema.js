@@ -1,244 +1,267 @@
-const mysql = require("mysql2/promise");
+const { Pool } = require("pg");
 const config = require("../config");
 
+// 建立 updated_at 觸發器的輔助函數
+async function createUpdatedAtTrigger(pool, tableName) {
+	await pool.query(`
+		DROP TRIGGER IF EXISTS update_${tableName}_updated_at ON ${tableName};
+		CREATE TRIGGER update_${tableName}_updated_at
+			BEFORE UPDATE ON ${tableName}
+			FOR EACH ROW
+			EXECUTE FUNCTION update_updated_at_column();
+	`);
+}
+
 async function initSchema() {
-	let connection;
+	const pool = new Pool({
+		host: config.database.host,
+		port: config.database.port,
+		user: config.database.user,
+		password: config.database.password,
+		database: "postgres" // 連接到預設資料庫以建立目標資料庫
+	});
 
 	try {
-		// 先連接到 MySQL（不指定資料庫）以建立資料庫
-		connection = await mysql.createConnection({
+		console.log("正在建立資料庫...");
+
+		// 檢查資料庫是否存在
+		const dbCheck = await pool.query("SELECT 1 FROM pg_database WHERE datname = $1", [config.database.database]);
+
+		if (dbCheck.rows.length === 0) {
+			await pool.query(`CREATE DATABASE ${config.database.database}`);
+			console.log(`✅ 資料庫 ${config.database.database} 已建立`);
+		} else {
+			console.log(`✅ 資料庫 ${config.database.database} 已存在`);
+		}
+
+		await pool.end();
+
+		// 連接到目標資料庫
+		const targetPool = new Pool({
 			host: config.database.host,
 			port: config.database.port,
 			user: config.database.user,
-			password: config.database.password
+			password: config.database.password,
+			database: config.database.database
 		});
 
-		console.log("正在建立資料庫...");
+		// 建立 ENUM 類型
+		await targetPool.query(`
+			DO $$ BEGIN
+				CREATE TYPE user_role AS ENUM ('admin', 'operator', 'viewer');
+			EXCEPTION
+				WHEN duplicate_object THEN null;
+			END $$;
+		`);
 
-		// 建立資料庫（如果不存在）
-		await connection.query(`CREATE DATABASE IF NOT EXISTS \`${config.database.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-		console.log(`✅ 資料庫 ${config.database.database} 已準備就緒`);
+		await targetPool.query(`
+			DO $$ BEGIN
+				CREATE TYPE user_status AS ENUM ('active', 'inactive', 'suspended');
+			EXCEPTION
+				WHEN duplicate_object THEN null;
+			END $$;
+		`);
 
-		// 切換到目標資料庫
-		await connection.query(`USE \`${config.database.database}\``);
+		await targetPool.query(`
+			DO $$ BEGIN
+				CREATE TYPE device_status AS ENUM ('active', 'inactive', 'error');
+			EXCEPTION
+				WHEN duplicate_object THEN null;
+			END $$;
+		`);
+
+		await targetPool.query(`
+			DO $$ BEGIN
+				CREATE TYPE register_type AS ENUM ('coil', 'discrete', 'holding', 'input');
+			EXCEPTION
+				WHEN duplicate_object THEN null;
+			END $$;
+		`);
+
+		await targetPool.query(`
+			DO $$ BEGIN
+				CREATE TYPE alert_type AS ENUM ('offline', 'error', 'threshold', 'maintenance');
+			EXCEPTION
+				WHEN duplicate_object THEN null;
+			END $$;
+		`);
+
+		await targetPool.query(`
+			DO $$ BEGIN
+				CREATE TYPE alert_severity AS ENUM ('info', 'warning', 'error', 'critical');
+			EXCEPTION
+				WHEN duplicate_object THEN null;
+			END $$;
+		`);
 
 		// 建立 users 表
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`users\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`username\` VARCHAR(50) NOT NULL UNIQUE,
-        \`email\` VARCHAR(100) NOT NULL UNIQUE,
-        \`password_hash\` VARCHAR(255) NOT NULL,
-        \`role\` ENUM('admin', 'operator', 'viewer') NOT NULL DEFAULT 'viewer',
-        \`status\` ENUM('active', 'inactive', 'suspended') NOT NULL DEFAULT 'active',
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_username\` (\`username\`),
-        INDEX \`idx_email\` (\`email\`),
-        INDEX \`idx_status\` (\`status\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS users (
+				id SERIAL PRIMARY KEY,
+				username VARCHAR(50) NOT NULL UNIQUE,
+				email VARCHAR(100) NOT NULL UNIQUE,
+				password_hash VARCHAR(255) NOT NULL,
+				role user_role NOT NULL DEFAULT 'viewer',
+				status user_status NOT NULL DEFAULT 'active',
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+		// 建立 updated_at 自動更新觸發器函數
+		await targetPool.query(`
+			CREATE OR REPLACE FUNCTION update_updated_at_column()
+			RETURNS TRIGGER AS $$
+			BEGIN
+				NEW.updated_at = CURRENT_TIMESTAMP;
+				RETURN NEW;
+			END;
+			$$ language 'plpgsql';
+		`);
+
+		// 為 users 表建立觸發器
+		await createUpdatedAtTrigger(targetPool, "users");
+
+		// 建立索引
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+			CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+			CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+		`);
+
 		console.log("✅ users 表已建立");
 
-		// 建立 modbus_device_types 表（設備類型：DI/DO or sensor）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`modbus_device_types\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`name\` VARCHAR(50) NOT NULL UNIQUE,
-        \`code\` VARCHAR(20) NOT NULL UNIQUE,
-        \`description\` TEXT DEFAULT NULL,
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_code\` (\`code\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		// 建立 modbus_device_types 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS modbus_device_types (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(50) NOT NULL UNIQUE,
+				code VARCHAR(20) NOT NULL UNIQUE,
+				description TEXT,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+		await createUpdatedAtTrigger(targetPool, "modbus_device_types");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_types_code ON modbus_device_types(code);
+		`);
+
 		console.log("✅ modbus_device_types 表已建立");
 
-		// 建立 modbus_device_models 表（設備型號）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`modbus_device_models\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`name\` VARCHAR(100) NOT NULL,
-        \`type_id\` INT UNSIGNED NOT NULL COMMENT '設備類型 ID (DI/DO or Sensor)',
-        \`port\` INT UNSIGNED NOT NULL DEFAULT 502 COMMENT 'Modbus 端口',
-        \`description\` TEXT DEFAULT NULL COMMENT '備註',
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_name\` (\`name\`),
-        INDEX \`idx_type_id\` (\`type_id\`),
-        INDEX \`idx_port\` (\`port\`),
-        FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		// 建立 modbus_device_models 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS modbus_device_models (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(100) NOT NULL,
+				type_id INTEGER NOT NULL,
+				port INTEGER NOT NULL DEFAULT 502,
+				description TEXT,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT fk_model_type FOREIGN KEY (type_id) REFERENCES modbus_device_types(id) ON DELETE RESTRICT
+			)
+		`);
+
+		await createUpdatedAtTrigger(targetPool, "modbus_device_models");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_models_name ON modbus_device_models(name);
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_models_type_id ON modbus_device_models(type_id);
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_models_port ON modbus_device_models(port);
+		`);
+
 		console.log("✅ modbus_device_models 表已建立");
 
-		// 如果 modbus_device_models 表已存在但沒有 type_id 和 port 欄位，則添加它們
-		try {
-			// 檢查欄位是否存在
-			const [columns] = await connection.query(`
-        SELECT COLUMN_NAME 
-        FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_SCHEMA = ? 
-        AND TABLE_NAME = 'modbus_device_models' 
-        AND COLUMN_NAME IN ('type_id', 'port')
-      `, [config.database.database]);
-			
-			const existingColumns = columns.map(col => col.COLUMN_NAME);
-			
-			// 添加 type_id 欄位（如果不存在）
-			if (!existingColumns.includes('type_id')) {
-				await connection.query(`
-          ALTER TABLE \`modbus_device_models\`
-          ADD COLUMN \`type_id\` INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '設備類型 ID' AFTER \`name\`
-        `);
-				console.log("✅ 已添加 type_id 欄位到 modbus_device_models 表");
-			}
-			
-			// 添加 port 欄位（如果不存在）
-			if (!existingColumns.includes('port')) {
-				await connection.query(`
-          ALTER TABLE \`modbus_device_models\`
-          ADD COLUMN \`port\` INT UNSIGNED NOT NULL DEFAULT 502 COMMENT 'Modbus 端口' AFTER \`type_id\`
-        `);
-				console.log("✅ 已添加 port 欄位到 modbus_device_models 表");
-			}
-			
-			// 檢查並添加索引
-			const [indexes] = await connection.query(`
-        SELECT INDEX_NAME 
-        FROM INFORMATION_SCHEMA.STATISTICS 
-        WHERE TABLE_SCHEMA = ? 
-        AND TABLE_NAME = 'modbus_device_models' 
-        AND INDEX_NAME IN ('idx_type_id', 'idx_port')
-      `, [config.database.database]);
-			
-			const existingIndexes = indexes.map(idx => idx.INDEX_NAME);
-			
-			if (!existingIndexes.includes('idx_type_id')) {
-				await connection.query(`
-          ALTER TABLE \`modbus_device_models\`
-          ADD INDEX \`idx_type_id\` (\`type_id\`)
-        `);
-			}
-			
-			if (!existingIndexes.includes('idx_port')) {
-				await connection.query(`
-          ALTER TABLE \`modbus_device_models\`
-          ADD INDEX \`idx_port\` (\`port\`)
-        `);
-			}
-			
-			// 檢查並添加外鍵
-			const [foreignKeys] = await connection.query(`
-        SELECT CONSTRAINT_NAME 
-        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
-        WHERE TABLE_SCHEMA = ? 
-        AND TABLE_NAME = 'modbus_device_models' 
-        AND CONSTRAINT_NAME = 'fk_model_type'
-      `, [config.database.database]);
-			
-			if (foreignKeys.length === 0) {
-				await connection.query(`
-          ALTER TABLE \`modbus_device_models\`
-          ADD CONSTRAINT \`fk_model_type\` FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT
-        `);
-				console.log("✅ 已添加外鍵約束到 modbus_device_models 表");
-			}
-			
-			console.log("✅ modbus_device_models 表的欄位已更新");
-		} catch (error) {
-			console.warn("⚠️  更新 modbus_device_models 欄位時出現警告:", error.message);
-		}
+		// 建立 modbus_ports 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS modbus_ports (
+				id SERIAL PRIMARY KEY,
+				port INTEGER NOT NULL UNIQUE,
+				name VARCHAR(50),
+				description TEXT,
+				is_default BOOLEAN NOT NULL DEFAULT FALSE,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
 
-		// 建立 modbus_ports 表（端口配置）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`modbus_ports\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`port\` INT UNSIGNED NOT NULL UNIQUE,
-        \`name\` VARCHAR(50) DEFAULT NULL,
-        \`description\` TEXT DEFAULT NULL,
-        \`is_default\` BOOLEAN NOT NULL DEFAULT FALSE,
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_port\` (\`port\`),
-        INDEX \`idx_is_default\` (\`is_default\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		await createUpdatedAtTrigger(targetPool, "modbus_ports");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_modbus_ports_port ON modbus_ports(port);
+			CREATE INDEX IF NOT EXISTS idx_modbus_ports_is_default ON modbus_ports(is_default);
+		`);
+
 		console.log("✅ modbus_ports 表已建立");
 
-		// 建立 devices 表（修改後版本，加入型號和類型外鍵）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`devices\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`name\` VARCHAR(100) NOT NULL,
-        \`model_id\` INT UNSIGNED DEFAULT NULL,
-        \`type_id\` INT UNSIGNED NOT NULL,
-        \`device_type\` VARCHAR(50) DEFAULT NULL,
-        \`modbus_host\` VARCHAR(255) NOT NULL,
-        \`modbus_port\` INT UNSIGNED NOT NULL COMMENT '端口由型號綁定，從 model 繼承',
-        \`port_id\` INT UNSIGNED DEFAULT NULL,
-        \`modbus_unit_id\` INT UNSIGNED NOT NULL,
-        \`location\` VARCHAR(255) DEFAULT NULL,
-        \`description\` TEXT DEFAULT NULL,
-        \`status\` ENUM('active', 'inactive', 'error') NOT NULL DEFAULT 'inactive',
-        \`last_seen_at\` TIMESTAMP NULL DEFAULT NULL,
-        \`created_by\` INT UNSIGNED DEFAULT NULL,
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_modbus_connection\` (\`modbus_host\`, \`modbus_port\`, \`modbus_unit_id\`),
-        INDEX \`idx_status\` (\`status\`),
-        INDEX \`idx_type_id\` (\`type_id\`),
-        INDEX \`idx_model_id\` (\`model_id\`),
-        INDEX \`idx_device_type\` (\`device_type\`),
-        FOREIGN KEY (\`created_by\`) REFERENCES \`users\`(\`id\`) ON DELETE SET NULL,
-        FOREIGN KEY (\`model_id\`) REFERENCES \`modbus_device_models\`(\`id\`) ON DELETE SET NULL,
-        FOREIGN KEY (\`type_id\`) REFERENCES \`modbus_device_types\`(\`id\`) ON DELETE RESTRICT,
-        FOREIGN KEY (\`port_id\`) REFERENCES \`modbus_ports\`(\`id\`) ON DELETE SET NULL
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		// 建立 devices 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS devices (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(100) NOT NULL,
+				model_id INTEGER,
+				type_id INTEGER NOT NULL,
+				device_type VARCHAR(50),
+				modbus_host VARCHAR(255) NOT NULL,
+				modbus_port INTEGER NOT NULL,
+				port_id INTEGER,
+				modbus_unit_id INTEGER NOT NULL,
+				location VARCHAR(255),
+				description TEXT,
+				status device_status NOT NULL DEFAULT 'inactive',
+				config JSONB,
+				last_seen_at TIMESTAMP,
+				created_by INTEGER,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT fk_devices_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+				CONSTRAINT fk_devices_model FOREIGN KEY (model_id) REFERENCES modbus_device_models(id) ON DELETE SET NULL,
+				CONSTRAINT fk_devices_type FOREIGN KEY (type_id) REFERENCES modbus_device_types(id) ON DELETE RESTRICT,
+				CONSTRAINT fk_devices_port FOREIGN KEY (port_id) REFERENCES modbus_ports(id) ON DELETE SET NULL
+			)
+		`);
+
+		await createUpdatedAtTrigger(targetPool, "devices");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_devices_modbus_connection ON devices(modbus_host, modbus_port, modbus_unit_id);
+			CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
+			CREATE INDEX IF NOT EXISTS idx_devices_type_id ON devices(type_id);
+			CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
+			CREATE INDEX IF NOT EXISTS idx_devices_device_type ON devices(device_type);
+		`);
+
 		console.log("✅ devices 表已建立");
 
-		// 如果 devices 表已存在但沒有 device_type 欄位，則添加它
-		try {
-			await connection.query(`
-        ALTER TABLE \`devices\` 
-        ADD COLUMN IF NOT EXISTS \`device_type\` VARCHAR(50) DEFAULT NULL AFTER \`type_id\`,
-        ADD INDEX IF NOT EXISTS \`idx_device_type\` (\`device_type\`)
-      `);
-			console.log("✅ devices 表的 device_type 欄位已更新");
-		} catch (error) {
-			// MySQL 不支援 IF NOT EXISTS，所以如果欄位已存在會報錯，這是正常的
-			if (!error.message.includes("Duplicate column name")) {
-				console.warn("⚠️  更新 device_type 欄位時出現警告:", error.message);
-			}
-		}
+		// 建立 modbus_device_addresses 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS modbus_device_addresses (
+				id SERIAL PRIMARY KEY,
+				device_id INTEGER NOT NULL,
+				register_type register_type NOT NULL,
+				address INTEGER NOT NULL,
+				length INTEGER NOT NULL DEFAULT 1,
+				name VARCHAR(100),
+				description TEXT,
+				is_active BOOLEAN NOT NULL DEFAULT TRUE,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT fk_addresses_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+				CONSTRAINT unique_device_register_address UNIQUE (device_id, register_type, address)
+			)
+		`);
 
-		// 建立 modbus_device_addresses 表（儲存 DI/DO 位址等內層資料）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`modbus_device_addresses\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`device_id\` INT UNSIGNED NOT NULL,
-        \`register_type\` ENUM('coil', 'discrete', 'holding', 'input') NOT NULL,
-        \`address\` INT UNSIGNED NOT NULL,
-        \`length\` INT UNSIGNED NOT NULL DEFAULT 1,
-        \`name\` VARCHAR(100) DEFAULT NULL,
-        \`description\` TEXT DEFAULT NULL,
-        \`is_active\` BOOLEAN NOT NULL DEFAULT TRUE,
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_device_register\` (\`device_id\`, \`register_type\`),
-        INDEX \`idx_address\` (\`address\`),
-        INDEX \`idx_is_active\` (\`is_active\`),
-        FOREIGN KEY (\`device_id\`) REFERENCES \`devices\`(\`id\`) ON DELETE CASCADE,
-        UNIQUE KEY \`unique_device_register_address\` (\`device_id\`, \`register_type\`, \`address\`)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		await createUpdatedAtTrigger(targetPool, "modbus_device_addresses");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_addresses_device_register ON modbus_device_addresses(device_id, register_type);
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_addresses_address ON modbus_device_addresses(address);
+			CREATE INDEX IF NOT EXISTS idx_modbus_device_addresses_is_active ON modbus_device_addresses(is_active);
+		`);
+
 		console.log("✅ modbus_device_addresses 表已建立");
 
 		// 插入預設的設備類型資料
@@ -247,8 +270,10 @@ async function initSchema() {
 			{ name: "Sensor", code: "SENSOR", description: "感測器設備" }
 		];
 		for (const type of deviceTypes) {
-			await connection.query(
-				"INSERT IGNORE INTO modbus_device_types (name, code, description) VALUES (?, ?, ?)",
+			await targetPool.query(
+				`INSERT INTO modbus_device_types (name, code, description) 
+				 VALUES ($1, $2, $3) 
+				 ON CONFLICT (code) DO NOTHING`,
 				[type.name, type.code, type.description]
 			);
 		}
@@ -260,59 +285,65 @@ async function initSchema() {
 			{ port: 503, name: "Modbus TCP 備用端口", description: "Modbus TCP/IP 備用端口", is_default: false }
 		];
 		for (const portData of ports) {
-			await connection.query(
-				"INSERT IGNORE INTO modbus_ports (port, name, description, is_default) VALUES (?, ?, ?, ?)",
+			await targetPool.query(
+				`INSERT INTO modbus_ports (port, name, description, is_default) 
+				 VALUES ($1, $2, $3, $4) 
+				 ON CONFLICT (port) DO NOTHING`,
 				[portData.port, portData.name, portData.description, portData.is_default]
 			);
 		}
 		console.log("✅ 預設端口資料已插入");
 
-		// 建立 device_data_logs 表（用於儲存歷史資料）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`device_data_logs\` (
-        \`id\` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`device_id\` INT UNSIGNED NOT NULL,
-        \`register_type\` ENUM('holding', 'input', 'coil', 'discrete') NOT NULL,
-        \`address\` INT UNSIGNED NOT NULL,
-        \`value\` JSON NOT NULL,
-        \`recorded_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_device_recorded\` (\`device_id\`, \`recorded_at\`),
-        INDEX \`idx_recorded_at\` (\`recorded_at\`),
-        FOREIGN KEY (\`device_id\`) REFERENCES \`devices\`(\`id\`) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		// 建立 device_data_logs 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS device_data_logs (
+				id BIGSERIAL PRIMARY KEY,
+				device_id INTEGER NOT NULL,
+				register_type register_type NOT NULL,
+				address INTEGER NOT NULL,
+				value JSONB NOT NULL,
+				recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT fk_logs_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+			)
+		`);
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_device_data_logs_device_recorded ON device_data_logs(device_id, recorded_at);
+			CREATE INDEX IF NOT EXISTS idx_device_data_logs_recorded_at ON device_data_logs(recorded_at);
+		`);
+
 		console.log("✅ device_data_logs 表已建立");
 
-		// 建立 device_alerts 表（用於告警記錄）
-		await connection.query(`
-      CREATE TABLE IF NOT EXISTS \`device_alerts\` (
-        \`id\` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        \`device_id\` INT UNSIGNED NOT NULL,
-        \`alert_type\` ENUM('offline', 'error', 'threshold', 'maintenance') NOT NULL,
-        \`severity\` ENUM('info', 'warning', 'error', 'critical') NOT NULL DEFAULT 'warning',
-        \`message\` TEXT NOT NULL,
-        \`resolved\` BOOLEAN NOT NULL DEFAULT FALSE,
-        \`resolved_at\` TIMESTAMP NULL DEFAULT NULL,
-        \`resolved_by\` INT UNSIGNED DEFAULT NULL,
-        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (\`id\`),
-        INDEX \`idx_device_resolved\` (\`device_id\`, \`resolved\`),
-        INDEX \`idx_created_at\` (\`created_at\`),
-        FOREIGN KEY (\`device_id\`) REFERENCES \`devices\`(\`id\`) ON DELETE CASCADE,
-        FOREIGN KEY (\`resolved_by\`) REFERENCES \`users\`(\`id\`) ON DELETE SET NULL
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+		// 建立 device_alerts 表
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS device_alerts (
+				id SERIAL PRIMARY KEY,
+				device_id INTEGER NOT NULL,
+				alert_type alert_type NOT NULL,
+				severity alert_severity NOT NULL DEFAULT 'warning',
+				message TEXT NOT NULL,
+				resolved BOOLEAN NOT NULL DEFAULT FALSE,
+				resolved_at TIMESTAMP,
+				resolved_by INTEGER,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT fk_alerts_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+				CONSTRAINT fk_alerts_resolved_by FOREIGN KEY (resolved_by) REFERENCES users(id) ON DELETE SET NULL
+			)
+		`);
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_device_alerts_device_resolved ON device_alerts(device_id, resolved);
+			CREATE INDEX IF NOT EXISTS idx_device_alerts_created_at ON device_alerts(created_at);
+		`);
+
 		console.log("✅ device_alerts 表已建立");
+
+		await targetPool.end();
 
 		console.log("\n🎉 資料庫 Schema 初始化完成！");
 	} catch (error) {
 		console.error("❌ 初始化資料庫 Schema 失敗:", error.message);
 		throw error;
-	} finally {
-		if (connection) {
-			await connection.end();
-		}
 	}
 }
 

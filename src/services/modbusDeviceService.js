@@ -99,10 +99,10 @@ async function createDevice(deviceData, userId) {
 		throw new Error("設備型號不存在");
 	}
 	const model = models[0];
-	
+
 	// 從型號繼承 type_id 和 port
 	const finalTypeId = type_id || model.type_id;
-	const finalPort = modbus_port !== undefined ? modbus_port : (port !== undefined ? port : model.port);
+	const finalPort = modbus_port !== undefined ? modbus_port : port !== undefined ? port : model.port;
 
 	// 驗證端口
 	validatePort(finalPort);
@@ -123,26 +123,53 @@ async function createDevice(deviceData, userId) {
 	}
 
 	// 檢查是否已有相同連接配置的設備（host + port + unitId）
-	const existing = await db.query(
-		"SELECT id FROM devices WHERE modbus_host = ? AND modbus_port = ? AND modbus_unit_id = ?",
-		[finalHost, finalPort, finalUnitId]
-	);
+	const existing = await db.query("SELECT id FROM devices WHERE modbus_host = ? AND modbus_port = ? AND modbus_unit_id = ?", [
+		finalHost,
+		finalPort,
+		finalUnitId
+	]);
 	if (existing.length > 0) {
 		throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
 	}
 
 	// 建立設備（端口從型號繼承，type_id 也從型號繼承）
 	const finalDeviceType = device_type_from_data || device_type;
-	const insertFields = ["name", "model_id", "type_id", "device_type", "modbus_host", "modbus_port", "port_id", "modbus_unit_id", "location", "description", "status", "created_by"];
-	const insertValues = [name, model_id, finalTypeId, finalDeviceType || null, finalHost, finalPort, port_id || null, finalUnitId, location || null, description || null, status, userId || null];
-	
+	const insertFields = [
+		"name",
+		"model_id",
+		"type_id",
+		"device_type",
+		"modbus_host",
+		"modbus_port",
+		"port_id",
+		"modbus_unit_id",
+		"location",
+		"description",
+		"status",
+		"created_by"
+	];
+	const insertValues = [
+		name,
+		model_id,
+		finalTypeId,
+		finalDeviceType || null,
+		finalHost,
+		finalPort,
+		port_id || null,
+		finalUnitId,
+		location || null,
+		description || null,
+		status,
+		userId || null
+	];
+
 	const result = await db.query(
-		`INSERT INTO devices (${insertFields.join(", ")}) VALUES (${insertFields.map(() => "?").join(", ")})`,
+		`INSERT INTO devices (${insertFields.join(", ")}) VALUES (${insertFields.map(() => "?").join(", ")}) RETURNING id`,
 		insertValues
 	);
 
 	// 取得建立的設備（包含關聯資料）
-	return await getDeviceById(result.insertId);
+	return await getDeviceById(result[0].id);
 }
 
 // 取得設備列表
@@ -253,21 +280,7 @@ async function getDeviceById(deviceId) {
 // 更新設備
 async function updateDevice(deviceId, updateData, userId) {
 	// 支援前端發送的欄位名稱（host, port, unitId）和後端欄位名稱（modbus_host, modbus_port, modbus_unit_id）
-	const {
-		name,
-		model_id,
-		type_id,
-		host,
-		modbus_host,
-		port,
-		modbus_port,
-		port_id,
-		unitId,
-		modbus_unit_id,
-		location,
-		description,
-		status
-	} = updateData;
+	const { name, model_id, type_id, host, modbus_host, port, modbus_port, port_id, unitId, modbus_unit_id, location, description, status } = updateData;
 
 	// 統一使用後端欄位名稱（如果提供則使用，否則為 undefined）
 	const finalHost = modbus_host !== undefined ? modbus_host : host;
@@ -312,11 +325,11 @@ async function updateDevice(deviceId, updateData, userId) {
 			finalPort = model.port;
 		} else {
 			// 沒有更新型號，但可以手動提供端口（向後兼容）
-			finalPort = modbus_port !== undefined ? modbus_port : (port !== undefined ? port : model.port);
+			finalPort = modbus_port !== undefined ? modbus_port : port !== undefined ? port : model.port;
 		}
 	} else {
 		// 如果沒有 model_id，使用原有的邏輯（向後兼容）
-		finalPort = modbus_port !== undefined ? modbus_port : (port !== undefined ? port : existingDevice.port);
+		finalPort = modbus_port !== undefined ? modbus_port : port !== undefined ? port : existingDevice.port;
 		if (finalTypeId) {
 			const types = await db.query("SELECT id, code FROM modbus_device_types WHERE id = ?", [finalTypeId]);
 			if (types.length === 0) {
@@ -355,10 +368,12 @@ async function updateDevice(deviceId, updateData, userId) {
 	const checkUnitId = finalUnitId !== undefined ? finalUnitId : existingDevice.unitId;
 
 	if (checkHost !== existingDevice.host || checkPort !== existingDevice.port || checkUnitId !== existingDevice.unitId) {
-		const existing = await db.query(
-			"SELECT id FROM devices WHERE modbus_host = ? AND modbus_port = ? AND modbus_unit_id = ? AND id != ?",
-			[checkHost, checkPort, checkUnitId, deviceId]
-		);
+		const existing = await db.query("SELECT id FROM devices WHERE modbus_host = ? AND modbus_port = ? AND modbus_unit_id = ? AND id != ?", [
+			checkHost,
+			checkPort,
+			checkUnitId,
+			deviceId
+		]);
 		if (existing.length > 0) {
 			throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
 		}
@@ -454,4 +469,3 @@ module.exports = {
 	updateDevice,
 	deleteDevice
 };
-

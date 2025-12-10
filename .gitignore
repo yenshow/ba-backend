@@ -6,3 +6,6 @@ backups/
 
 # HLS 串流文件（運行時生成，不需要版本控制）
 public/hls/
+
+# PostgreSQL 資料目錄（可攜式 PostgreSQL）
+postgres/

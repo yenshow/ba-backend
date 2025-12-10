@@ -188,13 +188,13 @@ async function main() {
 		if (logsBackup.count > 0) {
 			console.log("\n🗑️  刪除舊的 device_data_logs...");
 			const result = await db.query("DELETE FROM device_data_logs WHERE recorded_at < ?", [beforeDate]);
-			console.log(`   ✅ 已刪除 ${result.affectedRows} 筆記錄`);
+			console.log(`   ✅ 已刪除 ${result.rowCount} 筆記錄`);
 		}
 
 		if (alertsBackup.count > 0) {
 			console.log("\n🗑️  刪除已解決的舊 device_alerts...");
 			const result = await db.query("DELETE FROM device_alerts WHERE resolved = TRUE AND created_at < ?", [beforeDate]);
-			console.log(`   ✅ 已刪除 ${result.affectedRows} 筆記錄`);
+			console.log(`   ✅ 已刪除 ${result.rowCount} 筆記錄`);
 		}
 
 		console.log("\n🎉 備份與清理完成！");

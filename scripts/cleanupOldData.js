@@ -42,7 +42,7 @@ async function cleanupOldData(daysToKeep = 30) {
 		if (logsBackup.count > 0) {
 			console.log(`   刪除 ${logsBackup.count} 筆 device_data_logs...`);
 			const result = await db.query("DELETE FROM device_data_logs WHERE recorded_at < ?", [beforeDate]);
-			console.log(`   ✅ 已刪除 ${result.affectedRows} 筆記錄`);
+			console.log(`   ✅ 已刪除 ${result.rowCount} 筆記錄`);
 		} else {
 			console.log("   ℹ️  沒有需要刪除的 device_data_logs");
 		}
@@ -50,7 +50,7 @@ async function cleanupOldData(daysToKeep = 30) {
 		if (alertsBackup.count > 0) {
 			console.log(`   刪除 ${alertsBackup.count} 筆 device_alerts...`);
 			const result = await db.query("DELETE FROM device_alerts WHERE resolved = TRUE AND created_at < ?", [beforeDate]);
-			console.log(`   ✅ 已刪除 ${result.affectedRows} 筆記錄`);
+			console.log(`   ✅ 已刪除 ${result.rowCount} 筆記錄`);
 		} else {
 			console.log("   ℹ️  沒有需要刪除的 device_alerts");
 		}

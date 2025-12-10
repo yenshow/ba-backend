@@ -113,13 +113,15 @@ async function registerUser(userData) {
 	const passwordHash = await hashPassword(password);
 
 	// 建立用戶
-	const result = await db.query(
-		"INSERT INTO users (username, email, password_hash, role, status) VALUES (?, ?, ?, ?, 'active')",
-		[username, email, passwordHash, role]
-	);
+	const result = await db.query("INSERT INTO users (username, email, password_hash, role, status) VALUES (?, ?, ?, ?, 'active') RETURNING id", [
+		username,
+		email,
+		passwordHash,
+		role
+	]);
 
 	// 取得建立的用戶（不包含密碼）
-	const user = await db.query("SELECT id, username, email, role, status, created_at, updated_at FROM users WHERE id = ?", [result.insertId]);
+	const user = await db.query("SELECT id, username, email, role, status, created_at, updated_at FROM users WHERE id = ?", [result[0].id]);
 
 	return user[0];
 }
@@ -173,20 +175,16 @@ async function loginUser(credentials) {
 async function getUsers(filters = {}) {
 	const { role, status, limit, offset, orderBy, order } = filters;
 
-	// 確保 limit 和 offset 是有效的整數（MySQL 需要整數類型）
-	const parsedLimit = limit !== undefined && limit !== null 
-		? Math.max(1, Math.floor(Number(limit))) 
-		: 100;
-	const parsedOffset = offset !== undefined && offset !== null 
-		? Math.max(0, Math.floor(Number(offset))) 
-		: 0;
+	// 確保 limit 和 offset 是有效的整數
+	const parsedLimit = limit !== undefined && limit !== null ? Math.max(1, Math.floor(Number(limit))) : 100;
+	const parsedOffset = offset !== undefined && offset !== null ? Math.max(0, Math.floor(Number(offset))) : 0;
 
 	// 構建查詢條件
 	const { whereClause, params } = buildUserQueryConditions({ role, status });
 
 	// 處理排序：預設按 created_at 降序（新到舊）
 	const validOrderBy = ["id", "created_at", "username", "email"].includes(orderBy) ? orderBy : "created_at";
-	const validOrder = (order === "asc" || order === "desc") ? order : "desc";
+	const validOrder = order === "asc" || order === "desc" ? order : "desc";
 
 	// 查詢用戶列表
 	const query = `SELECT id, username, email, role, status, created_at, updated_at FROM users ${whereClause} ORDER BY ${validOrderBy} ${validOrder} LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
@@ -346,4 +344,3 @@ module.exports = {
 	verifyToken,
 	generateToken
 };
-

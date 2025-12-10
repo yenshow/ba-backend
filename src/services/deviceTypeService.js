@@ -93,9 +93,13 @@ async function createDeviceType(deviceTypeData) {
 			throw new Error("設備類型代碼已存在");
 		}
 
-		const result = await db.query("INSERT INTO device_types (name, code, description) VALUES (?, ?, ?)", [name.trim(), code.trim(), description || null]);
+		const result = await db.query("INSERT INTO device_types (name, code, description) VALUES (?, ?, ?) RETURNING id", [
+			name.trim(),
+			code.trim(),
+			description || null
+		]);
 
-		const deviceTypes = await db.query("SELECT * FROM device_types WHERE id = ?", [result.insertId]);
+		const deviceTypes = await db.query("SELECT * FROM device_types WHERE id = ?", [result[0].id]);
 
 		return {
 			message: "設備類型建立成功",
