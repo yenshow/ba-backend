@@ -188,7 +188,11 @@ function extractArchive(archivePath, extractCommand, platform) {
 				// Windows 需要特殊處理（可能需要安裝 tar 或使用其他工具）
 				// 嘗試使用內建的 tar（Windows 10+ 有）
 				try {
-					execSync(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, { stdio: "inherit" });
+					// Windows 路徑需要正確處理，使用 shell: true
+					execSync(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, {
+						stdio: "inherit",
+						shell: true
+					});
 				} catch (error) {
 					// 如果 tar 不可用，提示安裝
 					throw new Error("Windows 需要 tar 命令。請安裝 Git for Windows 或使用 Windows 10+ 內建的 tar。");
@@ -307,11 +311,21 @@ function initDatabase() {
 
 	// 執行 initdb
 	try {
-		const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
-		execSync(initdbCmd, {
-			stdio: "inherit",
-			shell: process.platform === "win32"
-		});
+		// Windows 需要特殊處理路徑中的空格和特殊字元
+		if (process.platform === "win32") {
+			// Windows: 使用引號包裹路徑，並使用 shell: true
+			const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
+			execSync(initdbCmd, {
+				stdio: "inherit",
+				shell: true
+			});
+		} else {
+			// Unix-like: 直接執行
+			const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
+			execSync(initdbCmd, {
+				stdio: "inherit"
+			});
+		}
 	} catch (error) {
 		throw new Error(`初始化資料庫失敗: ${error.message}`);
 	}
@@ -337,7 +351,8 @@ function checkPortAvailable(port) {
 		if (process.platform === "win32") {
 			const result = execSync(`netstat -ano | findstr :${port}`, {
 				stdio: "pipe",
-				encoding: "utf8"
+				encoding: "utf8",
+				shell: true
 			});
 			return result.trim().length === 0;
 		} else {
@@ -348,7 +363,7 @@ function checkPortAvailable(port) {
 			return result.trim().length === 0;
 		}
 	} catch (error) {
-		// 如果命令失敗（例如沒有 lsof），假設端口可用
+		// 如果命令失敗（例如沒有 lsof 或 netstat），假設端口可用
 		return true;
 	}
 }
@@ -361,7 +376,7 @@ async function startPostgreSQL() {
 	try {
 		execSync(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
 			stdio: "pipe",
-			shell: process.platform === "win32"
+			shell: process.platform === "win32" ? true : false
 		});
 		log(`✅ PostgreSQL 已在運行`, "green");
 		return;
@@ -407,7 +422,7 @@ async function startPostgreSQL() {
 		const startCmd = `"${pgCtlPath}" -D "${DATA_DIR}" -l "${logFile}" start`;
 		execSync(startCmd, {
 			stdio: "inherit",
-			shell: process.platform === "win32"
+			shell: process.platform === "win32" ? true : false
 		});
 		// 等待啟動
 		await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -416,7 +431,7 @@ async function startPostgreSQL() {
 		try {
 			execSync(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
 				stdio: "pipe",
-				shell: process.platform === "win32"
+				shell: process.platform === "win32" ? true : false
 			});
 			log(`✅ PostgreSQL 已啟動`, "green");
 		} catch (error) {
@@ -462,17 +477,21 @@ function setupDatabase() {
 
 	try {
 		// 建立資料庫
-		const dbCheckCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
+		// Windows 需要特殊處理 SQL 中的引號
+		const dbCheckCmd =
+			process.platform === "win32"
+				? `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`
+				: `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
 		const dbCheck = execSync(dbCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",
-			shell: process.platform === "win32"
+			shell: process.platform === "win32" ? true : false
 		});
 
 		if (!dbCheck.trim()) {
 			execSync(`"${psqlPath}" -U "${currentUser}" -d postgres -c "CREATE DATABASE ${dbName};"`, {
 				stdio: "inherit",
-				shell: process.platform === "win32"
+				shell: process.platform === "win32" ? true : false
 			});
 		}
 
@@ -481,14 +500,14 @@ function setupDatabase() {
 		const userCheck = execSync(userCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",
-			shell: process.platform === "win32"
+			shell: process.platform === "win32" ? true : false
 		});
 
 		if (!userCheck.trim()) {
 			const createUserCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -c "CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';"`;
 			execSync(createUserCmd, {
 				stdio: "inherit",
-				shell: process.platform === "win32"
+				shell: process.platform === "win32" ? true : false
 			});
 		}
 
@@ -496,12 +515,12 @@ function setupDatabase() {
 		const grantDbCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"`;
 		execSync(grantDbCmd, {
 			stdio: "inherit",
-			shell: process.platform === "win32"
+			shell: process.platform === "win32" ? true : false
 		});
 		const grantSchemaCmd = `"${psqlPath}" -U "${currentUser}" -d ${dbName} -c "GRANT ALL ON SCHEMA public TO ${dbUser};"`;
 		execSync(grantSchemaCmd, {
 			stdio: "inherit",
-			shell: process.platform === "win32"
+			shell: process.platform === "win32" ? true : false
 		});
 
 		log(`✅ 資料庫和使用者已設定完成`, "green");

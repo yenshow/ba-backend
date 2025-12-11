@@ -19,13 +19,13 @@ try {
 	// 檢查是否在運行
 	execSync(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
 		stdio: "pipe",
-		shell: process.platform === "win32"
+		shell: process.platform === "win32" ? true : false
 	});
 	// 在運行，停止
 	console.log("🛑 停止 PostgreSQL...");
 	execSync(`"${pgCtlPath}" -D "${DATA_DIR}" stop`, {
 		stdio: "inherit",
-		shell: process.platform === "win32"
+		shell: process.platform === "win32" ? true : false
 	});
 	console.log("✅ PostgreSQL 已停止");
 } catch (error) {
