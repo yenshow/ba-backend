@@ -315,10 +315,62 @@ function initDatabase() {
 		if (process.platform === "win32") {
 			// Windows: 使用引號包裹路徑，並使用 shell: true
 			const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
-			execSync(initdbCmd, {
-				stdio: "inherit",
-				shell: true
-			});
+			try {
+				execSync(initdbCmd, {
+					stdio: "inherit",
+					shell: true,
+					encoding: "utf8"
+				});
+			} catch (execError) {
+				// 檢查是否是 DLL 缺失錯誤
+				const errorCode = execError.status || execError.code;
+				const errorOutput = (execError.stdout || execError.stderr || execError.message || "").toString();
+
+				// 錯誤碼 0xC0000135 (3221225781) 或 -1073741515 表示 DLL_NOT_FOUND
+				// 也檢查錯誤訊息中是否包含相關關鍵字
+				const isDllError =
+					errorCode === 3221225781 ||
+					errorCode === -1073741515 ||
+					errorCode === 3221226505 || // STATUS_ENTRYPOINT_NOT_FOUND
+					errorOutput.includes("0xC0000135") ||
+					errorOutput.includes("STATUS_DLL_NOT_FOUND") ||
+					(errorOutput.includes("DLL") && errorOutput.includes("not found")) ||
+					errorOutput.includes("The specified module could not be found") ||
+					errorOutput.includes("無法找到指定的模組");
+
+				if (isDllError) {
+					log(`\n❌ 初始化資料庫失敗：缺少必要的運行時庫`, "red");
+					console.log(`\n問題診斷：`);
+					console.log(`  initdb.exe 執行時出現錯誤碼 ${errorCode || "未知"}`);
+					if (errorCode === 3221225781 || errorCode === -1073741515) {
+						console.log(`  錯誤碼 0xC0000135 表示 STATUS_DLL_NOT_FOUND`);
+					}
+					console.log(`  這通常是缺少必要的 DLL 或 Visual C++ 運行時庫。\n`);
+					console.log(`建議的解決方案：`);
+					console.log(`\n方案 1：安裝 Visual C++ Redistributable（推薦）`);
+					console.log(`  1. 下載並安裝 Visual C++ Redistributable：`);
+					console.log(`     https://aka.ms/vs/17/release/vc_redist.x64.exe`);
+					console.log(`  2. 安裝後重新執行：`);
+					console.log(`     npm run postgres:download\n`);
+					console.log(`方案 2：手動執行 initdb`);
+					console.log(`  在 PowerShell 中執行：`);
+					console.log(`    cd postgres\\bin`);
+					console.log(`    $env:PATH = "$PWD;$env:PATH"`);
+					console.log(`    .\\initdb.exe -D ..\\data --auth-local=trust --auth-host=trust\n`);
+					console.log(`方案 3：使用系統安裝的 PostgreSQL`);
+					console.log(`  如果系統已安裝 PostgreSQL，可跳過可攜式版本，直接使用系統版本。\n`);
+
+					throw new Error(`初始化資料庫失敗：缺少 Visual C++ Redistributable。請安裝後重試。`);
+				}
+
+				// 其他錯誤，顯示詳細訊息
+				log(`\n❌ 初始化資料庫失敗`, "red");
+				console.log(`錯誤碼: ${errorCode || "未知"}`);
+				if (errorOutput) {
+					console.log(`錯誤訊息:\n${errorOutput}`);
+				}
+				throw new Error(`初始化資料庫失敗: ${execError.message}`);
+			}
 		} else {
 			// Unix-like: 直接執行
 			const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
@@ -327,7 +379,12 @@ function initDatabase() {
 			});
 		}
 	} catch (error) {
-		throw new Error(`初始化資料庫失敗: ${error.message}`);
+		// 如果已經處理過 DLL 錯誤，直接拋出
+		if (error.message.includes("Visual C++ Redistributable")) {
+			throw error;
+		}
+		// 其他錯誤，提供一般性錯誤訊息
+		throw error;
 	}
 
 	// 設定配置
