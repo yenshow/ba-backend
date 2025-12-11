@@ -5,22 +5,15 @@
  * 支援：macOS、Windows、Linux
  */
 
-const fs = require("fs");
-const path = require("path");
 const { execSync } = require("child_process");
+const { DATA_DIR, getBinPath, isPostgresDownloaded } = require("./postgres-common");
 
-const PROJECT_DIR = path.resolve(__dirname, "..");
-const POSTGRES_DIR = path.join(PROJECT_DIR, "postgres");
-const BIN_DIR = path.join(POSTGRES_DIR, "bin");
-const DATA_DIR = path.join(POSTGRES_DIR, "data");
-
-const binExtension = process.platform === "win32" ? ".exe" : "";
-const pgCtlPath = path.join(BIN_DIR, `pg_ctl${binExtension}`);
-
-if (!fs.existsSync(pgCtlPath)) {
+if (!isPostgresDownloaded()) {
 	console.error("❌ PostgreSQL 尚未下載");
 	process.exit(1);
 }
+
+const pgCtlPath = getBinPath("pg_ctl");
 
 try {
 	// 檢查是否在運行

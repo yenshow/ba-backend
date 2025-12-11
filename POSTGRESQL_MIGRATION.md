@@ -23,14 +23,59 @@ npm install
 
 ### 2. 下載並設定可攜式 PostgreSQL（只需一次）
 
+#### 方式一：自動下載（推薦）
+
 ```bash
 npm run postgres:download
 ```
 
+#### 方式二：手動下載
+
+如果自動下載失敗，可以手動下載：
+
+1. **檢測您的系統平台**：執行腳本會自動顯示
+
+   ```bash
+   npm run postgres:download
+   ```
+
+   腳本會顯示您的平台資訊和需要的檔案名稱格式。
+
+2. **手動下載檔案**：
+
+   **步驟**：
+
+   1. 訪問：https://github.com/theseus-rs/postgresql-binaries/releases
+
+   2. 找到可用版本（例如 **16.11.0**、**16.10.0** 等），點擊版本號進入該版本的詳細頁面
+
+   3. 在頁面下方找到 **"Assets"** 區塊（可能需要點擊 "Show all X assets" 展開）
+
+   4. 根據您的系統平台，找到對應的檔案：
+
+      - **macOS ARM64 (Apple Silicon)**：尋找 `postgresql-<版本>-aarch64-apple-darwin.tar.gz`
+      - **macOS Intel**：尋找 `postgresql-<版本>-x86_64-apple-darwin.tar.gz`
+      - **Windows x64**：尋找 `postgresql-<版本>-x86_64-pc-windows-msvc.tar.gz`
+      - **Linux x64**：尋找 `postgresql-<版本>-x86_64-unknown-linux-gnu.tar.gz`
+      - **Linux ARM64**：尋找 `postgresql-<版本>-aarch64-unknown-linux-gnu.tar.gz`
+
+   5. 點擊檔案名稱即可下載（或右鍵選擇「另存連結為」）
+
+   6. 將下載的 `.tar.gz` 檔案放置到專案的 `postgres/` 目錄
+
+3. **重新執行腳本**：
+   ```bash
+   npm run postgres:download
+   ```
+   腳本會自動檢測並使用您手動下載的檔案。
+
+**注意**：腳本會自動根據系統平台選擇正確的檔案，您只需要下載對應平台的檔案即可。
+
 這個腳本會：
 
 - **自動檢測作業系統**（macOS、Windows、Linux）
-- 自動下載對應平台的 PostgreSQL 二進制檔案到 `postgres/` 目錄
+- 自動下載或使用手動下載的對應平台 PostgreSQL 二進制檔案
+- 解壓縮並設定到 `postgres/` 目錄
 - 初始化資料庫
 - 建立資料庫和使用者
 - 啟動 PostgreSQL 服務
@@ -248,23 +293,36 @@ Windows 防火牆可能會詢問是否允許 PostgreSQL 存取網路，請選擇
 
 ## 疑難排解
 
-### 問題：下載失敗 (404)
+### 問題：下載失敗 (404 或檔案不存在)
 
 **可能原因**：
 
 - 該版本尚未發布到 GitHub
 - 版本號格式不正確
+- 該平台沒有對應版本的二進制檔案
 
 **解決方案**：
 
-1. 檢查 [GitHub Releases](https://github.com/theseus-rs/postgresql-binaries/releases)
-2. 確認版本號是否正確（例如：`16.2` 對應標籤 `v16.2`）
-3. 手動下載：
-   - 訪問：https://github.com/theseus-rs/postgresql-binaries/releases
-   - 找到對應版本（例如：`v16.2`）
-   - 下載對應平台的 `.tar.gz` 檔案
+1. **檢查可用版本**：
+
+   - 訪問 [GitHub Releases](https://github.com/theseus-rs/postgresql-binaries/releases)
+   - 查看有哪些版本可用（例如：v16.11.0、v16.10.0 等）
+
+2. **手動下載**：
+
+   - 執行 `npm run postgres:download` 查看您的平台資訊
+   - 腳本會顯示：
+     - 您的系統平台和架構
+     - 目標標識符（Target Triple）
+     - 需要的檔案名稱格式
+   - 從 GitHub Releases 下載對應平台的 `.tar.gz` 檔案
    - 將檔案放到 `postgres/` 目錄
    - 重新執行 `npm run postgres:download`
+
+3. **檔案名稱格式**：
+   - 格式：`postgresql-<版本>-<目標標識符>.tar.gz`
+   - 例如：`postgresql-16.11.0-aarch64-apple-darwin.tar.gz`
+   - 腳本會自動檢測並使用任何符合格式的檔案（不一定要完全匹配版本號）
 
 ### 問題：Windows tar 命令不可用
 
