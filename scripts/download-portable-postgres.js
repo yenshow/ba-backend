@@ -12,7 +12,7 @@ const http = require("http");
 const { execSync } = require("child_process");
 const os = require("os");
 
-const VERSION = "16.2";
+const VERSION = "16.2"; // PostgreSQL 版本（對應 GitHub Releases 標籤 v16.2） // PostgreSQL 版本（對應 GitHub Releases 標籤）
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const POSTGRES_DIR = path.join(PROJECT_DIR, "postgres");
 const BIN_DIR = path.join(POSTGRES_DIR, "bin");
@@ -43,46 +43,49 @@ function detectPlatform() {
 	log(`🔍 檢測系統: ${platform} ${arch}`, "green");
 
 	let downloadUrl, archiveName, extractCommand, binExtension;
+	let targetTriple = null;
 
+	// 使用 GitHub 開源二進制檔案（theseus-rs/postgresql-binaries）- 無需登入
 	if (platform === "darwin") {
 		// macOS
 		if (arch === "arm64") {
-			downloadUrl = `https://get.enterprisedb.com/postgresql/postgresql-${VERSION}-1-osx-arm64-binaries.zip`;
-			archiveName = `postgresql-${VERSION}-1-osx-arm64-binaries.zip`;
+			targetTriple = "aarch64-apple-darwin";
 		} else {
-			downloadUrl = `https://get.enterprisedb.com/postgresql/postgresql-${VERSION}-1-osx-x86_64-binaries.zip`;
-			archiveName = `postgresql-${VERSION}-1-osx-x86_64-binaries.zip`;
+			targetTriple = "x86_64-apple-darwin";
 		}
-		extractCommand = "unzip";
+		downloadUrl = `https://github.com/theseus-rs/postgresql-binaries/releases/download/v${VERSION}/postgresql-${VERSION}-${targetTriple}.tar.gz`;
+		archiveName = `postgresql-${VERSION}-${targetTriple}.tar.gz`;
+		extractCommand = "tar";
 		binExtension = "";
 	} else if (platform === "win32") {
 		// Windows
 		if (arch === "x64") {
-			downloadUrl = `https://get.enterprisedb.com/postgresql/postgresql-${VERSION}-1-windows-x64-binaries.zip`;
-			archiveName = `postgresql-${VERSION}-1-windows-x64-binaries.zip`;
+			targetTriple = "x86_64-pc-windows-msvc";
+			downloadUrl = `https://github.com/theseus-rs/postgresql-binaries/releases/download/v${VERSION}/postgresql-${VERSION}-${targetTriple}.tar.gz`;
+			archiveName = `postgresql-${VERSION}-${targetTriple}.tar.gz`;
+			extractCommand = "tar";
 		} else {
 			throw new Error(`不支援的 Windows 架構: ${arch}`);
 		}
-		extractCommand = "powershell";
 		binExtension = ".exe";
 	} else if (platform === "linux") {
 		// Linux
 		if (arch === "x64") {
-			downloadUrl = `https://get.enterprisedb.com/postgresql/postgresql-${VERSION}-1-linux-x64-binaries.tar.gz`;
-			archiveName = `postgresql-${VERSION}-1-linux-x64-binaries.tar.gz`;
+			targetTriple = "x86_64-unknown-linux-gnu";
 		} else if (arch === "arm64") {
-			downloadUrl = `https://get.enterprisedb.com/postgresql/postgresql-${VERSION}-1-linux-arm64-binaries.tar.gz`;
-			archiveName = `postgresql-${VERSION}-1-linux-arm64-binaries.tar.gz`;
+			targetTriple = "aarch64-unknown-linux-gnu";
 		} else {
 			throw new Error(`不支援的 Linux 架構: ${arch}`);
 		}
+		downloadUrl = `https://github.com/theseus-rs/postgresql-binaries/releases/download/v${VERSION}/postgresql-${VERSION}-${targetTriple}.tar.gz`;
+		archiveName = `postgresql-${VERSION}-${targetTriple}.tar.gz`;
 		extractCommand = "tar";
 		binExtension = "";
 	} else {
 		throw new Error(`不支援的作業系統: ${platform}`);
 	}
 
-	return { downloadUrl, archiveName, extractCommand, binExtension, platform };
+	return { downloadUrl, archiveName, extractCommand, binExtension, platform, targetTriple };
 }
 
 // 下載檔案
@@ -95,14 +98,26 @@ function downloadFile(url, dest) {
 		log(`   來源: ${url}`, "yellow");
 		log(`   目標: ${dest}`, "yellow");
 
+		const options = {
+			headers: {
+				"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+				Accept: "*/*",
+				"Accept-Language": "en-US,en;q=0.9"
+			}
+		};
+
 		protocol
-			.get(url, (response) => {
+			.get(url, options, (response) => {
 				if (response.statusCode === 301 || response.statusCode === 302) {
 					// 處理重定向
 					return downloadFile(response.headers.location, dest).then(resolve).catch(reject);
 				}
 				if (response.statusCode !== 200) {
-					reject(new Error(`下載失敗: HTTP ${response.statusCode}`));
+					let errorMsg = `下載失敗: HTTP ${response.statusCode}`;
+					if (response.statusCode === 404) {
+						errorMsg += `\n\n⚠️  找不到該版本的二進制檔案。\n   請檢查 https://github.com/theseus-rs/postgresql-binaries/releases 是否有版本 ${VERSION}。`;
+					}
+					reject(new Error(errorMsg));
 					return;
 				}
 
@@ -137,20 +152,24 @@ function extractArchive(archivePath, extractCommand, platform) {
 	log(`📦 解壓縮...`, "yellow");
 
 	try {
-		if (extractCommand === "unzip") {
-			// macOS (需要 unzip)
+		if (extractCommand === "tar") {
+			// 所有平台都使用 tar（GitHub 二進制檔案都是 tar.gz）
+			if (platform === "win32") {
+				// Windows 需要特殊處理（可能需要安裝 tar 或使用其他工具）
+				// 嘗試使用內建的 tar（Windows 10+ 有）
+				try {
+					execSync(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, { stdio: "inherit" });
+				} catch (error) {
+					// 如果 tar 不可用，提示安裝
+					throw new Error("Windows 需要 tar 命令。請安裝 Git for Windows 或使用 Windows 10+ 內建的 tar。");
+				}
+			} else {
+				// macOS 和 Linux
+				execSync(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, { stdio: "inherit" });
+			}
+		} else if (extractCommand === "unzip") {
+			// 備用：unzip（如果未來需要）
 			execSync(`unzip -q "${archivePath}" -d "${POSTGRES_DIR}"`, { stdio: "inherit" });
-		} else if (extractCommand === "powershell") {
-			// Windows 使用 PowerShell
-			const archivePathEscaped = archivePath.replace(/\\/g, "/").replace(/'/g, "''");
-			const destPathEscaped = POSTGRES_DIR.replace(/\\/g, "/").replace(/'/g, "''");
-			execSync(`powershell -Command "Expand-Archive -Path '${archivePathEscaped}' -DestinationPath '${destPathEscaped}' -Force"`, {
-				stdio: "inherit",
-				shell: true
-			});
-		} else if (extractCommand === "tar") {
-			// Linux
-			execSync(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, { stdio: "inherit" });
 		}
 
 		// 刪除壓縮檔
@@ -163,19 +182,26 @@ function extractArchive(archivePath, extractCommand, platform) {
 		}
 
 		// 移動檔案到正確位置
+		// GitHub 二進制檔案可能直接解壓縮到當前目錄，或包含在一個子目錄中
 		const extractedDirs = fs.readdirSync(POSTGRES_DIR).filter((item) => {
 			const itemPath = path.join(POSTGRES_DIR, item);
 			try {
-				return fs.statSync(itemPath).isDirectory() && (item.startsWith("pgsql") || item.toLowerCase().includes("postgresql"));
+				const stat = fs.statSync(itemPath);
+				if (!stat.isDirectory()) return false;
+				// 檢查是否包含 bin 目錄（PostgreSQL 的標誌）
+				const binPath = path.join(itemPath, "bin");
+				return fs.existsSync(binPath) || item.startsWith("pgsql") || item.toLowerCase().includes("postgresql");
 			} catch {
 				return false;
 			}
 		});
 
 		if (extractedDirs.length > 0) {
+			// 找到包含 bin 目錄的目錄
 			const extractedDir = path.join(POSTGRES_DIR, extractedDirs[0]);
 			const extractedBin = path.join(extractedDir, "bin");
 			const extractedShare = path.join(extractedDir, "share");
+			const extractedLib = path.join(extractedDir, "lib");
 
 			if (fs.existsSync(extractedBin)) {
 				if (fs.existsSync(BIN_DIR)) {
@@ -192,8 +218,24 @@ function extractArchive(archivePath, extractCommand, platform) {
 				fs.renameSync(extractedShare, targetShare);
 			}
 
+			if (fs.existsSync(extractedLib)) {
+				const targetLib = path.join(POSTGRES_DIR, "lib");
+				if (fs.existsSync(targetLib)) {
+					fs.rmSync(targetLib, { recursive: true, force: true });
+				}
+				fs.renameSync(extractedLib, targetLib);
+			}
+
 			// 清理臨時目錄
 			fs.rmSync(extractedDir, { recursive: true, force: true });
+		} else {
+			// 如果沒有找到子目錄，可能直接解壓縮到當前目錄
+			// 檢查是否有 bin 目錄在 POSTGRES_DIR
+			const directBin = path.join(POSTGRES_DIR, "bin");
+			if (fs.existsSync(directBin) && !fs.existsSync(BIN_DIR)) {
+				// 已經在正確位置，不需要移動
+				log(`✅ 檔案已在正確位置`, "green");
+			}
 		}
 
 		log(`✅ PostgreSQL 下載完成`, "green");
@@ -388,7 +430,19 @@ async function main() {
 		} else {
 			// 下載
 			const archivePath = path.join(POSTGRES_DIR, archiveName);
-			await downloadFile(downloadUrl, archivePath);
+			try {
+				await downloadFile(downloadUrl, archivePath);
+			} catch (error) {
+				// 如果下載失敗，提供手動下載說明
+				log(`\n❌ 自動下載失敗。請手動下載 PostgreSQL 二進制檔案：`, "red");
+				console.log(`\n📥 手動下載步驟（開源版本，無需登入）：`);
+				console.log(`1. 訪問: https://github.com/theseus-rs/postgresql-binaries/releases`);
+				console.log(`2. 找到版本 v${VERSION}`);
+				console.log(`3. 下載對應平台的檔案: ${archiveName}`);
+				console.log(`4. 將檔案放置到: ${POSTGRES_DIR}/`);
+				console.log(`5. 重新執行此腳本: npm run postgres:download\n`);
+				throw error;
+			}
 
 			// 解壓縮
 			extractArchive(archivePath, extractCommand, platform);
