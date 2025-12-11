@@ -13,9 +13,9 @@
     "db:cleanup": "node scripts/cleanupOldData.js",
     "admin:create": "node scripts/createAdmin.js",
     "diagnose": "node scripts/diagnoseConnection.js",
-    "postgres:download": "bash scripts/download-portable-postgres.sh",
-    "postgres:start": "bash scripts/start-portable-postgres.sh",
-    "postgres:stop": "bash scripts/stop-portable-postgres.sh"
+    "postgres:download": "node scripts/download-portable-postgres.js",
+    "postgres:start": "node scripts/start-portable-postgres.js",
+    "postgres:stop": "node scripts/stop-portable-postgres.js"
   },
   "keywords": [],
   "author": "",

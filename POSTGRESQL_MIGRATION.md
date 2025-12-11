@@ -52,10 +52,17 @@ npm run postgres:download
 
 這個腳本會：
 
-- 自動下載 PostgreSQL 二進制檔案到 `postgres/` 目錄
+- **自動檢測作業系統**（macOS、Windows、Linux）
+- 自動下載對應平台的 PostgreSQL 二進制檔案到 `postgres/` 目錄
 - 初始化資料庫
 - 建立資料庫和使用者
 - 啟動 PostgreSQL 服務
+
+**支援的平台**：
+
+- ✅ macOS (Intel / Apple Silicon)
+- ✅ Windows (x64)
+- ✅ Linux (x64 / ARM64)
 
 ### 3. 啟動 PostgreSQL（之後每次使用）
 

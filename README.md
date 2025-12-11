@@ -34,10 +34,10 @@ cp .env.example .env
 
 ### 設定 PostgreSQL（可攜式）
 
-專案支援可攜式 PostgreSQL，無需在系統安裝 PostgreSQL：
+專案支援可攜式 PostgreSQL，無需在系統安裝 PostgreSQL。**支援 macOS、Windows 和 Linux**：
 
 ```bash
-# 下載並設定 PostgreSQL（只需一次）
+# 下載並設定 PostgreSQL（只需一次，自動檢測作業系統）
 npm run postgres:download
 
 # 啟動 PostgreSQL
@@ -46,6 +46,12 @@ npm run postgres:start
 # 停止 PostgreSQL
 npm run postgres:stop
 ```
+
+**支援的平台**：
+
+- ✅ macOS (Intel / Apple Silicon)
+- ✅ Windows (x64)
+- ✅ Linux (x64 / ARM64)
 
 詳細說明請參考 [POSTGRESQL_MIGRATION.md](./POSTGRESQL_MIGRATION.md)
 
