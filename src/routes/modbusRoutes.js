@@ -1,8 +1,5 @@
 const express = require("express");
 const modbusClient = require("../services/modbusClient");
-const modbusDeviceService = require("../services/modbusDeviceService");
-const deviceTypeService = require("../services/deviceTypeService");
-const deviceModelService = require("../services/deviceModelService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 
 const router = express.Router();
@@ -122,90 +119,16 @@ router.put("/coils", async (req, res, next) => {
 	}
 });
 
-// ==================== Modbus 設備管理路由 ====================
+// ==================== 已棄用的路由（保留僅為向後兼容）===================
+// 注意：以下路由已移至 /api/devices，建議前端遷移到新的路由
+// - 設備管理：/api/devices (GET, POST, PUT, DELETE)
+// - 設備類型：/api/devices/types
+// - 設備型號：/api/devices/models
 
-// 需要管理員權限：取得設備列表
-router.get("/devices", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const { status, type_id, model_id, limit, offset, orderBy, order } = req.query;
-		const result = await modbusDeviceService.getDevices({
-			status,
-			type_id,
-			model_id,
-			limit,
-			offset,
-			orderBy,
-			order
-		});
-		res.json(result);
-	} catch (error) {
-		next(error);
-	}
-});
-
-// 需要管理員權限：取得單一設備
-router.get("/devices/:id", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const deviceId = parseInt(req.params.id, 10);
-		if (isNaN(deviceId)) {
-			return res.status(400).json({ error: "設備 ID 必須是數字" });
-		}
-		const device = await modbusDeviceService.getDeviceById(deviceId);
-		res.json(device);
-	} catch (error) {
-		next(error);
-	}
-});
-
-// 需要管理員權限：建立設備
-router.post("/devices", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const device = await modbusDeviceService.createDevice(req.body, req.user.id);
-		res.status(201).json({
-			message: "設備建立成功",
-			device
-		});
-	} catch (error) {
-		next(error);
-	}
-});
-
-// 需要管理員權限：更新設備
-router.put("/devices/:id", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const deviceId = parseInt(req.params.id, 10);
-		if (isNaN(deviceId)) {
-			return res.status(400).json({ error: "設備 ID 必須是數字" });
-		}
-		const device = await modbusDeviceService.updateDevice(deviceId, req.body, req.user.id);
-		res.json({
-			message: "設備已更新",
-			device
-		});
-	} catch (error) {
-		next(error);
-	}
-});
-
-// 需要管理員權限：刪除設備
-router.delete("/devices/:id", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const deviceId = parseInt(req.params.id, 10);
-		if (isNaN(deviceId)) {
-			return res.status(400).json({ error: "設備 ID 必須是數字" });
-		}
-		const result = await modbusDeviceService.deleteDevice(deviceId);
-		res.json(result);
-	} catch (error) {
-		next(error);
-	}
-});
-
-// ==================== 設備類型讀取路由（僅供設備型號管理選擇類型使用）===================
-
-// 取得所有設備類型（公開，不需要認證）- 僅供讀取，用於設備型號管理選擇類型
+// 取得所有設備類型（已棄用，請使用 /api/devices/types）
 router.get("/device-types", async (req, res, next) => {
 	try {
+		const deviceTypeService = require("../services/deviceTypeService");
 		const result = await deviceTypeService.getAllDeviceTypes();
 		res.json(result);
 	} catch (error) {
@@ -213,9 +136,10 @@ router.get("/device-types", async (req, res, next) => {
 	}
 });
 
-// 取得單一設備類型（公開）- 僅供讀取
+// 取得單一設備類型（已棄用，請使用 /api/devices/types/:id）
 router.get("/device-types/:id", async (req, res, next) => {
 	try {
+		const deviceTypeService = require("../services/deviceTypeService");
 		const id = parseInt(req.params.id, 10);
 		if (isNaN(id)) {
 			return res.status(400).json({ error: "設備類型 ID 必須是數字" });
@@ -230,11 +154,12 @@ router.get("/device-types/:id", async (req, res, next) => {
 	}
 });
 
-// ==================== 設備型號管理路由 ====================
+// ==================== 設備型號管理路由（已棄用，請使用 /api/devices/models）===================
 
-// 取得所有設備型號（公開）
+// 取得所有設備型號（已棄用，請使用 /api/devices/models）
 router.get("/device-models", async (req, res, next) => {
 	try {
+		const deviceModelService = require("../services/deviceModelService");
 		const result = await deviceModelService.getAllDeviceModels();
 		res.json(result);
 	} catch (error) {
@@ -242,9 +167,10 @@ router.get("/device-models", async (req, res, next) => {
 	}
 });
 
-// 取得單一設備型號（公開）
+// 取得單一設備型號（已棄用，請使用 /api/devices/models/:id）
 router.get("/device-models/:id", async (req, res, next) => {
 	try {
+		const deviceModelService = require("../services/deviceModelService");
 		const id = parseInt(req.params.id, 10);
 		if (isNaN(id)) {
 			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
@@ -259,9 +185,10 @@ router.get("/device-models/:id", async (req, res, next) => {
 	}
 });
 
-// 建立設備型號（需要管理員權限）
+// 建立設備型號（已棄用，請使用 /api/devices/models）
 router.post("/device-models", authenticate, requireAdmin, async (req, res, next) => {
 	try {
+		const deviceModelService = require("../services/deviceModelService");
 		const result = await deviceModelService.createDeviceModel(req.body, req.user.id);
 		res.status(201).json(result);
 	} catch (error) {
@@ -272,9 +199,10 @@ router.post("/device-models", authenticate, requireAdmin, async (req, res, next)
 	}
 });
 
-// 更新設備型號（需要管理員權限）
+// 更新設備型號（已棄用，請使用 /api/devices/models/:id）
 router.put("/device-models/:id", authenticate, requireAdmin, async (req, res, next) => {
 	try {
+		const deviceModelService = require("../services/deviceModelService");
 		const id = parseInt(req.params.id, 10);
 		if (isNaN(id)) {
 			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
@@ -289,9 +217,10 @@ router.put("/device-models/:id", authenticate, requireAdmin, async (req, res, ne
 	}
 });
 
-// 刪除設備型號（需要管理員權限）
+// 刪除設備型號（已棄用，請使用 /api/devices/models/:id）
 router.delete("/device-models/:id", authenticate, requireAdmin, async (req, res, next) => {
 	try {
+		const deviceModelService = require("../services/deviceModelService");
 		const id = parseInt(req.params.id, 10);
 		if (isNaN(id)) {
 			return res.status(400).json({ error: "設備型號 ID 必須是數字" });

@@ -33,11 +33,12 @@ const validateDeviceConfig = (config, typeCode) => {
 			if (!config.host || typeof config.host !== "string") {
 				throw new Error("controller 類型需要 host (string)");
 			}
-			if (!config.port || typeof config.port !== "number") {
-				throw new Error("controller 類型需要 port (number)");
+			if (config.port !== undefined && typeof config.port !== "number") {
+				throw new Error("controller 類型的 port 必須是數字");
 			}
-			if (!config.unitId || typeof config.unitId !== "number") {
-				throw new Error("controller 類型需要 unitId (number)");
+			// unitId 可選，如果提供則必須是數字
+			if (config.unitId !== undefined && typeof config.unitId !== "number") {
+				throw new Error("controller 類型的 unitId 必須是數字");
 			}
 			break;
 
@@ -58,8 +59,9 @@ const validateDeviceConfig = (config, typeCode) => {
 				if (!config.port || typeof config.port !== "number") {
 					throw new Error("sensor (modbus) 需要 port (number)");
 				}
-				if (!config.unitId || typeof config.unitId !== "number") {
-					throw new Error("sensor (modbus) 需要 unitId (number)");
+				// unitId 可選，如果提供則必須是數字（將由系統自動生成）
+				if (config.unitId !== undefined && typeof config.unitId !== "number") {
+					throw new Error("sensor (modbus) 類型的 unitId 必須是數字");
 				}
 			} else if (config.protocol === "http") {
 				if (!config.api_endpoint || typeof config.api_endpoint !== "string") {

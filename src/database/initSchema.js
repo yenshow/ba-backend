@@ -18,14 +18,17 @@ async function initSchema() {
 		port: config.database.port,
 		user: config.database.user,
 		password: config.database.password,
-		database: "postgres" // 連接到預設資料庫以建立目標資料庫
+    database: "postgres", // 連接到預設資料庫以建立目標資料庫
 	});
 
 	try {
 		console.log("正在建立資料庫...");
 
 		// 檢查資料庫是否存在
-		const dbCheck = await pool.query("SELECT 1 FROM pg_database WHERE datname = $1", [config.database.database]);
+    const dbCheck = await pool.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [config.database.database]
+    );
 
 		if (dbCheck.rows.length === 0) {
 			await pool.query(`CREATE DATABASE ${config.database.database}`);
@@ -42,7 +45,7 @@ async function initSchema() {
 			port: config.database.port,
 			user: config.database.user,
 			password: config.database.password,
-			database: config.database.database
+      database: config.database.database,
 		});
 
 		// 建立 ENUM 類型
@@ -131,9 +134,9 @@ async function initSchema() {
 
 		console.log("✅ users 表已建立");
 
-		// 建立 modbus_device_types 表
+		// 建立 device_types 表（通用設備類型表）
 		await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS modbus_device_types (
+			CREATE TABLE IF NOT EXISTS device_types (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(50) NOT NULL UNIQUE,
 				code VARCHAR(20) NOT NULL UNIQUE,
@@ -143,72 +146,59 @@ async function initSchema() {
 			)
 		`);
 
-		await createUpdatedAtTrigger(targetPool, "modbus_device_types");
+		await createUpdatedAtTrigger(targetPool, "device_types");
 
 		await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_types_code ON modbus_device_types(code);
+			CREATE INDEX IF NOT EXISTS idx_device_types_code ON device_types(code);
 		`);
 
-		console.log("✅ modbus_device_types 表已建立");
+		console.log("✅ device_types 表已建立");
 
-		// 建立 modbus_device_models 表
+		// 建立 device_models 表（通用設備型號表）
 		await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS modbus_device_models (
+			CREATE TABLE IF NOT EXISTS device_models (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
 				type_id INTEGER NOT NULL,
-				port INTEGER NOT NULL DEFAULT 502,
 				description TEXT,
+				config JSONB,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				CONSTRAINT fk_model_type FOREIGN KEY (type_id) REFERENCES modbus_device_types(id) ON DELETE RESTRICT
+				CONSTRAINT fk_device_model_type FOREIGN KEY (type_id) REFERENCES device_types(id) ON DELETE RESTRICT
 			)
 		`);
 
-		await createUpdatedAtTrigger(targetPool, "modbus_device_models");
-
+		// 如果表已存在但沒有 port 欄位，添加它
 		await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_models_name ON modbus_device_models(name);
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_models_type_id ON modbus_device_models(type_id);
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_models_port ON modbus_device_models(port);
+			DO $$ 
+			BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM information_schema.columns 
+					WHERE table_name = 'device_models' AND column_name = 'port'
+				) THEN
+					ALTER TABLE device_models ADD COLUMN port INTEGER NOT NULL DEFAULT 502;
+					RAISE NOTICE '已添加 port 欄位到 device_models 表';
+				END IF;
+			END $$;
 		`);
 
-		console.log("✅ modbus_device_models 表已建立");
-
-		// 建立 modbus_ports 表
-		await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS modbus_ports (
-				id SERIAL PRIMARY KEY,
-				port INTEGER NOT NULL UNIQUE,
-				name VARCHAR(50),
-				description TEXT,
-				is_default BOOLEAN NOT NULL DEFAULT FALSE,
-				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-			)
-		`);
-
-		await createUpdatedAtTrigger(targetPool, "modbus_ports");
+		await createUpdatedAtTrigger(targetPool, "device_models");
 
 		await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_modbus_ports_port ON modbus_ports(port);
-			CREATE INDEX IF NOT EXISTS idx_modbus_ports_is_default ON modbus_ports(is_default);
+			CREATE INDEX IF NOT EXISTS idx_device_models_name ON device_models(name);
+			CREATE INDEX IF NOT EXISTS idx_device_models_type_id ON device_models(type_id);
+			CREATE INDEX IF NOT EXISTS idx_device_models_port ON device_models(port);
 		`);
 
-		console.log("✅ modbus_ports 表已建立");
+		console.log("✅ device_models 表已建立");
 
 		// 建立 devices 表
 		await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS devices (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
-				model_id INTEGER,
+				model_id INTEGER NOT NULL,
 				type_id INTEGER NOT NULL,
-				device_type VARCHAR(50),
-				modbus_host VARCHAR(255) NOT NULL,
-				modbus_port INTEGER NOT NULL,
-				port_id INTEGER,
-				modbus_unit_id INTEGER NOT NULL,
 				location VARCHAR(255),
 				description TEXT,
 				status device_status NOT NULL DEFAULT 'inactive',
@@ -218,81 +208,53 @@ async function initSchema() {
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				CONSTRAINT fk_devices_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-				CONSTRAINT fk_devices_model FOREIGN KEY (model_id) REFERENCES modbus_device_models(id) ON DELETE SET NULL,
-				CONSTRAINT fk_devices_type FOREIGN KEY (type_id) REFERENCES modbus_device_types(id) ON DELETE RESTRICT,
-				CONSTRAINT fk_devices_port FOREIGN KEY (port_id) REFERENCES modbus_ports(id) ON DELETE SET NULL
+				CONSTRAINT fk_devices_model FOREIGN KEY (model_id) REFERENCES device_models(id) ON DELETE RESTRICT,
+				CONSTRAINT fk_devices_type FOREIGN KEY (type_id) REFERENCES device_types(id) ON DELETE RESTRICT
 			)
 		`);
 
 		await createUpdatedAtTrigger(targetPool, "devices");
 
 		await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_devices_modbus_connection ON devices(modbus_host, modbus_port, modbus_unit_id);
 			CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
 			CREATE INDEX IF NOT EXISTS idx_devices_type_id ON devices(type_id);
 			CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
-			CREATE INDEX IF NOT EXISTS idx_devices_device_type ON devices(device_type);
+			CREATE INDEX IF NOT EXISTS idx_devices_config ON devices USING GIN (config);
 		`);
 
 		console.log("✅ devices 表已建立");
 
-		// 建立 modbus_device_addresses 表
-		await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS modbus_device_addresses (
-				id SERIAL PRIMARY KEY,
-				device_id INTEGER NOT NULL,
-				register_type register_type NOT NULL,
-				address INTEGER NOT NULL,
-				length INTEGER NOT NULL DEFAULT 1,
-				name VARCHAR(100),
-				description TEXT,
-				is_active BOOLEAN NOT NULL DEFAULT TRUE,
-				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				CONSTRAINT fk_addresses_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
-				CONSTRAINT unique_device_register_address UNIQUE (device_id, register_type, address)
-			)
-		`);
+    // 預設設備類型資料
+    const deviceTypes = [
+      { name: "攝影機", code: "camera", description: "影像監控、車牌辨識、人流統計" },
+      { name: "感測器", code: "sensor", description: "感測器設備" },
+      { name: "控制器", code: "controller", description: "modbus" },
+      { name: "平板", code: "tablet", description: "平板電腦設備" },
+      { name: "網路裝置", code: "network", description: "路由器、交換器、無線基地台等網路設備" }
+    ];
 
-		await createUpdatedAtTrigger(targetPool, "modbus_device_addresses");
-
-		await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_addresses_device_register ON modbus_device_addresses(device_id, register_type);
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_addresses_address ON modbus_device_addresses(address);
-			CREATE INDEX IF NOT EXISTS idx_modbus_device_addresses_is_active ON modbus_device_addresses(is_active);
-		`);
-
-		console.log("✅ modbus_device_addresses 表已建立");
-
-		// 插入預設的設備類型資料
-		const deviceTypes = [
-			{ name: "DI/DO", code: "DI_DO", description: "數位輸入/輸出設備" },
-			{ name: "Sensor", code: "SENSOR", description: "感測器設備" }
-		];
+		// 插入預設的設備類型資料到 device_types 表
 		for (const type of deviceTypes) {
-			await targetPool.query(
-				`INSERT INTO modbus_device_types (name, code, description) 
-				 VALUES ($1, $2, $3) 
-				 ON CONFLICT (code) DO NOTHING`,
-				[type.name, type.code, type.description]
-			);
+			try {
+				await targetPool.query(
+					`INSERT INTO device_types (name, code, description) 
+					 VALUES ($1, $2, $3) 
+					 ON CONFLICT (code) DO NOTHING`,
+					[type.name, type.code, type.description]
+				);
+			} catch (error) {
+				// 如果因為 name 衝突而失敗，嘗試使用 code 衝突處理
+        if (
+          error.code === "23505" &&
+          error.constraint === "device_types_name_key"
+        ) {
+					// 名稱已存在，跳過
+					continue;
+				}
+				throw error;
+			}
 		}
-		console.log("✅ 預設設備類型資料已插入");
-
-		// 插入預設的端口資料
-		const ports = [
-			{ port: 502, name: "Modbus TCP 標準端口", description: "Modbus TCP/IP 標準端口", is_default: true },
-			{ port: 503, name: "Modbus TCP 備用端口", description: "Modbus TCP/IP 備用端口", is_default: false }
-		];
-		for (const portData of ports) {
-			await targetPool.query(
-				`INSERT INTO modbus_ports (port, name, description, is_default) 
-				 VALUES ($1, $2, $3, $4) 
-				 ON CONFLICT (port) DO NOTHING`,
-				[portData.port, portData.name, portData.description, portData.is_default]
-			);
-		}
-		console.log("✅ 預設端口資料已插入");
+		console.log("✅ 預設設備類型資料已插入到 device_types");
 
 		// 建立 device_data_logs 表
 		await targetPool.query(`
@@ -337,6 +299,85 @@ async function initSchema() {
 		`);
 
 		console.log("✅ device_alerts 表已建立");
+
+    // 建立 lighting_categories 表（照明系統分類點）
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS lighting_categories (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(100) NOT NULL,
+				floor_id VARCHAR(50) NOT NULL,
+				location_x DECIMAL(5,2) NOT NULL,
+				location_y DECIMAL(5,2) NOT NULL,
+				description TEXT,
+				device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+				modbus_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+				room_ids INTEGER[] DEFAULT ARRAY[]::INTEGER[],
+				status VARCHAR(50) DEFAULT 'active',
+				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+    await createUpdatedAtTrigger(targetPool, "lighting_categories");
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_lighting_categories_floor_id ON lighting_categories(floor_id);
+			CREATE INDEX IF NOT EXISTS idx_lighting_categories_device_id ON lighting_categories(device_id);
+			CREATE INDEX IF NOT EXISTS idx_lighting_categories_modbus_config ON lighting_categories USING GIN(modbus_config);
+			CREATE INDEX IF NOT EXISTS idx_lighting_categories_status ON lighting_categories(status);
+			CREATE INDEX IF NOT EXISTS idx_lighting_categories_created_at ON lighting_categories(created_at);
+		`);
+
+    console.log("✅ lighting_categories 表已建立");
+
+		// 建立 lighting_floors 表（照明系統樓層）
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS lighting_floors (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(100) NOT NULL UNIQUE,
+				image_url TEXT,
+				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+		await createUpdatedAtTrigger(targetPool, "lighting_floors");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_lighting_floors_name ON lighting_floors(name);
+		`);
+
+		console.log("✅ lighting_floors 表已建立");
+
+		// 建立 lighting_areas 表（照明系統區域，原分類點）
+		await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS lighting_areas (
+				id SERIAL PRIMARY KEY,
+				floor_id INTEGER NOT NULL REFERENCES lighting_floors(id) ON DELETE CASCADE,
+				name VARCHAR(100) NOT NULL,
+				location_x DECIMAL(5,2) NOT NULL DEFAULT 50.00,
+				location_y DECIMAL(5,2) NOT NULL DEFAULT 50.00,
+				description TEXT,
+				device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+				modbus_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				CONSTRAINT unique_floor_area_name UNIQUE(floor_id, name)
+			)
+		`);
+
+		await createUpdatedAtTrigger(targetPool, "lighting_areas");
+
+		await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_lighting_areas_floor_id ON lighting_areas(floor_id);
+			CREATE INDEX IF NOT EXISTS idx_lighting_areas_device_id ON lighting_areas(device_id);
+			CREATE INDEX IF NOT EXISTS idx_lighting_areas_modbus_config ON lighting_areas USING GIN(modbus_config);
+		`);
+
+		console.log("✅ lighting_areas 表已建立");
 
 		await targetPool.end();
 

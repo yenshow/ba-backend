@@ -158,25 +158,162 @@ async function createDevice(deviceData, userId) {
 
 		const typeCode = types[0].code;
 
+		// 驗證 model_id 必填
+		if (!model_id) {
+			throw new Error("設備型號 ID 不能為空");
+		}
+
+		// 驗證設備型號是否存在且類型匹配
+		const models = await db.query("SELECT id, type_id, port FROM device_models WHERE id = ?", [model_id]);
+		if (models.length === 0) {
+			throw new Error("設備型號不存在");
+		}
+
+		if (models[0].type_id !== type_id) {
+			throw new Error("設備型號的類型與設備類型不匹配");
+		}
+
+		const modelPort = models[0].port;
+
 		// 驗證配置
 		validateDeviceConfig(config, typeCode);
 
-		// 如果提供了 model_id，驗證它是否存在且類型匹配
-		if (model_id) {
-			const models = await db.query("SELECT id, type_id FROM device_models WHERE id = ?", [model_id]);
-			if (models.length === 0) {
-				throw new Error("設備型號不存在");
+		// 對於 controller 類型的設備，處理連接資訊和自動生成 unitId
+		if (typeCode === "controller") {
+			if (!config.host) {
+				throw new Error("controller 類型需要 host (主機位址)");
+			}
+			if (config.port === undefined && !modelPort) {
+				throw new Error("controller 類型需要 port (端口)");
 			}
 
-			if (models[0].type_id !== type_id) {
-				throw new Error("設備型號的類型與設備類型不匹配");
+			// 設定 port（優先使用 config.port，否則使用 model.port，最後預設 502）
+			const finalPort = config.port !== undefined ? config.port : (modelPort || 502);
+			config.port = finalPort;
+
+			// 自動生成 unitId（如果未提供）
+			if (config.unitId === undefined) {
+				// 查詢相同 host + port 的設備，找出已使用的 unitId
+				const existingDevices = await db.query(
+					`SELECT config FROM devices 
+					WHERE type_id = ? 
+					AND config->>'host' = ? 
+					AND (config->>'port')::integer = ?`,
+					[type_id, config.host, finalPort]
+				);
+
+				// 找出已使用的 unitId
+				const usedUnitIds = new Set();
+				existingDevices.forEach((device) => {
+					const deviceConfig = parseConfig(device.config);
+					if (deviceConfig && deviceConfig.unitId !== undefined) {
+						usedUnitIds.add(deviceConfig.unitId);
+					}
+				});
+
+				// 從 1 開始找第一個未使用的 unitId
+				let autoUnitId = 1;
+				while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
+					autoUnitId++;
+				}
+
+				if (autoUnitId > 255) {
+					throw new Error("無法自動生成 unitId：已達到最大值 255");
+				}
+
+				config.unitId = autoUnitId;
+			}
+
+			// 檢查是否已有相同連接配置的設備（host + port + unitId）
+			const existing = await db.query(
+				`SELECT id FROM devices 
+				WHERE type_id = ? 
+				AND config->>'host' = ? 
+				AND (config->>'port')::integer = ? 
+				AND (config->>'unitId')::integer = ?`,
+				[type_id, config.host, finalPort, config.unitId]
+			);
+
+			if (existing.length > 0) {
+				throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
+			}
+		}
+
+		// 對於 sensor (modbus) 類型的設備，處理連接資訊和自動生成 unitId
+		if (typeCode === "sensor" && config.protocol === "modbus") {
+			if (!config.host) {
+				throw new Error("sensor (modbus) 類型需要 host (主機位址)");
+			}
+			if (config.port === undefined && !modelPort) {
+				throw new Error("sensor (modbus) 類型需要 port (端口)");
+			}
+
+			// 設定 port（優先使用 config.port，否則使用 model.port，最後預設 502）
+			const finalPort = config.port !== undefined ? config.port : (modelPort || 502);
+			config.port = finalPort;
+
+			// 自動生成 unitId（如果未提供）
+			if (config.unitId === undefined) {
+				// 查詢相同 host + port 的設備，找出已使用的 unitId
+				const existingDevices = await db.query(
+					`SELECT config FROM devices 
+					WHERE type_id = ? 
+					AND config->>'protocol' = 'modbus'
+					AND config->>'host' = ? 
+					AND (config->>'port')::integer = ?`,
+					[type_id, config.host, finalPort]
+				);
+
+				// 找出已使用的 unitId
+				const usedUnitIds = new Set();
+				existingDevices.forEach((device) => {
+					const deviceConfig = parseConfig(device.config);
+					if (deviceConfig && deviceConfig.protocol === "modbus" && deviceConfig.unitId !== undefined) {
+						usedUnitIds.add(deviceConfig.unitId);
+					}
+				});
+
+				// 從 1 開始找第一個未使用的 unitId
+				let autoUnitId = 1;
+				while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
+					autoUnitId++;
+				}
+
+				if (autoUnitId > 255) {
+					throw new Error("無法自動生成 unitId：已達到最大值 255");
+				}
+
+				config.unitId = autoUnitId;
+			}
+
+			// 檢查是否已有相同連接配置的設備（host + port + unitId）
+			const existing = await db.query(
+				`SELECT id FROM devices 
+				WHERE type_id = ? 
+				AND config->>'protocol' = 'modbus'
+				AND config->>'host' = ? 
+				AND (config->>'port')::integer = ? 
+				AND (config->>'unitId')::integer = ?`,
+				[type_id, config.host, finalPort, config.unitId]
+			);
+
+			if (existing.length > 0) {
+				throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
 			}
 		}
 
 		// 建立設備
 		const result = await db.query(
 			"INSERT INTO devices (name, type_id, model_id, description, status, config, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-			[name.trim(), type_id, model_id || null, description || null, status || "inactive", stringifyConfig(config), userId || null]
+			[
+				name.trim(),
+				type_id,
+				model_id,
+				description || null,
+				status || "inactive",
+				stringifyConfig(config),
+				userId || null
+			]
 		);
 
 		// 取得建立的設備
@@ -231,24 +368,25 @@ async function updateDevice(id, deviceData, userId) {
 		}
 
 		if (model_id !== undefined) {
-			if (model_id === null || model_id === 0) {
-				updates.push("model_id = NULL");
-			} else {
-				// 驗證設備型號是否存在
-				const models = await db.query("SELECT id, type_id FROM device_models WHERE id = ?", [model_id]);
-				if (models.length === 0) {
-					throw new Error("設備型號不存在");
-				}
-
-				// 驗證類型匹配
-				const currentTypeId = type_id !== undefined ? type_id : existingDevice.type_id;
-				if (models[0].type_id !== currentTypeId) {
-					throw new Error("設備型號的類型與設備類型不匹配");
-				}
-
-				updates.push("model_id = ?");
-				params.push(model_id);
+			// model_id 現在是必填的，不能為 null
+			if (!model_id) {
+				throw new Error("設備型號 ID 不能為空");
 			}
+
+			// 驗證設備型號是否存在
+			const models = await db.query("SELECT id, type_id, port FROM device_models WHERE id = ?", [model_id]);
+			if (models.length === 0) {
+				throw new Error("設備型號不存在");
+			}
+
+			// 驗證類型匹配
+			const currentTypeId = type_id !== undefined ? type_id : existingDevice.type_id;
+			if (models[0].type_id !== currentTypeId) {
+				throw new Error("設備型號的類型與設備類型不匹配");
+			}
+
+			updates.push("model_id = ?");
+			params.push(model_id);
 		}
 
 		if (description !== undefined) {
@@ -272,6 +410,185 @@ async function updateDevice(id, deviceData, userId) {
 
 			// 驗證配置
 			validateDeviceConfig(config, typeCode);
+
+			// 對於 controller 類型的設備，處理連接資訊和自動生成 unitId
+			if (typeCode === "controller") {
+				const existingConfig = parseConfig(existingDevice.config);
+				const finalModelId = model_id !== undefined ? model_id : existingDevice.model_id;
+
+				// 獲取 model port
+				let modelPort = null;
+				if (finalModelId) {
+					const models = await db.query("SELECT port FROM device_models WHERE id = ?", [finalModelId]);
+					if (models.length > 0) {
+						modelPort = models[0].port;
+					}
+				}
+
+				// 設定 port（優先使用 config.port，否則使用 model.port，最後使用現有 port，最後預設 502）
+				const finalPort = config.port !== undefined ? config.port : (modelPort || existingConfig?.port || 502);
+				config.port = finalPort;
+
+				// 自動生成 unitId（如果未提供且 host 或 port 有變更）
+				if (config.unitId === undefined) {
+					const finalHost = config.host || existingConfig?.host;
+					
+					if (finalHost && finalPort) {
+						// 查詢相同 host + port 的設備，找出已使用的 unitId（排除當前設備）
+						const existingDevices = await db.query(
+							`SELECT config FROM devices 
+							WHERE type_id = ? 
+							AND id != ?
+							AND config->>'host' = ? 
+							AND (config->>'port')::integer = ?`,
+							[currentTypeId, id, finalHost, finalPort]
+						);
+
+						// 找出已使用的 unitId
+						const usedUnitIds = new Set();
+						existingDevices.forEach((device) => {
+							const deviceConfig = parseConfig(device.config);
+							if (deviceConfig && deviceConfig.unitId !== undefined) {
+								usedUnitIds.add(deviceConfig.unitId);
+							}
+						});
+
+						// 如果現有設備有 unitId，優先使用
+						if (existingConfig && existingConfig.unitId !== undefined) {
+							if (!usedUnitIds.has(existingConfig.unitId)) {
+								config.unitId = existingConfig.unitId;
+							} else {
+								// 現有的 unitId 已被使用，找新的
+								let autoUnitId = 1;
+								while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
+									autoUnitId++;
+								}
+								if (autoUnitId > 255) {
+									throw new Error("無法自動生成 unitId：已達到最大值 255");
+								}
+								config.unitId = autoUnitId;
+							}
+						} else {
+							// 從 1 開始找第一個未使用的 unitId
+							let autoUnitId = 1;
+							while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
+								autoUnitId++;
+							}
+							if (autoUnitId > 255) {
+								throw new Error("無法自動生成 unitId：已達到最大值 255");
+							}
+							config.unitId = autoUnitId;
+						}
+					}
+				}
+
+				// 檢查是否已有相同連接配置的設備（host + port + unitId，排除當前設備）
+				if (config.host && config.port !== undefined && config.unitId !== undefined) {
+					const existing = await db.query(
+						`SELECT id FROM devices 
+						WHERE type_id = ? 
+						AND id != ?
+						AND config->>'host' = ? 
+						AND (config->>'port')::integer = ? 
+						AND (config->>'unitId')::integer = ?`,
+						[currentTypeId, id, config.host, config.port, config.unitId]
+					);
+
+					if (existing.length > 0) {
+						throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
+					}
+				}
+			}
+
+			// 對於 sensor (modbus) 類型的設備，處理連接資訊和自動生成 unitId
+			if (typeCode === "sensor" && config.protocol === "modbus") {
+				const existingConfig = parseConfig(existingDevice.config);
+				const finalModelId = model_id !== undefined ? model_id : existingDevice.model_id;
+
+				// 獲取 model port
+				let modelPort = null;
+				if (finalModelId) {
+					const models = await db.query("SELECT port FROM device_models WHERE id = ?", [finalModelId]);
+					if (models.length > 0) {
+						modelPort = models[0].port;
+					}
+				}
+
+				// 設定 port（優先使用 config.port，否則使用 model.port，最後使用現有 port，最後預設 502）
+				const finalPort = config.port !== undefined ? config.port : (modelPort || existingConfig?.port || 502);
+				config.port = finalPort;
+
+				// 自動生成 unitId（如果未提供且 host 或 port 有變更）
+				if (config.unitId === undefined) {
+					const finalHost = config.host || existingConfig?.host;
+					
+					if (finalHost && finalPort) {
+						// 查詢相同 host + port 的設備，找出已使用的 unitId（排除當前設備）
+						const existingDevices = await db.query(
+							`SELECT config FROM devices 
+							WHERE type_id = ? 
+							AND id != ?
+							AND config->>'protocol' = 'modbus'
+							AND config->>'host' = ? 
+							AND (config->>'port')::integer = ?`,
+							[currentTypeId, id, finalHost, finalPort]
+						);
+
+						// 找出已使用的 unitId
+						const usedUnitIds = new Set();
+						existingDevices.forEach((device) => {
+							const deviceConfig = parseConfig(device.config);
+							if (deviceConfig && deviceConfig.protocol === "modbus" && deviceConfig.unitId !== undefined) {
+								usedUnitIds.add(deviceConfig.unitId);
+							}
+						});
+
+						// 如果現有設備有 unitId，優先使用
+						if (existingConfig && existingConfig.protocol === "modbus" && existingConfig.unitId !== undefined) {
+							if (!usedUnitIds.has(existingConfig.unitId)) {
+								config.unitId = existingConfig.unitId;
+							} else {
+								// 現有的 unitId 已被使用，找新的
+								let autoUnitId = 1;
+								while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
+									autoUnitId++;
+								}
+								if (autoUnitId > 255) {
+									throw new Error("無法自動生成 unitId：已達到最大值 255");
+								}
+								config.unitId = autoUnitId;
+							}
+						} else {
+							// 從 1 開始找第一個未使用的 unitId
+							let autoUnitId = 1;
+							while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
+								autoUnitId++;
+							}
+							if (autoUnitId > 255) {
+								throw new Error("無法自動生成 unitId：已達到最大值 255");
+							}
+							config.unitId = autoUnitId;
+						}
+					}
+				}
+
+				// 檢查是否已有相同連接配置的設備（host + port + unitId，排除當前設備）
+				if (config.host && config.port !== undefined && config.unitId !== undefined) {
+					const existing = await db.query(
+						`SELECT id FROM devices 
+						WHERE type_id = ? 
+						AND id != ?
+						AND config->>'host' = ? 
+						AND (config->>'port')::integer = ? 
+						AND (config->>'unitId')::integer = ?`,
+						[currentTypeId, id, config.host, config.port, config.unitId]
+					);
+
+					if (existing.length > 0) {
+						throw new Error("已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）");
+					}
+				}
+			}
 
 			updates.push("config = ?");
 			params.push(stringifyConfig(config));

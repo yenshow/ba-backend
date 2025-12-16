@@ -1,38 +1,20 @@
 const db = require("../database/db");
 
-// 取得所有設備類型（支援從 device_types 或 modbus_device_types 讀取）
+// 取得所有設備類型
 async function getAllDeviceTypes() {
 	try {
-		// 先嘗試從 device_types 讀取（新的通用表）
-		let deviceTypes = await db.query("SELECT * FROM device_types ORDER BY id");
-
-		// 如果 device_types 表不存在或為空，從 modbus_device_types 讀取（向後兼容）
-		if (deviceTypes.length === 0) {
-			deviceTypes = await db.query("SELECT * FROM modbus_device_types ORDER BY id");
-		}
-
+		const deviceTypes = await db.query("SELECT * FROM device_types ORDER BY id");
 		return { device_types: deviceTypes };
 	} catch (error) {
-		// 如果 device_types 表不存在，嘗試從 modbus_device_types 讀取
-		try {
-			const deviceTypes = await db.query("SELECT * FROM modbus_device_types ORDER BY id");
-			return { device_types: deviceTypes };
-		} catch (fallbackError) {
-			console.error("取得設備類型失敗:", error);
-			throw new Error("取得設備類型失敗: " + error.message);
-		}
+		console.error("取得設備類型失敗:", error);
+		throw new Error("取得設備類型失敗: " + error.message);
 	}
 }
 
 // 取得單一設備類型
 async function getDeviceTypeById(id) {
 	try {
-		let deviceTypes = await db.query("SELECT * FROM device_types WHERE id = ?", [id]);
-
-		// 如果 device_types 中找不到，嘗試從 modbus_device_types 讀取
-		if (deviceTypes.length === 0) {
-			deviceTypes = await db.query("SELECT * FROM modbus_device_types WHERE id = ?", [id]);
-		}
+		const deviceTypes = await db.query("SELECT * FROM device_types WHERE id = ?", [id]);
 
 		if (deviceTypes.length === 0) {
 			const error = new Error("設備類型不存在");
@@ -49,15 +31,10 @@ async function getDeviceTypeById(id) {
 	}
 }
 
-// 根據代碼取得設備類型 ⭐ 新增
+// 根據代碼取得設備類型
 async function getDeviceTypeByCode(code) {
 	try {
-		let deviceTypes = await db.query("SELECT * FROM device_types WHERE code = ?", [code]);
-
-		// 如果 device_types 中找不到，嘗試從 modbus_device_types 讀取
-		if (deviceTypes.length === 0) {
-			deviceTypes = await db.query("SELECT * FROM modbus_device_types WHERE code = ?", [code]);
-		}
+		const deviceTypes = await db.query("SELECT * FROM device_types WHERE code = ?", [code]);
 
 		if (deviceTypes.length === 0) {
 			const error = new Error("設備類型不存在");
