@@ -1,6 +1,6 @@
 const ModbusRTU = require("modbus-serial");
 const EventEmitter = require("events");
-const config = require("../config");
+const config = require("../../config");
 
 class ModbusClient extends EventEmitter {
 	constructor(modbusConfig) {

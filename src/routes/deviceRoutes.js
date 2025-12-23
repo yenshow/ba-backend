@@ -1,8 +1,8 @@
 const express = require("express");
 const router = express.Router();
-const deviceService = require("../services/deviceService");
-const deviceTypeService = require("../services/deviceTypeService");
-const deviceModelService = require("../services/deviceModelService");
+const deviceService = require("../services/devices/deviceService");
+const deviceTypeService = require("../services/devices/deviceTypeService");
+const deviceModelService = require("../services/devices/deviceModelService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 
 // ========== 設備類型 API ==========
@@ -12,10 +12,8 @@ const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 router.get("/types", async (req, res, next) => {
 	try {
 		const result = await deviceTypeService.getAllDeviceTypes();
-		// 設備類型可能會變動，使用較短的快取時間（30秒）或禁用快取
-		// 如果前端有快取機制，這裡可以禁用瀏覽器快取
 		res.set({
-			"Cache-Control": "no-cache, must-revalidate", // 禁用快取，必須重新驗證
+			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",
 			"Expires": "0"
 		});
@@ -25,12 +23,11 @@ router.get("/types", async (req, res, next) => {
 	}
 });
 
-// 根據代碼取得設備類型（公開）⭐ 新增（必須在 /types/:id 之前）
+// 根據代碼取得設備類型（公開）
 router.get("/types/code/:code", async (req, res, next) => {
 	try {
 		const { code } = req.params;
 		const result = await deviceTypeService.getDeviceTypeByCode(code);
-		// 禁用瀏覽器快取
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",
@@ -47,7 +44,6 @@ router.get("/types/:id", async (req, res, next) => {
 	try {
 		const { id } = req.params;
 		const result = await deviceTypeService.getDeviceTypeById(parseInt(id));
-		// 禁用瀏覽器快取
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",
@@ -102,7 +98,6 @@ router.get("/models", async (req, res, next) => {
 			type_id: type_id ? parseInt(type_id) : undefined,
 			type_code
 		});
-		// 設備型號可能會變動，禁用瀏覽器快取
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",
@@ -119,7 +114,6 @@ router.get("/models/:id", async (req, res, next) => {
 	try {
 		const { id } = req.params;
 		const result = await deviceModelService.getDeviceModelById(parseInt(id));
-		// 禁用瀏覽器快取
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",
@@ -178,7 +172,6 @@ router.get("/", async (req, res, next) => {
 			orderBy,
 			order
 		});
-		// 設備列表可能經常變動，禁用瀏覽器快取
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",
@@ -195,7 +188,6 @@ router.get("/:id", async (req, res, next) => {
 	try {
 		const { id } = req.params;
 		const result = await deviceService.getDeviceById(parseInt(id));
-		// 禁用瀏覽器快取，確保取得最新資料
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
 			"Pragma": "no-cache",

@@ -1,4 +1,4 @@
-const db = require("../database/db");
+const db = require("../../database/db");
 
 // ========== 共用輔助函數 ==========
 

@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const lightingService = require("../services/lightingService");
+const lightingService = require("../services/systems/lightingService");
 const { authenticate } = require("../middleware/authMiddleware");
 
 // 禁用快取的中間件

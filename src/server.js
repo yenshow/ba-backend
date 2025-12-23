@@ -8,8 +8,21 @@ const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
 const rtspRoutes = require("./routes/rtspRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
-const rtspStreamService = require("./services/rtspStreamService");
+const rtspStreamService = require("./services/communication/rtspStreamService");
+const deviceErrorTracker = require("./services/alerts/deviceErrorTracker");
 const db = require("./database/db");
+
+// 監聽 RTSP 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
+rtspStreamService.on("error", (errorInfo) => {
+	// 只記錄簡潔的錯誤信息，不輸出完整堆疊跟踪
+	const errorMsg = errorInfo.error?.message || "未知錯誤";
+	console.error(`[RTSP Stream Service] 串流錯誤 (${errorInfo.streamId}): ${errorMsg}`);
+	// 不拋出錯誤，只記錄，避免程序崩潰
+});
+
+rtspStreamService.on("end", (streamInfo) => {
+	console.log(`[RTSP Stream Service] 串流正常結束:`, streamInfo.streamId);
+});
 
 const app = express();
 
@@ -59,27 +72,13 @@ app.use("/api/rtsp", rtspRoutes);
 app.use("/api/devices", deviceRoutes);
 const lightingRoutes = require("./routes/lightingRoutes");
 app.use("/api/lighting", lightingRoutes);
+const environmentRoutes = require("./routes/environmentRoutes");
+app.use("/api/environment", environmentRoutes);
 const alertRoutes = require("./routes/alertRoutes");
 app.use("/api/alerts", alertRoutes);
 
-// 提供 HLS 串流文件的靜態服務
-app.use(
-	"/hls",
-	express.static(path.join(__dirname, "../public/hls"), {
-		setHeaders: (res, filePath) => {
-			// 設置正確的 MIME 類型
-			if (filePath.endsWith(".m3u8")) {
-				res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-			} else if (filePath.endsWith(".ts")) {
-				res.setHeader("Content-Type", "video/mp2t");
-			}
-			// 允許跨域訪問（CORS）
-			res.setHeader("Access-Control-Allow-Origin", "*");
-			res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-			res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    },
-	})
-);
+// 注意：HLS 串流現在由 MediaMTX 提供，不再需要本地靜態文件服務
+// MediaMTX 在 http://localhost:8888 提供 HLS 服務
 
 // 處理 WebSocket 升級請求（來自 Nuxt Content 熱重載等）
 // 靜默返回 404，不記錄日誌
@@ -133,6 +132,67 @@ app.use((err, _req, res, _next) => {
 		// 對於設備離線錯誤，使用簡潔的日誌輸出，避免重複堆疊
 		// eslint-disable-next-line no-console
 		console.error(`[503] ${err.message}`);
+
+		// 如果是 Modbus 相關的錯誤，記錄設備錯誤（連續5次才觸發警報）
+		if (req.path && req.path.startsWith("/api/modbus")) {
+			// 從查詢參數中提取設備配置
+			const deviceConfig = {
+				host: req.query?.host,
+				port: req.query?.port ? Number(req.query.port) : undefined,
+				unitId: req.query?.unitId ? Number(req.query.unitId) : undefined
+			};
+
+			// 如果有有效的設備配置，記錄錯誤
+			if (deviceConfig.host && deviceConfig.port !== undefined) {
+				// 異步處理，不阻塞錯誤響應
+				deviceErrorTracker
+					.getDeviceIdFromConfig(deviceConfig)
+					.then((deviceId) => {
+						if (deviceId) {
+							// 將通訊錯誤整合到離線警報中
+							return deviceErrorTracker.recordDeviceError(
+								deviceId,
+								"offline",
+								err.message
+							);
+						}
+						return false;
+					})
+					.catch((trackError) => {
+						// 靜默處理追蹤錯誤，避免影響主錯誤響應
+						console.error("[server] 記錄設備錯誤失敗:", trackError.message);
+					});
+			}
+		}
+	}
+	// RTSP 連接錯誤
+	else if (
+		err.message &&
+    (err.message.includes("無法連接到 RTSP") ||
+      err.message.includes("RTSP 認證失敗") ||
+      err.message.includes("RTSP 串流路徑不存在") ||
+      err.message.includes("RTSP 連接失敗"))
+	) {
+		statusCode = 503; // Service Unavailable
+		// 對於 RTSP 連接錯誤，使用簡潔的日誌輸出
+		// eslint-disable-next-line no-console
+		console.error(`[503] ${err.message}`);
+
+		// 如果是 RTSP 相關的錯誤，記錄設備錯誤（連續5次才觸發警報）
+		if (req.path && req.path.startsWith("/api/rtsp")) {
+			// 從請求中提取設備 ID（RTSP 路由可能使用不同的參數結構）
+			// 這裡需要根據實際的 RTSP 路由結構來調整
+			const deviceId = req.body?.device_id || req.query?.device_id || req.params?.deviceId;
+			if (deviceId) {
+				// 異步處理，不阻塞錯誤響應
+				deviceErrorTracker
+					.recordDeviceError(Number(deviceId), "offline", err.message)
+					.catch((trackError) => {
+						// 靜默處理追蹤錯誤，避免影響主錯誤響應
+						console.error("[server] 記錄設備錯誤失敗:", trackError.message);
+					});
+			}
+		}
 	} else {
 		// 其他錯誤輸出完整堆疊
 		// eslint-disable-next-line no-console

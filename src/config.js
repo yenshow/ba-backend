@@ -30,5 +30,11 @@ module.exports = {
 	jwt: {
 		secret: process.env.JWT_SECRET || "your-secret-key-change-in-production",
 		expiresIn: process.env.JWT_EXPIRES_IN || "7d"
+	},
+	mediaMTX: {
+		apiUrl: process.env.MEDIAMTX_API_URL || "http://localhost:9997",
+		hlsUrl: process.env.MEDIAMTX_HLS_URL || "http://localhost:8888",
+		webrtcUrl: process.env.MEDIAMTX_WEBRTC_URL || "http://localhost:8889",
+		rtspUrl: process.env.MEDIAMTX_RTSP_URL || "rtsp://localhost:8554"
 	}
 };

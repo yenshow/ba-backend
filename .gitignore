@@ -8,3 +8,9 @@ backups/
 public/hls/
 
 postgres/
+
+# MediaMTX 相關檔案
+mediamtx/bin/
+mediamtx/logs/
+mediamtx/mediamtx.pid
+mediamtx/mediamtx.yml

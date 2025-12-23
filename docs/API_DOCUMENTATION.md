@@ -187,20 +187,6 @@
 }
 ```
 
-### 6. 已棄用的路由 (`/api/modbus`)
-
-以下路由已移至 `/api/devices`，保留僅為向後兼容：
-
-| 方法   | 路徑                            | 狀態   | 替代路由                  |
-| ------ | ------------------------------- | ------ | ------------------------- |
-| GET    | `/api/modbus/device-types`      | 已棄用 | `/api/devices/types`      |
-| GET    | `/api/modbus/device-types/:id`  | 已棄用 | `/api/devices/types/:id`  |
-| GET    | `/api/modbus/device-models`     | 已棄用 | `/api/devices/models`     |
-| GET    | `/api/modbus/device-models/:id` | 已棄用 | `/api/devices/models/:id` |
-| POST   | `/api/modbus/device-models`     | 已棄用 | `/api/devices/models`     |
-| PUT    | `/api/modbus/device-models/:id` | 已棄用 | `/api/devices/models/:id` |
-| DELETE | `/api/modbus/device-models/:id` | 已棄用 | `/api/devices/models/:id` |
-
 ---
 
 ## 詳細 API 說明
@@ -447,6 +433,3 @@ Expires: 0
 
    - 所有 Modbus 讀取路由都需要在查詢參數中提供 `host`、`port`、`unitId`
    - 這些參數可以從設備的 `config` 中取得
-
-4. **已棄用路由**：
-   - `/api/modbus/device-*` 路由已棄用，建議前端遷移到 `/api/devices/*`

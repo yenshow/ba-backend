@@ -1,5 +1,5 @@
-const db = require("../database/db");
-const { parseConfig, stringifyConfig, validateDeviceConfig } = require("../utils/deviceHelpers");
+const db = require("../../database/db");
+const { parseConfig, stringifyConfig, validateDeviceConfig } = require("../../utils/deviceHelpers");
 
 // 取得設備列表
 async function getDevices(filters = {}) {
@@ -100,7 +100,10 @@ async function getDeviceById(id) {
 				d.*,
 				dt.name as type_name,
 				dt.code as type_code,
-				dm.name as model_name
+				dm.id as model_id,
+				dm.name as model_name,
+				dm.port as model_port,
+				dm.config as model_config
 			FROM devices d
 			INNER JOIN device_types dt ON d.type_id = dt.id
 			LEFT JOIN device_models dm ON d.model_id = dm.id
@@ -117,6 +120,22 @@ async function getDeviceById(id) {
 
 		const device = devices[0];
 		device.config = parseConfig(device.config);
+
+		// 如果設備有 model_id，包含完整的 model 資訊（含 config）
+		if (device.model_id) {
+			device.model = {
+				id: device.model_id,
+				name: device.model_name,
+				port: device.model_port,
+				config: parseConfig(device.model_config)
+			};
+		}
+
+		// 移除臨時欄位
+		delete device.model_id;
+		delete device.model_name;
+		delete device.model_port;
+		delete device.model_config;
 
 		return { device };
 	} catch (error) {

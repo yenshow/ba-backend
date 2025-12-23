@@ -28,7 +28,22 @@ async function createTestAlerts() {
 		const sensorDevice = sensorDevices[0];
 		console.log(`✅ 找到感測器設備: ${sensorDevice.name} (ID: ${sensorDevice.id})`);
 
-		// 創建多個測試警示
+		// 先清空該設備的現有測試警報
+		console.log("🧹 清空該設備的現有警報...");
+		const existingAlerts = await db.query(
+			`SELECT COUNT(*) as count FROM device_alerts WHERE device_id = ?`,
+			[sensorDevice.id]
+		);
+		const existingCount = parseInt(existingAlerts[0]?.count || 0);
+
+		if (existingCount > 0) {
+			await db.query(`DELETE FROM device_alerts WHERE device_id = ?`, [sensorDevice.id]);
+			console.log(`✅ 已刪除 ${existingCount} 個現有警報`);
+		} else {
+			console.log("ℹ️  沒有現有警報需要刪除");
+		}
+
+		// 創建多個測試警示（注意：警報系統不處理 info 級別和 maintenance 類型）
 		const testAlerts = [
 			{
 				device_id: sensorDevice.id,
@@ -47,12 +62,6 @@ async function createTestAlerts() {
 				alert_type: "threshold",
 				severity: "warning",
 				message: `感測器設備「${sensorDevice.name}」CO2 濃度超過閾值 (800 ppm)`
-			},
-			{
-				device_id: sensorDevice.id,
-				alert_type: "maintenance",
-				severity: "info",
-				message: `感測器設備「${sensorDevice.name}」需要定期維護檢查`
 			},
 			{
 				device_id: sensorDevice.id,

@@ -1,0 +1,25 @@
+# MediaMTX 配置檔案
+# 優化低延遲配置
+
+logLevel: info
+logDestinations: [stdout]
+logFile: ""
+
+# 監聽地址
+rtspAddress: :8554
+rtmpAddress: :1935
+hlsAddress: :8888
+webrtcAddress: :8889
+apiAddress: :9997
+api: yes
+
+# HLS 低延遲配置
+# 注意：MediaMTX 的 HLS 配置選項有限，低延遲主要通過前端播放器配置實現
+
+# 路徑配置（通過 API 動態添加）
+paths: {}
+
+# 全域設定：啟用重新封裝以支持 HLS 和 WebRTC
+# 這會自動將不兼容的編解碼器（如 H265）轉換為瀏覽器支持的格式
+readTimeout: 10s
+writeTimeout: 10s

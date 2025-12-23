@@ -1,40 +1,66 @@
 const express = require("express");
 const router = express.Router();
-const alertService = require("../services/alertService");
+const alertService = require("../services/alerts/alertService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+
+/**
+ * 驗證用戶認證並返回用戶 ID
+ * 用於簡化路由中的重複驗證邏輯
+ */
+function getAuthenticatedUserId(req, res) {
+	const userId = req.user?.id;
+	if (!userId) {
+		res.status(401).json({ error: true, message: "未提供認證資訊" });
+		return null;
+	}
+	return userId;
+}
 
 // ========== 警示 API ==========
 
-// 取得警示列表（公開，但建議加上認證）
+// 取得警示列表（公開）
 router.get("/", async (req, res, next) => {
 	try {
 		const {
-			device_id,
+      source,
+      source_id,
+      device_id, // 向後兼容
+      device_type_code,
 			alert_type,
 			severity,
-			resolved,
+      status,
+      resolved, // 向後兼容
+      ignored, // 向後兼容
+      start_date,
+      end_date,
 			limit,
 			offset,
 			orderBy,
-			order
+      order,
 		} = req.query;
 
 		const result = await alertService.getAlerts({
-			device_id: device_id ? parseInt(device_id) : undefined,
+      source,
+      source_id: source_id ? parseInt(source_id) : undefined,
+      device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
+      device_type_code,
 			alert_type,
 			severity,
-			resolved: resolved !== undefined ? resolved === "true" : undefined,
+      status,
+      resolved: resolved !== undefined ? resolved === "true" : undefined, // 向後兼容
+      ignored: ignored !== undefined ? ignored === "true" : undefined, // 向後兼容
+      start_date,
+      end_date,
 			limit: limit ? parseInt(limit) : undefined,
 			offset: offset ? parseInt(offset) : undefined,
 			orderBy,
-			order
+      order,
 		});
 
-		// 禁用快取，確保取得最新資料
 		res.set({
 			"Cache-Control": "no-cache, must-revalidate",
-			"Pragma": "no-cache",
-			"Expires": "0"
+      Pragma: "no-cache",
+      Expires: "0",
 		});
 		res.json(result);
 	} catch (error) {
@@ -45,12 +71,14 @@ router.get("/", async (req, res, next) => {
 // 取得未解決的警示數量（公開）
 router.get("/unresolved/count", async (req, res, next) => {
 	try {
-		const { device_id, alert_type, severity } = req.query;
+    const { source, source_id, device_id, alert_type, severity } = req.query;
 
 		const count = await alertService.getUnresolvedAlertCount({
-			device_id: device_id ? parseInt(device_id) : undefined,
+      source,
+      source_id: source_id ? parseInt(source_id) : undefined,
+      device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
 			alert_type,
-			severity
+      severity,
 		});
 
 		res.json({ count });
@@ -81,25 +109,36 @@ router.post("/", authenticate, async (req, res, next) => {
 	}
 });
 
-// 標記警示為已解決（需要認證）
-router.put("/:id/resolve", authenticate, async (req, res, next) => {
+// 標記警示為已解決（需要認證，支持多系統來源）
+router.put(
+  "/:deviceId/:alertType/resolve",
+  authenticate,
+  async (req, res, next) => {
 	try {
-		const { id } = req.params;
-		const userId = req.user?.id;
+      const { deviceId, alertType } = req.params;
+      const { source } = req.query; // 可選的系統來源參數
+		const userId = getAuthenticatedUserId(req, res);
+		if (!userId) return;
 
-		if (!userId) {
-			return res.status(401).json({ error: true, message: "未提供認證資訊" });
-		}
-
-		const result = await alertService.resolveAlert(parseInt(id), userId);
-		res.json({ alert: result });
+      const count = await alertService.resolveAlert(
+        parseInt(deviceId),
+        alertType,
+        userId,
+        source // 如果未提供，默認為 device（向後兼容）
+      );
+      res.json({ success: true, message: `已解決 ${count} 個警示`, count });
 	} catch (error) {
 		next(error);
 	}
-});
+  }
+);
 
 // 標記警示為未解決（需要認證，管理員）
-router.put("/:id/unresolve", authenticate, requireAdmin, async (req, res, next) => {
+router.put(
+  "/:id/unresolve",
+  authenticate,
+  requireAdmin,
+  async (req, res, next) => {
 	try {
 		const { id } = req.params;
 		const result = await alertService.unresolveAlert(parseInt(id));
@@ -107,18 +146,31 @@ router.put("/:id/unresolve", authenticate, requireAdmin, async (req, res, next) 
 	} catch (error) {
 		next(error);
 	}
-});
+  }
+);
 
-// 刪除警示（需要認證，管理員）
-router.delete("/:id", authenticate, requireAdmin, async (req, res, next) => {
+// 忽視警示（需要認證，支持多系統來源）
+router.post(
+  "/:deviceId/:alertType/ignore",
+  authenticate,
+  async (req, res, next) => {
 	try {
-		const { id } = req.params;
-		await alertService.deleteAlert(parseInt(id));
-		res.json({ success: true, message: "警示已刪除" });
+      const { deviceId, alertType } = req.params;
+      const { source } = req.query; // 可選的系統來源參數
+      const userId = getAuthenticatedUserId(req, res);
+      if (!userId) return;
+
+      const count = await alertService.ignoreAlerts(
+        parseInt(deviceId),
+        alertType,
+        userId,
+        source // 如果未提供，默認為 device（向後兼容）
+      );
+      res.json({ success: true, message: `已忽視 ${count} 個警示`, count });
 	} catch (error) {
 		next(error);
 	}
-});
+  }
+);
 
 module.exports = router;
-

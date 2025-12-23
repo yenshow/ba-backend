@@ -1,5 +1,5 @@
 const express = require("express");
-const rtspStreamService = require("../services/rtspStreamService");
+const rtspStreamService = require("../services/communication/rtspStreamService");
 
 const router = express.Router();
 
@@ -20,7 +20,20 @@ router.post("/start", async (req, res, next) => {
 			});
 		}
 
+		// 驗證 RTSP URL 格式
+		if (!rtspUrl.startsWith("rtsp://")) {
+			return res.status(400).json({
+				error: true,
+				message: "無效的 RTSP URL 格式，必須以 rtsp:// 開頭",
+				timestamp: new Date().toISOString()
+			});
+		}
+
+		console.log(`[RTSP Routes] 收到啟動串流請求: ${rtspUrl.replace(/:[^:@]+@/, ':****@')}`); // 隱藏密碼
+
 		const result = await rtspStreamService.startStream(rtspUrl);
+
+		console.log(`[RTSP Routes] 串流啟動成功: Stream ID = ${result.streamId}`);
 
 		res.json({
 			error: false,
@@ -29,6 +42,7 @@ router.post("/start", async (req, res, next) => {
 			timestamp: new Date().toISOString()
 		});
 	} catch (error) {
+		console.error(`[RTSP Routes] 啟動串流失敗:`, error.message);
 		next(error);
 	}
 });
@@ -66,9 +80,9 @@ router.post("/stop/:streamId", async (req, res, next) => {
  * GET /api/rtsp/status
  * 獲取所有串流狀態
  */
-router.get("/status", (_req, res) => {
+router.get("/status", async (_req, res) => {
 	try {
-		const statuses = rtspStreamService.getStreamStatus();
+		const statuses = await rtspStreamService.getStreamStatus();
 
 		res.json({
 			error: false,
@@ -90,7 +104,7 @@ router.get("/status", (_req, res) => {
  * GET /api/rtsp/status/:streamId
  * 獲取指定串流狀態
  */
-router.get("/status/:streamId", (req, res) => {
+router.get("/status/:streamId", async (req, res) => {
 	try {
 		const { streamId } = req.params;
 
@@ -102,7 +116,7 @@ router.get("/status/:streamId", (req, res) => {
 			});
 		}
 
-		const status = rtspStreamService.getStreamStatus(streamId);
+		const status = await rtspStreamService.getStreamStatus(streamId);
 
 		if (!status) {
 			return res.status(404).json({

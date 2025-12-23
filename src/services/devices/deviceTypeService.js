@@ -1,4 +1,4 @@
-const db = require("../database/db");
+const db = require("../../database/db");
 
 // 取得所有設備類型
 async function getAllDeviceTypes() {

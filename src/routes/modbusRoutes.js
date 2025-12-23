@@ -1,12 +1,13 @@
 const express = require("express");
-const modbusClient = require("../services/modbusClient");
-const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const modbusClient = require("../services/devices/modbusClient");
+const deviceErrorTracker = require("../services/alerts/deviceErrorTracker");
 
 const router = express.Router();
 
 const parseAddressParams = (req) => {
 	const address = Number(req.query.address ?? 0);
-	const length = Number(req.query.length ?? 10);
+	// length 參數可選，預設為 1（讀取單個寄存器）
+	const length = req.query.length !== undefined ? Number(req.query.length) : 1;
 
 	if (!Number.isInteger(address) || address < 0) {
 		throw new Error("address must be a non-negative integer");
@@ -59,6 +60,20 @@ const routeFactory = (reader) => async (req, res, next) => {
 		const { address, length } = parseAddressParams(req);
 		const deviceConfig = parseDeviceParams(req);
 		const data = await reader(address, length, deviceConfig);
+
+		// 成功讀取資料時，清除設備錯誤狀態（設備已恢復連線）
+		deviceErrorTracker
+			.getDeviceIdFromConfig(deviceConfig)
+			.then((deviceId) => {
+				if (deviceId) {
+					return deviceErrorTracker.clearDeviceError(deviceId);
+				}
+			})
+			.catch((error) => {
+				// 靜默處理，不影響正常響應
+				console.error("[modbusRoutes] 清除設備錯誤狀態失敗:", error.message);
+			});
+
 		res.json({ address, length, data, device: deviceConfig });
 	} catch (error) {
 		next(error);
@@ -115,122 +130,6 @@ router.put("/coils", async (req, res, next) => {
 
 		return res.status(400).json({ error: "must provide either value (boolean) or values (boolean[])" });
 	} catch (error) {
-		next(error);
-	}
-});
-
-// ==================== 已棄用的路由（保留僅為向後兼容）===================
-// 注意：以下路由已移至 /api/devices，建議前端遷移到新的路由
-// - 設備管理：/api/devices (GET, POST, PUT, DELETE)
-// - 設備類型：/api/devices/types
-// - 設備型號：/api/devices/models
-
-// 取得所有設備類型（已棄用，請使用 /api/devices/types）
-router.get("/device-types", async (req, res, next) => {
-	try {
-		const deviceTypeService = require("../services/deviceTypeService");
-		const result = await deviceTypeService.getAllDeviceTypes();
-		res.json(result);
-	} catch (error) {
-		next(error);
-	}
-});
-
-// 取得單一設備類型（已棄用，請使用 /api/devices/types/:id）
-router.get("/device-types/:id", async (req, res, next) => {
-	try {
-		const deviceTypeService = require("../services/deviceTypeService");
-		const id = parseInt(req.params.id, 10);
-		if (isNaN(id)) {
-			return res.status(400).json({ error: "設備類型 ID 必須是數字" });
-		}
-		const result = await deviceTypeService.getDeviceTypeById(id);
-		res.json(result);
-	} catch (error) {
-		if (error.statusCode === 404) {
-			return res.status(404).json({ error: error.message });
-		}
-		next(error);
-	}
-});
-
-// ==================== 設備型號管理路由（已棄用，請使用 /api/devices/models）===================
-
-// 取得所有設備型號（已棄用，請使用 /api/devices/models）
-router.get("/device-models", async (req, res, next) => {
-	try {
-		const deviceModelService = require("../services/deviceModelService");
-		const result = await deviceModelService.getAllDeviceModels();
-		res.json(result);
-	} catch (error) {
-		next(error);
-	}
-});
-
-// 取得單一設備型號（已棄用，請使用 /api/devices/models/:id）
-router.get("/device-models/:id", async (req, res, next) => {
-	try {
-		const deviceModelService = require("../services/deviceModelService");
-		const id = parseInt(req.params.id, 10);
-		if (isNaN(id)) {
-			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
-		}
-		const result = await deviceModelService.getDeviceModelById(id);
-		res.json(result);
-	} catch (error) {
-		if (error.statusCode === 404) {
-			return res.status(404).json({ error: error.message });
-		}
-		next(error);
-	}
-});
-
-// 建立設備型號（已棄用，請使用 /api/devices/models）
-router.post("/device-models", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const deviceModelService = require("../services/deviceModelService");
-		const result = await deviceModelService.createDeviceModel(req.body, req.user.id);
-		res.status(201).json(result);
-	} catch (error) {
-		if (error.statusCode === 400) {
-			return res.status(400).json({ error: error.message });
-		}
-		next(error);
-	}
-});
-
-// 更新設備型號（已棄用，請使用 /api/devices/models/:id）
-router.put("/device-models/:id", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const deviceModelService = require("../services/deviceModelService");
-		const id = parseInt(req.params.id, 10);
-		if (isNaN(id)) {
-			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
-		}
-		const result = await deviceModelService.updateDeviceModel(id, req.body, req.user.id);
-		res.json(result);
-	} catch (error) {
-		if (error.statusCode === 400 || error.statusCode === 404) {
-			return res.status(error.statusCode).json({ error: error.message });
-		}
-		next(error);
-	}
-});
-
-// 刪除設備型號（已棄用，請使用 /api/devices/models/:id）
-router.delete("/device-models/:id", authenticate, requireAdmin, async (req, res, next) => {
-	try {
-		const deviceModelService = require("../services/deviceModelService");
-		const id = parseInt(req.params.id, 10);
-		if (isNaN(id)) {
-			return res.status(400).json({ error: "設備型號 ID 必須是數字" });
-		}
-		const result = await deviceModelService.deleteDeviceModel(id);
-		res.json(result);
-	} catch (error) {
-		if (error.statusCode === 400 || error.statusCode === 404) {
-			return res.status(error.statusCode).json({ error: error.message });
-		}
 		next(error);
 	}
 });

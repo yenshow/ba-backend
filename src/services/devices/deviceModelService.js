@@ -1,5 +1,5 @@
-const db = require("../database/db");
-const { parseConfig, stringifyConfig } = require("../utils/deviceHelpers");
+const db = require("../../database/db");
+const { parseConfig, stringifyConfig } = require("../../utils/deviceHelpers");
 
 // 取得所有設備型號（支援按類型篩選）
 async function getAllDeviceModels(filters = {}) {
@@ -79,6 +79,37 @@ async function getDeviceModelById(id) {
 	}
 }
 
+// 驗證感測器參數配置
+function validateSensorParametersConfig(config) {
+	if (!config || typeof config !== "object") {
+		return; // config 是可選的
+	}
+
+	if (config.sensorParameters) {
+		if (!Array.isArray(config.sensorParameters)) {
+			throw new Error("sensorParameters 必須為陣列");
+		}
+
+		const validParameterTypes = ["pm25", "pm10", "tvoc", "hcho", "humidity", "temperature", "co2", "noise", "wind"];
+		
+		for (const param of config.sensorParameters) {
+			if (!param.type) {
+				throw new Error("參數定義必須包含 type 欄位");
+			}
+			if (!validParameterTypes.includes(param.type)) {
+				throw new Error(`無效的參數類型: ${param.type}。有效類型: ${validParameterTypes.join(", ")}`);
+			}
+			if (!param.modbusConfig) {
+				throw new Error(`參數 ${param.type} 必須包含 modbusConfig`);
+			}
+			if (typeof param.modbusConfig.address !== "number" || param.modbusConfig.address < 0) {
+				throw new Error(`參數 ${param.type} 的 modbusConfig.address 必須為非負整數`);
+			}
+			// length 已移除：前端不再提供，後端統一使用預設值 1
+		}
+	}
+}
+
 // 建立設備型號
 async function createDeviceModel(data, userId) {
 	try {
@@ -100,9 +131,14 @@ async function createDeviceModel(data, userId) {
 		}
 
 		// 驗證設備類型是否存在
-		const types = await db.query("SELECT id FROM device_types WHERE id = ?", [type_id]);
+		const types = await db.query("SELECT id, code FROM device_types WHERE id = ?", [type_id]);
 		if (types.length === 0) {
 			throw new Error("設備類型不存在");
+		}
+
+		// 如果是感測器類型，驗證 sensorParameters 配置
+		if (config && types[0].code === "sensor") {
+			validateSensorParametersConfig(config);
 		}
 
 		// 插入到 device_models
@@ -161,17 +197,30 @@ async function updateDeviceModel(id, data, userId) {
 			}
 		}
 
-		// 驗證設備類型是否存在（如果提供）
-		if (type_id !== undefined) {
-			const types = await db.query("SELECT id FROM device_types WHERE id = ?", [type_id]);
+		const existingModel = existing[0];
+		const currentTypeId = existingModel.type_id;
+
+		// 驗證設備類型是否存在（如果提供且與現有值不同）
+		if (type_id !== undefined && type_id !== currentTypeId) {
+			const types = await db.query("SELECT id, code FROM device_types WHERE id = ?", [type_id]);
 			if (types.length === 0) {
 				throw new Error("設備類型不存在");
 			}
 
-			// 檢查是否有設備使用此型號
+			// 只有在實際更改類型時才檢查是否有設備使用此型號
 			const devices = await db.query("SELECT id FROM devices WHERE model_id = ? LIMIT 1", [id]);
 			if (devices.length > 0) {
 				throw new Error("無法更改類型：仍有設備使用此型號");
+			}
+		}
+
+		// 驗證 config（如果是感測器類型）
+		if (config !== undefined) {
+			// 確定當前的設備類型（優先使用新的 type_id，否則使用現有的）
+			const targetTypeId = type_id !== undefined ? type_id : currentTypeId;
+			const types = await db.query("SELECT code FROM device_types WHERE id = ?", [targetTypeId]);
+			if (types.length > 0 && types[0].code === "sensor") {
+				validateSensorParametersConfig(config);
 			}
 		}
 
