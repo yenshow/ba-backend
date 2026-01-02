@@ -29,6 +29,11 @@ class MediaMTXService extends EventEmitter {
     this.streams = new Map();
     // API 請求超時時間（毫秒）
     this.apiTimeout = 10000;
+    
+    // 路徑狀態緩存（優化性能：減少 API 請求）
+    this.pathStatusCache = new Map();
+    this.lastStatusUpdate = 0;
+    this.statusUpdateInterval = 2000; // 批量更新間隔 2 秒
   }
 
   /**
@@ -144,17 +149,17 @@ class MediaMTXService extends EventEmitter {
    * @returns {Promise<Object>}
    */
   async addPath(pathName, rtspUrl) {
+    // MediaMTX 路徑配置（移到外部以便在錯誤處理中使用）
+    // 注意：H265 編解碼器可能導致 HLS 生成失敗
+    // 解決方案：1) 將攝像頭配置為輸出 H264  2) 使用 FFmpeg 進行轉碼
+    const pathConfig = {
+      source: rtspUrl,
+      sourceOnDemand: false, // 立即啟動，不等待客戶端連接
+      // 注意：HLS 低延遲配置需要在全局配置文件中設置
+      // MediaMTX API 的路徑配置不支持直接設置 HLS 參數
+    };
+    
     try {
-      // MediaMTX 路徑配置
-      // 注意：H265 編解碼器可能導致 HLS 生成失敗
-      // 解決方案：1) 將攝像頭配置為輸出 H264  2) 使用 FFmpeg 進行轉碼
-      const pathConfig = {
-        source: rtspUrl,
-        sourceOnDemand: false, // 立即啟動，不等待客戶端連接
-        // 注意：HLS 低延遲配置需要在全局配置文件中設置
-        // MediaMTX API 的路徑配置不支持直接設置 HLS 參數
-      };
-      
       // 注意：如果遇到 H265 DTS 錯誤，需要：
       // 1. 將攝像頭配置為輸出 H264 編碼
       // 2. 或使用 FFmpeg 進行轉碼（需要額外配置）
@@ -174,10 +179,15 @@ class MediaMTXService extends EventEmitter {
       return response.data;
     } catch (error) {
       if (error.response) {
-        // 路徑可能已存在
-        if (error.response.status === 409) {
-          console.log(`[MediaMTX Service] 路徑 ${pathName} 已存在`);
-          return { exists: true };
+        // 路徑可能已存在（MediaMTX 可能返回 400 或 409）
+        if (error.response.status === 409 || error.response.status === 400) {
+          const errorMsg = error.response.data?.error || error.response.data?.message || error.message || '';
+          // 檢查錯誤訊息是否包含 "already exists" 或類似的關鍵字
+          const errorMsgLower = errorMsg.toLowerCase();
+          if (errorMsgLower.includes('already exists') || errorMsgLower.includes('already exist') || errorMsgLower.includes('path already')) {
+            console.log(`[MediaMTX Service] 路徑 ${pathName} 已存在`);
+            return { exists: true };
+          }
         }
         // 顯示詳細錯誤訊息
         const errorMsg = error.response.data?.error || error.response.data?.message || error.message;
@@ -211,11 +221,17 @@ class MediaMTXService extends EventEmitter {
   }
 
   /**
-   * 獲取路徑狀態
-   * @param {string} pathName - 路徑名稱
-   * @returns {Promise<Object|null>}
+   * 獲取所有路徑狀態（批量獲取，使用緩存優化性能）
+   * @returns {Promise<Map<string, Object>>}
    */
-  async getPathStatus(pathName) {
+  async getAllPathsStatus() {
+    const now = Date.now();
+    
+    // 如果緩存未過期，直接返回緩存
+    if (now - this.lastStatusUpdate < this.statusUpdateInterval && this.pathStatusCache.size > 0) {
+      return this.pathStatusCache;
+    }
+
     try {
       const response = await axios.get(
         `${this.apiBaseUrl}/v3/paths/list`,
@@ -225,7 +241,33 @@ class MediaMTXService extends EventEmitter {
       );
 
       const paths = response.data?.items || [];
-      return paths.find((p) => p.name === pathName) || null;
+      const statusMap = new Map();
+      
+      paths.forEach((path) => {
+        statusMap.set(path.name, path);
+      });
+
+      // 更新緩存
+      this.pathStatusCache = statusMap;
+      this.lastStatusUpdate = now;
+
+      return statusMap;
+    } catch (error) {
+      console.error(`[MediaMTX Service] 獲取路徑狀態失敗:`, error.message);
+      // 返回緩存（即使過期），避免完全失敗
+      return this.pathStatusCache;
+    }
+  }
+
+  /**
+   * 獲取路徑狀態（優化：使用緩存）
+   * @param {string} pathName - 路徑名稱
+   * @returns {Promise<Object|null>}
+   */
+  async getPathStatus(pathName) {
+    try {
+      const allPaths = await this.getAllPathsStatus();
+      return allPaths.get(pathName) || null;
     } catch (error) {
       console.error(`[MediaMTX Service] 獲取路徑狀態失敗:`, error.message);
       return null;
@@ -270,7 +312,40 @@ class MediaMTXService extends EventEmitter {
 
     try {
       // 添加路徑到 MediaMTX
-      await this.addPath(pathName, rtspUrl);
+      const addPathResult = await this.addPath(pathName, rtspUrl);
+
+      // 如果路徑已存在，檢查是否已經在我們的記錄中
+      if (addPathResult && addPathResult.exists) {
+        // 路徑已存在，嘗試獲取現有路徑的狀態
+        const pathStatus = await this.getPathStatus(pathName);
+        if (pathStatus && pathStatus.ready) {
+          // 路徑存在且就緒，生成播放 URL 並添加到記錄
+          const hlsUrl = `${this.hlsBaseUrl}/${pathName}/index.m3u8`;
+          const webrtcUrl = `${this.webrtcBaseUrl}/${pathName}`;
+
+          const streamInfo = {
+            streamId,
+            pathName,
+            rtspUrl,
+            hlsUrl,
+            webrtcUrl,
+            status: "running",
+            startedAt: new Date(),
+          };
+
+          this.streams.set(streamId, streamInfo);
+
+          console.log(`[MediaMTX Service] 串流已存在並就緒: ${streamId} (路徑: ${pathName})`);
+
+          return {
+            streamId,
+            hlsUrl,
+            webrtcUrl,
+            status: "running",
+            rtspUrl,
+          };
+        }
+      }
 
       // 生成播放 URL
       const hlsUrl = `${this.hlsBaseUrl}/${pathName}/index.m3u8`;
@@ -338,7 +413,7 @@ class MediaMTXService extends EventEmitter {
   }
 
   /**
-   * 獲取串流狀態
+   * 獲取串流狀態（優化：批量獲取路徑狀態，減少 API 請求）
    * @param {string} streamId - 串流 ID（可選，不提供則返回所有串流）
    * @returns {Object|Array|null}
    */
@@ -349,8 +424,9 @@ class MediaMTXService extends EventEmitter {
       }
 
       const stream = this.streams.get(streamId);
-      // 嘗試從 MediaMTX 獲取最新狀態
-      const pathStatus = await this.getPathStatus(stream.pathName);
+      // 批量獲取所有路徑狀態（使用緩存）
+      const allPaths = await this.getAllPathsStatus();
+      const pathStatus = allPaths.get(stream.pathName) || null;
 
       return {
         streamId: stream.streamId,
@@ -363,10 +439,12 @@ class MediaMTXService extends EventEmitter {
       };
     }
 
-    // 返回所有串流狀態
+    // 返回所有串流狀態（優化：只發起一次 API 請求）
+    const allPaths = await this.getAllPathsStatus();
     const statuses = [];
+    
     for (const stream of this.streams.values()) {
-      const pathStatus = await this.getPathStatus(stream.pathName);
+      const pathStatus = allPaths.get(stream.pathName) || null;
       statuses.push({
         streamId: stream.streamId,
         rtspUrl: stream.rtspUrl,

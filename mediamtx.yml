@@ -14,7 +14,13 @@ apiAddress: :9997
 api: yes
 
 # HLS 低延遲配置
-# 注意：MediaMTX 的 HLS 配置選項有限，低延遲主要通過前端播放器配置實現
+hlsAlwaysRemux: yes
+hlsSegmentCount: 3
+hlsSegmentDuration: 1s
+hlsAllowOrigin: "*"
+
+# WebRTC 配置（低延遲）
+webrtcAllowOrigin: "*"
 
 # 路徑配置（通過 API 動態添加）
 paths: {}

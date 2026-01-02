@@ -36,5 +36,9 @@ module.exports = {
 		hlsUrl: process.env.MEDIAMTX_HLS_URL || "http://localhost:8888",
 		webrtcUrl: process.env.MEDIAMTX_WEBRTC_URL || "http://localhost:8889",
 		rtspUrl: process.env.MEDIAMTX_RTSP_URL || "rtsp://localhost:8554"
+	},
+	monitoring: {
+		// 是否啟用背景監控服務（預設為 true）
+		enabled: process.env.MONITORING_ENABLED !== "false"
 	}
 };

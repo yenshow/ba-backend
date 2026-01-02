@@ -91,11 +91,15 @@ async function backupDeviceDataLogs(beforeDate) {
 	return { json: jsonPath, csv: csvPath, count: logs.length };
 }
 
-// 備份 device_alerts
-async function backupDeviceAlerts(beforeDate) {
-	console.log("\n📦 備份 device_alerts...");
+// 備份 alerts（統一警報表，取代舊的 device_alerts）
+async function backupAlerts(beforeDate) {
+	console.log("\n📦 備份 alerts...");
 
-	const alerts = await db.query("SELECT * FROM device_alerts WHERE resolved = TRUE AND created_at < ? ORDER BY created_at ASC", [beforeDate]);
+	// 備份已解決的警報
+	const alerts = await db.query(
+		"SELECT * FROM alerts WHERE status = 'resolved' AND resolved_at < ? ORDER BY resolved_at ASC",
+		[beforeDate]
+	);
 
 	if (alerts.length === 0) {
 		console.log("   ℹ️  沒有需要備份的資料");
@@ -104,8 +108,8 @@ async function backupDeviceAlerts(beforeDate) {
 
 	console.log(`   📊 找到 ${alerts.length} 筆記錄`);
 
-	const jsonPath = await exportDataToJSON("device_alerts", alerts);
-	const csvPath = await exportDataToCSV("device_alerts", alerts);
+	const jsonPath = await exportDataToJSON("alerts", alerts);
+	const csvPath = await exportDataToCSV("alerts", alerts);
 
 	console.log(`   ✅ JSON 備份: ${path.basename(jsonPath)}`);
 	console.log(`   ✅ CSV 備份: ${path.basename(csvPath)}`);
@@ -174,8 +178,8 @@ async function main() {
 		// 備份 device_data_logs
 		const logsBackup = await backupDeviceDataLogs(beforeDate);
 
-		// 備份 device_alerts
-		const alertsBackup = await backupDeviceAlerts(beforeDate);
+		// 備份 alerts（統一警報表）
+		const alertsBackup = await backupAlerts(beforeDate);
 
 		// 如果只備份，不刪除
 		if (backupOnly) {
@@ -192,8 +196,11 @@ async function main() {
 		}
 
 		if (alertsBackup.count > 0) {
-			console.log("\n🗑️  刪除已解決的舊 device_alerts...");
-			const result = await db.query("DELETE FROM device_alerts WHERE resolved = TRUE AND created_at < ?", [beforeDate]);
+			console.log("\n🗑️  刪除已解決的舊 alerts...");
+			const result = await db.query(
+				"DELETE FROM alerts WHERE status = 'resolved' AND resolved_at < ?",
+				[beforeDate]
+			);
 			console.log(`   ✅ 已刪除 ${result.rowCount} 筆記錄`);
 		}
 
@@ -215,7 +222,7 @@ if (require.main === module) {
 
 module.exports = {
 	backupDeviceDataLogs,
-	backupDeviceAlerts,
+	backupAlerts,
 	exportDataToJSON,
 	exportDataToCSV
 };

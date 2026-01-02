@@ -68,5 +68,39 @@ router.delete("/floors/:id", authenticate, async (req, res, next) => {
 	}
 });
 
+// ========== 錯誤追蹤路由 ==========
+
+// 記錄照明區域錯誤（公開，因為是系統自動記錄）
+router.post("/areas/:areaId/errors", noCache, async (req, res, next) => {
+	try {
+		const { areaId } = req.params;
+		const { errorMessage } = req.body;
+		const systemAlert = require("../services/alerts/systemAlertHelper");
+		
+		const alertCreated = await systemAlert.recordError(
+			"lighting",
+			parseInt(areaId),
+			errorMessage || "無法讀取照明設備資料"
+		);
+		
+		res.json({ success: true, alertCreated });
+	} catch (error) {
+		next(error);
+	}
+});
+
+// 清除照明區域錯誤（公開，因為是系統自動清除）
+router.delete("/areas/:areaId/errors", noCache, async (req, res, next) => {
+	try {
+		const { areaId } = req.params;
+		const systemAlert = require("../services/alerts/systemAlertHelper");
+		
+		await systemAlert.clearError("lighting", parseInt(areaId));
+		res.json({ success: true });
+	} catch (error) {
+		next(error);
+	}
+});
+
 module.exports = router;
 

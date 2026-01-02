@@ -107,10 +107,10 @@ async function initSchema() {
 			END $$;
 		`);
 
-    // 建立警報狀態 ENUM（狀態機）
+    // 建立警報狀態 ENUM（狀態機，移除 pending）
     await targetPool.query(`
 			DO $$ BEGIN
-				CREATE TYPE alert_status AS ENUM ('pending', 'active', 'resolved', 'ignored');
+				CREATE TYPE alert_status AS ENUM ('active', 'resolved', 'ignored');
 			EXCEPTION
 				WHEN duplicate_object THEN null;
 			END $$;
@@ -303,18 +303,16 @@ async function initSchema() {
 
     console.log("✅ device_data_logs 表已建立");
 
-    // 建立統一警報表（支持多系統來源）
+    // 建立統一警報表（支持多系統來源，精簡版）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS alerts (
 				id SERIAL PRIMARY KEY,
 				source alert_source NOT NULL,
 				source_id INTEGER NOT NULL,
-				source_type VARCHAR(50),
 				alert_type alert_type NOT NULL,
 				severity alert_severity NOT NULL DEFAULT 'warning',
 				message TEXT NOT NULL,
 				status alert_status NOT NULL DEFAULT 'active',
-				metadata JSONB DEFAULT '{}'::jsonb,
 				resolved_at TIMESTAMP,
 				resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				ignored_at TIMESTAMP,
@@ -324,13 +322,12 @@ async function initSchema() {
 			)
 		`);
 
+    // 精簡後的索引（只保留核心索引）
     await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_alerts_source ON alerts(source, source_id);
-			CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
-			CREATE INDEX IF NOT EXISTS idx_alerts_alert_type ON alerts(alert_type);
-			CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
-			CREATE INDEX IF NOT EXISTS idx_alerts_source_type_status ON alerts(source, source_type, status);
-			CREATE INDEX IF NOT EXISTS idx_alerts_metadata ON alerts USING GIN(metadata);
+			CREATE INDEX IF NOT EXISTS idx_alerts_source_composite ON alerts(source, source_id, alert_type, status);
+			CREATE UNIQUE INDEX IF NOT EXISTS unique_active_alert ON alerts(source, source_id, alert_type) WHERE status = 'active';
+			CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC) WHERE status = 'active';
+			CREATE INDEX IF NOT EXISTS idx_alerts_updated_at ON alerts(updated_at DESC);
 		`);
 
     await createUpdatedAtTrigger(targetPool, "alerts");
@@ -360,6 +357,51 @@ async function initSchema() {
     await createUpdatedAtTrigger(targetPool, "error_tracking");
 
     console.log("✅ error_tracking 表已建立（錯誤追蹤持久化）");
+
+    // 建立警報規則參照表（alert_rules）
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS alert_rules (
+				id SERIAL PRIMARY KEY,
+				source alert_source NOT NULL,
+				alert_type alert_type NOT NULL,
+				severity alert_severity NOT NULL,
+				condition_type VARCHAR(50),
+				condition_config JSONB,
+				message_template TEXT,
+				enabled BOOLEAN DEFAULT TRUE,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_alert_rules_source_type ON alert_rules(source, alert_type);
+			CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+		`);
+
+    await createUpdatedAtTrigger(targetPool, "alert_rules");
+
+    console.log("✅ alert_rules 表已建立（警報規則參照表）");
+
+    // 建立警報歷史記錄表（alert_history）
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS alert_history (
+				id SERIAL PRIMARY KEY,
+				alert_id INTEGER REFERENCES alerts(id) ON DELETE CASCADE,
+				old_status alert_status,
+				new_status alert_status,
+				changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+				changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				reason TEXT
+			)
+		`);
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_alert_history_alert_id ON alert_history(alert_id);
+			CREATE INDEX IF NOT EXISTS idx_alert_history_changed_at ON alert_history(changed_at DESC);
+		`);
+
+    console.log("✅ alert_history 表已建立（警報歷史記錄）");
 
     // 建立 lighting_categories 表（照明系統分類點）
     await targetPool.query(`

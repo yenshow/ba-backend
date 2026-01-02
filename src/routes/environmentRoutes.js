@@ -98,5 +98,39 @@ router.get("/readings/:locationId", noCache, async (req, res, next) => {
 	}
 });
 
+// ========== 錯誤追蹤路由 ==========
+
+// 記錄環境位置錯誤（公開，因為是系統自動記錄）
+router.post("/locations/:locationId/errors", noCache, async (req, res, next) => {
+	try {
+		const { locationId } = req.params;
+		const { errorMessage } = req.body;
+		const systemAlert = require("../services/alerts/systemAlertHelper");
+		
+		const alertCreated = await systemAlert.recordError(
+			"environment",
+			parseInt(locationId),
+			errorMessage || "無法讀取感測器資料"
+		);
+		
+		res.json({ success: true, alertCreated });
+	} catch (error) {
+		next(error);
+	}
+});
+
+// 清除環境位置錯誤（公開，因為是系統自動清除）
+router.delete("/locations/:locationId/errors", noCache, async (req, res, next) => {
+	try {
+		const { locationId } = req.params;
+		const systemAlert = require("../services/alerts/systemAlertHelper");
+		
+		await systemAlert.clearError("environment", parseInt(locationId));
+		res.json({ success: true });
+	} catch (error) {
+		next(error);
+	}
+});
+
 module.exports = router;
 
