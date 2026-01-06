@@ -4,6 +4,18 @@
 
 `alert_rules` 表用於集中管理所有警報規則，先行定義所有可能的警報情況（包含閾值、嚴重程度等），實現規則的可配置化和可維護性。
 
+## ✅ 實現狀態
+
+**當前狀態**：所有預設規則已實現並插入到資料庫中
+
+- ✅ **環境系統閾值規則**：14 條（CO2、溫度、濕度、PM2.5、PM10、噪音）
+- ✅ **設備系統離線規則**：1 條
+- ✅ **環境系統離線規則**：1 條
+- ✅ **照明系統離線規則**：1 條
+- ✅ **總計**：17 條規則已啟用並正在使用
+
+所有規則已整合到監控系統中，系統會自動根據規則創建和解決警報。
+
 ## 🎯 設計目標
 
 1. **集中管理**：所有警報規則統一在資料庫中管理，無需修改程式碼即可調整規則
@@ -145,226 +157,103 @@ CREATE INDEX idx_alert_rules_enabled ON alert_rules(enabled);
 - **預設值**：`TRUE`
 - **說明**：停用的規則不會被使用，便於測試和調試
 
+## 📝 已實現的規則
+
+以下規則已經插入到資料庫中並正在使用：
+
+### 規則統計
+
+| 系統來源      | 警報類型    | 規則數量 | 狀態      |
+| ------------- | ----------- | -------- | --------- |
+| `environment` | `threshold` | 14       | ✅ 已實現 |
+| `device`      | `offline`   | 1        | ✅ 已實現 |
+| `environment` | `offline`   | 1        | ✅ 已實現 |
+| `lighting`    | `offline`   | 1        | ✅ 已實現 |
+| **總計**      | -           | **17**   | ✅ 已實現 |
+
+### 規則列表
+
+#### 環境系統 - 閾值規則（14 條）
+
+1. **CO2 濃度**（2 條）
+
+   - `warning`：> 1000 ppm
+   - `critical`：> 2000 ppm
+
+2. **溫度**（4 條）
+
+   - `warning`：≤ 20°C 或 ≥ 26°C
+   - `critical`：< 18°C 或 > 28°C
+
+3. **濕度**（4 條）
+
+   - `warning`：≤ 30% 或 ≥ 60%
+   - `critical`：< 20% 或 > 70%
+
+4. **PM2.5**（2 條）
+
+   - `warning`：> 25 µg/m³
+   - `critical`：> 50 µg/m³
+
+5. **PM10**（2 條）
+
+   - `warning`：> 50 µg/m³
+   - `critical`：> 100 µg/m³
+
+6. **噪音**（2 條）
+   - `warning`：> 55 dB
+   - `critical`：> 70 dB
+
+#### 設備系統 - 離線規則（1 條）
+
+- `device` + `offline` + `warning`：連續 5 次錯誤
+
+#### 環境系統 - 離線規則（1 條）
+
+- `environment` + `offline` + `warning`：連續 5 次錯誤
+
+#### 照明系統 - 離線規則（1 條）
+
+- `lighting` + `offline` + `warning`：連續 5 次錯誤
+
+---
+
 ## 📝 規則定義範例
 
-> **參考標準**：
->
-> - **PM2.5/PM10**: WHO 2021 空氣品質指引
-> - **CO₂**: ASHRAE 室內空氣品質標準
-> - **溫度**: ASHRAE 55 熱舒適標準
-> - **濕度**: ASHRAE 室內環境標準
-> - **噪音**: OSHA/WHO 工作場所噪音標準
->
-> 前端狀態映射：
->
-> - **注意** → `warning` 級別
-> - **警報** → `critical` 級別
+> **參考標準**：PM2.5/PM10 (WHO 2021)、CO₂/溫度/濕度 (ASHRAE)、噪音 (OSHA/WHO)  
+> **狀態映射**：注意 → `warning`、警報 → `critical`  
+> **注意**：所有規則已實現並插入到資料庫中
 
-### 1. 環境系統 - CO2 濃度閾值（ASHRAE 標準）
+### 環境系統閾值規則（14 條）
 
-```sql
--- 注意（warning）：1000.1 - 2000 ppm
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "co2", "operator": ">", "value": 1000, "unit": "ppm"}'::jsonb,
-  '{source_name} 的 CO2 濃度超過 1000ppm，當前值：{value}ppm（注意）'
-);
+| 參數  | Warning 閾值 | Critical 閾值 | 單位  |
+| ----- | ------------ | ------------- | ----- |
+| CO2   | > 1000       | > 2000        | ppm   |
+| 溫度  | ≤ 20 或 ≥ 26 | < 18 或 > 28  | °C    |
+| 濕度  | ≤ 30 或 ≥ 60 | < 20 或 > 70  | %     |
+| PM2.5 | > 25         | > 50          | µg/m³ |
+| PM10  | > 50         | > 100         | µg/m³ |
+| 噪音  | > 55         | > 70          | dB    |
 
--- 警報（critical）：> 2000 ppm
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "co2", "operator": ">", "value": 2000, "unit": "ppm"}'::jsonb,
-  '{source_name} 的 CO2 濃度超過 2000ppm，當前值：{value}ppm（警報）'
-);
-```
+### 離線規則（3 條）
 
-### 2. 環境系統 - 溫度閾值（ASHRAE 55 標準）
+- **設備/環境/照明系統**：連續 5 次連接失敗觸發 `warning` 級別警報
+
+### 規則格式範例
 
 ```sql
--- 注意（warning）：18-20°C 或 26-28°C
+-- 閾值規則
 INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
 VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "temperature", "operator": "<=", "value": 20, "unit": "°C"}'::jsonb,
-  '{source_name} 的溫度低於 20°C，當前值：{value}°C（注意）'
-);
-
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "temperature", "operator": ">=", "value": 26, "unit": "°C"}'::jsonb,
-  '{source_name} 的溫度超過 26°C，當前值：{value}°C（注意）'
-);
-
--- 警報（critical）：< 18°C 或 > 28°C
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "temperature", "operator": "<", "value": 18, "unit": "°C"}'::jsonb,
-  '{source_name} 的溫度低於 18°C，當前值：{value}°C（警報）'
-);
-
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "temperature", "operator": ">", "value": 28, "unit": "°C"}'::jsonb,
-  '{source_name} 的溫度超過 28°C，當前值：{value}°C（警報）'
-);
-```
-
-### 3. 環境系統 - 濕度閾值（ASHRAE 標準）
-
-```sql
--- 注意（warning）：20-30% 或 60-70%
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "humidity", "operator": "<=", "value": 30, "unit": "%"}'::jsonb,
-  '{source_name} 的濕度低於 30%，當前值：{value}%（注意）'
-);
-
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "humidity", "operator": ">=", "value": 60, "unit": "%"}'::jsonb,
-  '{source_name} 的濕度高於 60%，當前值：{value}%（注意）'
-);
-
--- 警報（critical）：< 20% 或 > 70%
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "humidity", "operator": "<", "value": 20, "unit": "%"}'::jsonb,
-  '{source_name} 的濕度低於 20%，當前值：{value}%（警報）'
-);
-
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "humidity", "operator": ">", "value": 70, "unit": "%"}'::jsonb,
-  '{source_name} 的濕度高於 70%，當前值：{value}%（警報）'
-);
-```
-
-### 4. 環境系統 - PM2.5 閾值（WHO 2021 標準）
-
-```sql
--- 注意（warning）：25.1 - 50 µg/m³
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
+  'environment', 'threshold', 'warning', 'threshold',
   '{"parameter": "pm25", "operator": ">", "value": 25, "unit": "µg/m³"}'::jsonb,
   '{source_name} 的 PM2.5 超過 25µg/m³，當前值：{value}µg/m³（注意）'
 );
 
--- 警報（critical）：> 50 µg/m³
+-- 離線規則
 INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
 VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "pm25", "operator": ">", "value": 50, "unit": "µg/m³"}'::jsonb,
-  '{source_name} 的 PM2.5 超過 50µg/m³，當前值：{value}µg/m³（警報）'
-);
-```
-
-### 5. 環境系統 - PM10 閾值（WHO 2021 標準）
-
-```sql
--- 注意（warning）：50.1 - 100 µg/m³
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "pm10", "operator": ">", "value": 50, "unit": "µg/m³"}'::jsonb,
-  '{source_name} 的 PM10 超過 50µg/m³，當前值：{value}µg/m³（注意）'
-);
-
--- 警報（critical）：> 100 µg/m³
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "pm10", "operator": ">", "value": 100, "unit": "µg/m³"}'::jsonb,
-  '{source_name} 的 PM10 超過 100µg/m³，當前值：{value}µg/m³（警報）'
-);
-```
-
-### 6. 環境系統 - 噪音值閾值（OSHA/WHO 標準）
-
-```sql
--- 注意（warning）：55.1 - 70 dB
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'warning',
-  'threshold',
-  '{"parameter": "noise", "operator": ">", "value": 55, "unit": "dB"}'::jsonb,
-  '{source_name} 的噪音值超過 55dB，當前值：{value}dB（注意）'
-);
-
--- 警報（critical）：> 70 dB
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'environment',
-  'threshold',
-  'critical',
-  'threshold',
-  '{"parameter": "noise", "operator": ">", "value": 70, "unit": "dB"}'::jsonb,
-  '{source_name} 的噪音值超過 70dB，當前值：{value}dB（警報）'
-);
-```
-
-### 7. 設備系統 - 離線錯誤次數
-
-```sql
-INSERT INTO alert_rules (source, alert_type, severity, condition_type, condition_config, message_template)
-VALUES (
-  'device',
-  'offline',
-  'warning',
-  'error_count',
+  'device', 'offline', 'warning', 'error_count',
   '{"min_errors": 5, "time_window_minutes": 15}'::jsonb,
   '{source_name} 在 15 分鐘內連續 {error_count} 次無法連接，請檢查狀態'
 );
@@ -372,105 +261,13 @@ VALUES (
 
 ## 🔄 使用流程
 
-### 1. 創建警報時查詢規則
+系統會自動查詢 `alert_rules` 表並根據規則創建警報。主要流程：
 
-```javascript
-// 在 alertService.createAlert() 或監控服務中
-async function getAlertRule(source, alertType, conditionData) {
-  // 查詢適用的規則
-  const rules = await db.query(
-    `
-    SELECT * FROM alert_rules
-    WHERE source = ?
-      AND alert_type = ?
-      AND enabled = TRUE
-    ORDER BY severity DESC
-  `,
-    [source, alertType]
-  );
+1. **閾值監控**（`environmentMonitor.js`）：查詢啟用的閾值規則 → 評估感測器數值 → 創建/更新警報
+2. **錯誤追蹤**（`errorTracker.js`）：查詢錯誤次數規則 → 達到閾值時創建離線警報
+3. **規則服務**（`alertRuleService.js`）：提供規則查詢、閾值評估、訊息格式化等功能
 
-  // 根據 condition_data 匹配規則
-  for (const rule of rules) {
-    if (matchesCondition(rule.condition_config, conditionData)) {
-      return rule;
-    }
-  }
-
-  return null; // 沒有匹配的規則，使用預設嚴重程度
-}
-```
-
-### 2. 閾值監控流程（環境系統）
-
-```javascript
-// 在 environmentMonitor.js 中
-async function checkThresholds(locationId, sensorData) {
-  // 讀取感測器數據
-  const { temperature, humidity, co2 } = sensorData;
-
-  // 查詢所有啟用的閾值規則
-  const rules = await db.query(`
-    SELECT * FROM alert_rules
-    WHERE source = 'environment'
-      AND alert_type = 'threshold'
-      AND enabled = TRUE
-  `);
-
-  // 檢查每個規則
-  for (const rule of rules) {
-    const config = rule.condition_config;
-    const value = sensorData[config.parameter];
-
-    if (evaluateThreshold(config, value)) {
-      // 創建警報
-      await createAlert({
-        source: "environment",
-        source_id: locationId,
-        alert_type: "threshold",
-        severity: rule.severity,
-        message: formatMessage(rule.message_template, {
-          source_name: location.name,
-          parameter: config.parameter,
-          value: value,
-          threshold: config.value,
-          unit: config.unit,
-        }),
-      });
-    }
-  }
-}
-```
-
-### 3. 錯誤次數監控（已實現，需要整合規則）
-
-```javascript
-// 在 errorTracker.js 中（需要整合規則查詢）
-async function recordError(source, sourceId, alertType, errorMessage) {
-  // ... 現有邏輯 ...
-
-  // 查詢錯誤次數規則
-  const rule = await getAlertRule(source, alertType, {
-    error_count: tracking.error_count,
-    time_window_minutes: 15,
-  });
-
-  if (rule && tracking.error_count >= rule.condition_config.min_errors) {
-    const severity = rule.severity;
-    const message = formatMessage(rule.message_template, {
-      source_name: metadata.name,
-      error_count: tracking.error_count,
-    });
-
-    await alertService.createAlert({
-      source,
-      source_id: sourceId,
-      alert_type: alertType,
-      severity,
-      message,
-    });
-  }
-}
-```
+詳細實現請參考相關源代碼文件。
 
 ## 🚀 實現步驟
 
@@ -480,103 +277,75 @@ async function recordError(source, sourceId, alertType, errorMessage) {
 - [x] 創建索引
 - [x] 創建觸發器
 
-### 階段 2：規則管理服務
+### 階段 2：規則管理服務（已完成）
 
-- [ ] 創建 `alertRuleService.js`：
+- [x] 創建 `alertRuleService.js`：
   - `getAlertRules(source, alertType, conditionData)`：查詢適用的規則
-  - `evaluateCondition(conditionConfig, conditionData)`：評估條件是否匹配
+  - `getErrorCountRule(source, alertType)`：查詢錯誤次數規則
+  - `getThresholdRules(source)`：查詢閾值規則
+  - `evaluateThreshold(conditionConfig, value)`：評估閾值條件
   - `formatMessage(template, variables)`：格式化訊息模板
 - [ ] 創建規則管理 API（可選，用於前端管理規則）
 
-### 階段 3：整合到現有系統
+### 階段 3：整合到現有系統（已完成）
 
-- [ ] 整合到 `errorTracker.js`：使用規則決定錯誤次數警報的嚴重程度
-- [ ] 整合到環境監控：實現閾值監控邏輯
-- [ ] 修改 `alertService.createAlert()`：支援規則查詢（可選，向後兼容）
+- [x] 整合到 `errorTracker.js`：使用規則決定錯誤次數警報的嚴重程度
+- [x] 整合到環境監控：實現閾值監控邏輯
+- [x] 性能優化：
+  - 使用 UPSERT 操作減少資料庫查詢
+  - 只在 severity 需要升級時才更新警報
+  - 一次性查詢所有 active 警報和規則
+  - 優化警報匹配邏輯，使用 `findAlertByParameter` 輔助函數
 
-### 階段 4：初始化預設規則
+### 階段 4：初始化預設規則（已完成）
 
-- [ ] 創建遷移腳本：插入預設的規則資料
-- [ ] 定義環境系統的預設閾值規則
-- [ ] 定義設備系統的預設錯誤次數規則
+- [x] 創建遷移腳本：插入預設的規則資料
+- [x] 定義環境系統的預設閾值規則（CO2、溫度、濕度、PM2.5、PM10、噪音）- **14 條規則**
+- [x] 定義設備系統的預設錯誤次數規則 - **1 條規則**
+- [x] 定義環境系統的預設離線規則 - **1 條規則**
+- [x] 定義照明系統的預設離線規則 - **1 條規則**
+- [x] **總計 17 條規則已插入資料庫並啟用**
 
-## 📋 規則管理 API（可選）
+## 🔍 查詢資料庫規則
 
-### 查詢規則
+```sql
+-- 查看所有規則
+SELECT * FROM alert_rules ORDER BY source, alert_type, severity;
 
-```
-GET /api/alert-rules
-Query Parameters:
-  - source: 系統來源（可選）
-  - alert_type: 警報類型（可選）
-  - enabled: 是否啟用（可選）
-```
+-- 查看特定系統規則
+SELECT * FROM alert_rules WHERE source = 'environment' AND enabled = TRUE;
 
-### 創建規則
+-- 統計規則數量
+SELECT source, alert_type, COUNT(*) as rule_count,
+       COUNT(CASE WHEN enabled = TRUE THEN 1 END) as enabled_count
+FROM alert_rules GROUP BY source, alert_type;
 
-```
-POST /api/alert-rules
-Body: {
-  source: "environment",
-  alert_type: "threshold",
-  severity: "warning",
-  condition_type: "threshold",
-  condition_config: {...},
-  message_template: "...",
-  enabled: true
-}
+-- 更新規則狀態
+UPDATE alert_rules SET enabled = FALSE WHERE id = ?;
 ```
 
-### 更新規則
+## 📋 規則管理
 
-```
-PUT /api/alert-rules/:id
-Body: {
-  condition_config: {...},
-  message_template: "...",
-  enabled: false
-}
-```
-
-### 刪除規則
-
-```
-DELETE /api/alert-rules/:id
-```
+目前規則通過資料庫直接管理。未來可考慮添加 REST API 進行規則管理（可選功能）。
 
 ## ⚠️ 注意事項
 
-1. **向後兼容**：
-
-   - 現有的 `createAlert()` 呼叫不應該因為規則系統而失效
-   - 如果沒有匹配的規則，應該使用預設的嚴重程度（例如：warning）
-
-2. **規則優先級**：
-
-   - 當多個規則匹配時，應該選擇嚴重程度最高的
-   - 或者按照規則 ID 排序（後創建的優先）
-
-3. **條件評估性能**：
-
-   - 規則查詢應該有適當的索引
-   - 條件評估邏輯應該高效，避免複雜的 JSONB 查詢
-
-4. **規則測試**：
-
-   - 規則可以通過 `enabled` 欄位進行測試
-   - 建議在生產環境前先在測試環境驗證規則
-
-5. **訊息模板安全性**：
-   - 訊息模板應該避免 SQL 注入風險（使用參數化查詢）
-   - 變數替換應該進行適當的轉義
+1. **向後兼容**：如果沒有匹配的規則，使用預設嚴重程度（`warning`）
+2. **規則優先級**：多個規則匹配時，選擇嚴重程度最高的
+3. **性能優化**：
+   - 規則查詢使用索引優化
+   - 只在 severity 需要升級時才更新警報
+   - 一次性查詢所有 active 警報和規則
+4. **規則測試**：通過 `enabled` 欄位測試規則，建議先在測試環境驗證
+5. **安全性**：使用參數化查詢，避免 SQL 注入風險
 
 ## 🔍 未來擴展
 
-1. **規則優先級**：添加 `priority` 欄位，明確規則執行順序
-2. **規則分組**：添加 `rule_group` 欄位，支援規則分組管理
-3. **規則生效時間**：添加 `start_time` 和 `end_time`，支援定時規則
-4. **規則條件組合**：支援 AND/OR 條件組合
-5. **規則通知設定**：整合通知機制，不同規則可以有不同的通知方式
+- 規則優先級：添加 `priority` 欄位
+- 規則分組：支援規則分組管理
+- 定時規則：支援生效時間設定
+- 條件組合：支援 AND/OR 邏輯
+- 通知設定：整合通知機制
 
 ## 📚 參考資料
 
@@ -599,8 +368,88 @@ DELETE /api/alert-rules/:id
 - 前端的「注意」閾值 → `warning` 級別規則
 - 前端的「警報」閾值 → `critical` 級別規則
 
+## 🔄 前端與後端閾值對照表
+
+### 完整閾值對照
+
+以下表格詳細列出前端顯示邏輯和後端警報規則的對應關係：
+
+#### PM2.5
+
+| 前端數值範圍 | 前端狀態 | 前端顯示 | 後端規則 | 後端嚴重程度 | 警報訊息模板                                                        |
+| ------------ | -------- | -------- | -------- | ------------ | ------------------------------------------------------------------- |
+| ≤ 25 µg/m³   | 正常     | 綠色     | -        | -            | 不創建警報                                                          |
+| 25.1-50      | 注意     | 黃色     | > 25     | `warning`    | `{source_name} 的 PM2.5 超過 25µg/m³，當前值：{value}µg/m³（注意）` |
+| > 50         | 警報     | 紅色     | > 50     | `critical`   | `{source_name} 的 PM2.5 超過 50µg/m³，當前值：{value}µg/m³（警報）` |
+
+#### PM10
+
+| 前端數值範圍 | 前端狀態 | 前端顯示 | 後端規則 | 後端嚴重程度 | 警報訊息模板                                                        |
+| ------------ | -------- | -------- | -------- | ------------ | ------------------------------------------------------------------- |
+| ≤ 50 µg/m³   | 正常     | 綠色     | -        | -            | 不創建警報                                                          |
+| 50.1-100     | 注意     | 黃色     | > 50     | `warning`    | `{source_name} 的 PM10 超過 50µg/m³，當前值：{value}µg/m³（注意）`  |
+| > 100        | 警報     | 紅色     | > 100    | `critical`   | `{source_name} 的 PM10 超過 100µg/m³，當前值：{value}µg/m³（警報）` |
+
+#### CO2
+
+| 前端數值範圍 | 前端狀態 | 前端顯示 | 後端規則 | 後端嚴重程度 | 警報訊息模板                                                        |
+| ------------ | -------- | -------- | -------- | ------------ | ------------------------------------------------------------------- |
+| ≤ 1000 ppm   | 正常     | 綠色     | -        | -            | 不創建警報                                                          |
+| 1000.1-2000  | 注意     | 黃色     | > 1000   | `warning`    | `{source_name} 的 CO2 濃度超過 1000ppm，當前值：{value}ppm（注意）` |
+| > 2000       | 警報     | 紅色     | > 2000   | `critical`   | `{source_name} 的 CO2 濃度超過 2000ppm，當前值：{value}ppm（警報）` |
+
+#### 溫度
+
+| 前端數值範圍      | 前端狀態 | 前端顯示 | 後端規則     | 後端嚴重程度 | 警報訊息模板                                                                                                             |
+| ----------------- | -------- | -------- | ------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| 20-26 °C          | 正常     | 綠色     | -            | -            | 不創建警報                                                                                                               |
+| 18-20 或 26-28 °C | 注意     | 黃色     | ≤ 20 或 ≥ 26 | `warning`    | `{source_name} 的溫度低於 20°C，當前值：{value}°C（注意）` 或 `{source_name} 的溫度超過 26°C，當前值：{value}°C（注意）` |
+| < 18 或 > 28 °C   | 警報     | 紅色     | < 18 或 > 28 | `critical`   | `{source_name} 的溫度低於 18°C，當前值：{value}°C（警報）` 或 `{source_name} 的溫度超過 28°C，當前值：{value}°C（警報）` |
+
+#### 濕度
+
+| 前端數值範圍     | 前端狀態 | 前端顯示 | 後端規則     | 後端嚴重程度 | 警報訊息模板                                                                                                         |
+| ---------------- | -------- | -------- | ------------ | ------------ | -------------------------------------------------------------------------------------------------------------------- |
+| 30-60 %          | 正常     | 綠色     | -            | -            | 不創建警報                                                                                                           |
+| 20-30 或 60-70 % | 注意     | 黃色     | ≤ 30 或 ≥ 60 | `warning`    | `{source_name} 的濕度低於 30%，當前值：{value}%（注意）` 或 `{source_name} 的濕度高於 60%，當前值：{value}%（注意）` |
+| < 20 或 > 70 %   | 警報     | 紅色     | < 20 或 > 70 | `critical`   | `{source_name} 的濕度低於 20%，當前值：{value}%（警報）` 或 `{source_name} 的濕度高於 70%，當前值：{value}%（警報）` |
+
+#### 噪音
+
+| 前端數值範圍 | 前端狀態 | 前端顯示 | 後端規則 | 後端嚴重程度 | 警報訊息模板                                                 |
+| ------------ | -------- | -------- | -------- | ------------ | ------------------------------------------------------------ |
+| ≤ 55 dB      | 正常     | 綠色     | -        | -            | 不創建警報                                                   |
+| 55.1-70      | 注意     | 黃色     | > 55     | `warning`    | `{source_name} 的噪音值超過 55dB，當前值：{value}dB（注意）` |
+| > 70         | 警報     | 紅色     | > 70     | `critical`   | `{source_name} 的噪音值超過 70dB，當前值：{value}dB（警報）` |
+
+**重要**：前端狀態判斷（`environment.vue`）僅用於 UI 顯示，不影響後端警報的創建和解決。
+
+## 🚨 警報處理流程
+
+### 創建流程
+
+感測器讀數 → 環境監控任務（每 15 秒）→ 檢查連接狀態 → 查詢閾值規則 → 評估參數 → 創建/更新警報 → WebSocket 推送
+
+**優化**：只在 severity 需要升級時才更新，避免不必要的資料庫操作
+
+### 解決流程
+
+環境監控任務 → 檢查閾值規則 → 數值恢復正常 → 匹配警報 → 更新狀態為 resolved → WebSocket 推送
+
+### 前端監聽
+
+WebSocket 模式（優先）→ 監聽 `alert:new`、`alert:updated`、`alert:count`  
+輪詢模式（備用）→ 每 30 秒增量查詢
+
+### 已實施的優化
+
+✅ **重複更新優化**：只在 severity 需要升級時才更新警報，避免不必要的資料庫操作和 WebSocket 推送  
+✅ **警報匹配優化**：使用 `findAlertByParameter` 統一處理，提高匹配準確性  
+✅ **調試日誌**：添加結構化日誌，記錄關鍵操作便於追蹤問題  
+⚠️ **前端一致性**：前端狀態判斷（UI 顯示）與後端規則基本一致，建議定期對照確保完全一致
+
 ---
 
-**文件版本**：v1.0  
+**文件版本**：v1.2  
 **創建日期**：2025-01-XX  
-**最後更新**：2025-01-XX
+**最後更新**：2025-01-06

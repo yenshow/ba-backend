@@ -7,7 +7,11 @@ const { spawn } = require("child_process");
  */
 
 const MEDIAMTX_DIR = path.join(__dirname, "..", "mediamtx");
-const MEDIAMTX_BIN = path.join(MEDIAMTX_DIR, "bin", process.platform === "win32" ? "mediamtx.exe" : "mediamtx");
+const MEDIAMTX_BIN = path.join(
+  MEDIAMTX_DIR,
+  "bin",
+  process.platform === "win32" ? "mediamtx.exe" : "mediamtx"
+);
 const MEDIAMTX_CONFIG = path.join(MEDIAMTX_DIR, "mediamtx.yml");
 const MEDIAMTX_PID_FILE = path.join(MEDIAMTX_DIR, "mediamtx.pid");
 const MEDIAMTX_LOG_FILE = path.join(MEDIAMTX_DIR, "logs", "mediamtx.log");
@@ -23,7 +27,10 @@ function checkMediaMTXInstalled() {
 function checkMediaMTXRunning() {
   if (fs.existsSync(MEDIAMTX_PID_FILE)) {
     try {
-      const pid = parseInt(fs.readFileSync(MEDIAMTX_PID_FILE, "utf8").trim(), 10);
+      const pid = parseInt(
+        fs.readFileSync(MEDIAMTX_PID_FILE, "utf8").trim(),
+        10
+      );
       // 檢查進程是否存在
       try {
         process.kill(pid, 0); // 發送信號 0 檢查進程是否存在
@@ -64,7 +71,7 @@ function startMediaMTX() {
   ensureDirectories();
 
   const logStream = fs.createWriteStream(MEDIAMTX_LOG_FILE, { flags: "a" });
-  
+
   const args = [];
   if (fs.existsSync(MEDIAMTX_CONFIG)) {
     args.push(MEDIAMTX_CONFIG);
@@ -145,7 +152,7 @@ function startMediaMTX() {
 
   // 保持進程運行（不要使用 unref，這樣 Node.js 會等待子進程）
   // mediamtx.unref(); // 移除這行，讓 Node.js 保持運行
-  
+
   // 確保 Node.js 進程不會退出，等待 MediaMTX 進程
   // 在 Windows 上，我們需要保持事件循環運行
   // 由於我們已經監聽了 mediamtx 的 stdout/stderr，事件循環會自動保持運行
@@ -166,4 +173,3 @@ if (require.main === module) {
 }
 
 module.exports = { main, checkMediaMTXInstalled, checkMediaMTXRunning };
-

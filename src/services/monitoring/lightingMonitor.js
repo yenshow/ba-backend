@@ -6,6 +6,10 @@
 const db = require("../../database/db");
 const modbusClient = require("../devices/modbusClient");
 const systemAlert = require("../alerts/systemAlertHelper");
+const websocketService = require("../websocket/websocketService");
+
+// 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
+const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
 
 /**
  * 檢查照明區域的設備狀態
@@ -91,14 +95,14 @@ async function checkLightingAreas() {
 					await modbusClient.readDiscreteInputs(0, 1, deviceConfig);
 				}
 				
-				// 讀取成功，清除錯誤狀態
-				await systemAlert.clearError("lighting", area.id);
+				// 讀取成功，清除錯誤狀態（批次模式：跳過即時推送）
+				await systemAlert.clearError("lighting", area.id, { skipWebSocket: true });
 
 				return { areaId: area.id, success: true };
 			} catch (error) {
-				// 讀取失敗，記錄錯誤
+				// 讀取失敗，記錄錯誤（批次模式：跳過即時推送）
 				const errorMessage = error.message || "無法讀取照明設備資料";
-				await systemAlert.recordError("lighting", area.id, errorMessage);
+				await systemAlert.recordError("lighting", area.id, errorMessage, { skipWebSocket: true });
 				
 				return { 
 					areaId: area.id, 
@@ -110,17 +114,72 @@ async function checkLightingAreas() {
 
 		const results = await Promise.allSettled(checkPromises);
 		
-		results.forEach((result) => {
+		// 收集狀態更新，用於批次推送（只收集狀態改變的設備）
+		const statusUpdates = [];
+
+		results.forEach((result, index) => {
 			if (result.status === "fulfilled") {
-				if (result.value.success) {
-					successCount++;
+				const areaId = result.value.areaId;
+				const key = `lighting:${areaId}`;
+				const currentStatus = result.value.success ? "online" : "offline";
+				const lastStatus = lastDeviceStatus.get(key);
+
+				// 只在狀態改變時才添加到更新列表
+				if (lastStatus !== currentStatus) {
+					lastDeviceStatus.set(key, currentStatus);
+					
+					if (result.value.success) {
+						successCount++;
+						statusUpdates.push({
+							system: "lighting",
+							sourceId: areaId,
+							status: "online",
+						});
+					} else {
+						failCount++;
+						statusUpdates.push({
+							system: "lighting",
+							sourceId: areaId,
+							status: "offline",
+						});
+					}
 				} else {
-					failCount++;
+					// 狀態沒有改變，只更新計數（不推送 WebSocket）
+					if (result.value.success) {
+						successCount++;
+					} else {
+						failCount++;
+					}
 				}
 			} else {
+				// Promise 被 reject，記錄錯誤並標記為離線
 				failCount++;
+				const area = areas[index];
+				if (area) {
+					const key = `lighting:${area.id}`;
+					const lastStatus = lastDeviceStatus.get(key);
+					
+					// 只在狀態改變時才推送
+					if (lastStatus !== "offline") {
+						lastDeviceStatus.set(key, "offline");
+						statusUpdates.push({
+							system: "lighting",
+							sourceId: area.id,
+							status: "offline",
+						});
+					}
+				}
+				console.error(
+					`[lightingMonitor] 檢查區域失敗 (Promise rejected):`,
+					result.reason
+				);
 			}
 		});
+
+		// 批次推送設備狀態更新（只推送狀態改變的設備）
+		if (statusUpdates.length > 0) {
+			websocketService.emitBatchDeviceStatus(statusUpdates);
+		}
 
 		if (successCount > 0 || failCount > 0) {
 			console.log(

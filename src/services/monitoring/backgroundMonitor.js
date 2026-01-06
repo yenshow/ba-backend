@@ -7,8 +7,10 @@
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 
-// 監控間隔（毫秒）- 每 30 秒檢查一次
-const MONITORING_INTERVAL = 30000;
+// 監控間隔（毫秒）- 每 15 秒檢查一次
+// 使用 WebSocket 後可提升更新頻率，從 30 秒調整為 15 秒以提升即時性
+// 注意：執行時間約 10 秒，設置 15 秒間隔確保任務有足夠時間完成
+const MONITORING_INTERVAL = 15000;
 
 // 監控任務註冊表
 const monitoringTasks = [];
@@ -95,6 +97,9 @@ async function runAllTasks() {
 			);
 		}
 
+		// 註解：前端不需要 monitoring:status 事件
+		// 如需監控任務狀態，可透過 REST API 查詢，或實作管理員專用的監控面板
+		/*
 		// 推送 WebSocket 事件：監控任務執行摘要
 		websocketService.emitMonitoringStatus({
 			timestamp: new Date().toISOString(),
@@ -105,6 +110,7 @@ async function runAllTasks() {
 				errorCount: task.errorCount,
 			})),
 		});
+		*/
 	} catch (error) {
 		console.error("[backgroundMonitor] 執行監控任務時發生未預期的錯誤:", error);
 	} finally {

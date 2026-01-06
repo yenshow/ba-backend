@@ -1,0 +1,92 @@
+{
+  "description": "車輛進出系統資料庫測試配置檔案 - 根據圖三頁面資訊對應圖一圖二資料表",
+  "tables": [
+    {
+      "name": "passageway_log_data",
+      "schema": "vehiclebiz",
+      "description": "出入口的日志 - 所有資料）",
+      "options": {
+        "limit": 20,
+        "offset": 0,
+        "orderBy": "id",
+        "orderDirection": "DESC"
+      },
+      "showSchema": true,
+      "showData": true,
+      "showCount": true
+    },
+    {
+      "name": "parking_lot_info",
+      "schema": "vehiclebiz",
+      "description": "停车场的配置信息 - 對應圖三多個工地資訊（AA工地、BB工地、DD工地）",
+      "options": {
+        "limit": 10,
+        "offset": 0,
+        "orderBy": "id",
+        "orderDirection": "ASC"
+      },
+      "showSchema": true,
+      "showData": true,
+      "showCount": true
+    },
+    {
+      "name": "parking_lot_available_lots",
+      "schema": "vehiclebiz",
+      "description": "车道配置信息 - 剩余车位数",
+      "options": {
+        "limit": 10,
+        "offset": 0,
+        "orderBy": "id",
+        "orderDirection": "ASC"
+      },
+      "showSchema": true,
+      "showData": true,
+      "showCount": true
+    },
+    {
+      "name": "no_exit_passageway_log",
+      "schema": "vehiclebiz",
+      "description": "未出场的入场记录 - 可能對應圖三目前場內數量統計",
+      "options": {
+        "limit": 20,
+        "offset": 0,
+        "orderBy": "id",
+        "orderDirection": "DESC"
+      },
+      "showSchema": true,
+      "showData": true,
+      "showCount": true
+    },
+    {
+      "name": "perm_vehicles",
+      "schema": "vehiclebiz",
+      "description": "停车场固定车 - 車輛管理相關",
+      "options": {
+        "limit": 20,
+        "offset": 0,
+        "orderBy": "id",
+        "orderDirection": "DESC"
+      },
+      "showSchema": true,
+      "showData": true,
+      "showCount": true
+    },
+    {
+      "name": "lane_info",
+      "schema": "vehiclebiz",
+      "description": "车道的配置信息 - 車道相關配置",
+      "options": {
+        "limit": 20,
+        "offset": 0,
+        "orderBy": "id",
+        "orderDirection": "ASC"
+      },
+      "showSchema": true,
+      "showData": true,
+      "showCount": true
+    }
+  ],
+  "showSchema": true,
+  "showData": true,
+  "showCount": true
+}

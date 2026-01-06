@@ -5,10 +5,12 @@
 1. [系統架構](#系統架構)
 2. [MediaMTX 服務配置](#mediamtx-服務配置)
 3. [後端 RTSP 服務配置](#後端-rtsp-服務配置)
-4. [前端播放器配置](#前端播放器配置)
-5. [影像編解碼器設定](#影像編解碼器設定)
-6. [延遲優化設定](#延遲優化設定)
-7. [環境變數配置](#環境變數配置)
+4. [WebSocket 整合](#websocket-整合)
+5. [前端播放器配置](#前端播放器配置)
+6. [影像編解碼器設定](#影像編解碼器設定)
+7. [延遲優化設定](#延遲優化設定)
+8. [環境變數配置](#環境變數配置)
+9. [性能優化與改進建議](#性能優化與改進建議)
 
 ---
 
@@ -78,19 +80,9 @@ writeTimeout: 10s # 寫入超時
 
 ### 配置說明
 
-1. **HLS 配置**
-
-   - `hlsAlwaysRemux: yes` - 自動將不兼容的編解碼器（如 H265）轉換為瀏覽器支持的格式
-   - `hlsSegmentDuration: 1s` - 每個 HLS 片段時長 1 秒（平衡延遲和穩定性）
-   - `hlsSegmentCount: 3` - 保留 3 個片段（約 3 秒緩衝）
-
-2. **WebRTC 配置**
-
-   - `webrtcAllowOrigin: "*"` - 允許所有來源的跨域訪問
-
-3. **路徑管理**
-   - 路徑通過 API 動態添加，不在配置文件中預設
-   - 每個 RTSP 串流會自動生成唯一的路徑名稱
+- **HLS 配置**：`hlsAlwaysRemux: yes` 自動轉換編解碼器，`hlsSegmentDuration: 1s` 片段時長 1 秒，`hlsSegmentCount: 3` 保留 3 個片段
+- **WebRTC 配置**：`webrtcAllowOrigin: "*"` 允許跨域訪問
+- **路徑管理**：路徑通過 API 動態添加，每個串流自動生成唯一路徑名稱
 
 ---
 
@@ -153,68 +145,71 @@ MediaMTX API (HTTP)
 
 ---
 
-## 前端播放器配置
+## WebSocket 整合
 
-### 播放器組件
+系統通過 WebSocket 實時推送 RTSP 串流狀態變化。所有事件會廣播給所有連接的客戶端。
 
-- 位置：`app/components/rtsp/VideoPlayer.vue`
-- 支持：HLS (hls.js) 和 WebRTC
+### WebSocket 事件類型
 
-### HLS 播放器配置（低延遲優化）
+| 事件名稱                     | 觸發時機       | 數據格式                                                      |
+| ---------------------------- | -------------- | ------------------------------------------------------------- |
+| `rtsp:stream:started`        | 串流啟動成功時 | `{ streamId, rtspUrl, hlsUrl, webrtcUrl, status, timestamp }` |
+| `rtsp:stream:stopped`        | 串流停止時     | `{ streamId, timestamp }`                                     |
+| `rtsp:stream:error`          | 串流發生錯誤時 | `{ streamId, error: { message, code? }, timestamp }`          |
+| `rtsp:stream:status:changed` | 串流狀態變更時 | `{ streamId, oldStatus, newStatus, timestamp }`（預留）       |
 
-```typescript
-const HLS_PLAYER_CONFIG = {
-  maxBufferLength: 0.3, // 最大緩衝 0.3 秒（極低延遲）
-  maxMaxBufferLength: 0.6, // 最大緩衝上限 0.6 秒
-  backBufferLength: 0, // 禁用後緩衝
-  maxBufferSize: 600 * 1000, // 最大緩衝大小 600KB
-  fragLoadingTimeOut: 1000, // 片段加載超時 1 秒
-  manifestLoadingTimeOut: 300, // 清單加載超時 0.3 秒
-  levelLoadingTimeOut: 1000, // 級別加載超時 1 秒
-};
+### 前端使用範例
+
+```javascript
+import { io } from "socket.io-client";
+
+const socket = io("http://192.168.2.8:4000", {
+  transports: ["websocket"],
+});
+
+socket.on("rtsp:stream:started", (data) => {
+  // data.streamId, data.hlsUrl, data.webrtcUrl
+});
+
+socket.on("rtsp:stream:stopped", (data) => {
+  // data.streamId
+});
+
+socket.on("rtsp:stream:error", (data) => {
+  // data.streamId, data.error.message
+});
 ```
 
-### hls.js 詳細配置
+**實現位置**：
+
+- 後端：`src/services/websocket/websocketService.js`
+- 觸發：`src/services/communication/rtspStreamService.js`
+
+---
+
+## 前端播放器配置
+
+**位置**：`app/components/rtsp/VideoPlayer.vue`  
+**支持**：HLS (hls.js) 和 WebRTC
+
+### hls.js 低延遲配置
 
 ```typescript
 {
-  enableWorker: true,                    // 啟用 Web Worker
-  lowLatencyMode: true,                  // 低延遲模式
-  backBufferLength: 0,                   // 禁用後緩衝
+  enableWorker: true,
+  lowLatencyMode: true,
+  backBufferLength: 0,
   maxBufferLength: 0.3,                  // 最大緩衝 0.3 秒
   maxMaxBufferLength: 0.6,               // 最大緩衝上限 0.6 秒
-  maxBufferSize: 600 * 1000,             // 最大緩衝大小 600KB
-  maxBufferHole: 0.01,                   // 極小緩衝空洞
-  highBufferWatchdogPeriod: 0.1,        // 緩衝監控週期 0.1 秒
-  nudgeOffset: 0.001,                    // 極小調整偏移
-  nudgeMaxRetry: 1,                      // 最少重試
-  fragLoadingTimeOut: 1000,              // 片段加載超時 1 秒
-  manifestLoadingTimeOut: 300,           // 清單加載超時 0.3 秒
-  levelLoadingTimeOut: 1000,              // 級別加載超時 1 秒
-  startLevel: -1,                        // 自動選擇最佳品質
-  liveSyncDurationCount: 0.3,            // 只等待 0.3 個片段就開始播放（約 0.3 秒）
-  liveMaxLatencyDurationCount: 1.0,      // 最大延遲 1.0 個片段（約 1 秒）
-  liveDurationInfinity: false            // 不使用無限持續時間
+  maxBufferSize: 600 * 1000,
+  liveSyncDurationCount: 0.3,            // 只等待 0.3 個片段就開始播放
+  liveMaxLatencyDurationCount: 1.0,      // 最大延遲 1.0 個片段
+  fragLoadingTimeOut: 1000,
+  manifestLoadingTimeOut: 300,
 }
 ```
 
-### 播放策略
-
-1. **優先使用 HLS**
-
-   - 使用 hls.js 進行播放
-   - 如果瀏覽器原生支持 HLS（Safari），會優先使用原生播放器
-
-2. **錯誤處理**
-
-   - 網路錯誤：自動重試（最多 8 次，間隔 300ms）
-   - 媒體錯誤：自動恢復
-   - 解碼錯誤：回退到 hls.js（如果使用原生播放器）
-
-3. **URL 驗證**
-   - 啟動前驗證 HLS URL 是否可訪問
-   - 重試 8 次，間隔 300ms
-   - 驗證響應內容是否包含 HLS 標記（`#EXTM3U` 或 `#EXT-X`）
+**播放策略**：優先使用 HLS，自動重試網路錯誤（最多 8 次），URL 驗證後播放
 
 ---
 
@@ -229,84 +224,29 @@ const HLS_PLAYER_CONFIG = {
 
 ### H265 問題與解決方案
 
-#### 問題描述
+**問題**：H265 編碼可能導致 DTS 錯誤 `unable to extract DTS: invalid DeltaPocS0`
 
-當 RTSP 串流使用 H265 編解碼器時，可能出現以下錯誤：
+**解決方案**：
 
-```
-[HLS] [muxer stream_xxx] destroyed: muxer error: unable to extract DTS: invalid DeltaPocS0
-```
-
-#### 解決方案
-
-1. **推薦方案：修改攝像頭配置**
-
-   - 將攝像頭配置為輸出 H264 編碼
-   - 優點：無需轉碼，性能最佳，延遲最低
-   - 缺點：需要訪問攝像頭配置界面
-
-2. **備選方案：使用 MediaMTX 重新封裝**
-
-   - MediaMTX 配置了 `hlsAlwaysRemux: yes`
-   - 會自動嘗試將 H265 轉換為 H264
-   - 注意：標準版 MediaMTX 的轉碼能力有限
-
-3. **測試不同通道**
-   - 通常 Channel 101 是 H265 流
-   - Channel 102 可能是 H264 流
-   - 測試 URL：`rtsp://admin:password@192.168.2.103:554/Streaming/Channels/102`
+1. **推薦**：將攝像頭配置為輸出 H264（無需轉碼，性能最佳）
+2. **備選**：使用 MediaMTX 重新封裝（`hlsAlwaysRemux: yes`），但轉碼能力有限
+3. **測試**：嘗試不同通道（通常 Channel 102 是 H264，Channel 101 是 H265）
 
 ### 影像品質設定
 
-目前系統**不進行轉碼**，直接使用攝像頭原始串流：
-
-- **解析度**：由攝像頭配置決定
-- **幀率**：由攝像頭配置決定
-- **碼率**：由攝像頭配置決定
-- **編解碼器**：由攝像頭配置決定（建議使用 H264）
-
-如需調整影像品質，請在攝像頭端進行配置。
+系統不進行轉碼，直接使用攝像頭原始串流。解析度、幀率、碼率、編解碼器均由攝像頭配置決定（建議使用 H264）。
 
 ---
 
 ## 延遲優化設定
 
-### 目標延遲
+**目標延遲**：HLS 播放約 1-2 秒，WebRTC < 500ms
 
-- **HLS 播放**：約 1-2 秒
-- **WebRTC 播放**：< 500ms（如果實現）
+**優化措施**：
 
-### 優化措施
-
-#### 1. MediaMTX 配置
-
-- `hlsSegmentDuration: 1s` - 片段時長 1 秒（平衡延遲和穩定性）
-- `hlsSegmentCount: 3` - 保留 3 個片段（約 3 秒緩衝）
-
-#### 2. 前端播放器配置
-
-- `maxBufferLength: 0.3s` - 最小緩衝（極低延遲）
-- `liveSyncDurationCount: 0.3` - 只等待 0.3 個片段就開始播放
-- `liveMaxLatencyDurationCount: 1.0` - 最大延遲 1.0 個片段
-
-#### 3. 網路優化
-
-- 使用區域網路 IP 而非 localhost（減少網路延遲）
-- 自動檢測服務器 IP 地址
-
-### 延遲組成
-
-```
-總延遲 = RTSP 連接延遲 + MediaMTX 處理延遲 + 網路傳輸延遲 + 前端緩衝延遲
-
-典型值：
-- RTSP 連接：0.1-0.2 秒
-- MediaMTX 處理：0.3-0.5 秒
-- 網路傳輸：0.2-0.5 秒
-- 前端緩衝：0.3-1.0 秒
---------------------------------
-總計：約 1-2 秒
-```
+- MediaMTX：片段時長 1 秒，保留 3 個片段
+- 前端播放器：最小緩衝 0.3 秒，自動檢測服務器 IP
+- 總延遲組成：RTSP 連接(0.1-0.2s) + MediaMTX 處理(0.3-0.5s) + 網路傳輸(0.2-0.5s) + 前端緩衝(0.3-1.0s) ≈ 1-2 秒
 
 ---
 
@@ -347,10 +287,8 @@ NUXT_PUBLIC_MEDIAMTX_WEBRTC_URL=http://192.168.2.8:8889
 
 ## 使用範例
 
-### 啟動串流
-
 ```javascript
-// 前端調用
+// 啟動串流
 const response = await fetch("http://192.168.2.8:4000/api/rtsp/start", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -358,25 +296,18 @@ const response = await fetch("http://192.168.2.8:4000/api/rtsp/start", {
     rtspUrl: "rtsp://admin:password@192.168.2.103:554/Streaming/Channels/101",
   }),
 });
-
 const result = await response.json();
-// result.data.hlsUrl: http://192.168.2.8:8888/stream_0cd71f31/index.m3u8
-// result.data.webrtcUrl: http://192.168.2.8:8889/stream_0cd71f31
-```
+// result.data.hlsUrl, result.data.webrtcUrl
 
-### 停止串流
-
-```javascript
+// 停止串流
 await fetch(`http://192.168.2.8:4000/api/rtsp/stop/${streamId}`, {
   method: "POST",
 });
-```
 
-### 獲取串流狀態
-
-```javascript
-const response = await fetch("http://192.168.2.8:4000/api/rtsp/status");
-const statuses = await response.json();
+// 獲取串流狀態
+const statuses = await fetch("http://192.168.2.8:4000/api/rtsp/status").then(
+  (r) => r.json()
+);
 ```
 
 ---
@@ -412,6 +343,28 @@ const statuses = await response.json();
 
 ---
 
+## 性能優化與改進建議
+
+### 目前實現的優化
+
+- **路徑狀態緩存**：2 秒緩存間隔，減少 API 請求
+- **批量狀態獲取**：一次性獲取所有路徑狀態
+- **自動 IP 檢測**：優先使用環境變數，自動檢測區域網路 IP
+- **WebSocket 通知**：實時推送串流狀態變化
+
+### 建議的進一步優化
+
+| 優先級 | 優化項目         | 說明                           |
+| ------ | ---------------- | ------------------------------ |
+| 🔴 高  | 串流健康監控     | 定期檢查狀態，自動清理失效記錄 |
+| 🟡 中  | API 請求重試機制 | 指數退避重試（最多 3 次）      |
+| 🟡 中  | 串流資源管理     | 設置數量限制，自動清理閒置串流 |
+| 🟢 低  | 性能指標統計     | API 響應時間、失敗率統計       |
+| 🟢 低  | 配置優化         | 將硬編碼配置移到環境變數       |
+| 🟢 低  | 連接池優化       | 使用 HTTP Keep-Alive           |
+
+---
+
 ## 相關文檔
 
 - [H265 轉碼解決方案](./H265_TRANSCODING_SOLUTION.md)
@@ -421,4 +374,4 @@ const statuses = await response.json();
 ---
 
 **最後更新**：2025-12-30  
-**版本**：1.0.0
+**版本**：1.1.0

@@ -26,86 +26,130 @@ async function recordError(
   errorMessage,
   metadata = {}
 ) {
+  const startTime = Date.now();
+
   try {
-    // 檢查是否已被忽視
+    // 1. 檢查是否已被忽視（優先檢查，避免不必要的資料庫操作）
     const isIgnored = await alertService.isSourceIgnored(
       source,
       sourceId,
       alertType
     );
     if (isIgnored) {
-      console.log(
-        `[errorTracker] 來源 ${source}:${sourceId} 的 ${alertType} 警報已被忽視，跳過創建新警報`
-      );
+      if (process.env.NODE_ENV === "development") {
+        console.log(
+          `[errorTracker] ⏭️  來源 ${source}:${sourceId} 的 ${alertType} 警報已被忽視，跳過`
+        );
+      }
       return false;
     }
 
-    // 取得或創建錯誤追蹤記錄
-    let tracking = await getErrorTracking(source, sourceId);
-    if (!tracking) {
-      await createErrorTracking(source, sourceId);
-      tracking = await getErrorTracking(source, sourceId);
+    // 2. 使用 UPSERT 操作一次完成取得/創建和增加計數
+    const now = new Date();
+    const upsertResult = await db.query(
+      `INSERT INTO error_tracking (source, source_id, error_count, last_error_at, alert_created, updated_at)
+      VALUES (?, ?, 1, ?, FALSE, CURRENT_TIMESTAMP)
+      ON CONFLICT (source, source_id) 
+      DO UPDATE SET 
+        error_count = error_tracking.error_count + 1,
+        last_error_at = ?,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *`,
+      [source, sourceId, now, now]
+    );
+
+    if (!upsertResult || upsertResult.length === 0) {
+      throw new Error("UPSERT 操作失敗");
     }
 
-    // 增加錯誤計數
-    tracking.error_count++;
-    tracking.last_error_at = new Date();
+    const tracking = upsertResult[0];
 
-    // 查詢錯誤次數規則（如果存在）
-    const rule = await alertRuleService.getErrorCountRule(source, alertType);
-    const threshold = rule?.condition_config?.min_errors || ERROR_THRESHOLD;
+    // 3. 延遲查詢規則：只在達到預設閾值且未創建警報時才查詢（優化：減少不必要的規則查詢）
+    let rule = null;
+    let threshold = ERROR_THRESHOLD;
+    if (tracking.error_count >= ERROR_THRESHOLD && !tracking.alert_created) {
+      rule = await alertRuleService.getErrorCountRule(source, alertType);
+      threshold = rule?.condition_config?.min_errors || ERROR_THRESHOLD;
+    }
 
-    // 如果達到閾值且尚未創建警報，則創建警報
-    if (tracking.error_count >= threshold && !tracking.alert_created) {
+    // 4. 判斷是否達到閾值並創建/更新警報
+    if (tracking.error_count >= threshold) {
       // 使用規則定義的嚴重程度，如果沒有規則則使用預設值
       const severity = rule?.severity || alertService.SEVERITIES.WARNING;
 
-      // 構建警報訊息（使用規則模板或預設格式）
-      const sourceName = metadata.name || `${source}:${sourceId}`;
-      let alertMessage;
-      if (rule?.message_template) {
-        alertMessage = alertRuleService.formatMessage(rule.message_template, {
-          source_name: sourceName,
-          error_count: tracking.error_count,
-        });
-      } else {
-        alertMessage = `${sourceName} 連續 ${tracking.error_count} 次無法連接，請檢查狀態`;
+      // 5. 創建或更新警報
+      try {
+        // 構建警報資料（總是提供 message，使用達到閾值時的錯誤次數）
+        const sourceName = metadata.name || `${source}:${sourceId}`;
+        let message;
+        if (rule?.message_template) {
+          message = alertRuleService.formatMessage(rule.message_template, {
+            source_name: sourceName,
+            error_count: threshold, // 使用達到閾值時的錯誤次數
+          });
+        } else {
+          message = `${sourceName} 連續 ${threshold} 次無法連接，請檢查狀態`;
+        }
+
+        const alertData = {
+          source,
+          source_id: sourceId,
+          alert_type: alertType,
+          severity,
+          message,
+        };
+
+        await alertService.createAlert(alertData);
+
+        // 如果是首次創建警報，標記已創建（用於規則查詢優化）
+        const isFirstCreation = !tracking.alert_created;
+        if (isFirstCreation) {
+          await db.query(
+            `UPDATE error_tracking SET alert_created = TRUE
+            WHERE source = ? AND source_id = ?`,
+            [source, sourceId]
+          );
+        }
+
+        const duration = Date.now() - startTime;
+        if (isFirstCreation) {
+          console.log(
+            `[errorTracker] ✅ 警報已創建 | ${source}:${sourceId} | ${alertType} | ` +
+              `錯誤次數:${tracking.error_count}/${threshold} | 嚴重程度:${severity} | 耗時:${duration}ms`
+          );
+        } else if (process.env.NODE_ENV === "development") {
+          console.log(
+            `[errorTracker] 🔄 警報已更新 | ${source}:${sourceId} | ${alertType} | ` +
+              `錯誤次數:${tracking.error_count}/${threshold} | 耗時:${duration}ms`
+          );
+        }
+
+        return true;
+      } catch (alertError) {
+        console.error(
+          `[errorTracker] ❌ 創建/更新警報失敗 | ${source}:${sourceId} | ${alertType}:`,
+          alertError.message
+        );
+        return false;
       }
-
-      // 創建警報
-      await alertService.createAlert({
-        source,
-        source_id: sourceId,
-        alert_type: alertType,
-        severity,
-        message: alertMessage,
-      });
-
-      // 標記已創建警報
-      await updateErrorTracking(source, sourceId, {
-        error_count: tracking.error_count,
-        last_error_at: tracking.last_error_at,
-        alert_created: true,
-      });
-
-      console.log(
-        `[errorTracker] 來源 ${source}:${sourceId} 連續 ${tracking.error_count} 次錯誤，已創建警報`
-      );
-
-      return true;
     } else {
-      // 更新錯誤計數
-      await updateErrorTracking(source, sourceId, {
-        error_count: tracking.error_count,
-        last_error_at: tracking.last_error_at,
-      });
+      if (
+        process.env.NODE_ENV === "development" &&
+        tracking.error_count % 5 === 0
+      ) {
+        const duration = Date.now() - startTime;
+        console.log(
+          `[errorTracker] 📊 錯誤計數更新 | ${source}:${sourceId} | ${alertType} | ` +
+            `當前:${tracking.error_count}/${threshold} | 耗時:${duration}ms`
+        );
+      }
+      return false;
     }
-
-    return false;
   } catch (error) {
+    const duration = Date.now() - startTime;
     console.error(
-      `[errorTracker] 記錄錯誤失敗 (source: ${source}, sourceId: ${sourceId}):`,
-      error
+      `[errorTracker] ❌ 記錄錯誤失敗 | ${source}:${sourceId} | ${alertType} | 耗時:${duration}ms:`,
+      error.message
     );
     return false;
   }
@@ -119,11 +163,56 @@ async function recordError(
  * @param {string} alertType - 警報類型（可選，如果未提供則嘗試解決所有相關警報）
  * @returns {Promise<boolean>} 是否實際清除了錯誤（有錯誤記錄且已清除）
  */
+/**
+ * 嘗試解決指定類型的 ACTIVE 警報（內部輔助函數）
+ * @param {string} source - 系統來源
+ * @param {number} sourceId - 來源實體 ID
+ * @param {string|Array<string>} alertTypes - 警報類型（單一類型或類型陣列）
+ * @returns {Promise<boolean>} 是否成功解決了至少一個警報
+ */
+async function resolveActiveAlerts(source, sourceId, alertTypes) {
+  const types = Array.isArray(alertTypes) ? alertTypes : [alertTypes];
+  let resolvedAny = false;
+
+  for (const type of types) {
+    try {
+      await alertService.updateAlertStatus(
+        sourceId,
+        source,
+        type,
+        alertService.ALERT_STATUS.RESOLVED,
+        null,
+        "系統檢測到問題已恢復"
+      );
+      resolvedAny = true;
+    } catch (resolveError) {
+      // 如果警報不存在或已解決，忽略錯誤（這是正常情況）
+      if (!resolveError.message.includes("未找到可更新的警報")) {
+        console.error(
+          `[errorTracker] 自動解決警報失敗 (source: ${source}, sourceId: ${sourceId}, type: ${type}):`,
+          resolveError.message
+        );
+      }
+    }
+  }
+
+  return resolvedAny;
+}
+
 async function clearError(source, sourceId, alertType = null) {
   try {
     const tracking = await getErrorTracking(source, sourceId);
+    const alertTypesToResolve = alertType
+      ? [alertType]
+      : ["offline", "error"];
 
-    if (tracking && tracking.error_count > 0) {
+    // 情況 1：沒有 tracking 記錄，直接檢查並解決 ACTIVE 警報
+    if (!tracking) {
+      return await resolveActiveAlerts(source, sourceId, alertTypesToResolve);
+    }
+
+    // 情況 2：有 tracking 記錄且 error_count > 0
+    if (tracking.error_count > 0) {
       const previousCount = tracking.error_count;
       const hadAlert = tracking.alert_created;
 
@@ -136,45 +225,13 @@ async function clearError(source, sourceId, alertType = null) {
 
       // 如果之前創建了警報，自動解決對應的警報
       if (hadAlert) {
-        try {
-          // 如果指定了 alertType，只解決該類型的警報
-          // 否則嘗試解決 offline 和 error 類型的警報
-          const alertTypesToResolve = alertType
-            ? [alertType]
-            : ["offline", "error"];
-
-          for (const type of alertTypesToResolve) {
-            try {
-              // 使用 updateAlertStatus 自動解決警報（resolved_by = null 表示系統自動解決）
-              await alertService.updateAlertStatus(
-                sourceId,
-                source,
-                type,
-                alertService.ALERT_STATUS.RESOLVED,
-                null, // 系統自動解決，不記錄操作者
-                "系統檢測到問題已恢復"
-              );
-            } catch (resolveError) {
-              // 如果該類型的警報不存在，忽略錯誤（可能已經被解決或不存在）
-              if (
-                !resolveError.message.includes("未找到可更新的警報")
-              ) {
-                console.error(
-                  `[errorTracker] 自動解決警報失敗 (source: ${source}, sourceId: ${sourceId}, type: ${type}):`,
-                  resolveError.message
-                );
-              }
-            }
-          }
-        } catch (error) {
-          console.error(
-            `[errorTracker] 自動解決警報時發生錯誤:`,
-            error
-          );
-        }
-
+        const resolvedAny = await resolveActiveAlerts(
+          source,
+          sourceId,
+          alertTypesToResolve
+        );
         console.log(
-          `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，已創建警報並自動解決）`
+          `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，已創建警報${resolvedAny ? "並自動解決" : ""}）`
         );
       } else {
         console.log(
@@ -182,10 +239,28 @@ async function clearError(source, sourceId, alertType = null) {
         );
       }
 
-      return true; // 實際清除了錯誤
+      return true;
     }
 
-    return false; // 沒有錯誤記錄或錯誤計數為 0
+    // 情況 3：error_count = 0 但 alert_created = TRUE（取消忽視後設備已恢復的情況）
+    if (tracking.alert_created) {
+      const resolvedAny = await resolveActiveAlerts(
+        source,
+        sourceId,
+        alertTypesToResolve
+      );
+
+      // 如果解決了警報，重置 alert_created 標記
+      if (resolvedAny) {
+        await updateErrorTracking(source, sourceId, {
+          alert_created: false,
+        });
+      }
+
+      return resolvedAny;
+    }
+
+    return false; // 沒有需要處理的情況
   } catch (error) {
     console.error(
       `[errorTracker] 清除錯誤狀態失敗 (source: ${source}, sourceId: ${sourceId}):`,
@@ -196,7 +271,7 @@ async function clearError(source, sourceId, alertType = null) {
 }
 
 /**
- * 取得錯誤追蹤記錄
+ * 取得錯誤追蹤記錄（保留用於其他用途）
  * @param {string} source - 系統來源
  * @param {number} sourceId - 來源實體 ID
  * @returns {Promise<Object|null>} 錯誤追蹤記錄
@@ -213,25 +288,6 @@ async function getErrorTracking(source, sourceId) {
   } catch (error) {
     console.error(`[errorTracker] 取得錯誤追蹤失敗:`, error);
     return null;
-  }
-}
-
-/**
- * 創建錯誤追蹤記錄
- * @param {string} source - 系統來源
- * @param {number} sourceId - 來源實體 ID
- * @returns {Promise<void>}
- */
-async function createErrorTracking(source, sourceId) {
-  try {
-    await db.query(
-      `INSERT INTO error_tracking (source, source_id, error_count, alert_created)
-			VALUES (?, ?, 0, FALSE)
-			ON CONFLICT (source, source_id) DO NOTHING`,
-      [source, sourceId]
-    );
-  } catch (error) {
-    console.error(`[errorTracker] 創建錯誤追蹤失敗:`, error);
   }
 }
 

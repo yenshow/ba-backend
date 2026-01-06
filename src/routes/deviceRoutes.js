@@ -224,7 +224,8 @@ router.put("/:id", authenticate, requireAdmin, async (req, res, next) => {
 router.delete("/:id", authenticate, requireAdmin, async (req, res, next) => {
 	try {
 		const { id } = req.params;
-		const result = await deviceService.deleteDevice(parseInt(id));
+		const userId = req.user?.id;
+		const result = await deviceService.deleteDevice(parseInt(id), userId);
 		res.json(result);
 	} catch (error) {
 		next(error);

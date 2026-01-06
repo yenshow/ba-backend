@@ -12,24 +12,25 @@ class MediaMTXService extends EventEmitter {
     super();
     // MediaMTX API 基礎 URL
     this.apiBaseUrl = process.env.MEDIAMTX_API_URL || "http://localhost:9997";
-    
+
     // 獲取服務器 IP 地址（用於前端訪問）
     const serverIP = this.getServerIP();
-    
+
     // MediaMTX HLS 輸出 URL（供前端播放）
     // 使用服務器 IP 而不是 localhost，以便前端可以訪問
     const hlsHost = process.env.MEDIAMTX_HLS_URL || `http://${serverIP}:8888`;
     this.hlsBaseUrl = hlsHost;
-    
+
     // MediaMTX WebRTC URL（低延遲選項）
-    const webrtcHost = process.env.MEDIAMTX_WEBRTC_URL || `http://${serverIP}:8889`;
+    const webrtcHost =
+      process.env.MEDIAMTX_WEBRTC_URL || `http://${serverIP}:8889`;
     this.webrtcBaseUrl = webrtcHost;
-    
+
     // 存儲所有活躍的串流
     this.streams = new Map();
     // API 請求超時時間（毫秒）
     this.apiTimeout = 10000;
-    
+
     // 路徑狀態緩存（優化性能：減少 API 請求）
     this.pathStatusCache = new Map();
     this.lastStatusUpdate = 0;
@@ -45,7 +46,7 @@ class MediaMTXService extends EventEmitter {
     if (process.env.MEDIAMTX_PUBLIC_IP) {
       return process.env.MEDIAMTX_PUBLIC_IP;
     }
-    
+
     // 獲取區域網路 IP
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
@@ -56,7 +57,7 @@ class MediaMTXService extends EventEmitter {
         }
       }
     }
-    
+
     // 如果沒有找到，返回 localhost（開發環境）
     return "localhost";
   }
@@ -107,20 +108,20 @@ class MediaMTXService extends EventEmitter {
           const url = new URL(this.apiBaseUrl);
           const host = url.hostname;
           const port = parseInt(url.port) || 9997;
-          
+
           const client = new net.Socket();
           client.setTimeout(2000);
-          
+
           client.once("connect", () => {
             client.destroy();
             resolve(true);
           });
-          
+
           client.once("timeout", () => {
             client.destroy();
             resolve(false);
           });
-          
+
           client.once("error", (err) => {
             // 連接被拒絕表示端口未開放，但其他錯誤可能是網路問題
             if (err.code === "ECONNREFUSED") {
@@ -130,7 +131,7 @@ class MediaMTXService extends EventEmitter {
               resolve(false);
             }
           });
-          
+
           client.connect(port, host);
         } catch (error) {
           resolve(false);
@@ -158,12 +159,17 @@ class MediaMTXService extends EventEmitter {
       // 注意：HLS 低延遲配置需要在全局配置文件中設置
       // MediaMTX API 的路徑配置不支持直接設置 HLS 參數
     };
-    
+
     try {
       // 注意：如果遇到 H265 DTS 錯誤，需要：
       // 1. 將攝像頭配置為輸出 H264 編碼
       // 2. 或使用 FFmpeg 進行轉碼（需要額外配置）
-      console.log(`[MediaMTX Service] 添加路徑: ${pathName}, 來源: ${rtspUrl.replace(/:[^:@]+@/, ':****@')}`);
+      console.log(
+        `[MediaMTX Service] 添加路徑: ${pathName}, 來源: ${rtspUrl.replace(
+          /:[^:@]+@/,
+          ":****@"
+        )}`
+      );
 
       const response = await axios.post(
         `${this.apiBaseUrl}/v3/config/paths/add/${pathName}`,
@@ -181,18 +187,35 @@ class MediaMTXService extends EventEmitter {
       if (error.response) {
         // 路徑可能已存在（MediaMTX 可能返回 400 或 409）
         if (error.response.status === 409 || error.response.status === 400) {
-          const errorMsg = error.response.data?.error || error.response.data?.message || error.message || '';
+          const errorMsg =
+            error.response.data?.error ||
+            error.response.data?.message ||
+            error.message ||
+            "";
           // 檢查錯誤訊息是否包含 "already exists" 或類似的關鍵字
           const errorMsgLower = errorMsg.toLowerCase();
-          if (errorMsgLower.includes('already exists') || errorMsgLower.includes('already exist') || errorMsgLower.includes('path already')) {
+          if (
+            errorMsgLower.includes("already exists") ||
+            errorMsgLower.includes("already exist") ||
+            errorMsgLower.includes("path already")
+          ) {
             console.log(`[MediaMTX Service] 路徑 ${pathName} 已存在`);
             return { exists: true };
           }
         }
         // 顯示詳細錯誤訊息
-        const errorMsg = error.response.data?.error || error.response.data?.message || error.message;
-        console.error(`[MediaMTX Service] 添加路徑失敗 (${error.response.status}):`, errorMsg);
-        console.error(`[MediaMTX Service] 請求配置:`, JSON.stringify(pathConfig, null, 2));
+        const errorMsg =
+          error.response.data?.error ||
+          error.response.data?.message ||
+          error.message;
+        console.error(
+          `[MediaMTX Service] 添加路徑失敗 (${error.response.status}):`,
+          errorMsg
+        );
+        console.error(
+          `[MediaMTX Service] 請求配置:`,
+          JSON.stringify(pathConfig, null, 2)
+        );
         throw new Error(`添加路徑失敗: ${errorMsg}`);
       }
       throw new Error(`添加路徑失敗: ${error.message}`);
@@ -206,9 +229,13 @@ class MediaMTXService extends EventEmitter {
    */
   async removePath(pathName) {
     try {
-      await axios.post(`${this.apiBaseUrl}/v3/config/paths/remove/${pathName}`, {}, {
-        timeout: this.apiTimeout,
-      });
+      await axios.post(
+        `${this.apiBaseUrl}/v3/config/paths/remove/${pathName}`,
+        {},
+        {
+          timeout: this.apiTimeout,
+        }
+      );
       return true;
     } catch (error) {
       if (error.response && error.response.status === 404) {
@@ -226,23 +253,23 @@ class MediaMTXService extends EventEmitter {
    */
   async getAllPathsStatus() {
     const now = Date.now();
-    
+
     // 如果緩存未過期，直接返回緩存
-    if (now - this.lastStatusUpdate < this.statusUpdateInterval && this.pathStatusCache.size > 0) {
+    if (
+      now - this.lastStatusUpdate < this.statusUpdateInterval &&
+      this.pathStatusCache.size > 0
+    ) {
       return this.pathStatusCache;
     }
 
     try {
-      const response = await axios.get(
-        `${this.apiBaseUrl}/v3/paths/list`,
-        {
-          timeout: this.apiTimeout,
-        }
-      );
+      const response = await axios.get(`${this.apiBaseUrl}/v3/paths/list`, {
+        timeout: this.apiTimeout,
+      });
 
       const paths = response.data?.items || [];
       const statusMap = new Map();
-      
+
       paths.forEach((path) => {
         statusMap.set(path.name, path);
       });
@@ -335,7 +362,9 @@ class MediaMTXService extends EventEmitter {
 
           this.streams.set(streamId, streamInfo);
 
-          console.log(`[MediaMTX Service] 串流已存在並就緒: ${streamId} (路徑: ${pathName})`);
+          console.log(
+            `[MediaMTX Service] 串流已存在並就緒: ${streamId} (路徑: ${pathName})`
+          );
 
           return {
             streamId,
@@ -364,7 +393,9 @@ class MediaMTXService extends EventEmitter {
 
       this.streams.set(streamId, streamInfo);
 
-      console.log(`[MediaMTX Service] 串流啟動成功: ${streamId} (路徑: ${pathName})`);
+      console.log(
+        `[MediaMTX Service] 串流啟動成功: ${streamId} (路徑: ${pathName})`
+      );
 
       return {
         streamId,
@@ -442,7 +473,7 @@ class MediaMTXService extends EventEmitter {
     // 返回所有串流狀態（優化：只發起一次 API 請求）
     const allPaths = await this.getAllPathsStatus();
     const statuses = [];
-    
+
     for (const stream of this.streams.values()) {
       const pathStatus = allPaths.get(stream.pathName) || null;
       statuses.push({
@@ -474,4 +505,3 @@ class MediaMTXService extends EventEmitter {
 
 // 導出單例
 module.exports = new MediaMTXService();
-

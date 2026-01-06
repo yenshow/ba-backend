@@ -1,5 +1,6 @@
 const EventEmitter = require("events");
 const mediaMTXService = require("./mediaMTXService");
+const websocketService = require("../websocket/websocketService");
 
 /**
  * RTSP 串流服務（使用 MediaMTX）
@@ -20,10 +21,19 @@ class RTSPStreamService extends EventEmitter {
     // 監聽 MediaMTX 服務的事件並轉發
     mediaMTXService.on("error", (errorInfo) => {
       this.emit("error", errorInfo);
+      // 推送 WebSocket 事件：串流錯誤
+      websocketService.emitRTSPStreamError({
+        streamId: errorInfo.streamId,
+        error: errorInfo.error,
+      });
     });
 
     mediaMTXService.on("end", (streamInfo) => {
       this.emit("end", streamInfo);
+      // 推送 WebSocket 事件：串流結束（正常結束）
+      websocketService.emitRTSPStreamStopped({
+        streamId: streamInfo.streamId,
+      });
     });
   }
 
@@ -45,6 +55,15 @@ class RTSPStreamService extends EventEmitter {
     try {
       const result = await mediaMTXService.startStream(rtspUrl);
       
+      // 推送 WebSocket 事件：串流啟動
+      websocketService.emitRTSPStreamStarted({
+        streamId: result.streamId,
+        rtspUrl: result.rtspUrl,
+        hlsUrl: result.hlsUrl,
+        webrtcUrl: result.webrtcUrl,
+        status: result.status,
+      });
+      
       // 返回與原有 API 兼容的格式
       return {
         streamId: result.streamId,
@@ -57,6 +76,13 @@ class RTSPStreamService extends EventEmitter {
       // 發射錯誤事件
       const streamId = this.generateStreamId(rtspUrl);
       this.emit("error", { streamId, error });
+      
+      // 推送 WebSocket 事件：串流錯誤
+      websocketService.emitRTSPStreamError({
+        streamId,
+        error,
+      });
+      
       throw error;
     }
   }
@@ -68,7 +94,14 @@ class RTSPStreamService extends EventEmitter {
    */
   async stopStream(streamId) {
     try {
-      return await mediaMTXService.stopStream(streamId);
+      const result = await mediaMTXService.stopStream(streamId);
+      
+      // 推送 WebSocket 事件：串流停止
+      websocketService.emitRTSPStreamStopped({
+        streamId,
+      });
+      
+      return result;
     } catch (error) {
       throw error;
     }

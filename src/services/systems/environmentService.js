@@ -1,4 +1,5 @@
 const db = require("../../database/db");
+const websocketService = require("../websocket/websocketService");
 
 // ========== 共用輔助函數 ==========
 
@@ -414,15 +415,23 @@ async function saveReading(readingData) {
 			[parseInt(locationId), new Date(timestamp), JSON.stringify(data)]
 		);
 
+		const reading = {
+			id: String(result[0].id),
+			locationId: String(result[0].location_id),
+			timestamp: result[0].timestamp.toISOString(),
+			data: typeof result[0].data === "string" ? JSON.parse(result[0].data) : result[0].data,
+			createdAt: result[0].created_at.toISOString(),
+		};
+
+		// 推送 WebSocket 事件：環境感測器讀數（廣播給所有客戶端）
+		websocketService.emitEnvironmentReading({
+			locationId: parseInt(locationId),
+			reading,
+		});
+
 		return {
 			message: "讀數儲存成功",
-			reading: {
-				id: String(result[0].id),
-				locationId: String(result[0].location_id),
-				timestamp: result[0].timestamp.toISOString(),
-				data: typeof result[0].data === "string" ? JSON.parse(result[0].data) : result[0].data,
-				createdAt: result[0].created_at.toISOString(),
-			},
+			reading,
 		};
 	} catch (error) {
 		if (error.statusCode) {

@@ -40,5 +40,13 @@ module.exports = {
 	monitoring: {
 		// 是否啟用背景監控服務（預設為 true）
 		enabled: process.env.MONITORING_ENABLED !== "false"
+	},
+	externalDatabase: {
+		host: process.env.EXTERNAL_DB_HOST || "192.168.2.2",
+		port: toNumber(process.env.EXTERNAL_DB_PORT, 5432),
+		user: process.env.EXTERNAL_DB_USER || "postgres",
+		password: process.env.EXTERNAL_DB_PASSWORD || "",
+		database: process.env.EXTERNAL_DB_NAME || "cms",
+		connectionLimit: toNumber(process.env.EXTERNAL_DB_CONNECTION_LIMIT, 5)
 	}
 };

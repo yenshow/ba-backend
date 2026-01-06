@@ -1,5 +1,6 @@
 const db = require("../../database/db");
 const { parseConfig, stringifyConfig, validateDeviceConfig } = require("../../utils/deviceHelpers");
+const websocketService = require("../websocket/websocketService");
 
 // 取得設備列表
 async function getDevices(filters = {}) {
@@ -336,7 +337,15 @@ async function createDevice(deviceData, userId) {
 		);
 
 		// 取得建立的設備
-		return await getDeviceById(result[0].id);
+		const deviceResult = await getDeviceById(result[0].id);
+		
+		// 推送 WebSocket 事件：設備創建
+		websocketService.emitDeviceCreated({
+			device: deviceResult.device,
+			userId,
+		});
+		
+		return deviceResult;
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
@@ -619,10 +628,42 @@ async function updateDevice(id, deviceData, userId) {
 
 		params.push(id);
 
+		// 記錄舊狀態（用於狀態變更事件）
+		const oldStatus = existingDevice.status;
+
 		await db.query(`UPDATE devices SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, params);
 
 		// 取得更新後的設備
-		return await getDeviceById(id);
+		const updatedDevice = await getDeviceById(id);
+		
+		// 構建變更的欄位列表
+		const changes = {};
+		const fields = { name, type_id, model_id, description, status, config };
+		Object.keys(fields).forEach(key => {
+			if (fields[key] !== undefined) {
+				changes[key] = true;
+			}
+		});
+		
+		// 檢測狀態變更並推送特定事件
+		const newStatus = status !== undefined ? status : oldStatus;
+		if (status !== undefined && oldStatus !== newStatus) {
+			websocketService.emitDeviceStatusChanged({
+				deviceId: id,
+				oldStatus,
+				newStatus,
+				userId,
+			});
+		}
+		
+		// 推送設備更新事件（包含所有變更）
+		websocketService.emitDeviceUpdated({
+			device: updatedDevice.device,
+			changes,
+			userId,
+		});
+		
+		return updatedDevice;
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
@@ -633,7 +674,7 @@ async function updateDevice(id, deviceData, userId) {
 }
 
 // 刪除設備
-async function deleteDevice(id) {
+async function deleteDevice(id, userId = null) {
 	try {
 		// 檢查設備是否存在
 		const devices = await db.query("SELECT id FROM devices WHERE id = ?", [id]);
@@ -644,6 +685,12 @@ async function deleteDevice(id) {
 		}
 
 		await db.query("DELETE FROM devices WHERE id = ?", [id]);
+
+		// 推送 WebSocket 事件：設備刪除
+		websocketService.emitDeviceDeleted({
+			deviceId: id,
+			userId,
+		});
 
 		return { message: "設備已刪除" };
 	} catch (error) {

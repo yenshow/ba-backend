@@ -12,6 +12,7 @@ const deviceRoutes = require("./routes/deviceRoutes");
 const rtspStreamService = require("./services/communication/rtspStreamService");
 const systemAlert = require("./services/alerts/systemAlertHelper");
 const db = require("./database/db");
+const externalDb = require("./database/externalDb");
 const websocketService = require("./services/websocket/websocketService");
 
 // 背景監控服務
@@ -88,6 +89,8 @@ const environmentRoutes = require("./routes/environmentRoutes");
 app.use("/api/environment", environmentRoutes);
 const alertRoutes = require("./routes/alertRoutes");
 app.use("/api/alerts", alertRoutes);
+const externalDataRoutes = require("./routes/externalDataRoutes");
+app.use("/api/external-data", externalDataRoutes);
 
 // 注意：HLS 串流現在由 MediaMTX 提供，不再需要本地靜態文件服務
 // MediaMTX 在 http://localhost:8888 提供 HLS 服務
@@ -248,6 +251,12 @@ async function startServer() {
     console.error("⚠️  警告: 資料庫連線失敗，但伺服器仍會啟動");
   }
 
+  // 測試外部資料庫連線
+  const externalDbConnected = await externalDb.testConnection();
+  if (!externalDbConnected) {
+    console.error("⚠️  警告: 外部資料庫連線失敗，外部資料功能可能無法使用");
+  }
+
   // 註冊並啟動背景監控任務（如果啟用）
   if (config.monitoring.enabled) {
     backgroundMonitor.registerMonitoringTask(
@@ -300,6 +309,7 @@ process.on("SIGTERM", async () => {
   backgroundMonitor.stopMonitoring();
   await rtspStreamService.stopAllStreams();
   await db.close();
+  await externalDb.close();
   process.exit(0);
 });
 
@@ -308,6 +318,7 @@ process.on("SIGINT", async () => {
   backgroundMonitor.stopMonitoring();
   await rtspStreamService.stopAllStreams();
   await db.close();
+  await externalDb.close();
   process.exit(0);
 });
 

@@ -87,18 +87,6 @@ router.get("/unresolved/count", async (req, res, next) => {
   }
 });
 
-// 取得單一警示（公開）
-router.get("/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await alertService.getAlertById(parseInt(id));
-
-    res.json({ alert: result });
-  } catch (error) {
-    next(error);
-  }
-});
-
 // 取得警示歷史記錄（公開）
 router.get("/:id/history", async (req, res, next) => {
   try {

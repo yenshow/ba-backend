@@ -199,9 +199,11 @@ const SYSTEM_CONFIGS = {
  * @param {string} system - 系統名稱 (environment, lighting, device)
  * @param {number} sourceId - 來源實體 ID
  * @param {string} errorMessage - 錯誤訊息
+ * @param {Object} options - 選項
+ * @param {boolean} options.skipWebSocket - 是否跳過 WebSocket 推送（用於批次模式）
  * @returns {Promise<boolean>} 是否創建了警報
  */
-async function recordError(system, sourceId, errorMessage) {
+async function recordError(system, sourceId, errorMessage, options = {}) {
   try {
     const config = SYSTEM_CONFIGS[system];
     if (!config) {
@@ -227,8 +229,8 @@ async function recordError(system, sourceId, errorMessage) {
             }
           );
 
-          // 推送 WebSocket 事件：設備離線
-          if (alertCreated) {
+          // 推送 WebSocket 事件：設備離線（批次模式可跳過）
+          if (alertCreated && !options.skipWebSocket) {
             websocketService.emitDeviceStatus("device", deviceId, "offline");
           }
 
@@ -241,14 +243,17 @@ async function recordError(system, sourceId, errorMessage) {
     // 系統業務錯誤或找不到設備 → 創建系統警報
     const sourceInfo = await config.getSourceInfo(sourceId);
     if (!sourceInfo) {
-      console.warn(
-        `[systemAlertHelper] ${system} 來源 ID ${sourceId} 不存在`
-      );
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          `[systemAlertHelper] ⚠️  ${system} 來源 ID ${sourceId} 不存在，跳過錯誤記錄`
+        );
+      }
       return false;
     }
 
     const alertType = isDeviceConnectionError(errorMessage) ? "offline" : "error";
 
+    // 記錄錯誤並創建警報（如果達到閾值）
     const alertCreated = await errorTracker.recordError(
       config.source,
       sourceId,
@@ -260,9 +265,15 @@ async function recordError(system, sourceId, errorMessage) {
       }
     );
 
-    // 推送 WebSocket 事件：系統設備離線（僅當創建了 offline 類型的警報時）
-    if (alertCreated && alertType === "offline") {
+    // 推送 WebSocket 事件：系統設備離線（僅當創建了 offline 類型的警報時，批次模式可跳過）
+    // 注意：這裡的設備狀態推送與警報創建是分離的，確保即使警報未創建也能推送狀態
+    if (alertCreated && alertType === "offline" && !options.skipWebSocket) {
       websocketService.emitDeviceStatus(config.source, sourceId, "offline");
+      if (process.env.NODE_ENV === "development") {
+        console.log(
+          `[systemAlertHelper] 📢 已推送設備狀態 | ${config.source}:${sourceId} | offline`
+        );
+      }
     }
 
     return alertCreated;
@@ -279,9 +290,11 @@ async function recordError(system, sourceId, errorMessage) {
  * 清除系統錯誤狀態
  * @param {string} system - 系統名稱
  * @param {number} sourceId - 來源實體 ID
+ * @param {Object} options - 選項
+ * @param {boolean} options.skipWebSocket - 是否跳過 WebSocket 推送（用於批次模式）
  * @returns {Promise<void>}
  */
-async function clearError(system, sourceId) {
+async function clearError(system, sourceId, options = {}) {
   try {
     const config = SYSTEM_CONFIGS[system];
     if (!config) {
@@ -300,8 +313,8 @@ async function clearError(system, sourceId) {
           deviceId,
           "offline" // 設備恢復連接時，解決 offline 類型警報
         );
-        // 只有在實際清除了錯誤時才推送事件
-        if (deviceCleared) {
+        // 只有在實際清除了錯誤時才推送事件（批次模式可跳過）
+        if (deviceCleared && !options.skipWebSocket) {
           websocketService.emitDeviceStatus("device", deviceId, "online");
         }
       }
@@ -309,8 +322,8 @@ async function clearError(system, sourceId) {
 
     // 清除系統錯誤狀態（自動解決 offline 和 error 類型警報）
     const systemCleared = await errorTracker.clearError(config.source, sourceId);
-    // 只有在實際清除了錯誤時才推送事件
-    if (systemCleared) {
+    // 只有在實際清除了錯誤時才推送事件（批次模式可跳過）
+    if (systemCleared && !options.skipWebSocket) {
       websocketService.emitDeviceStatus(config.source, sourceId, "online");
     }
   } catch (error) {
