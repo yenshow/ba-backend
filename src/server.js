@@ -3,13 +3,19 @@ const http = require("http");
 const cors = require("cors");
 const morgan = require("morgan");
 const os = require("os");
-const path = require("path");
 const config = require("./config");
+
+// 路由
 const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
 const rtspRoutes = require("./routes/rtspRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
-const rtspStreamService = require("./services/communication/rtspStreamService");
+const lightingRoutes = require("./routes/lightingRoutes");
+const environmentRoutes = require("./routes/environmentRoutes");
+const alertRoutes = require("./routes/alertRoutes");
+
+// 服務
+const mediaMTXService = require("./services/communication/mediaMTXService");
 const systemAlert = require("./services/alerts/systemAlertHelper");
 const db = require("./database/db");
 const externalDb = require("./database/externalDb");
@@ -23,18 +29,19 @@ const lightingMonitor = require("./services/monitoring/lightingMonitor");
 // 警報自動清理服務
 const alertCleanupService = require("./services/alerts/alertCleanupService");
 
-// 監聽 RTSP 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
-rtspStreamService.on("error", (errorInfo) => {
+// 監聽 MediaMTX 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
+// 注意：WebSocket 事件推送已整合到 mediaMTXService 中
+mediaMTXService.on("error", (errorInfo) => {
   // 只記錄簡潔的錯誤信息，不輸出完整堆疊跟踪
   const errorMsg = errorInfo.error?.message || "未知錯誤";
   console.error(
-    `[RTSP Stream Service] 串流錯誤 (${errorInfo.streamId}): ${errorMsg}`
+    `[MediaMTX Service] 串流錯誤 (${errorInfo.streamId}): ${errorMsg}`
   );
   // 不拋出錯誤，只記錄，避免程序崩潰
 });
 
-rtspStreamService.on("end", (streamInfo) => {
-  console.log(`[RTSP Stream Service] 串流正常結束:`, streamInfo.streamId);
+mediaMTXService.on("end", (streamInfo) => {
+  console.log(`[MediaMTX Service] 串流正常結束:`, streamInfo.streamId);
 });
 
 const app = express();
@@ -79,18 +86,14 @@ app.use(
   })
 );
 
+// 註冊路由
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/rtsp", rtspRoutes);
 app.use("/api/devices", deviceRoutes);
-const lightingRoutes = require("./routes/lightingRoutes");
 app.use("/api/lighting", lightingRoutes);
-const environmentRoutes = require("./routes/environmentRoutes");
 app.use("/api/environment", environmentRoutes);
-const alertRoutes = require("./routes/alertRoutes");
 app.use("/api/alerts", alertRoutes);
-const externalDataRoutes = require("./routes/externalDataRoutes");
-app.use("/api/external-data", externalDataRoutes);
 
 // 注意：HLS 串流現在由 MediaMTX 提供，不再需要本地靜態文件服務
 // MediaMTX 在 http://localhost:8888 提供 HLS 服務
@@ -115,15 +118,15 @@ function recordDeviceError(req, errorMessage) {
 
     // 如果有有效的設備配置，記錄錯誤
     if (deviceConfig.host && deviceConfig.port !== undefined) {
-			// 異步處理，不阻塞錯誤響應
-			systemAlert
-				.getDeviceIdFromConfig(deviceConfig)
-				.then((deviceId) => {
-					if (deviceId) {
-						return systemAlert.recordError("device", deviceId, errorMessage);
-					}
-					return false;
-				})
+      // 異步處理，不阻塞錯誤響應
+      systemAlert
+        .getDeviceIdFromConfig(deviceConfig)
+        .then((deviceId) => {
+          if (deviceId) {
+            return systemAlert.recordError("device", deviceId, errorMessage);
+          }
+          return false;
+        })
         .catch((trackError) => {
           // 靜默處理追蹤錯誤，避免影響主錯誤響應
           console.error("[server] 記錄設備錯誤失敗:", trackError.message);
@@ -307,7 +310,8 @@ async function startServer() {
 process.on("SIGTERM", async () => {
   console.log("收到 SIGTERM，正在關閉伺服器...");
   backgroundMonitor.stopMonitoring();
-  await rtspStreamService.stopAllStreams();
+  // 直接使用 mediaMTXService（移除 rtspStreamService 層）
+  await mediaMTXService.stopAllStreams();
   await db.close();
   await externalDb.close();
   process.exit(0);
@@ -316,7 +320,8 @@ process.on("SIGTERM", async () => {
 process.on("SIGINT", async () => {
   console.log("收到 SIGINT，正在關閉伺服器...");
   backgroundMonitor.stopMonitoring();
-  await rtspStreamService.stopAllStreams();
+  // 直接使用 mediaMTXService（移除 rtspStreamService 層）
+  await mediaMTXService.stopAllStreams();
   await db.close();
   await externalDb.close();
   process.exit(0);

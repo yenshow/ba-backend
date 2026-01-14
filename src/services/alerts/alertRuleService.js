@@ -15,6 +15,24 @@ const SEVERITY_ORDER = {
 };
 
 /**
+ * 閾值規則緩存（規則寫入資料庫後就是固定的，可以永久緩存）
+ * key: source, value: { rules: Array, timestamp: number }
+ */
+const thresholdRulesCache = new Map();
+
+/**
+ * 清除指定來源的閾值規則緩存（當規則更新時調用）
+ * @param {string} source - 系統來源
+ */
+function clearThresholdRulesCache(source = null) {
+  if (source) {
+    thresholdRulesCache.delete(source);
+  } else {
+    thresholdRulesCache.clear();
+  }
+}
+
+/**
  * 查詢警報規則
  * @param {string} source - 系統來源
  * @param {string} alertType - 警報類型
@@ -47,32 +65,49 @@ async function getAlertRules(source, alertType, enabled = true) {
 }
 
 /**
- * 查詢閾值規則
+ * 查詢閾值規則（帶緩存）
+ * 規則寫入資料庫後就是固定的，可以永久緩存直到手動清除
  * @param {string} source - 系統來源
  * @param {string} parameter - 參數名稱（可選）
  * @returns {Promise<Array>} 閾值規則列表
  */
 async function getThresholdRules(source, parameter = null) {
   try {
-    let query = `
-      SELECT * FROM alert_rules
-      WHERE source = ? 
-        AND alert_type = 'threshold'
-        AND condition_type = 'threshold'
-        AND enabled = TRUE
-    `;
-    const params = [source];
+    // 檢查緩存
+    const cacheKey = source;
+    let cached = thresholdRulesCache.get(cacheKey);
 
-    if (parameter) {
-      query += " AND condition_config->>'parameter' = ?";
-      params.push(parameter);
+    // 如果緩存不存在，從資料庫查詢並緩存
+    if (!cached) {
+      const query = `
+        SELECT * FROM alert_rules
+        WHERE source = ? 
+          AND alert_type = 'threshold'
+          AND condition_type = 'threshold'
+          AND enabled = TRUE
+        ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END, id DESC
+      `;
+
+      const result = await db.query(query, [source]);
+      const rules = result || [];
+
+      // 永久緩存（規則寫入後就是固定的）
+      thresholdRulesCache.set(cacheKey, {
+        rules: rules,
+        timestamp: Date.now(),
+      });
+
+      cached = thresholdRulesCache.get(cacheKey);
     }
 
-    query +=
-      " ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END, id DESC";
+    // 如果指定了參數，過濾出該參數的規則
+    if (parameter) {
+      return cached.rules.filter(
+        (rule) => rule.condition_config?.parameter === parameter
+      );
+    }
 
-    const result = await db.query(query, params);
-    return result || [];
+    return cached.rules;
   } catch (error) {
     console.error(
       `[alertRuleService] 查詢閾值規則失敗 (source: ${source}, parameter: ${parameter}):`,
@@ -227,6 +262,7 @@ module.exports = {
   formatMessage,
   getParameterDisplayName,
   groupRulesByParameter,
+  clearThresholdRulesCache,
   SEVERITY_ORDER,
 };
 

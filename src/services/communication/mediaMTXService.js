@@ -2,6 +2,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const os = require("os");
+const websocketService = require("../websocket/websocketService");
 
 /**
  * MediaMTX 服務管理類別
@@ -79,6 +80,90 @@ class MediaMTXService extends EventEmitter {
   generatePathName(rtspUrl) {
     const streamId = this.generateStreamId(rtspUrl);
     return `stream_${streamId.substring(0, 8)}`;
+  }
+
+  /**
+   * 生成 HLS URL（統一方法，包含時間戳以防止緩存）
+   * @param {string} pathName - 路徑名稱
+   * @param {number} timestamp - 時間戳（可選，預設使用當前時間）
+   * @returns {string} HLS URL
+   */
+  generateHlsUrl(pathName, timestamp = null) {
+    const ts = timestamp || Date.now();
+    return `${this.hlsBaseUrl}/${pathName}/index.m3u8?t=${ts}`;
+  }
+
+  /**
+   * 生成 WebRTC URL
+   * @param {string} pathName - 路徑名稱
+   * @returns {string} WebRTC URL
+   */
+  generateWebRTCUrl(pathName) {
+    return `${this.webrtcBaseUrl}/${pathName}`;
+  }
+
+  /**
+   * 創建串流資訊對象（統一方法）
+   * @param {string} streamId - 串流 ID
+   * @param {string} pathName - 路徑名稱
+   * @param {string} rtspUrl - RTSP URL
+   * @param {string} hlsUrl - HLS URL
+   * @param {string} webrtcUrl - WebRTC URL
+   * @param {number} timestamp - 時間戳
+   * @param {string} status - 狀態
+   * @returns {Object} 串流資訊對象
+   * @private
+   */
+  _createStreamInfo(streamId, pathName, rtspUrl, hlsUrl, webrtcUrl, timestamp, status = "running") {
+    return {
+      streamId,
+      pathName,
+      rtspUrl,
+      hlsUrl,
+      webrtcUrl,
+      timestamp,
+      status,
+      startedAt: new Date(),
+    };
+  }
+
+  /**
+   * 創建串流響應對象（統一方法）
+   * @param {string} streamId - 串流 ID
+   * @param {string} rtspUrl - RTSP URL
+   * @param {string} hlsUrl - HLS URL
+   * @param {string} webrtcUrl - WebRTC URL
+   * @param {string} status - 狀態
+   * @returns {Object} 串流響應對象
+   * @private
+   */
+  _createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl, status) {
+    return {
+      streamId,
+      rtspUrl,
+      hlsUrl,
+      webrtcUrl,
+      status,
+    };
+  }
+
+  /**
+   * 推送串流啟動 WebSocket 事件（統一方法）
+   * @param {string} streamId - 串流 ID
+   * @param {string} rtspUrl - RTSP URL
+   * @param {string} hlsUrl - HLS URL
+   * @param {string} webrtcUrl - WebRTC URL
+   * @param {string} status - 狀態
+   * @private
+   */
+  _emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl, status = "running") {
+    websocketService.emitRTSPStreamStarted({
+      streamId,
+      rtspUrl,
+      hlsUrl,
+      webrtcUrl,
+      status,
+    });
   }
 
   /**
@@ -248,6 +333,62 @@ class MediaMTXService extends EventEmitter {
   }
 
   /**
+   * 輪詢檢查路徑是否真的被移除（統一方法）
+   * @param {string} pathName - 路徑名稱
+   * @param {number} maxWaitMs - 最大等待時間（毫秒），預設 3000ms
+   * @param {number} checkIntervalMs - 檢查間隔（毫秒），預設 200ms
+   * @returns {Promise<boolean>} 是否成功移除
+   */
+  async waitForPathRemoval(pathName, maxWaitMs = 3000, checkIntervalMs = 200) {
+    const maxAttempts = Math.floor(maxWaitMs / checkIntervalMs);
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, checkIntervalMs));
+      const checkStatus = await this.getPathStatus(pathName);
+      if (!checkStatus || !checkStatus.ready) {
+        const waitTime = (i + 1) * checkIntervalMs;
+        console.log(
+          `[MediaMTX Service] 路徑 ${pathName} 已成功移除（等待 ${waitTime}ms）`
+        );
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 輪詢檢查路徑是否就緒（用於等待 MediaMTX 生成 HLS manifest）
+   * @param {string} pathName - 路徑名稱
+   * @param {number} maxWaitMs - 最大等待時間（毫秒），預設 5000ms
+   * @param {number} checkIntervalMs - 檢查間隔（毫秒），預設 200ms
+   * @returns {Promise<boolean>} 是否成功就緒
+   */
+  async waitForPathReady(pathName, maxWaitMs = 5000, checkIntervalMs = 200) {
+    const maxAttempts = Math.floor(maxWaitMs / checkIntervalMs);
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, checkIntervalMs));
+      const checkStatus = await this.getPathStatus(pathName);
+      if (checkStatus && checkStatus.ready) {
+        const waitTime = (i + 1) * checkIntervalMs;
+        console.log(
+          `[MediaMTX Service] 路徑 ${pathName} 已就緒（等待 ${waitTime}ms）`
+        );
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 生成帶時間戳的路徑名稱（用於強制創建新路徑）
+   * @param {string} basePathName - 基礎路徑名稱
+   * @returns {string} 帶時間戳的路徑名稱
+   */
+  _generateTimestampedPathName(basePathName) {
+    const timestamp = Date.now();
+    return `${basePathName}_${timestamp}`;
+  }
+
+  /**
    * 獲取所有路徑狀態（批量獲取，使用緩存優化性能）
    * @returns {Promise<Map<string, Object>>}
    */
@@ -317,18 +458,49 @@ class MediaMTXService extends EventEmitter {
     }
 
     const streamId = this.generateStreamId(rtspUrl);
-    const pathName = this.generatePathName(rtspUrl);
+    let pathName = this.generatePathName(rtspUrl); // 使用 let，因為可能需要在移除失敗時重新賦值
 
-    // 如果串流已經存在，返回現有資訊
+    // 如果串流已經存在，先檢查 MediaMTX 路徑狀態
+    // 如果路徑已存在但串流剛停止，需要重新創建路徑以清除舊片段
     if (this.streams.has(streamId)) {
       const existingStream = this.streams.get(streamId);
-      return {
-        streamId,
-        hlsUrl: existingStream.hlsUrl,
-        webrtcUrl: existingStream.webrtcUrl,
-        status: existingStream.status,
-        rtspUrl: existingStream.rtspUrl,
-      };
+      
+      // 檢查 MediaMTX 路徑是否真的存在
+      const pathStatus = await this.getPathStatus(pathName);
+      
+      if (pathStatus && pathStatus.ready) {
+        // 路徑存在且就緒，直接返回新的 URL（帶最新時間戳）
+        const timestamp = Date.now();
+        const latestHlsUrl = this.generateHlsUrl(existingStream.pathName, timestamp);
+        
+        // 更新現有串流的 URL
+        existingStream.hlsUrl = latestHlsUrl;
+        existingStream.timestamp = timestamp;
+        this.streams.set(streamId, existingStream);
+        
+        // 推送 WebSocket 事件（通知前端 URL 已更新）
+        this._emitStreamStarted(
+          streamId,
+          existingStream.rtspUrl,
+          latestHlsUrl,
+          existingStream.webrtcUrl,
+          existingStream.status
+        );
+        
+        return this._createStreamResponse(
+          streamId,
+          existingStream.rtspUrl,
+          latestHlsUrl,
+          existingStream.webrtcUrl,
+          existingStream.status
+        );
+      }
+      
+      // 路徑不存在或未就緒，從記憶體中移除，重新創建
+      console.log(
+        `[MediaMTX Service] 串流 ${streamId} 的路徑不存在或未就緒，將重新創建`
+      );
+      this.streams.delete(streamId);
     }
 
     // 檢查 MediaMTX 服務健康狀態
@@ -338,75 +510,106 @@ class MediaMTXService extends EventEmitter {
     }
 
     try {
-      // 添加路徑到 MediaMTX
-      const addPathResult = await this.addPath(pathName, rtspUrl);
-
-      // 如果路徑已存在，檢查是否已經在我們的記錄中
-      if (addPathResult && addPathResult.exists) {
-        // 路徑已存在，嘗試獲取現有路徑的狀態
-        const pathStatus = await this.getPathStatus(pathName);
-        if (pathStatus && pathStatus.ready) {
-          // 路徑存在且就緒，生成播放 URL 並添加到記錄
-          const hlsUrl = `${this.hlsBaseUrl}/${pathName}/index.m3u8`;
-          const webrtcUrl = `${this.webrtcBaseUrl}/${pathName}`;
-
-          const streamInfo = {
-            streamId,
-            pathName,
-            rtspUrl,
-            hlsUrl,
-            webrtcUrl,
-            status: "running",
-            startedAt: new Date(),
-          };
-
-          this.streams.set(streamId, streamInfo);
-
-          console.log(
-            `[MediaMTX Service] 串流已存在並就緒: ${streamId} (路徑: ${pathName})`
+      // 檢查路徑是否已存在，如果存在則先移除（確保清除舊片段）
+      const existingPathStatus = await this.getPathStatus(pathName);
+      if (existingPathStatus && existingPathStatus.ready) {
+        console.log(
+          `[MediaMTX Service] 路徑 ${pathName} 已存在，先移除以清除舊片段`
+        );
+        try {
+          await this.removePath(pathName);
+          
+          // ⭐ 關鍵：輪詢檢查路徑是否真的被移除（統一方法）
+          const removed = await this.waitForPathRemoval(pathName, 3000, 200);
+          
+          if (!removed) {
+            console.warn(
+              `[MediaMTX Service] 路徑 ${pathName} 移除超時（3秒），使用帶時間戳的路徑名稱強制重新創建`
+            );
+            // ⭐ 關鍵：如果路徑無法移除，使用帶時間戳的路徑名稱強制創建新路徑
+            pathName = this._generateTimestampedPathName(pathName);
+            console.log(
+              `[MediaMTX Service] 使用新路徑名稱: ${pathName}（避免使用舊片段）`
+            );
+          }
+        } catch (removeError) {
+          // 移除失敗，使用帶時間戳的路徑名稱
+          console.warn(
+            `[MediaMTX Service] 移除舊路徑失敗，使用帶時間戳的路徑名稱: ${removeError.message}`
           );
-
-          return {
-            streamId,
-            hlsUrl,
-            webrtcUrl,
-            status: "running",
-            rtspUrl,
-          };
+          pathName = this._generateTimestampedPathName(pathName);
+          console.log(
+            `[MediaMTX Service] 使用新路徑名稱: ${pathName}（避免使用舊片段）`
+          );
         }
       }
 
-      // 生成播放 URL
-      const hlsUrl = `${this.hlsBaseUrl}/${pathName}/index.m3u8`;
-      const webrtcUrl = `${this.webrtcBaseUrl}/${pathName}`;
+      // 添加路徑到 MediaMTX（重新創建，確保從最新片段開始）
+      const addPathResult = await this.addPath(pathName, rtspUrl);
 
-      // 存儲串流資訊
-      const streamInfo = {
+      // 生成播放 URL（統一方法，包含時間戳以防止緩存）
+      const timestamp = Date.now();
+      const hlsUrl = this.generateHlsUrl(pathName, timestamp);
+      const webrtcUrl = this.generateWebRTCUrl(pathName);
+
+      // 存儲串流資訊（使用統一方法）
+      const streamInfo = this._createStreamInfo(
         streamId,
         pathName,
         rtspUrl,
         hlsUrl,
         webrtcUrl,
-        status: "running",
-        startedAt: new Date(),
-      };
-
+        timestamp
+      );
       this.streams.set(streamId, streamInfo);
 
+      // 如果路徑已存在（addPath 返回 exists），這表示路徑可能沒有被完全移除
+      // 注意：如果已經使用了帶時間戳的新路徑名稱，addPath 不應該返回 exists
+      // 但如果仍然返回 exists，等待 MediaMTX 重新初始化（通常不需要，因為已使用新路徑）
+      const isExistingPath = addPathResult && addPathResult.exists;
+      if (isExistingPath) {
+        console.log(
+          `[MediaMTX Service] 路徑 ${pathName} 已存在，等待 MediaMTX 重新初始化`
+        );
+        // ⭐ 優化：輪詢檢查路徑是否就緒，而不是固定等待時間
+        const ready = await this.waitForPathReady(pathName, 5000, 200);
+        if (ready) {
+          this._emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl);
+          console.log(
+            `[MediaMTX Service] 串流已重新創建並就緒: ${streamId} (路徑: ${pathName})`
+          );
+          return this._createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl);
+        }
+      } else {
+        // ⭐ 優化：新路徑，輪詢檢查路徑是否就緒（減少前端 404 錯誤）
+        console.log(
+          `[MediaMTX Service] 等待新路徑 ${pathName} 就緒（MediaMTX 生成 HLS manifest）`
+        );
+        const ready = await this.waitForPathReady(pathName, 5000, 200);
+        if (!ready) {
+          console.warn(
+            `[MediaMTX Service] 路徑 ${pathName} 就緒超時（5秒），但繼續啟動流程（HLS.js 會自動重試）`
+          );
+        }
+      }
+
+      // 路徑已就緒或超時，推送 WebSocket 事件
+      this._emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl);
       console.log(
         `[MediaMTX Service] 串流啟動成功: ${streamId} (路徑: ${pathName})`
       );
 
-      return {
-        streamId,
-        hlsUrl,
-        webrtcUrl,
-        status: streamInfo.status,
-        rtspUrl,
-      };
+      return this._createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl);
     } catch (error) {
       // 清理失敗的串流
       this.streams.delete(streamId);
+      
+      // 推送 WebSocket 錯誤事件（streamId 已在上面計算過）
+      websocketService.emitRTSPStreamError({
+        streamId,
+        error: error,
+      });
+      
       throw new Error(`啟動串流失敗: ${error.message}`);
     }
   }
@@ -427,8 +630,21 @@ class MediaMTXService extends EventEmitter {
       // 從 MediaMTX 移除路徑
       await this.removePath(streamInfo.pathName);
 
+      // ⭐ 關鍵：輪詢檢查路徑是否真的被移除（統一方法）
+      // 這確保路徑被完全清理，避免重新啟動時使用舊片段
+      const removed = await this.waitForPathRemoval(streamInfo.pathName, 3000, 200);
+
+      if (!removed) {
+        console.warn(
+          `[MediaMTX Service] 路徑 ${streamInfo.pathName} 移除超時（3秒），但繼續停止流程`
+        );
+      }
+
       // 從記憶體中移除
       this.streams.delete(streamId);
+
+      // 推送 WebSocket 事件（整合 WebSocket 推送）
+      websocketService.emitRTSPStreamStopped({ streamId });
 
       console.log(`[MediaMTX Service] 串流已停止: ${streamId}`);
 
@@ -439,6 +655,13 @@ class MediaMTXService extends EventEmitter {
     } catch (error) {
       // 即使移除失敗，也從記憶體中移除
       this.streams.delete(streamId);
+      
+      // 推送 WebSocket 錯誤事件
+      websocketService.emitRTSPStreamError({
+        streamId,
+        error: error,
+      });
+      
       throw new Error(`停止串流失敗: ${error.message}`);
     }
   }
@@ -500,6 +723,28 @@ class MediaMTXService extends EventEmitter {
       streamIds.map((id) => this.stopStream(id))
     );
     return results;
+  }
+
+  /**
+   * 獲取最新的 HLS URL（帶時間戳，防止緩存）
+   * @param {string} streamId - 串流 ID
+   * @returns {Promise<{hlsUrl: string, timestamp: number, serverTime: number}>}
+   */
+  async getLatestHlsUrl(streamId) {
+    if (!this.streams.has(streamId)) {
+      throw new Error(`串流 ${streamId} 不存在`);
+    }
+
+    const stream = this.streams.get(streamId);
+    const timestamp = Date.now();
+    // 使用統一方法生成帶時間戳的 URL
+    const hlsUrl = this.generateHlsUrl(stream.pathName, timestamp);
+
+    return {
+      hlsUrl,
+      timestamp,
+      serverTime: timestamp, // 與 timestamp 相同，保留以維持 API 兼容性
+    };
   }
 }
 

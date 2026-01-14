@@ -6,6 +6,182 @@ const websocketService = require("../websocket/websocketService");
  * 支持多系統來源：device, environment, lighting 等
  */
 
+/**
+ * 參數匹配正則表達式（用於從警報訊息中提取參數名稱）
+ */
+const PARAMETER_PATTERN =
+  /\b(PM2\.5|PM10|CO2|溫度|濕度|噪音值|TVOC|HCHO|風速)\b/;
+
+/**
+ * 從警報訊息中提取參數名稱（用於閾值警報的參數匹配）
+ * @param {string} message - 警報訊息
+ * @returns {string|null} 參數名稱，如果未找到則返回 null
+ */
+function extractParameterFromMessage(message) {
+  if (!message) return null;
+  const match = message.match(PARAMETER_PATTERN);
+  return match ? match[1] : null;
+}
+
+/**
+ * 獲取當天的開始和結束時間（UTC）
+ * 用於按天限制警報查詢，確保同一天只會有一個 active 警報
+ * @returns {Object} { todayStart, todayEnd } - 當天的開始和結束時間（ISO 字符串）
+ */
+function getTodayDateRange() {
+  const now = new Date();
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+  const todayEnd = new Date(todayStart);
+  todayEnd.setUTCDate(todayEnd.getUTCDate() + 1);
+  
+  return {
+    todayStart: todayStart.toISOString(),
+    todayEnd: todayEnd.toISOString()
+  };
+}
+
+/**
+ * 查詢被忽視的警報（支持參數匹配）
+ * @param {string} source - 來源類型
+ * @param {number} sourceId - 來源 ID
+ * @param {string} alertType - 警報類型
+ * @param {string|null} parameter - 參數名稱（用於閾值警報匹配，可選）
+ * @returns {Promise<Object|null>} 被忽視的警報，如果不存在則返回 null
+ */
+async function findIgnoredAlert(source, sourceId, alertType, parameter = null) {
+  let ignoredAlert;
+
+  // 對於閾值警報，如果提供了參數，使用參數匹配查詢
+  if (alertType === ALERT_TYPES.THRESHOLD && parameter) {
+    ignoredAlert = await db.query(
+      `SELECT * FROM alerts 
+      WHERE source = ? 
+        AND source_id = ? 
+        AND alert_type = ? 
+        AND status = ?
+        AND message LIKE ?
+      LIMIT 1`,
+      [
+        source,
+        sourceId,
+        alertType,
+        ALERT_STATUS.IGNORED,
+        `%${parameter}%`,
+      ]
+    );
+  }
+
+  // 如果沒有通過參數匹配找到，或者不是 threshold 類型，使用標準查詢
+  if (!ignoredAlert || ignoredAlert.length === 0) {
+    ignoredAlert = await db.query(
+      `SELECT * FROM alerts 
+      WHERE source = ? 
+        AND source_id = ? 
+        AND alert_type = ? 
+        AND status = ?
+      LIMIT 1`,
+      [source, sourceId, alertType, ALERT_STATUS.IGNORED]
+    );
+  }
+
+  return ignoredAlert && ignoredAlert.length > 0 ? ignoredAlert[0] : null;
+}
+
+/**
+ * 查詢現有的 active 警報（支持按天限制和參數匹配）
+ * @param {string} source - 來源類型
+ * @param {number} sourceId - 來源 ID
+ * @param {string} alertType - 警報類型
+ * @param {string|null} parameter - 參數名稱（用於閾值警報匹配，可選）
+ * @returns {Promise<Object|null>} 現有的 active 警報，如果不存在則返回 null
+ */
+async function findExistingActiveAlert(source, sourceId, alertType, parameter = null) {
+  const { todayStart, todayEnd } = getTodayDateRange();
+  let existingAlert;
+
+  // 對於閾值警報，如果提供了參數，使用參數匹配查詢
+  if (alertType === ALERT_TYPES.THRESHOLD && parameter) {
+    existingAlert = await db.query(
+      `SELECT * FROM alerts 
+      WHERE source = ? 
+        AND source_id = ? 
+        AND alert_type = ? 
+        AND status = ?
+        AND message LIKE ?
+        AND created_at >= ?
+        AND created_at < ?
+      LIMIT 1`,
+      [
+        source,
+        sourceId,
+        alertType,
+        ALERT_STATUS.ACTIVE,
+        `%${parameter}%`,
+        todayStart,
+        todayEnd,
+      ]
+    );
+  }
+
+  // 如果沒有通過參數匹配找到，或者不是 threshold 類型，使用標準查詢
+  if (!existingAlert || existingAlert.length === 0) {
+    existingAlert = await db.query(
+      `SELECT * FROM alerts 
+      WHERE source = ? 
+        AND source_id = ? 
+        AND alert_type = ? 
+        AND status = ?
+        AND created_at >= ?
+        AND created_at < ?
+      LIMIT 1`,
+      [
+        source,
+        sourceId,
+        alertType,
+        ALERT_STATUS.ACTIVE,
+        todayStart,
+        todayEnd,
+      ]
+    );
+  }
+
+  return existingAlert && existingAlert.length > 0 ? existingAlert[0] : null;
+}
+
+/**
+ * 判斷 severity 是否需要升級
+ * @param {string} currentSeverity - 當前嚴重程度
+ * @param {string} newSeverity - 新嚴重程度
+ * @returns {boolean} 是否需要升級
+ */
+function shouldUpgradeSeverity(currentSeverity, newSeverity) {
+  const severityOrder = { warning: 1, error: 2, critical: 3 };
+  const currentOrder = severityOrder[currentSeverity] || 0;
+  const newOrder = severityOrder[newSeverity] || 0;
+  return newOrder > currentOrder;
+}
+
+/**
+ * 更新警報的 severity 和 message
+ * @param {number} alertId - 警報 ID
+ * @param {string} severity - 新嚴重程度
+ * @param {string} message - 新訊息
+ * @returns {Promise<Object>} 更新後的警報
+ */
+async function updateAlertContent(alertId, severity, message) {
+  const updateQuery = `
+    UPDATE alerts 
+    SET severity = ?::alert_severity,
+        message = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+    RETURNING *
+  `;
+
+  const result = await db.query(updateQuery, [severity, message, alertId]);
+  return result && result.length > 0 ? result[0] : null;
+}
+
 // 警報系統來源
 const ALERT_SOURCES = {
   DEVICE: "device",
@@ -337,17 +513,16 @@ async function createAlert(alertData) {
     }
 
     // 優化：先檢查是否有被忽視的警報（優先級最高，使用索引優化查詢）
-    const ignoredAlert = await db.query(
-      `SELECT id FROM alerts 
-			WHERE source = ? 
-				AND source_id = ? 
-				AND alert_type = ? 
-				AND status = ?
-			LIMIT 1`,
-      [actualSource, source_id, alert_type, ALERT_STATUS.IGNORED]
-    );
+    // 對於閾值警報（threshold），需要通過 message 匹配參數（因為同一個 source 可能有多個不同參數的警報）
+    const parameter = extractParameterFromMessage(message);
+    const ignoredAlert = await findIgnoredAlert(
+          actualSource,
+          source_id,
+          alert_type,
+      parameter
+      );
 
-    if (ignoredAlert && ignoredAlert.length > 0) {
+    if (ignoredAlert) {
       // 如果警報已被忽視，不創建新警報（忽視功能：不再顯示相同來源和類型的警示）
       if (process.env.NODE_ENV === "development") {
         console.log(
@@ -355,64 +530,48 @@ async function createAlert(alertData) {
         );
       }
       // 返回忽視的警報（不更新，保持忽視狀態）
-      const existing = await db.query("SELECT * FROM alerts WHERE id = ?", [
-        ignoredAlert[0].id,
-      ]);
-      return enrichAlert(existing[0]);
+      return enrichAlert(ignoredAlert);
     }
 
     // 先查詢現有的 active 警報，檢查 severity 是否需要更新
-    // 優化：一次性查詢完整警報對象，避免後續重複查詢
-    const existingAlert = await db.query(
-      `SELECT * FROM alerts 
-			WHERE source = ? 
-				AND source_id = ? 
-				AND alert_type = ? 
-				AND status = ?
-			LIMIT 1`,
-      [actualSource, source_id, alert_type, ALERT_STATUS.ACTIVE]
+    // 優化：使用提取的輔助函數，減少重複代碼
+    // 重要：添加按天限制，確保同一天只會有一個 active 警報（符合文檔說明）
+    const existingAlert = await findExistingActiveAlert(
+          actualSource,
+          source_id,
+          alert_type,
+      parameter
     );
 
-    if (existingAlert && existingAlert.length > 0) {
-      const currentAlert = existingAlert[0];
-      const currentSeverity = currentAlert.severity;
+    if (existingAlert) {
+      const currentSeverity = existingAlert.severity;
+      const needsUpgrade = shouldUpgradeSeverity(currentSeverity, severity);
+      const messageChanged = existingAlert.message !== message;
 
-      // 判斷 severity 是否需要升級
-      const severityOrder = { warning: 1, error: 2, critical: 3 };
-      const currentSeverityOrder = severityOrder[currentSeverity] || 0;
-      const newSeverityOrder = severityOrder[severity] || 0;
-
-      // 如果新 severity 更高（數值更小），則需要升級
-      const needsUpgrade = newSeverityOrder < currentSeverityOrder;
-
-      if (needsUpgrade) {
-        // severity 需要升級，更新警報
-        const updateQuery = `
-          UPDATE alerts 
-          SET severity = ?::alert_severity,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-          RETURNING *
-        `;
-
-        const updateResult = await db.query(updateQuery, [
+      if (needsUpgrade || messageChanged) {
+        // severity 需要升級或 message 需要更新，更新警報
+        const updatedAlert = await updateAlertContent(
+          existingAlert.id,
           severity,
-          currentAlert.id,
-        ]);
+          message
+        );
 
-        if (updateResult && updateResult.length > 0) {
-          const alert = updateResult[0];
-
-          if (process.env.NODE_ENV === "development") {
+        if (updatedAlert) {
+          if (needsUpgrade) {
             console.log(
-              `[alertService] 🔄 警報已更新 | ID:${alert.id} | ${actualSource}:${source_id} | ` +
+              `[alertService] 🔄 警報已更新 | ID:${updatedAlert.id} | ${actualSource}:${source_id} | ` +
                 `類型:${alert_type} | 嚴重程度:${currentSeverity} -> ${severity}`
+            );
+          } else {
+            console.log(
+              `[alertService] 🔄 警報數值已更新 | ID:${updatedAlert.id} | ${actualSource}:${source_id} | ` +
+                `類型:${alert_type} | 新 message: ${message}`
             );
           }
 
-          const enrichedAlert = enrichAlert(alert);
+          const enrichedAlert = enrichAlert(updatedAlert);
 
-          // 推送 WebSocket 事件：severity 升級
+          // 推送 WebSocket 事件：警報更新（severity 升級或數值更新）
           websocketService.emitAlertUpdated(
             enrichedAlert,
             ALERT_STATUS.ACTIVE,
@@ -425,15 +584,13 @@ async function createAlert(alertData) {
           return enrichedAlert;
         }
       } else {
-        // severity 不需要升級（相同或更低），直接返回現有警報，不進行任何更新
-        if (process.env.NODE_ENV === "development") {
-          console.log(
-            `[alertService] 警報已存在且嚴重程度未改變 | ID:${currentAlert.id} | ` +
-              `${actualSource}:${source_id} | 類型:${alert_type} | 嚴重程度:${currentSeverity}`
-          );
-        }
+        // severity 和 message 都不需要更新，直接返回現有警報
+        console.log(
+          `[alertService] 警報已存在且未改變 | ID:${existingAlert.id} | ` +
+            `${actualSource}:${source_id} | 類型:${alert_type} | 嚴重程度:${currentSeverity}`
+        );
 
-        return enrichAlert(currentAlert);
+        return enrichAlert(existingAlert);
       }
     }
 
@@ -441,6 +598,13 @@ async function createAlert(alertData) {
     // message 已在函數開頭檢查，這裡不需要重複檢查
 
     // 使用 INSERT 語句，如果發生並發衝突，會由唯一索引捕獲
+    if (process.env.NODE_ENV === "development") {
+      console.log(
+        `[alertService] ➕ 創建新警報 | ${actualSource}:${source_id} | ` +
+          `類型:${alert_type} | 嚴重程度:${severity}`
+      );
+    }
+
     const insertQuery = `
 			INSERT INTO alerts (source, source_id, alert_type, severity, message, status)
 			VALUES (?, ?, ?, ?, ?, ?)
@@ -477,7 +641,7 @@ async function createAlert(alertData) {
 
       return enrichedAlert;
     } catch (error) {
-      // 如果唯一約束衝突（並發創建情況），再次嘗試更新
+      // 如果唯一約束衝突（並發創建情況），再次嘗試查詢並更新
       if (
         error.code === "23505" ||
         error.message.includes("unique_active_alert")
@@ -485,21 +649,39 @@ async function createAlert(alertData) {
         // 等待一小段時間，確保另一個事務已完成
         await new Promise((resolve) => setTimeout(resolve, 10));
 
-        // 注意：updateParams 已經包含 actualSource，不需要修改
-        const retryResult = await db.query(updateQuery, updateParams);
+        // 重新查詢現有警報（使用相同的日期限制和參數匹配）
+        const retryExistingAlert = await findExistingActiveAlert(
+          actualSource,
+          source_id,
+          alert_type,
+          parameter
+        );
 
-        if (retryResult && retryResult.length > 0) {
+        if (retryExistingAlert) {
+          const currentSeverity = retryExistingAlert.severity;
+          const needsUpgrade = shouldUpgradeSeverity(currentSeverity, severity);
+          const messageChanged = retryExistingAlert.message !== message;
+
+          if (needsUpgrade || messageChanged) {
+            // 更新警報
+            const updatedAlert = await updateAlertContent(
+              retryExistingAlert.id,
+              severity,
+              message
+            );
+
+            if (updatedAlert) {
           if (process.env.NODE_ENV === "development") {
             console.log(
-              `[alertService] 並發衝突後更新警報 ${retryResult[0].id}`
+                  `[alertService] 並發衝突後更新警報 ${updatedAlert.id}`
             );
           }
-          const enrichedAlert = enrichAlert(retryResult[0]);
+              const enrichedAlert = enrichAlert(updatedAlert);
 
-          // 推送 WebSocket 事件：警報更新（從無到有）
+              // 推送 WebSocket 事件：警報更新
           websocketService.emitAlertUpdated(
             enrichedAlert,
-            null,
+                ALERT_STATUS.ACTIVE,
             ALERT_STATUS.ACTIVE
           );
 
@@ -507,6 +689,11 @@ async function createAlert(alertData) {
           emitUnresolvedAlertCount();
 
           return enrichedAlert;
+            }
+          } else {
+            // 不需要更新，直接返回現有警報
+            return enrichAlert(retryExistingAlert);
+          }
         }
       }
       throw error;
@@ -818,10 +1005,31 @@ async function unignoreAlerts(
  * @param {string} source - 來源類型
  * @param {number} sourceId - 來源 ID
  * @param {string} alertType - 警報類型
+ * @param {string|null} message - 警報訊息（可選，用於閾值警報的參數匹配）
  * @returns {Promise<boolean>} 是否已被忽視
  */
-async function isSourceIgnored(source, sourceId, alertType) {
+async function isSourceIgnored(source, sourceId, alertType, message = null) {
   try {
+    // 對於閾值警報，如果提供了 message，嘗試參數匹配
+    const parameter = extractParameterFromMessage(message);
+
+    if (alertType === ALERT_TYPES.THRESHOLD && parameter) {
+      const result = await db.query(
+        `SELECT id FROM alerts 
+        WHERE source = ? 
+          AND source_id = ? 
+          AND alert_type = ? 
+          AND status = ?
+          AND message LIKE ?
+        LIMIT 1`,
+        [source, sourceId, alertType, ALERT_STATUS.IGNORED, `%${parameter}%`]
+      );
+      if (result && result.length > 0) {
+        return true;
+      }
+    }
+
+    // 標準查詢（非閾值警報或參數匹配失敗時使用）
     const result = await db.query(
       `SELECT id FROM alerts 
 			WHERE source = ? 

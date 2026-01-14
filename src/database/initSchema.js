@@ -323,9 +323,14 @@ async function initSchema() {
 		`);
 
     // 精簡後的索引（只保留核心索引）
+    // 注意：移除了 unique_active_alert 唯一索引，因為按天限制邏輯允許跨天創建新警報
+    // 應用層已實現按天限制邏輯，確保同一天只會有一個 active 警報
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_alerts_source_composite ON alerts(source, source_id, alert_type, status);
-			CREATE UNIQUE INDEX IF NOT EXISTS unique_active_alert ON alerts(source, source_id, alert_type) WHERE status = 'active';
+			-- 移除唯一索引：unique_active_alert（與按天限制邏輯衝突）
+			-- CREATE UNIQUE INDEX IF NOT EXISTS unique_active_alert ON alerts(source, source_id, alert_type) WHERE status = 'active';
+			-- 優化索引：支持按天限制查詢（包含 created_at 以優化日期範圍查詢）
+			CREATE INDEX IF NOT EXISTS idx_alerts_active_daily ON alerts(source, source_id, alert_type, status, created_at) WHERE status = 'active';
 			CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC) WHERE status = 'active';
 			CREATE INDEX IF NOT EXISTS idx_alerts_updated_at ON alerts(updated_at DESC);
 		`);

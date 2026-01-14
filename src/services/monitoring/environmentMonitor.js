@@ -90,6 +90,15 @@ async function checkEnvironmentLocations() {
                 ? JSON.parse(latestReading[0].data)
                 : latestReading[0].data;
 
+            // 調試日誌：只在需要時輸出（可通過環境變數控制）
+            // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
+            if (process.env.ENABLE_DETAILED_LOGS === "true") {
+              console.log(
+                `[environmentMonitor] 位置 ${location.id} (${location.name}) 感測器數據:`,
+                JSON.stringify(sensorData, null, 2)
+              );
+            }
+
             // 檢查閾值並自動解決恢復正常的警報
             await checkAndResolveThresholds(location.id, sensorData, {
               name: location.name,
@@ -289,8 +298,8 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
         triggeredParameters.add(parameter);
       }
 
-      // 調試日誌：記錄閾值檢查結果
-      if (process.env.NODE_ENV === "development") {
+      // 調試日誌：只在超過閾值或啟用詳細日誌時輸出
+      if (thresholdExceeded || process.env.ENABLE_DETAILED_LOGS === "true") {
         const status = thresholdExceeded
           ? `超過閾值 (${matchedRule.severity})`
           : "正常";
@@ -301,20 +310,14 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
     }
 
     // 第二階段：處理警報創建/更新/解決
+    // 優化：直接調用 createAlert，讓它處理創建/更新邏輯（避免重複匹配邏輯）
     for (const [parameter, status] of parameterExceededStatus) {
       const { exceeded, matchedRule, value } = status;
 
-      // 查找是否已存在該參數的 active 警報
-      const parameterDisplayName =
-        alertRuleService.getParameterDisplayName(parameter);
-      const existingAlert = findAlertByParameter(
-        activeAlerts,
-        parameter,
-        parameterDisplayName
-      );
-
       if (exceeded) {
         // 數值超過閾值
+        const parameterDisplayName =
+          alertRuleService.getParameterDisplayName(parameter);
         const message = alertRuleService.formatMessage(
           matchedRule.message_template,
           {
@@ -326,35 +329,11 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
           }
         );
 
-        if (existingAlert) {
-          // 已存在警報，檢查嚴重程度是否改變
-          if (existingAlert.severity !== matchedRule.severity) {
-            // 嚴重程度改變，更新警報（升級）
-            await systemAlert.createAlert(
-              "environment",
-              locationId,
-              "threshold",
-              matchedRule.severity,
-              message
-            );
-
-            if (process.env.NODE_ENV === "development") {
-              console.log(
-                `[environmentMonitor] 更新警報 | 位置 ${locationId} | 參數 ${parameter} | ` +
-                  `嚴重程度: ${existingAlert.severity} -> ${matchedRule.severity} | 數值: ${value}`
-              );
-            }
-          } else {
-            // 嚴重程度相同，不需要更新（避免不必要的 updated_at 更新）
-            if (process.env.NODE_ENV === "development") {
-              console.log(
-                `[environmentMonitor] 警報已存在且嚴重程度未改變 | 位置 ${locationId} | ` +
-                  `參數 ${parameter} | 嚴重程度: ${matchedRule.severity} | 數值: ${value}`
-              );
-            }
-          }
-        } else {
-          // 不存在警報，創建新警報
+        // 直接調用 createAlert，它會自動處理：
+        // 1. 檢查忽視狀態
+        // 2. 查找現有警報（使用參數匹配）
+        // 3. 更新現有警報或創建新警報
+        // 4. 輸出適當的日誌
           await systemAlert.createAlert(
             "environment",
             locationId,
@@ -362,16 +341,17 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
             matchedRule.severity,
             message
           );
-
-          if (process.env.NODE_ENV === "development") {
-            console.log(
-              `[environmentMonitor] 創建警報 | 位置 ${locationId} | 參數 ${parameter} | ` +
-                `嚴重程度: ${matchedRule.severity} | 數值: ${value} | 閾值: ${matchedRule.condition_config.value}`
-            );
-          }
-        }
       } else {
         // 數值未超過閾值，如果有對應的 active 警報，則解決它
+        // 需要查找現有警報來解決（這裡仍然需要 findAlertByParameter）
+        const parameterDisplayName =
+          alertRuleService.getParameterDisplayName(parameter);
+        const existingAlert = findAlertByParameter(
+          activeAlerts,
+          parameter,
+          parameterDisplayName
+        );
+        
         if (existingAlert) {
           await alertService.updateAlertStatus(
             locationId,
@@ -382,7 +362,8 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
             "數值已恢復正常"
           );
 
-          if (process.env.NODE_ENV === "development") {
+          // 只在啟用詳細日誌時輸出
+          if (process.env.ENABLE_DETAILED_LOGS === "true") {
             console.log(
               `[environmentMonitor] 解決警報 | 位置 ${locationId} | 參數 ${parameter} | ` +
                 `數值: ${value} (已低於閾值)`
@@ -447,7 +428,8 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
                 "數值已恢復正常"
               );
 
-              if (process.env.NODE_ENV === "development") {
+              // 只在啟用詳細日誌時輸出
+              if (process.env.ENABLE_DETAILED_LOGS === "true") {
                 console.log(
                   `[environmentMonitor] 解決警報 | 位置 ${locationId} | 參數 ${parameter} | ` +
                     `數值: ${value} (已恢復正常)`
