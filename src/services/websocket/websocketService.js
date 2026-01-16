@@ -159,15 +159,17 @@ function emitAlertCount(count) {
 /**
  * 推送設備狀態變化事件
  * @param {string} system - 系統名稱 (environment, lighting, device)
- * @param {number} sourceId - 來源 ID
+ * @param {number} sourceId - 來源 ID (systemId 或 deviceId)
  * @param {string} status - 狀態 (online, offline)
+ * @param {number} [deviceId] - 可選的設備 ID（用於前端設備管理頁面）
  */
-function emitDeviceStatus(system, sourceId, status) {
+function emitDeviceStatus(system, sourceId, status, deviceId = null) {
   safeEmit(
     "monitoring:device:status",
     {
       system,
       sourceId,
+      deviceId: deviceId || sourceId, // 如果是 device 系統，deviceId = sourceId；否則使用提供的 deviceId
       status,
       timestamp: new Date().toISOString(),
     },
@@ -181,8 +183,9 @@ function emitDeviceStatus(system, sourceId, status) {
  * 批次推送設備狀態變化事件
  * @param {Array} updates - 狀態更新陣列
  * @param {Object} updates[].system - 系統名稱 (environment, lighting, device)
- * @param {number} updates[].sourceId - 來源 ID
+ * @param {number} updates[].sourceId - 來源 ID (systemId 或 deviceId)
  * @param {string} updates[].status - 狀態 (online, offline)
+ * @param {number} [updates[].deviceId] - 可選的設備 ID（用於前端設備管理頁面）
  */
 function emitBatchDeviceStatus(updates) {
   if (!updates || updates.length === 0) {
@@ -201,6 +204,7 @@ function emitBatchDeviceStatus(updates) {
     }
     acc[key].updates.push({
       sourceId: update.sourceId,
+      deviceId: update.deviceId || update.sourceId, // 如果是 device 系統，deviceId = sourceId；否則使用提供的 deviceId
     });
     return acc;
   }, {});

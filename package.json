@@ -7,8 +7,6 @@
     "start": "node src/server.js",
     "scan:modbus": "node scripts/scanModbusAddresses.js",
     "test:modbus": "node scripts/testModbusConnection.js",
-    "test:external-db": "node scripts/testExternalDatabase.js",
-    "db:reverse-lookup": "node scripts/reverseLookupDatabase.js",
     "db:init": "node src/database/initSchema.js",
     "db:test": "node -e \"require('./src/database/db').testConnection().then(() => process.exit(0)).catch(() => process.exit(1))\"",
     "db:backup": "node scripts/backupData.js --backup-only",
@@ -20,7 +18,9 @@
     "alerts:clear": "node scripts/clearAlerts.js",
     "mediamtx:download": "node scripts/download-mediaMTX.js",
     "mediamtx:start": "node scripts/start-mediaMTX.js",
-    "mediamtx:stop": "node scripts/stop-mediaMTX.js"
+    "mediamtx:stop": "node scripts/stop-mediaMTX.js",
+    "external-data:test": "node scripts/externalData.js test",
+    "external-data:fetch": "node scripts/externalData.js fetch"
   },
   "keywords": [],
   "author": "",

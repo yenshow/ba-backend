@@ -16,21 +16,26 @@ const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'onl
  */
 async function checkLightingAreas() {
 	try {
-		// 取得所有有 Modbus 配置的照明區域
+		// 取得所有有照明系統的地點（使用新架構 location_systems）
 		const areas = await db.query(`
 			SELECT 
-				la.id, 
-				la.name, 
-				la.modbus_config as modbus,
-				d.config, 
-				dt.code as device_type_code,
-				lf.name as floor_name
-			FROM lighting_areas la
-			INNER JOIN lighting_floors lf ON la.floor_id = lf.id
-			LEFT JOIN devices d ON (la.modbus_config->>'deviceId')::integer = d.id
+				l.id as location_id,
+				l.name as location_name,
+				l.floor_id,
+				f.name as floor_name,
+				ls.id as system_id,
+				ls.system_config->>'device_id' as device_id,
+				ls.system_config->'modbus_config' as modbus_config,
+				d.config as device_config,
+				dt.code as device_type_code
+			FROM locations l
+			INNER JOIN floors f ON l.floor_id = f.id
+			INNER JOIN location_systems ls ON l.id = ls.location_id
+			LEFT JOIN devices d ON (ls.system_config->>'device_id')::integer = d.id
 			LEFT JOIN device_types dt ON d.type_id = dt.id
-			WHERE la.modbus_config IS NOT NULL
-				AND la.modbus_config != '{}'::jsonb
+			WHERE ls.system_type = 'lighting'
+				AND ls.system_config->'modbus_config' IS NOT NULL
+				AND ls.system_config->'modbus_config' != '{}'::jsonb
 		`);
 
 		if (areas.length === 0) {
@@ -44,21 +49,21 @@ async function checkLightingAreas() {
 		const checkPromises = areas.map(async (area) => {
 			try {
 				// 解析 modbus 配置
-				const modbusConfig = typeof area.modbus === "string" 
-					? JSON.parse(area.modbus) 
-					: area.modbus;
+				const modbusConfigRaw = typeof area.modbus_config === "string" 
+					? JSON.parse(area.modbus_config) 
+					: area.modbus_config;
 					
-				if (!modbusConfig || Object.keys(modbusConfig).length === 0) {
-					return { areaId: area.id, success: false, reason: "配置為空" };
+				if (!modbusConfigRaw || Object.keys(modbusConfigRaw).length === 0) {
+					return { systemId: area.system_id, areaId: area.location_id, success: false, reason: "配置為空" };
 				}
 
 				let deviceConfig = null;
 
-				// 如果使用新格式（有 deviceId）
-				if (modbusConfig.deviceId && area.config) {
-					const config = typeof area.config === "string" 
-						? JSON.parse(area.config) 
-						: area.config;
+				// 如果使用新格式（有 device_id 且 device_config 存在）
+				if (area.device_id && area.device_config) {
+					const config = typeof area.device_config === "string" 
+						? JSON.parse(area.device_config) 
+						: area.device_config;
 						
 					if (config.host && config.port !== undefined) {
 						deviceConfig = {
@@ -67,23 +72,23 @@ async function checkLightingAreas() {
 							unitId: config.unitId || 1
 						};
 					}
-				} else if (modbusConfig.host && modbusConfig.port !== undefined) {
-					// 向後兼容：使用舊格式
+				} else if (modbusConfigRaw.host && modbusConfigRaw.port !== undefined) {
+					// 向後兼容：使用舊格式（從 modbus_config 直接讀取）
 					deviceConfig = {
-						host: modbusConfig.host,
-						port: modbusConfig.port,
-						unitId: modbusConfig.unitId || 1
+						host: modbusConfigRaw.host,
+						port: modbusConfigRaw.port,
+						unitId: modbusConfigRaw.unitId || 1
 					};
 				}
 
 				if (!deviceConfig) {
-					return { areaId: area.id, success: false, reason: "配置不完整" };
+					return { systemId: area.system_id, areaId: area.location_id, success: false, reason: "配置不完整" };
 				}
 
 				// 嘗試讀取第一個離散輸入或線圈來檢查設備狀態
 				// 優先使用 DI（離散輸入），因為它反映實際設備狀態
-				const diAddresses = modbusConfig.points?.filter(p => p.type === "di").map(p => p.address) || [];
-				const doAddresses = modbusConfig.points?.filter(p => p.type === "do").map(p => p.address) || [];
+				const diAddresses = modbusConfigRaw.points?.filter(p => p.type === "di").map(p => p.address) || [];
+				const doAddresses = modbusConfigRaw.points?.filter(p => p.type === "do").map(p => p.address) || [];
 				const address = diAddresses.length > 0 ? diAddresses[0] : (doAddresses.length > 0 ? doAddresses[0] : 0);
 
 				if (diAddresses.length > 0) {
@@ -95,17 +100,19 @@ async function checkLightingAreas() {
 					await modbusClient.readDiscreteInputs(0, 1, deviceConfig);
 				}
 				
-				// 讀取成功，清除錯誤狀態（批次模式：跳過即時推送）
-				await systemAlert.clearError("lighting", area.id, { skipWebSocket: true });
+				// 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
+				await systemAlert.clearError("lighting", area.system_id, { skipWebSocket: true });
 
-				return { areaId: area.id, success: true };
+				return { systemId: area.system_id, areaId: area.location_id, success: true };
 			} catch (error) {
 				// 讀取失敗，記錄錯誤（批次模式：跳過即時推送）
+				// 使用 location_systems.id 作為 source_id
 				const errorMessage = error.message || "無法讀取照明設備資料";
-				await systemAlert.recordError("lighting", area.id, errorMessage, { skipWebSocket: true });
+				await systemAlert.recordError("lighting", area.system_id, errorMessage, { skipWebSocket: true });
 				
 				return { 
-					areaId: area.id, 
+					systemId: area.system_id,
+					areaId: area.location_id, 
 					success: false, 
 					reason: errorMessage 
 				};
@@ -119,10 +126,15 @@ async function checkLightingAreas() {
 
 		results.forEach((result, index) => {
 			if (result.status === "fulfilled") {
+				const systemId = result.value.systemId;
 				const areaId = result.value.areaId;
-				const key = `lighting:${areaId}`;
+				const key = `lighting:${systemId}`;
 				const currentStatus = result.value.success ? "online" : "offline";
 				const lastStatus = lastDeviceStatus.get(key);
+
+				// 從原始 areas 陣列中獲取 device_id
+				const area = areas[index];
+				const deviceId = area?.device_id ? parseInt(area.device_id) : null;
 
 				// 只在狀態改變時才添加到更新列表
 				if (lastStatus !== currentStatus) {
@@ -132,14 +144,16 @@ async function checkLightingAreas() {
 						successCount++;
 						statusUpdates.push({
 							system: "lighting",
-							sourceId: areaId,
+							sourceId: systemId,
+							deviceId: deviceId,
 							status: "online",
 						});
 					} else {
 						failCount++;
 						statusUpdates.push({
 							system: "lighting",
-							sourceId: areaId,
+							sourceId: systemId,
+							deviceId: deviceId,
 							status: "offline",
 						});
 					}
@@ -156,7 +170,7 @@ async function checkLightingAreas() {
 				failCount++;
 				const area = areas[index];
 				if (area) {
-					const key = `lighting:${area.id}`;
+					const key = `lighting:${area.system_id}`;
 					const lastStatus = lastDeviceStatus.get(key);
 					
 					// 只在狀態改變時才推送
@@ -164,7 +178,8 @@ async function checkLightingAreas() {
 						lastDeviceStatus.set(key, "offline");
 						statusUpdates.push({
 							system: "lighting",
-							sourceId: area.id,
+							sourceId: area.system_id,
+							deviceId: area.device_id ? parseInt(area.device_id) : null,
 							status: "offline",
 						});
 					}

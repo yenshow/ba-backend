@@ -43,18 +43,26 @@ async function getDeviceIdFromConfig(deviceConfig) {
 }
 
 /**
- * 獲取環境位置資訊
- * @param {number} locationId - 環境位置 ID
+ * 獲取環境位置資訊（使用新架構 location_systems）
+ * @param {number} systemId - 地點系統 ID (location_systems.id)
  * @returns {Promise<Object|null>} 位置資訊
  */
-async function getLocationInfo(locationId) {
+async function getLocationInfo(systemId) {
   try {
     const result = await db.query(
-      `SELECT el.id, el.name, el.device_id, ef.name as floor_name
-      FROM environment_locations el
-      INNER JOIN environment_floors ef ON el.floor_id = ef.id
-      WHERE el.id = ?`,
-      [locationId]
+      `SELECT 
+        ls.id,
+        ls.system_type,
+        ls.system_config->>'device_id' as device_id,
+        l.name,
+        l.floor_id,
+        f.name as floor_name
+      FROM location_systems ls
+      INNER JOIN locations l ON ls.location_id = l.id
+      INNER JOIN floors f ON l.floor_id = f.id
+      WHERE ls.id = $1
+        AND ls.system_type = 'environment'`,
+      [systemId]
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
@@ -64,20 +72,26 @@ async function getLocationInfo(locationId) {
 }
 
 /**
- * 獲取照明區域資訊
- * @param {number} areaId - 照明區域 ID
+ * 獲取照明區域資訊（使用新架構 location_systems）
+ * @param {number} systemId - 地點系統 ID (location_systems.id)
  * @returns {Promise<Object|null>} 區域資訊
  */
-async function getAreaInfo(areaId) {
+async function getAreaInfo(systemId) {
   try {
     const result = await db.query(
-      `SELECT la.id, la.name, 
-       (la.modbus_config->>'deviceId')::integer as device_id,
-       lf.name as floor_name
-      FROM lighting_areas la
-      INNER JOIN lighting_floors lf ON la.floor_id = lf.id
-      WHERE la.id = ?`,
-      [areaId]
+      `SELECT 
+        ls.id,
+        ls.system_type,
+        ls.system_config->>'device_id' as device_id,
+        l.name,
+        l.floor_id,
+        f.name as floor_name
+      FROM location_systems ls
+      INNER JOIN locations l ON ls.location_id = l.id
+      INNER JOIN floors f ON l.floor_id = f.id
+      WHERE ls.id = $1
+        AND ls.system_type = 'lighting'`,
+      [systemId]
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
@@ -133,15 +147,18 @@ function isDeviceConnectionError(errorMessage) {
 }
 
 /**
- * 從環境位置獲取設備 ID
- * @param {number} locationId - 環境位置 ID
+ * 從環境位置獲取設備 ID（使用新架構 location_systems）
+ * @param {number} systemId - 地點系統 ID (location_systems.id)
  * @returns {Promise<number|null>} 設備 ID
  */
-async function getDeviceIdFromLocation(locationId) {
+async function getDeviceIdFromLocation(systemId) {
   try {
     const result = await db.query(
-      `SELECT device_id FROM environment_locations WHERE id = ?`,
-      [locationId]
+      `SELECT (system_config->>'device_id')::integer as device_id 
+       FROM location_systems 
+       WHERE id = $1
+         AND system_type = 'environment'`,
+      [systemId]
     );
     return result && result.length > 0 ? result[0].device_id : null;
   } catch (error) {
@@ -151,20 +168,19 @@ async function getDeviceIdFromLocation(locationId) {
 }
 
 /**
- * 從照明區域獲取設備 ID
- * @param {number} areaId - 照明區域 ID
+ * 從照明區域獲取設備 ID（使用新架構 location_systems）
+ * @param {number} systemId - 地點系統 ID (location_systems.id)
  * @returns {Promise<number|null>} 設備 ID
  */
-async function getDeviceIdFromArea(areaId) {
+async function getDeviceIdFromArea(systemId) {
   try {
     const result = await db.query(
-      `SELECT (modbus_config->>'deviceId')::integer as device_id 
-       FROM lighting_areas 
-       WHERE id = ?
-         AND modbus_config IS NOT NULL
-         AND modbus_config != '{}'::jsonb
-         AND modbus_config->>'deviceId' IS NOT NULL`,
-      [areaId]
+      `SELECT (system_config->>'device_id')::integer as device_id 
+       FROM location_systems 
+       WHERE id = $1
+         AND system_type = 'lighting'
+         AND system_config->>'device_id' IS NOT NULL`,
+      [systemId]
     );
     return result && result.length > 0 ? result[0].device_id : null;
   } catch (error) {
@@ -268,7 +284,14 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
     // 推送 WebSocket 事件：系統設備離線（僅當創建了 offline 類型的警報時，批次模式可跳過）
     // 注意：這裡的設備狀態推送與警報創建是分離的，確保即使警報未創建也能推送狀態
     if (alertCreated && alertType === "offline" && !options.skipWebSocket) {
-      websocketService.emitDeviceStatus(config.source, sourceId, "offline");
+      // 獲取 deviceId（如果有的話）
+      let deviceId = null;
+      try {
+        deviceId = await config.getDeviceId(sourceId);
+      } catch (error) {
+        // 忽略錯誤，deviceId 為 null
+      }
+      websocketService.emitDeviceStatus(config.source, sourceId, "offline", deviceId);
       if (process.env.NODE_ENV === "development") {
         console.log(
           `[systemAlertHelper] 📢 已推送設備狀態 | ${config.source}:${sourceId} | offline`
@@ -324,7 +347,14 @@ async function clearError(system, sourceId, options = {}) {
     const systemCleared = await errorTracker.clearError(config.source, sourceId);
     // 只有在實際清除了錯誤時才推送事件（批次模式可跳過）
     if (systemCleared && !options.skipWebSocket) {
-      websocketService.emitDeviceStatus(config.source, sourceId, "online");
+      // 獲取 deviceId（如果有的話）
+      let deviceId = null;
+      try {
+        deviceId = await config.getDeviceId(sourceId);
+      } catch (error) {
+        // 忽略錯誤，deviceId 為 null
+      }
+      websocketService.emitDeviceStatus(config.source, sourceId, "online", deviceId);
     }
   } catch (error) {
     console.error(

@@ -18,20 +18,24 @@ const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'onl
  */
 async function checkEnvironmentLocations() {
   try {
-    // 取得所有有設備的環境位置
+    // 取得所有有環境監測系統的地點（使用新架構 location_systems）
     const locations = await db.query(`
 			SELECT 
-				el.id, 
-				el.name, 
-				el.device_id, 
-				d.config, 
-				dt.code as device_type_code,
-				ef.name as floor_name
-			FROM environment_locations el
-			INNER JOIN devices d ON el.device_id = d.id
+				l.id as location_id,
+				l.name as location_name,
+				l.floor_id,
+				f.name as floor_name,
+				ls.id as system_id,
+				ls.system_config->>'device_id' as device_id,
+				d.config as device_config,
+				dt.code as device_type_code
+			FROM locations l
+			INNER JOIN floors f ON l.floor_id = f.id
+			INNER JOIN location_systems ls ON l.id = ls.location_id
+			INNER JOIN devices d ON (ls.system_config->>'device_id')::integer = d.id
 			INNER JOIN device_types dt ON d.type_id = dt.id
-			INNER JOIN environment_floors ef ON el.floor_id = ef.id
-			WHERE d.status = 'active'
+			WHERE ls.system_type = 'environment'
+				AND d.status = 'active'
 				AND dt.code = 'sensor'
 				AND d.config->>'protocol' = 'modbus'
 		`);
@@ -46,31 +50,32 @@ async function checkEnvironmentLocations() {
     // 並行檢查所有位置（提高效率）
     const checkPromises = locations.map(async (location) => {
       try {
-        const config =
-          typeof location.config === "string"
-            ? JSON.parse(location.config)
-            : location.config;
+        const deviceConfigRaw =
+          typeof location.device_config === "string"
+            ? JSON.parse(location.device_config)
+            : location.device_config;
 
-        if (!config.host || !config.port) {
+        if (!deviceConfigRaw.host || !deviceConfigRaw.port) {
           return {
-            locationId: location.id,
+            systemId: location.system_id,
+            locationId: location.location_id,
             success: false,
             reason: "配置不完整",
           };
         }
 
         const deviceConfig = {
-          host: config.host,
-          port: config.port,
-          unitId: config.unitId || 1,
+          host: deviceConfigRaw.host,
+          port: deviceConfigRaw.port,
+          unitId: deviceConfigRaw.unitId || 1,
         };
 
         // 嘗試讀取第一個保持寄存器（地址 0）來檢查設備狀態
         // 這是一個輕量級的檢查，不會讀取大量數據
         await modbusClient.readHoldingRegisters(0, 1, deviceConfig);
 
-        // 讀取成功，清除錯誤狀態（批次模式：跳過即時推送）
-        await systemAlert.clearError("environment", location.id, { skipWebSocket: true });
+        // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
+        await systemAlert.clearError("environment", location.system_id, { skipWebSocket: true });
 
         // 讀取成功後，檢查閾值（僅在設備連接正常時）
         // 從最新的感測器讀數中獲取數據進行閾值檢查
@@ -78,10 +83,10 @@ async function checkEnvironmentLocations() {
           const latestReading = await db.query(
             `SELECT data, timestamp 
              FROM sensor_readings 
-             WHERE location_id = ? 
+             WHERE location_id = $1 
              ORDER BY timestamp DESC 
              LIMIT 1`,
-            [location.id]
+            [location.location_id]
           );
 
           if (latestReading && latestReading.length > 0) {
@@ -94,33 +99,35 @@ async function checkEnvironmentLocations() {
             // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
             if (process.env.ENABLE_DETAILED_LOGS === "true") {
               console.log(
-                `[environmentMonitor] 位置 ${location.id} (${location.name}) 感測器數據:`,
+                `[environmentMonitor] 位置 ${location.location_id} (${location.location_name}) 感測器數據:`,
                 JSON.stringify(sensorData, null, 2)
               );
             }
 
-            // 檢查閾值並自動解決恢復正常的警報
-            await checkAndResolveThresholds(location.id, sensorData, {
-              name: location.name,
+            // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
+            await checkAndResolveThresholds(location.system_id, sensorData, {
+              name: location.location_name,
               floor_name: location.floor_name,
             });
           }
         } catch (thresholdError) {
           // 閾值檢查失敗不影響連線檢查結果
           console.error(
-            `[environmentMonitor] 檢查位置 ${location.id} 閾值失敗:`,
+            `[environmentMonitor] 檢查位置 ${location.location_id} 閾值失敗:`,
             thresholdError.message
           );
         }
 
-        return { locationId: location.id, success: true };
+        return { systemId: location.system_id, locationId: location.location_id, success: true };
       } catch (error) {
         // 讀取失敗，記錄錯誤（不檢查閾值）（批次模式：跳過即時推送）
+        // 使用 location_systems.id 作為 source_id
         const errorMessage = error.message || "無法讀取感測器資料";
-        await systemAlert.recordError("environment", location.id, errorMessage, { skipWebSocket: true });
+        await systemAlert.recordError("environment", location.system_id, errorMessage, { skipWebSocket: true });
 
         return {
-          locationId: location.id,
+          systemId: location.system_id,
+          locationId: location.location_id,
           success: false,
           reason: errorMessage,
         };
@@ -134,10 +141,15 @@ async function checkEnvironmentLocations() {
 
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
+        const systemId = result.value.systemId;
         const locationId = result.value.locationId;
-        const key = `environment:${locationId}`;
+        const key = `environment:${systemId}`;
         const currentStatus = result.value.success ? "online" : "offline";
         const lastStatus = lastDeviceStatus.get(key);
+
+        // 從原始 locations 陣列中獲取 device_id
+        const location = locations[index];
+        const deviceId = location?.device_id ? parseInt(location.device_id) : null;
 
         // 只在狀態改變時才添加到更新列表
         if (lastStatus !== currentStatus) {
@@ -147,14 +159,16 @@ async function checkEnvironmentLocations() {
             successCount++;
             statusUpdates.push({
               system: "environment",
-              sourceId: locationId,
+              sourceId: systemId,
+              deviceId: deviceId,
               status: "online",
             });
           } else {
             failCount++;
             statusUpdates.push({
               system: "environment",
-              sourceId: locationId,
+              sourceId: systemId,
+              deviceId: deviceId,
               status: "offline",
             });
           }
@@ -171,7 +185,7 @@ async function checkEnvironmentLocations() {
         failCount++;
         const location = locations[index];
         if (location) {
-          const key = `environment:${location.id}`;
+          const key = `environment:${location.system_id}`;
           const lastStatus = lastDeviceStatus.get(key);
           
           // 只在狀態改變時才推送
@@ -179,7 +193,8 @@ async function checkEnvironmentLocations() {
             lastDeviceStatus.set(key, "offline");
             statusUpdates.push({
               system: "environment",
-              sourceId: location.id,
+              sourceId: location.system_id,
+              deviceId: location.device_id ? parseInt(location.device_id) : null,
               status: "offline",
             });
           }
@@ -208,54 +223,70 @@ async function checkEnvironmentLocations() {
 }
 
 /**
- * 根據參數名稱查找警報（輔助函數）
- * @param {Array} alerts - 警報列表
- * @param {string} parameter - 參數名稱（如 "pm25"）
- * @param {string} parameterDisplayName - 參數顯示名稱（如 "PM2.5"）
- * @returns {Object|null} 匹配的警報
+ * 解決閾值警報（統一函數，減少重複代碼）
+ * @param {number} systemId - 地點系統 ID
+ * @param {string} parameter - 參數名稱
+ * @param {number} value - 當前數值
+ * @param {string} reason - 解決原因
+ * @returns {Promise<void>}
  */
-function findAlertByParameter(alerts, parameter, parameterDisplayName) {
-  for (const alert of alerts) {
-    const message = alert.message || "";
-    // 檢查訊息中是否包含參數名稱或顯示名稱
-    if (
-      message.includes(parameterDisplayName) ||
-      message.toLowerCase().includes(parameter.toLowerCase())
-    ) {
-      return alert;
+async function resolveThresholdAlert(systemId, parameter, value, reason = "數值已恢復正常") {
+  try {
+    await alertService.updateAlertStatus(
+      systemId,
+      alertService.ALERT_SOURCES.ENVIRONMENT,
+      "threshold",
+      alertService.ALERT_STATUS.RESOLVED,
+      null,
+      reason
+    );
+
+    // 只在啟用詳細日誌時輸出
+    if (process.env.ENABLE_DETAILED_LOGS === "true") {
+      console.log(
+        `[environmentMonitor] 解決警報 | 系統 ${systemId} | 參數 ${parameter} | ` +
+          `數值: ${value} (${reason})`
+      );
+    }
+  } catch (error) {
+    // 如果警報不存在或已經解決，靜默處理（這在自動解決中是正常的）
+    if (process.env.NODE_ENV === "development") {
+      console.warn(
+        `[environmentMonitor] 解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}:`,
+        error.message
+      );
     }
   }
-  return null;
 }
 
 /**
  * 檢查並解決環境位置閾值警報
  * 當數值超過閾值時創建警報，當數值恢復正常時自動解決對應的警報
- * @param {number} locationId - 環境位置 ID
+ * @param {number} systemId - 地點系統 ID (location_systems.id)
  * @param {Object} sensorData - 感測器數據 { pm25, pm10, co2, temperature, humidity, noise, ... }
  * @param {Object} locationInfo - 位置資訊（包含名稱等）
  * @returns {Promise<void>}
  */
-async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
+async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
   try {
     // 查詢所有啟用的閾值規則
     const rules = await alertRuleService.getThresholdRules("environment");
 
     if (!rules || rules.length === 0) {
       // 沒有規則，檢查是否有現有的閾值警報需要解決
-      await resolveAllThresholdAlerts(locationId);
+      await resolveAllThresholdAlerts(systemId);
       return;
     }
 
-    // 先查詢所有現有的 active 閾值警報（優化：一次性查詢）
-    const activeAlertsResult = await alertService.getAlerts({
-      source: alertService.ALERT_SOURCES.ENVIRONMENT,
-      source_id: locationId,
-      alert_type: "threshold",
-      status: alertService.ALERT_STATUS.ACTIVE,
-    });
-
-    const activeAlerts = activeAlertsResult.alerts || [];
+    // 先查詢所有現有的 active 閾值警報（不限日期，用於解決跨天警報）
+    // 使用 location_systems.id 作為 source_id
+    // 注意：使用 findAllActiveAlerts 而非 getAlerts，因為需要解決跨天的警報
+    const activeAlerts = await alertService.findAllActiveAlerts(
+      alertService.ALERT_SOURCES.ENVIRONMENT,
+      systemId,
+      "threshold",
+      null // 參數匹配將在後續處理中進行
+    );
 
     // 按參數分組規則（每個參數只匹配最嚴重的規則）
     const parameterRules = alertRuleService.groupRulesByParameter(rules);
@@ -304,7 +335,7 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
           ? `超過閾值 (${matchedRule.severity})`
           : "正常";
         console.log(
-          `[environmentMonitor] 位置 ${locationId} | 參數 ${parameter} | 數值 ${value} | ${status}`
+          `[environmentMonitor] 位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`
         );
       }
     }
@@ -321,7 +352,7 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
         const message = alertRuleService.formatMessage(
           matchedRule.message_template,
           {
-            source_name: locationInfo?.name || `位置 ${locationId}`,
+            source_name: locationInfo?.name || `位置 ${systemId}`,
             parameter: parameterDisplayName,
             value: value,
             threshold: matchedRule.condition_config.value,
@@ -334,124 +365,96 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
         // 2. 查找現有警報（使用參數匹配）
         // 3. 更新現有警報或創建新警報
         // 4. 輸出適當的日誌
+        // 使用 location_systems.id 作為 source_id
           await systemAlert.createAlert(
             "environment",
-            locationId,
+            systemId,
             "threshold",
             matchedRule.severity,
             message
           );
       } else {
         // 數值未超過閾值，如果有對應的 active 警報，則解決它
-        // 需要查找現有警報來解決（這裡仍然需要 findAlertByParameter）
+        // 使用 findAllActiveAlerts 並傳遞參數，精確匹配需要解決的警報
         const parameterDisplayName =
           alertRuleService.getParameterDisplayName(parameter);
-        const existingAlert = findAlertByParameter(
-          activeAlerts,
-          parameter,
-          parameterDisplayName
+        const parameterAlerts = await alertService.findAllActiveAlerts(
+          alertService.ALERT_SOURCES.ENVIRONMENT,
+          systemId,
+          "threshold",
+          parameterDisplayName // 傳遞參數名稱，精確匹配
         );
         
-        if (existingAlert) {
-          await alertService.updateAlertStatus(
-            locationId,
-            alertService.ALERT_SOURCES.ENVIRONMENT,
-            "threshold",
-            alertService.ALERT_STATUS.RESOLVED,
-            null,
+        if (parameterAlerts.length > 0) {
+          await resolveThresholdAlert(
+            systemId,
+            parameter,
+            value,
             "數值已恢復正常"
           );
-
-          // 只在啟用詳細日誌時輸出
-          if (process.env.ENABLE_DETAILED_LOGS === "true") {
-            console.log(
-              `[environmentMonitor] 解決警報 | 位置 ${locationId} | 參數 ${parameter} | ` +
-                `數值: ${value} (已低於閾值)`
-            );
-          }
         }
       }
     }
 
     // 第三階段：處理其他參數的警報（如果該參數在第一階段沒有被處理，但數值存在且正常）
-    // 對於每個 active 警報，檢查對應的參數是否仍然超過閾值
-    for (const alert of activeAlerts) {
-      const message = alert.message || "";
-
-      // 檢查所有已知的參數，看哪個參數的顯示名稱在警報訊息中
-      let matched = false;
-      for (const parameter of Array.from(parameterRules.keys())) {
-        // 如果這個參數已經在第二階段處理過了，跳過
-        if (triggeredParameters.has(parameter) || parameterExceededStatus.has(parameter)) {
-          continue;
-        }
-
-        // 檢查警報訊息是否包含該參數的顯示名稱
-        const parameterDisplayName =
-          alertRuleService.getParameterDisplayName(parameter);
-        if (
-          message.includes(parameterDisplayName) ||
-          message.toLowerCase().includes(parameter.toLowerCase())
-        ) {
-          matched = true;
-
-          // 檢查該參數的數值是否存在且是否超過閾值
-          const value = sensorData[parameter];
-          if (value === null || value === undefined) {
-            break; // 數值不存在，跳出
-          }
-
-          // 檢查是否超過閾值
-          const paramRules = parameterRules.get(parameter);
-          if (paramRules) {
-            let stillExceeded = false;
-            for (const rule of paramRules) {
-              if (
-                alertRuleService.evaluateThreshold(
-                  rule.condition_config,
-                  value
-                )
-              ) {
-                stillExceeded = true;
-                break;
-              }
-            }
-
-            // 如果數值不再超過閾值，解決警報
-            if (!stillExceeded) {
-              await alertService.updateAlertStatus(
-                locationId,
-                alertService.ALERT_SOURCES.ENVIRONMENT,
-                "threshold",
-                alertService.ALERT_STATUS.RESOLVED,
-                null,
-                "數值已恢復正常"
-              );
-
-              // 只在啟用詳細日誌時輸出
-              if (process.env.ENABLE_DETAILED_LOGS === "true") {
-                console.log(
-                  `[environmentMonitor] 解決警報 | 位置 ${locationId} | 參數 ${parameter} | ` +
-                    `數值: ${value} (已恢復正常)`
-                );
-              }
-            }
-          }
-          break; // 找到匹配的參數後跳出循環
-        }
+    // 對於每個未處理的參數，檢查是否有對應的警報需要解決
+    for (const parameter of Array.from(parameterRules.keys())) {
+      // 如果這個參數已經在第二階段處理過了，跳過
+      if (parameterExceededStatus.has(parameter)) {
+        continue;
       }
 
-      // 如果沒有匹配到任何參數，記錄警告（可能有格式不正確的警報）
-      if (!matched && process.env.NODE_ENV === "development") {
-        console.warn(
-          `[environmentMonitor] 無法匹配警報訊息中的參數 | 位置 ${locationId} | ` +
-            `警報 ID: ${alert.id} | 訊息: ${message}`
-        );
+      const value = sensorData[parameter];
+      // 如果數值不存在，跳過（設備可能離線或未配置）
+      if (value === null || value === undefined) {
+        continue;
+      }
+
+      // 檢查是否有該參數的警報（使用參數顯示名稱精確匹配）
+      const parameterDisplayName =
+        alertRuleService.getParameterDisplayName(parameter);
+      const parameterAlerts = await alertService.findAllActiveAlerts(
+        alertService.ALERT_SOURCES.ENVIRONMENT,
+        systemId,
+        "threshold",
+        parameterDisplayName
+      );
+
+      // 如果沒有該參數的警報，跳過
+      if (parameterAlerts.length === 0) {
+        continue;
+      }
+
+      // 檢查該參數的數值是否超過閾值
+      const paramRules = parameterRules.get(parameter);
+      if (paramRules) {
+        let stillExceeded = false;
+        for (const rule of paramRules) {
+          if (
+            alertRuleService.evaluateThreshold(
+              rule.condition_config,
+              value
+            )
+          ) {
+            stillExceeded = true;
+            break;
+          }
+        }
+
+        // 如果數值不再超過閾值，解決警報
+        if (!stillExceeded) {
+          await resolveThresholdAlert(
+            systemId,
+            parameter,
+            value,
+            "數值已恢復正常"
+          );
+        }
       }
     }
   } catch (error) {
     console.error(
-      `[environmentMonitor] 檢查並解決閾值失敗 (locationId: ${locationId}):`,
+      `[environmentMonitor] 檢查並解決閾值失敗 (systemId: ${systemId}):`,
       error
     );
   }
@@ -459,33 +462,45 @@ async function checkAndResolveThresholds(locationId, sensorData, locationInfo) {
 
 /**
  * 解決位置的所有閾值警報（當沒有規則時）
- * @param {number} locationId - 環境位置 ID
+ * @param {number} systemId - 地點系統 ID (location_systems.id)
  * @returns {Promise<void>}
  */
-async function resolveAllThresholdAlerts(locationId) {
+async function resolveAllThresholdAlerts(systemId) {
   try {
-    const alerts = await alertService.getAlerts({
-      source: alertService.ALERT_SOURCES.ENVIRONMENT,
-      source_id: locationId,
-      alert_type: "threshold",
-      status: alertService.ALERT_STATUS.ACTIVE,
-    });
+    // 使用 findAllActiveAlerts 獲取所有 active 閾值警報（不限日期）
+    const activeAlerts = await alertService.findAllActiveAlerts(
+      alertService.ALERT_SOURCES.ENVIRONMENT,
+      systemId,
+      "threshold",
+      null // 不限定參數，獲取所有閾值警報
+    );
 
-    for (const alert of alerts.alerts || []) {
+    // 如果有多個警報，updateAlertStatus 會一次性解決所有匹配的警報
+    // 所以不需要循環調用，直接調用一次即可
+    if (activeAlerts.length > 0) {
       await alertService.updateAlertStatus(
-        locationId,
+        systemId,
         alertService.ALERT_SOURCES.ENVIRONMENT,
         "threshold",
         alertService.ALERT_STATUS.RESOLVED,
         null, // 系統自動解決
         "規則已移除，自動解決警報"
       );
+
+      if (process.env.ENABLE_DETAILED_LOGS === "true") {
+        console.log(
+          `[environmentMonitor] 解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`
+        );
+      }
     }
   } catch (error) {
-    console.error(
-      `[environmentMonitor] 解決所有閾值警報失敗 (locationId: ${locationId}):`,
-      error
-    );
+    // 如果警報不存在或已經解決，靜默處理
+    if (process.env.NODE_ENV === "development") {
+      console.warn(
+        `[environmentMonitor] 解決所有閾值警報失敗（可能已解決） | 系統 ${systemId}:`,
+        error.message
+      );
+    }
   }
 }
 
