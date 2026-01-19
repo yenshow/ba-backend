@@ -403,32 +403,15 @@ async function initSchema() {
 
     console.log("✅ alert_rules 表已建立（警報規則參照表）");
 
-    // 建立警報歷史記錄表（alert_history）
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS alert_history (
-				id SERIAL PRIMARY KEY,
-				alert_id INTEGER REFERENCES alerts(id) ON DELETE CASCADE,
-				old_status alert_status,
-				new_status alert_status,
-				changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-				changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				reason TEXT
-			)
-		`);
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_alert_history_alert_id ON alert_history(alert_id);
-			CREATE INDEX IF NOT EXISTS idx_alert_history_changed_at ON alert_history(changed_at DESC);
-		`);
-
-    console.log("✅ alert_history 表已建立（警報歷史記錄）");
+    // 注意：alert_history 表已不再使用，已移除相關邏輯
+    // 警報狀態變更資訊已直接記錄在 alerts 表中（resolved_at, resolved_by, ignored_at, ignored_by）
 
     // 建立 lighting_categories 表（照明系統分類點）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS lighting_categories (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
-				floor_id VARCHAR(50) NOT NULL,
+				zone_id INTEGER REFERENCES zones(id) ON DELETE CASCADE,
 				location_x DECIMAL(5,2) NOT NULL,
 				location_y DECIMAL(5,2) NOT NULL,
 				description TEXT,
@@ -445,7 +428,7 @@ async function initSchema() {
     await createUpdatedAtTrigger(targetPool, "lighting_categories");
 
     await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_lighting_categories_floor_id ON lighting_categories(floor_id);
+			CREATE INDEX IF NOT EXISTS idx_lighting_categories_zone_id ON lighting_categories(zone_id);
 			CREATE INDEX IF NOT EXISTS idx_lighting_categories_device_id ON lighting_categories(device_id);
 			CREATE INDEX IF NOT EXISTS idx_lighting_categories_modbus_config ON lighting_categories USING GIN(modbus_config);
 			CREATE INDEX IF NOT EXISTS idx_lighting_categories_status ON lighting_categories(status);
@@ -456,11 +439,11 @@ async function initSchema() {
 
     // ========== 統一地點管理架構 ==========
     // 注意：已移除舊表 lighting_floors, lighting_areas, environment_floors, environment_locations
-    // 統一使用 floors, locations, location_systems 表
+    // 統一使用 zones, locations, location_systems 表
 
-    // 建立統一的 floors 表（統一樓層表）
+    // 建立統一的 zones 表（統一區域表，原 floors 表）
     await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS floors (
+			CREATE TABLE IF NOT EXISTS zones (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL UNIQUE,
 				building_id INTEGER,
@@ -473,35 +456,35 @@ async function initSchema() {
 			)
 		`);
 
-    await createUpdatedAtTrigger(targetPool, "floors");
+    await createUpdatedAtTrigger(targetPool, "zones");
 
     await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_floors_name ON floors(name);
-			CREATE INDEX IF NOT EXISTS idx_floors_building_id ON floors(building_id);
+			CREATE INDEX IF NOT EXISTS idx_zones_name ON zones(name);
+			CREATE INDEX IF NOT EXISTS idx_zones_building_id ON zones(building_id);
 		`);
 
-    // 如果表已存在，添加 image_url 欄位（向後兼容）
+    // 如果表已存在，添加 image_url 欄位
     await targetPool.query(`
 			DO $$ 
 			BEGIN
 				IF NOT EXISTS (
 					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'floors' AND column_name = 'image_url'
+					WHERE table_name = 'zones' AND column_name = 'image_url'
 				) THEN
-					ALTER TABLE floors ADD COLUMN image_url TEXT;
-					RAISE NOTICE '已添加 floors.image_url 欄位';
+					ALTER TABLE zones ADD COLUMN image_url TEXT;
+					RAISE NOTICE '已添加 zones.image_url 欄位';
 				END IF;
 			END $$;
 		`);
 
-    console.log("✅ floors 表已建立（統一樓層表）");
+    console.log("✅ zones 表已建立（統一區域表）");
 
     // 建立統一的 locations 表（統一地點表）
     // 注意：此表只存儲物理地點的基本資訊，不包含系統相關資訊
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS locations (
 				id SERIAL PRIMARY KEY,
-				floor_id INTEGER NOT NULL REFERENCES floors(id) ON DELETE CASCADE,
+				zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
 				name VARCHAR(100) NOT NULL,
 				description TEXT,
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -551,24 +534,24 @@ async function initSchema() {
 			BEGIN
 				IF NOT EXISTS (
 					SELECT 1 FROM pg_constraint 
-					WHERE conname = 'unique_floor_location_name'
+					WHERE conname = 'unique_zone_location_name'
 				) THEN
 					ALTER TABLE locations 
-					ADD CONSTRAINT unique_floor_location_name UNIQUE(floor_id, name);
-					RAISE NOTICE '已添加 unique_floor_location_name 約束';
+					ADD CONSTRAINT unique_zone_location_name UNIQUE(zone_id, name);
+					RAISE NOTICE '已添加 unique_zone_location_name 約束';
 				ELSE
-					RAISE NOTICE '約束 unique_floor_location_name 已存在，跳過';
+					RAISE NOTICE '約束 unique_zone_location_name 已存在，跳過';
 				END IF;
 			EXCEPTION
 				WHEN duplicate_object THEN
-					RAISE NOTICE '約束 unique_floor_location_name 已存在，跳過';
+					RAISE NOTICE '約束 unique_zone_location_name 已存在，跳過';
 			END $$;
 		`);
 
     await createUpdatedAtTrigger(targetPool, "locations");
 
     await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_locations_floor_id ON locations(floor_id);
+			CREATE INDEX IF NOT EXISTS idx_locations_zone_id ON locations(zone_id);
 		`);
 
     console.log("✅ locations 表已建立（統一地點表）");
@@ -602,10 +585,11 @@ async function initSchema() {
 			DROP TABLE IF EXISTS environment_floors CASCADE;
 			DROP TABLE IF EXISTS lighting_areas CASCADE;
 			DROP TABLE IF EXISTS lighting_floors CASCADE;
+			DROP TABLE IF EXISTS floors CASCADE;
 		`);
 
     console.log(
-      "✅ 已移除舊表（environment_locations, environment_floors, lighting_areas, lighting_floors）"
+      "✅ 已移除舊表（environment_locations, environment_floors, lighting_areas, lighting_floors, floors）"
     );
 
     // 建立 sensor_readings 表（感測器讀數歷史資料）

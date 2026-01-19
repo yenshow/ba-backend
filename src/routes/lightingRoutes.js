@@ -6,38 +6,38 @@ const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
-// ========== 樓層管理路由 ==========
+// ========== 區域管理路由 ==========
 
-// 取得樓層列表
-router.get("/floors", noCache, asyncHandler(async (req, res) => {
-	const result = await lightingService.getFloors();
+// 取得區域列表
+router.get("/zones", noCache, asyncHandler(async (req, res) => {
+	const result = await lightingService.getZones();
 	res.sendSuccess(result);
 }));
 
-// 取得單一樓層
-router.get("/floors/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 取得單一區域
+router.get("/zones/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
-	const result = await lightingService.getFloorById(parseInt(id));
+	const result = await lightingService.getZoneById(parseInt(id));
 	res.sendSuccess(result);
 }));
 
-// 建立樓層（需要認證）
-router.post("/floors", authenticate, asyncHandler(async (req, res) => {
-	const result = await lightingService.createFloor(req.body, req.user.id);
+// 建立區域（需要認證）
+router.post("/zones", authenticate, asyncHandler(async (req, res) => {
+	const result = await lightingService.createZone(req.body, req.user.id);
 	res.sendSuccess(result, 201);
 }));
 
-// 更新樓層（需要認證）
-router.put("/floors/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新區域（需要認證）
+router.put("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
-	const result = await lightingService.updateFloor(parseInt(id), req.body, req.user.id);
+	const result = await lightingService.updateZone(parseInt(id), req.body, req.user.id);
 	res.sendSuccess(result);
 }));
 
-// 刪除樓層（需要認證）
-router.delete("/floors/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除區域（需要認證）
+router.delete("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
-	const result = await lightingService.deleteFloor(parseInt(id));
+	const result = await lightingService.deleteZone(parseInt(id));
 	res.sendSuccess(result);
 }));
 

@@ -406,20 +406,20 @@ function buildAlertSelectQuery() {
       END) as source_name,
       -- 向後兼容：device_name（與 source_name 相同，當 source = 'device' 時）
       MAX(CASE WHEN a.source = 'device' THEN d.name END) as device_name,
-      -- 樓層名稱（統一使用 floors 表）
+      -- 區域名稱（統一使用 zones 表）
       MAX(CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN f.name 
+        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN z.name 
         ELSE NULL 
-      END) as floor_name
+      END) as zone_name
     FROM alerts a
     LEFT JOIN users ru ON a.resolved_by = ru.id
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
     LEFT JOIN device_types dt ON d.type_id = dt.id
-    -- 使用新架構：location_systems 關聯到 locations 和 floors
+    -- 使用新架構：location_systems 關聯到 locations 和 zones
     LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
-    LEFT JOIN floors f ON l.floor_id = f.id
+    LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
     LEFT JOIN device_types dt_system ON d_system.type_id = dt_system.id`;
 }
@@ -807,15 +807,6 @@ async function unresolveAlert(id, userId = null) {
 
     const alert = result[0];
 
-    // 記錄狀態變更歷史
-    if (oldStatus !== ALERT_STATUS.ACTIVE) {
-      await db.query(
-        `INSERT INTO alert_history (alert_id, old_status, new_status, changed_by)
-			VALUES (?, ?, ?, ?)`,
-        [id, oldStatus, ALERT_STATUS.ACTIVE, userId]
-      );
-    }
-
     const enrichedAlert = enrichAlert(alert);
 
     // 推送 WebSocket 事件：警報狀態更新（unresolve）
@@ -924,16 +915,8 @@ async function updateAlertStatus(
 
     const updatedCount = result.length;
 
-    // 記錄狀態變更歷史和推送 WebSocket 事件（只有在狀態真正改變時）
+    // 推送 WebSocket 事件（只有在狀態真正改變時）
     if (oldStatus !== newStatus && alertIds.length > 0) {
-      // 為所有更新的警報記錄歷史（批量插入，使用安全的參數化查詢）
-      // 使用 unnest 函數進行批量插入（PostgreSQL 優化方式）
-      await db.query(
-        `INSERT INTO alert_history (alert_id, old_status, new_status, changed_by, reason)
-        SELECT unnest($1::integer[]), $2, $3, $4, $5`,
-        [alertIds, oldStatus, newStatus, userId, reason]
-      );
-
       // 查詢所有更新後的警報資料（用於 WebSocket 事件）
       const alertQuery = `
         SELECT 
@@ -1246,20 +1229,20 @@ async function getAlertById(id) {
         END as source_name,
         -- 向後兼容：device_name（與 source_name 相同，當 source = 'device' 時）
         CASE WHEN a.source = 'device' THEN d.name END as device_name,
-        -- 樓層名稱（統一使用 floors 表）
+        -- 區域名稱（統一使用 zones 表）
         CASE 
-          WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN f.name 
+          WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN z.name 
           ELSE NULL 
-        END as floor_name
+        END as zone_name
       FROM alerts a
       LEFT JOIN users ru ON a.resolved_by = ru.id
       LEFT JOIN users iu ON a.ignored_by = iu.id
       LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
       LEFT JOIN device_types dt ON d.type_id = dt.id
-      -- 使用新架構：location_systems 關聯到 locations 和 floors
+      -- 使用新架構：location_systems 關聯到 locations 和 zones
       LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting') AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
-      LEFT JOIN floors f ON l.floor_id = f.id
+      LEFT JOIN zones z ON l.zone_id = z.id
       LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
       LEFT JOIN device_types dt_system ON d_system.type_id = dt_system.id
       WHERE a.id = ?
@@ -1277,29 +1260,6 @@ async function getAlertById(id) {
   }
 }
 
-/**
- * 取得警報歷史記錄
- * @param {number} alertId - 警報 ID
- * @returns {Promise<Array>} 歷史記錄列表
- */
-async function getAlertHistory(alertId) {
-  try {
-    const query = `
-			SELECT 
-				ah.*,
-				u.username as changed_by_username
-			FROM alert_history ah
-			LEFT JOIN users u ON ah.changed_by = u.id
-			WHERE ah.alert_id = ?
-			ORDER BY ah.changed_at DESC
-		`;
-    const result = await db.query(query, [alertId]);
-    return result || [];
-  } catch (error) {
-    devLog.error(`[alertService] 取得警報歷史記錄失敗: ` + error.message);
-    throw error;
-  }
-}
 
 module.exports = {
   getAlerts,
@@ -1312,7 +1272,6 @@ module.exports = {
   unresolveAlert,
   isSourceIgnored,
   getUnresolvedAlertCount,
-  getAlertHistory,
   findAllActiveAlerts, // 導出用於自動解決跨天警報
   ALERT_SOURCES,
   ALERT_STATUS,

@@ -1,6 +1,6 @@
 /**
  * 人流統計地點管理服務
- *
+ * 
  * 使用統一地點管理架構，location_type = 'people_counting'
  */
 
@@ -15,27 +15,28 @@ const logger = require("../../utils/logger");
  */
 async function getPeopleCountingLocations(options = {}) {
   try {
-    const { floorId } = options;
-
+    const { zoneId } = options;
+    
     // 使用統一服務，篩選 people_counting 類型
-    const result = await locationService.getFloors({
+    const result = await locationService.getZones({
       locationType: "people_counting",
     });
-
-    // 如果指定了 floorId，只返回該樓層的地點
-    if (floorId) {
-      const floor = result.floors.find((f) => String(f.id) === String(floorId));
-      if (floor) {
+    const zones = result.zones;
+    
+    // 如果指定了 zoneId，只返回該區域的地點
+    if (zoneId) {
+      const zone = zones.find((z) => String(z.id) === String(zoneId));
+      if (zone) {
         return {
-          locations: floor.locations || [],
+          locations: zone.locations || [],
         };
       }
       return { locations: [] };
     }
-
+    
     // 返回所有地點（扁平化）
-    const allLocations = result.floors.flatMap(
-      (floor) => floor.locations || []
+    const allLocations = zones.flatMap(
+      (zone) => zone.locations || []
     );
     return {
       locations: allLocations,
@@ -56,14 +57,14 @@ async function getPeopleCountingLocationById(id) {
   try {
     // 先取得地點
     const location = await locationService.getLocationById(id);
-
+    
     // 驗證地點類型
     if (location.locationType !== "people_counting") {
       const error = new Error("地點類型不正確");
       error.statusCode = 400;
       throw error;
     }
-
+    
     return { location };
   } catch (error) {
     if (error.statusCode) {
@@ -85,7 +86,7 @@ async function createPeopleCountingLocation(locationData, userId) {
   try {
     const {
       name,
-      floorId,
+      zoneId,
       personGroupIds = [],
       entryDoorId,
       exitDoorId,
@@ -98,8 +99,8 @@ async function createPeopleCountingLocation(locationData, userId) {
       throw error;
     }
 
-    if (!floorId) {
-      const error = new Error("樓層 ID 不能為空");
+    if (!zoneId) {
+      const error = new Error("區域 ID 不能為空");
       error.statusCode = 400;
       throw error;
     }
@@ -131,7 +132,7 @@ async function createPeopleCountingLocation(locationData, userId) {
     // 使用統一服務建立地點（傳入正確的配置格式）
     const result = await locationService.createLocation(
       {
-        floorId: parseInt(floorId),
+        zoneId: parseInt(zoneId),
         name: name.trim(),
         locationType: "people_counting",
         config: {
@@ -194,7 +195,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       const currentExit = existing.location.exitDoorId;
       const newEntry = entryDoorId !== undefined ? entryDoorId : currentEntry;
       const newExit = exitDoorId !== undefined ? exitDoorId : currentExit;
-
+      
       if (newEntry && newExit && newEntry === newExit) {
         const error = new Error("入口和出口不能是同一個設備");
         error.statusCode = 400;
@@ -347,13 +348,13 @@ function parseEventType(record, allRecords, recordIndex, personPresenceMap) {
 async function getSites() {
   try {
     // 1. 取得所有地點（工地）
-    const locationsResult = await locationService.getFloors({
+    const locationsResult = await locationService.getZones({
       locationType: "people_counting",
     });
 
     const sites = [];
-    const allLocations = (locationsResult.floors || []).flatMap(
-      (floor) => floor.locations || []
+    const allLocations = (locationsResult.zones || []).flatMap(
+      (zone) => zone.locations || []
     );
 
     if (allLocations.length === 0) {

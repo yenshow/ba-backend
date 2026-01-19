@@ -55,11 +55,11 @@ async function getLocationInfo(systemId) {
         ls.system_type,
         ls.system_config->>'device_id' as device_id,
         l.name,
-        l.floor_id,
-        f.name as floor_name
+        l.zone_id,
+        z.name as zone_name
       FROM location_systems ls
       INNER JOIN locations l ON ls.location_id = l.id
-      INNER JOIN floors f ON l.floor_id = f.id
+      INNER JOIN zones z ON l.zone_id = z.id
       WHERE ls.id = $1
         AND ls.system_type = 'environment'`,
       [systemId]
@@ -84,11 +84,11 @@ async function getAreaInfo(systemId) {
         ls.system_type,
         ls.system_config->>'device_id' as device_id,
         l.name,
-        l.floor_id,
-        f.name as floor_name
+        l.zone_id,
+        z.name as zone_name
       FROM location_systems ls
       INNER JOIN locations l ON ls.location_id = l.id
-      INNER JOIN floors f ON l.floor_id = f.id
+      INNER JOIN zones z ON l.zone_id = z.id
       WHERE ls.id = $1
         AND ls.system_type = 'lighting'`,
       [systemId]
@@ -277,7 +277,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
       errorMessage,
       {
         name: sourceInfo.name,
-        floor_name: sourceInfo.floor_name,
+        zone_name: sourceInfo.zone_name,
       }
     );
 

@@ -7,6 +7,7 @@ const db = require("../../database/db");
 const modbusClient = require("../devices/modbusClient");
 const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
+const deviceDataLogger = require("../devices/deviceDataLogger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
@@ -21,15 +22,15 @@ async function checkLightingAreas() {
 			SELECT 
 				l.id as location_id,
 				l.name as location_name,
-				l.floor_id,
-				f.name as floor_name,
+				l.zone_id,
+				z.name as zone_name,
 				ls.id as system_id,
 				ls.system_config->>'device_id' as device_id,
 				ls.system_config->'modbus_config' as modbus_config,
 				d.config as device_config,
 				dt.code as device_type_code
 			FROM locations l
-			INNER JOIN floors f ON l.floor_id = f.id
+			INNER JOIN zones z ON l.zone_id = z.id
 			INNER JOIN location_systems ls ON l.id = ls.location_id
 			LEFT JOIN devices d ON (ls.system_config->>'device_id')::integer = d.id
 			LEFT JOIN device_types dt ON d.type_id = dt.id
@@ -102,6 +103,82 @@ async function checkLightingAreas() {
 				
 				// 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
 				await systemAlert.clearError("lighting", area.system_id, { skipWebSocket: true });
+
+				// 記錄設備數值（如果設備配置了 logging）
+				const deviceId = area.device_id ? parseInt(area.device_id) : null;
+				if (deviceId) {
+					try {
+						const loggingConfig = await deviceDataLogger.getDeviceLoggingConfig(deviceId);
+						
+						if (loggingConfig.enabled && loggingConfig.values && loggingConfig.values.length > 0) {
+							// 找出所有需要讀取的配置
+							const enabledValues = loggingConfig.values.filter(v => v.enabled);
+							
+							// 讀取所有配置的資料
+							const modbusDataMap = {};
+							for (const valueConfig of enabledValues) {
+								try {
+									let data = null;
+									if (valueConfig.register_type === "coil") {
+										data = await modbusClient.readCoils(
+											valueConfig.address,
+											valueConfig.length || 1,
+											deviceConfig
+										);
+									} else if (valueConfig.register_type === "discrete") {
+										data = await modbusClient.readDiscreteInputs(
+											valueConfig.address,
+											valueConfig.length || 1,
+											deviceConfig
+										);
+									} else if (valueConfig.register_type === "holding") {
+										data = await modbusClient.readHoldingRegisters(
+											valueConfig.address,
+											valueConfig.length || 1,
+											deviceConfig
+										);
+									} else if (valueConfig.register_type === "input") {
+										data = await modbusClient.readInputRegisters(
+											valueConfig.address,
+											valueConfig.length || 1,
+											deviceConfig
+										);
+									}
+
+									if (data !== null && data !== undefined) {
+										// 將資料轉換為陣列格式（統一處理）
+										modbusDataMap[valueConfig.name] = Array.isArray(data) ? data : [data];
+									}
+								} catch (readError) {
+									// 單個讀取失敗不影響其他數值
+									console.error(`[lightingMonitor] 讀取 ${valueConfig.name} 失敗:`, readError.message);
+								}
+							}
+
+							// 轉換為實際數值（為每個數值單獨處理）
+							const deviceValues = {};
+							for (const valueConfig of enabledValues) {
+								if (modbusDataMap[valueConfig.name]) {
+									const values = deviceDataLogger.convertModbusToValues(
+										modbusDataMap[valueConfig.name],
+										{ values: [valueConfig] }
+									);
+									Object.assign(deviceValues, values);
+								}
+							}
+
+							// 記錄到 device_data_logs（非阻塞，傳入配置避免重複查詢）
+							if (Object.keys(deviceValues).length > 0) {
+								deviceDataLogger.logDeviceValues(deviceId, deviceValues, loggingConfig).catch((error) => {
+									console.error(`[lightingMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, error.message);
+								});
+							}
+						}
+					} catch (logError) {
+						// 記錄失敗不影響監控流程
+						console.error(`[lightingMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, logError.message);
+					}
+				}
 
 				return { systemId: area.system_id, areaId: area.location_id, success: true };
 			} catch (error) {

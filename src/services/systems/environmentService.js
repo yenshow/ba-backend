@@ -5,35 +5,37 @@ const locationService = require("./locationService");
 // 注意：formatLocation, formatFloor, loadFloorLocations, validateAndCreateLocation, validateAndUpdateLocation 
 // 等函數已移除，統一使用 locationService 處理
 
-// ========== 樓層管理函數 ==========
+// ========== 區域管理函數 ==========
 
-// 取得樓層列表（使用統一表）
-async function getFloors() {
+// 取得區域列表（使用統一表）
+async function getZones() {
 	try {
-		return await locationService.getFloors({ locationType: "environment" });
+		const result = await locationService.getZones({ locationType: "environment" });
+		return { zones: result.zones };
 	} catch (error) {
-		console.error("取得樓層列表失敗:", error);
-		throw new Error("取得樓層列表失敗: " + error.message);
+		console.error("取得區域列表失敗:", error);
+		throw new Error("取得區域列表失敗: " + error.message);
 	}
 }
 
-// 取得單一樓層（使用統一表）
-async function getFloorById(id) {
+// 取得單一區域（使用統一表）
+async function getZoneById(id) {
 	try {
-		return await locationService.getFloorById(id, "environment");
+		const result = await locationService.getZoneById(id, "environment");
+		return { zone: result.zone };
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("取得樓層失敗:", error);
-		throw new Error("取得樓層失敗: " + error.message);
+		console.error("取得區域失敗:", error);
+		throw new Error("取得區域失敗: " + error.message);
 	}
 }
 
-// 建立樓層（使用統一表）
-async function createFloor(floorData, userId) {
+// 建立區域（使用統一表）
+async function createZone(zoneData, userId) {
 	try {
-		const { name, locations = [] } = floorData;
+		const { name, locations = [] } = zoneData;
 
 		// 將 locations 轉換為統一格式（加入 locationType）
 		const unifiedLocations = locations.map((loc) => ({
@@ -41,26 +43,31 @@ async function createFloor(floorData, userId) {
 			locationType: "environment",
 		}));
 
-		return await locationService.createFloor(
+		const result = await locationService.createZone(
 			{
-				...floorData,
+				...zoneData,
 				locations: unifiedLocations,
 			},
 			userId
 		);
+		return {
+			merged: result.merged,
+			message: result.message,
+			zone: result.zone,
+		};
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("建立樓層失敗:", error);
-		throw new Error("建立樓層失敗: " + error.message);
+		console.error("建立區域失敗:", error);
+		throw new Error("建立區域失敗: " + error.message);
 	}
 }
 
-// 更新樓層（使用統一表）
-async function updateFloor(id, floorData, userId) {
+// 更新區域（使用統一表）
+async function updateZone(id, zoneData, userId) {
 	try {
-		const { name, locations } = floorData;
+		const { name, locations } = zoneData;
 
 		// 將 locations 轉換為統一格式（加入 locationType）
 		const unifiedLocations = locations
@@ -70,7 +77,7 @@ async function updateFloor(id, floorData, userId) {
 			  }))
 			: undefined;
 
-		return await locationService.updateFloor(
+		const result = await locationService.updateZone(
 			id,
 			{
 				...(name !== undefined && { name }),
@@ -78,25 +85,30 @@ async function updateFloor(id, floorData, userId) {
 			},
 			userId
 		);
+		return {
+			merged: result.merged,
+			message: result.message,
+			zone: result.zone,
+		};
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("更新樓層失敗:", error);
-		throw new Error("更新樓層失敗: " + error.message);
+		console.error("更新區域失敗:", error);
+		throw new Error("更新區域失敗: " + error.message);
 	}
 }
 
-// 刪除樓層（使用統一表）
-async function deleteFloor(id) {
+// 刪除區域（使用統一表）
+async function deleteZone(id) {
 	try {
-		return await locationService.deleteFloor(id);
+		return await locationService.deleteZone(id);
 	} catch (error) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("刪除樓層失敗:", error);
-		throw new Error("刪除樓層失敗: " + error.message);
+		console.error("刪除區域失敗:", error);
+		throw new Error("刪除區域失敗: " + error.message);
 	}
 }
 
@@ -227,12 +239,12 @@ async function getReadings(locationId, options = {}) {
 }
 
 module.exports = {
-	// 樓層管理
-	getFloors,
-	getFloorById,
-	createFloor,
-	updateFloor,
-	deleteFloor,
+	// 區域管理
+	getZones,
+	getZoneById,
+	createZone,
+	updateZone,
+	deleteZone,
 	// 感測器讀數
 	saveReading,
 	getReadings,

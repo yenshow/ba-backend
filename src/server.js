@@ -44,6 +44,9 @@ const lightingMonitor = require("./services/monitoring/lightingMonitor");
 // 警報自動清理服務
 const alertCleanupService = require("./services/alerts/alertCleanupService");
 
+// 設備資料記錄服務
+const deviceDataLogger = require("./services/devices/deviceDataLogger");
+
 // 監聽 MediaMTX 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
 // 注意：WebSocket 事件推送已整合到 mediaMTXService 中
 const mediaMTXLogger = logger.createLogger("MediaMTX Service");
@@ -190,6 +193,10 @@ async function startServer() {
   alertCleanupService.startCleanupScheduler();
     serverLogger.info("警報自動清理服務已啟用");
 
+  // 啟動設備資料記錄服務的定時刷新
+  deviceDataLogger.start();
+    serverLogger.info("設備資料記錄服務已啟用");
+
   const localIP = getLocalIPAddress();
 
   // 創建 HTTP 伺服器
@@ -229,9 +236,18 @@ async function gracefulShutdown(signal) {
   backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
 
-    // 停止所有 RTSP 串流
-  await mediaMTXService.stopAllStreams();
+    // 停止設備資料記錄服務
+    deviceDataLogger.stop();
+    shutdownLogger.info("設備資料記錄服務已停止");
+
+    // 停止所有 RTSP 串流（包括 FFmpeg 進程）
+    await mediaMTXService.stopAllStreams();
     shutdownLogger.info("所有 RTSP 串流已停止");
+    
+    // 確保所有 FFmpeg 進程都已停止
+    const ffmpegService = require("./services/communication/ffmpegService");
+    await ffmpegService.stopAllProcesses();
+    shutdownLogger.info("所有 FFmpeg 進程已停止");
 
     // 關閉資料庫連線
   await db.close();

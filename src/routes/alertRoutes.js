@@ -99,18 +99,10 @@ router.get("/rules", noCache, asyncHandler(async (req, res) => {
 }));
 
 // 取得單一警示（公開）
-// 注意：必須在 /:id/history 之前定義，避免路由衝突
 router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const alert = await alertService.getAlertById(parseInt(id));
   res.sendSuccess({ alert });
-}));
-
-// 取得警示歷史記錄（公開）
-router.get("/:id/history", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const history = await alertService.getAlertHistory(parseInt(id));
-  res.sendSuccess({ history });
 }));
 
 // 注意：警報由系統自動解決，不提供手動解決的端點

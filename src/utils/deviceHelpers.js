@@ -94,8 +94,71 @@ const validateDeviceConfig = (config, typeCode) => {
 	}
 };
 
+/**
+ * 驗證 logging 配置
+ */
+const validateLoggingConfig = (config) => {
+	if (!config || typeof config !== "object") {
+		return { valid: false, error: "logging 配置必須是物件" };
+	}
+
+	if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
+		return { valid: false, error: "logging.enabled 必須是布林值" };
+	}
+
+	if (config.interval !== undefined) {
+		if (typeof config.interval !== "number" || config.interval < 1) {
+			return { valid: false, error: "logging.interval 必須是大於 0 的數字" };
+		}
+	}
+
+	if (config.values !== undefined) {
+		if (!Array.isArray(config.values)) {
+			return { valid: false, error: "logging.values 必須是陣列" };
+		}
+
+		for (const value of config.values) {
+			if (!value.name || typeof value.name !== "string") {
+				return { valid: false, error: "logging.values[].name 必須是字串" };
+			}
+			if (!["holding", "input", "coil", "discrete"].includes(value.register_type)) {
+				return { valid: false, error: `無效的暫存器類型: ${value.register_type}` };
+			}
+			if (typeof value.address !== "number" || value.address < 0) {
+				return { valid: false, error: "logging.values[].address 必須是非負整數" };
+			}
+			if (value.length !== undefined && (typeof value.length !== "number" || value.length < 1)) {
+				return { valid: false, error: "logging.values[].length 必須是大於 0 的數字" };
+			}
+			if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+				return { valid: false, error: "logging.values[].enabled 必須是布林值" };
+			}
+			if (value.conversion !== undefined) {
+				if (typeof value.conversion !== "object") {
+					return { valid: false, error: "logging.values[].conversion 必須是物件" };
+				}
+				if (value.conversion.formula !== undefined && typeof value.conversion.formula !== "string") {
+					return { valid: false, error: "logging.values[].conversion.formula 必須是字串" };
+				}
+				if (value.conversion.unit !== undefined && typeof value.conversion.unit !== "string") {
+					return { valid: false, error: "logging.values[].conversion.unit 必須是字串" };
+				}
+				if (value.conversion.scale !== undefined && typeof value.conversion.scale !== "number") {
+					return { valid: false, error: "logging.values[].conversion.scale 必須是數字" };
+				}
+				if (value.conversion.offset !== undefined && typeof value.conversion.offset !== "number") {
+					return { valid: false, error: "logging.values[].conversion.offset 必須是數字" };
+				}
+			}
+		}
+	}
+
+	return { valid: true };
+};
+
 module.exports = {
 	parseConfig,
 	stringifyConfig,
-	validateDeviceConfig
+	validateDeviceConfig,
+	validateLoggingConfig
 };

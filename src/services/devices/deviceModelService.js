@@ -141,6 +141,15 @@ async function createDeviceModel(data, userId) {
 			validateSensorParametersConfig(config);
 		}
 
+		// 驗證 logging 配置（如果提供）
+		if (config && config.logging) {
+			const { validateLoggingConfig } = require("../../utils/deviceHelpers");
+			const loggingValidation = validateLoggingConfig(config.logging);
+			if (!loggingValidation.valid) {
+				throw new Error(`logging 配置驗證失敗: ${loggingValidation.error}`);
+			}
+		}
+
 		// 插入到 device_models
 		const result = await db.query(
 			"INSERT INTO device_models (name, type_id, port, description, config) VALUES (?, ?, ?, ?, ?) RETURNING id",
@@ -221,6 +230,15 @@ async function updateDeviceModel(id, data, userId) {
 			const types = await db.query("SELECT code FROM device_types WHERE id = ?", [targetTypeId]);
 			if (types.length > 0 && types[0].code === "sensor") {
 				validateSensorParametersConfig(config);
+			}
+
+			// 驗證 logging 配置（如果提供）
+			if (config.logging) {
+				const { validateLoggingConfig } = require("../../utils/deviceHelpers");
+				const loggingValidation = validateLoggingConfig(config.logging);
+				if (!loggingValidation.valid) {
+					throw new Error(`logging 配置驗證失敗: ${loggingValidation.error}`);
+				}
 			}
 		}
 

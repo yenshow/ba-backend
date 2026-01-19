@@ -3,8 +3,10 @@ const db = require("../../database/db");
 /**
  * 統一地點管理服務（多系統架構）
  *
- * 此服務提供統一的地點和樓層管理 API，支援一個地點多個系統
+ * 此服務提供統一的地點和區域管理 API，支援一個地點多個系統
  * 使用 location_systems 表來關聯地點和系統
+ * 
+ * 注意：資料庫中仍使用 floors 表，但 API 層面統一使用 zones 命名
  */
 
 // ========== 共用輔助函數 ==========
@@ -119,7 +121,7 @@ function formatSystem(system) {
 function formatLocation(location, systems = []) {
   return {
     id: String(location.id),
-    floorId: String(location.floor_id),
+    zoneId: String(location.zone_id),
     name: location.name,
     description: location.description || undefined,
     systems: systems.map(formatSystem),
@@ -127,16 +129,16 @@ function formatLocation(location, systems = []) {
 }
 
 /**
- * 格式化樓層資料為前端格式
+ * 格式化區域資料為前端格式
  */
-function formatFloor(floor, locations = []) {
+function formatZone(zone, locations = []) {
   return {
-    id: String(floor.id),
-    name: floor.name,
-    buildingId: floor.building_id || undefined,
-    floorNumber: floor.floor_number || undefined,
-    imageUrl: floor.image_url || undefined,
-    description: floor.description || undefined,
+    id: String(zone.id),
+    name: zone.name,
+    buildingId: zone.building_id || undefined,
+    floorNumber: zone.floor_number || undefined,
+    imageUrl: zone.image_url || undefined,
+    description: zone.description || undefined,
     locations: locations,
   };
 }
@@ -167,7 +169,7 @@ function groupLocationRowsByLocation(rows) {
     if (!locationMap.has(locationId)) {
       locationMap.set(locationId, {
         id: row.id,
-        floor_id: row.floor_id,
+        zone_id: row.zone_id,
         name: row.name,
         description: row.description,
         created_by: row.created_by,
@@ -194,14 +196,14 @@ function groupLocationRowsByLocation(rows) {
 }
 
 /**
- * 載入樓層的地點（含所有系統）
+ * 載入區域的地點（含所有系統）
  * 優化：使用 JOIN 一次查詢地點和系統，避免 N+1 問題
  */
-async function loadFloorLocations(floorId, systemType = null) {
+async function loadZoneLocations(zoneId, systemType = null) {
   let sql = `
     SELECT 
       l.id,
-      l.floor_id,
+      l.zone_id,
       l.name,
       l.description,
       l.created_by,
@@ -214,9 +216,9 @@ async function loadFloorLocations(floorId, systemType = null) {
       ls.updated_at as system_updated_at
     FROM locations l
     LEFT JOIN location_systems ls ON l.id = ls.location_id
-    WHERE l.floor_id = $1
+    WHERE l.zone_id = $1
   `;
-  const params = [floorId];
+  const params = [zoneId];
 
   if (systemType) {
     // 只返回有該系統類型的地點
@@ -240,25 +242,25 @@ async function loadFloorLocations(floorId, systemType = null) {
   return locationsWithSystems;
 }
 
-// ========== 樓層管理函數 ==========
+// ========== 區域管理函數 ==========
 
 /**
- * 取得樓層列表
- * 優化：批次查詢所有樓層的地點和系統，避免為每個樓層分別查詢
+ * 取得區域列表
+ * 優化：批次查詢所有區域的地點和系統，避免為每個區域分別查詢
  */
-async function getFloors(filters = {}) {
+async function getZones(filters = {}) {
   try {
-    let sql = "SELECT * FROM floors WHERE 1=1";
+    let sql = "SELECT * FROM zones WHERE 1=1";
     const params = [];
 
     // 支援 systemType 或 locationType 篩選（向後兼容）
     const systemType = filters.systemType || filters.locationType;
     if (systemType) {
-      // 只返回有該系統類型地點的樓層
-      // 這樣在每個系統頁面只會看到有該系統地點的樓層，總覽更清晰
+      // 只返回有該系統類型地點的區域
+      // 這樣在每個系統頁面只會看到有該系統地點的區域，總覽更清晰
       sql += `
         AND id IN (
-          SELECT DISTINCT l.floor_id 
+          SELECT DISTINCT l.zone_id 
           FROM locations l
           INNER JOIN location_systems ls ON l.id = ls.location_id
           WHERE ls.system_type = $1
@@ -269,21 +271,21 @@ async function getFloors(filters = {}) {
 
     sql += " ORDER BY created_at DESC";
 
-    const floors = await db.query(sql, params);
+    const zones = await db.query(sql, params);
 
-    // 如果沒有樓層，直接返回
-    if (floors.length === 0) {
-      return { floors: [] };
+    // 如果沒有區域，直接返回
+    if (zones.length === 0) {
+      return { zones: [] };
     }
 
-    // 批次查詢所有樓層的地點和系統
-    const floorIds = floors.map((f) => f.id);
+    // 批次查詢所有區域的地點和系統
+    const zoneIds = zones.map((z) => z.id);
 
     // 構建批次查詢 SQL
     let locationsSql = `
       SELECT 
         l.id,
-        l.floor_id,
+        l.zone_id,
         l.name,
         l.description,
         l.created_by,
@@ -296,9 +298,9 @@ async function getFloors(filters = {}) {
         ls.updated_at as system_updated_at
       FROM locations l
       LEFT JOIN location_systems ls ON l.id = ls.location_id
-      WHERE l.floor_id = ANY($1::int[])
+      WHERE l.zone_id = ANY($1::int[])
     `;
-    const locationsParams = [floorIds];
+    const locationsParams = [zoneIds];
 
     if (systemType) {
       // 只返回有該系統類型的地點
@@ -309,69 +311,72 @@ async function getFloors(filters = {}) {
       locationsParams.push(systemType);
     }
 
-    locationsSql += " ORDER BY l.floor_id, l.created_at ASC, ls.created_at ASC";
+    locationsSql += " ORDER BY l.zone_id, l.created_at ASC, ls.created_at ASC";
 
     const locationRows = await db.query(locationsSql, locationsParams);
 
-    // 將地點按樓層分組
-    const locationsByFloorId = new Map();
+    // 將地點按區域分組
+    const locationsByZoneId = new Map();
     for (const row of locationRows) {
-      const floorId = row.floor_id;
-      if (!locationsByFloorId.has(floorId)) {
-        locationsByFloorId.set(floorId, []);
+      const zoneId = row.zone_id;
+      if (!locationsByZoneId.has(zoneId)) {
+        locationsByZoneId.set(zoneId, []);
       }
-      locationsByFloorId.get(floorId).push(row);
+      locationsByZoneId.get(zoneId).push(row);
     }
 
     // 格式化為前端格式
-    const floorsWithLocations = floors.map((floor) => {
-      const floorRows = locationsByFloorId.get(floor.id) || [];
-      const locationMap = groupLocationRowsByLocation(floorRows);
+    const zonesWithLocations = zones.map((zone) => {
+      const zoneRows = locationsByZoneId.get(zone.id) || [];
+      const locationMap = groupLocationRowsByLocation(zoneRows);
       const locations = Array.from(locationMap.values()).map((location) =>
         formatLocation(location, location.systems)
       );
-      return formatFloor(floor, locations);
+      return formatZone(zone, locations);
     });
 
-    return { floors: floorsWithLocations };
+    return { zones: zonesWithLocations };
   } catch (error) {
-    console.error("取得樓層列表失敗:", error);
-    throw new Error("取得樓層列表失敗: " + error.message);
+    console.error("取得區域列表失敗:", error);
+    throw new Error("取得區域列表失敗: " + error.message);
   }
 }
 
-/**
- * 取得單一樓層
- */
-async function getFloorById(id, systemTypeOrLocationType = null) {
-  try {
-    const floors = await db.query("SELECT * FROM floors WHERE id = $1", [id]);
 
-    if (floors.length === 0) {
-      const error = new Error("樓層不存在");
+/**
+ * 取得單一區域
+ */
+async function getZoneById(id, systemTypeOrLocationType = null) {
+  try {
+    const zones = await db.query("SELECT * FROM zones WHERE id = $1", [id]);
+
+    if (zones.length === 0) {
+      const error = new Error("區域不存在");
       error.statusCode = 404;
       throw error;
     }
 
-    const floor = floors[0];
-    const locations = await loadFloorLocations(id, systemTypeOrLocationType);
+    const zone = zones[0];
+    const locations = await loadZoneLocations(id, systemTypeOrLocationType);
 
     return {
-      floor: formatFloor(floor, locations),
+      zone: formatZone(zone, locations),
     };
   } catch (error) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得樓層失敗:", error);
-    throw new Error("取得樓層失敗: " + error.message);
+    console.error("取得區域失敗:", error);
+    throw new Error("取得區域失敗: " + error.message);
   }
 }
 
+// 向後兼容函數別名
+
 /**
- * 建立樓層
+ * 建立區域
  */
-async function createFloor(floorData, userId) {
+async function createZone(zoneData, userId) {
   try {
     const {
       name,
@@ -380,26 +385,26 @@ async function createFloor(floorData, userId) {
       description,
       imageUrl,
       locations = [],
-    } = floorData;
+    } = zoneData;
 
     // 驗證必填欄位
-    const trimmedName = validateName(name, "樓層名稱");
+    const trimmedName = validateName(name, "區域名稱");
 
-    // 檢查樓層名稱是否已存在
-    const existingFloor = await db.query(
-      "SELECT id FROM floors WHERE name = $1",
+    // 檢查區域名稱是否已存在
+    const existingZone = await db.query(
+      "SELECT id FROM zones WHERE name = $1",
       [trimmedName]
     );
 
-    let floorId;
+    let zoneId;
     let isMerged = false;
 
-    if (existingFloor.length > 0) {
-      // 樓層名稱已存在，使用現有樓層（自動合併）
-      floorId = existingFloor[0].id;
+    if (existingZone.length > 0) {
+      // 區域名稱已存在，使用現有區域（自動合併）
+      zoneId = existingZone[0].id;
       isMerged = true;
 
-      // 更新樓層的其他欄位
+      // 更新區域的其他欄位
       const updates = [];
       const params = [];
       let paramIndex = 1;
@@ -422,18 +427,18 @@ async function createFloor(floorData, userId) {
       }
 
       if (updates.length > 0) {
-        params.push(floorId);
+        params.push(zoneId);
         await db.query(
-          `UPDATE floors SET ${updates.join(
+          `UPDATE zones SET ${updates.join(
             ", "
           )}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`,
           params
         );
       }
     } else {
-      // 建立新樓層
-      const floorResult = await db.query(
-        `INSERT INTO floors (name, building_id, floor_number, image_url, description, created_by)
+      // 建立新區域
+      const zoneResult = await db.query(
+        `INSERT INTO zones (name, building_id, floor_number, image_url, description, created_by)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id`,
         [
@@ -445,7 +450,7 @@ async function createFloor(floorData, userId) {
           userId || null,
         ]
       );
-      floorId = floorResult[0].id;
+      zoneId = zoneResult[0].id;
     }
 
     // 如果有地點需要建立，使用事務確保一起建立
@@ -453,25 +458,25 @@ async function createFloor(floorData, userId) {
     if (validLocations.length > 0) {
       await db.transaction(async (query) => {
         for (const location of validLocations) {
-          await createLocationWithSystems(query, floorId, location, userId);
+          await createLocationWithSystems(query, zoneId, location, userId);
         }
       });
     }
 
-    // 取得建立後的完整樓層資料
-    const floorResult = await getFloorById(floorId);
+    // 取得建立後的完整區域資料
+    const zoneResult = await getZoneById(zoneId);
     return {
       merged: isMerged,
-      message: isMerged ? "地點已合併到現有樓層" : "樓層建立成功",
-      floor: floorResult.floor,
+      message: isMerged ? "地點已合併到現有區域" : "區域建立成功",
+      zone: zoneResult.zone,
     };
   } catch (error) {
     if (error.statusCode) {
       throw error;
     }
-    handleUniqueConstraintError(error, "floors_name_key", "樓層名稱已存在");
-    console.error("建立樓層失敗:", error);
-    throw new Error("建立樓層失敗: " + error.message);
+    handleUniqueConstraintError(error, "zones_name_key", "區域名稱已存在");
+    console.error("建立區域失敗:", error);
+    throw new Error("建立區域失敗: " + error.message);
   }
 }
 
@@ -483,49 +488,49 @@ function getValidLocations(locations) {
 }
 
 /**
- * 更新樓層
+ * 更新區域
  */
-async function updateFloor(id, floorData, userId) {
+async function updateZone(id, zoneData, userId) {
   try {
     const { name, buildingId, floorNumber, imageUrl, description, locations } =
-      floorData;
+      zoneData;
 
-    // 檢查樓層是否存在
+    // 檢查區域是否存在
     const existing = await db.query(
-      "SELECT id, name FROM floors WHERE id = $1",
+      "SELECT id, name FROM zones WHERE id = $1",
       [id]
     );
     if (existing.length === 0) {
-      const error = new Error("樓層不存在");
+      const error = new Error("區域不存在");
       error.statusCode = 404;
       throw error;
     }
 
-    const currentFloor = existing[0];
-    const currentFloorName = (currentFloor.name || "").trim();
+    const currentZone = existing[0];
+    const currentZoneName = (currentZone.name || "").trim();
 
-    // 檢查是否需要合併樓層（名稱改為已存在的名稱）
-    let targetFloorId = null;
+    // 檢查是否需要合併區域（名稱改為已存在的名稱）
+    let targetZoneId = null;
     if (name !== undefined) {
       const trimmedName = name.trim();
-      if (trimmedName !== currentFloorName) {
+      if (trimmedName !== currentZoneName) {
         if (!trimmedName || trimmedName.length === 0) {
-          throw new Error("樓層名稱不能為空");
+          throw new Error("區域名稱不能為空");
         }
         const nameCheck = await db.query(
-          "SELECT id FROM floors WHERE name = $1 AND id != $2",
+          "SELECT id FROM zones WHERE name = $1 AND id != $2",
           [trimmedName, id]
         );
         if (nameCheck.length > 0) {
-          targetFloorId = nameCheck[0].id;
+          targetZoneId = nameCheck[0].id;
         }
       }
     }
 
-    // 如果需要合併樓層，執行合併邏輯
-    if (targetFloorId) {
+    // 如果需要合併區域，執行合併邏輯
+    if (targetZoneId) {
       await db.transaction(async (query) => {
-        // 將當前樓層的地點移動到目標樓層
+        // 將當前區域的地點移動到目標區域
         if (locations !== undefined && locations.length > 0) {
           const validLocations = getValidLocations(locations);
 
@@ -533,41 +538,41 @@ async function updateFloor(id, floorData, userId) {
             // 使用 createLocationWithSystems 自動處理合併（如果地點已存在則使用現有地點）
             await createLocationWithSystems(
               query,
-              targetFloorId,
+              targetZoneId,
               location,
               userId
             );
           }
         }
 
-        // 刪除當前樓層中沒有系統的地點
+        // 刪除當前區域中沒有系統的地點
         await query(
           `DELETE FROM locations 
-           WHERE floor_id = $1 
+           WHERE zone_id = $1 
            AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
           [id]
         );
 
-        // 如果當前樓層沒有地點了，刪除它
+        // 如果當前區域沒有地點了，刪除它
         const remainingLocations = await query(
-          "SELECT id FROM locations WHERE floor_id = $1",
+          "SELECT id FROM locations WHERE zone_id = $1",
           [id]
         );
         if (remainingLocations.length === 0) {
-          await query("DELETE FROM floors WHERE id = $1", [id]);
+          await query("DELETE FROM zones WHERE id = $1", [id]);
         }
       });
 
-      // 返回目標樓層的資料
-      const targetFloorResult = await getFloorById(targetFloorId);
+      // 返回目標區域的資料
+      const targetZoneResult = await getZoneById(targetZoneId);
       return {
         merged: true,
-        message: "樓層已合併到現有樓層",
-        floor: targetFloorResult.floor,
+        message: "區域已合併到現有區域",
+        zone: targetZoneResult.zone,
       };
     }
 
-    // 正常更新樓層
+    // 正常更新區域
     await db.transaction(async (query) => {
       // 更新樓層基本資訊
       const updates = [];
@@ -575,9 +580,9 @@ async function updateFloor(id, floorData, userId) {
       let paramIndex = 1;
 
       if (name !== undefined) {
-        const trimmedName = validateName(name, "樓層名稱");
+        const trimmedName = validateName(name, "區域名稱");
         // 只有當名稱真正改變時才更新
-        if (trimmedName !== currentFloorName) {
+        if (trimmedName !== currentZoneName) {
           updates.push(`name = $${paramIndex++}`);
           params.push(trimmedName);
         }
@@ -606,7 +611,7 @@ async function updateFloor(id, floorData, userId) {
       if (updates.length > 0) {
         params.push(id);
         await query(
-          `UPDATE floors 
+          `UPDATE zones 
            SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP
            WHERE id = $${paramIndex}`,
           params
@@ -618,7 +623,7 @@ async function updateFloor(id, floorData, userId) {
         const validLocations = getValidLocations(locations);
 
         const existingLocations = await query(
-          "SELECT id FROM locations WHERE floor_id = $1",
+          "SELECT id FROM locations WHERE zone_id = $1",
           [id]
         );
         const existingLocationIds = new Set(
@@ -667,52 +672,52 @@ async function updateFloor(id, floorData, userId) {
       }
     });
 
-    const floorResult = await getFloorById(id);
+    const zoneResult = await getZoneById(id);
     return {
       merged: false,
-      message: "樓層更新成功",
-      floor: floorResult.floor,
+      message: "區域更新成功",
+      zone: zoneResult.zone,
     };
   } catch (error) {
     if (error.statusCode) {
       throw error;
     }
-    handleUniqueConstraintError(error, "floors_name_key", "樓層名稱已存在");
-    console.error("更新樓層失敗:", error);
-    throw new Error("更新樓層失敗: " + error.message);
+    handleUniqueConstraintError(error, "zones_name_key", "區域名稱已存在");
+    console.error("更新區域失敗:", error);
+    throw new Error("更新區域失敗: " + error.message);
   }
 }
 
 /**
- * 刪除樓層
+ * 刪除區域
  */
-async function deleteFloor(id) {
+async function deleteZone(id) {
   try {
     const result = await db.query(
-      "DELETE FROM floors WHERE id = $1 RETURNING id",
+      "DELETE FROM zones WHERE id = $1 RETURNING id",
       [id]
     );
 
     if (result.length === 0) {
-      const error = new Error("樓層不存在");
+      const error = new Error("區域不存在");
       error.statusCode = 404;
       throw error;
     }
 
     return {
-      message: "樓層刪除成功",
+      message: "區域刪除成功",
     };
   } catch (error) {
     if (error.statusCode) {
       throw error;
     }
     if (error.code === "23503") {
-      const constraintError = new Error("無法刪除樓層：仍有地點關聯到此樓層");
+      const constraintError = new Error("無法刪除區域：仍有地點關聯到此區域");
       constraintError.statusCode = 400;
       throw constraintError;
     }
-    console.error("刪除樓層失敗:", error);
-    throw new Error("刪除樓層失敗: " + error.message);
+    console.error("刪除區域失敗:", error);
+    throw new Error("刪除區域失敗: " + error.message);
   }
 }
 
@@ -753,7 +758,7 @@ async function getLocationById(id) {
  */
 async function createLocation(locationData, userId) {
   try {
-    const { floorId, name, description, systems = [] } = locationData;
+    const { zoneId, name, description, systems = [] } = locationData;
 
     validateName(name, "地點名稱");
 
@@ -762,7 +767,7 @@ async function createLocation(locationData, userId) {
     await db.transaction(async (query) => {
       locationId = await createLocationWithSystems(
         query,
-        floorId,
+        zoneId,
         locationData,
         userId
       );
@@ -779,8 +784,8 @@ async function createLocation(locationData, userId) {
     }
     handleUniqueConstraintError(
       error,
-      "unique_floor_location_name",
-      "該樓層已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。"
+      "unique_zone_location_name",
+      "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。"
     );
     console.error("建立地點失敗:", error);
     throw new Error("建立地點失敗: " + error.message);
@@ -951,7 +956,7 @@ async function updateSystem(query, systemId, system) {
  * 建立地點和系統（用於事務內部）
  * 如果地點已存在，則使用現有地點並添加系統（支援跨系統共用）
  */
-async function createLocationWithSystems(query, floorId, location, userId) {
+async function createLocationWithSystems(query, zoneId, location, userId) {
   const { name, description, systems = [], locationType } = location;
 
   // 如果沒有 systems 但有 locationType，自動轉換為 systems 陣列（向後兼容）
@@ -1000,10 +1005,10 @@ async function createLocationWithSystems(query, floorId, location, userId) {
 
   const trimmedName = validateName(name, "地點名稱");
 
-  // 檢查地點是否已存在（同一樓層內）
+  // 檢查地點是否已存在（同一區域內）
   const existingLocation = await query(
-    "SELECT id, description FROM locations WHERE floor_id = $1 AND name = $2",
-    [floorId, trimmedName]
+    "SELECT id, description FROM locations WHERE zone_id = $1 AND name = $2",
+    [zoneId, trimmedName]
   );
 
   let locationId;
@@ -1025,10 +1030,10 @@ async function createLocationWithSystems(query, floorId, location, userId) {
   } else {
     // 建立新地點
     const locationResult = await query(
-      `INSERT INTO locations (floor_id, name, description, created_by)
+      `INSERT INTO locations (zone_id, name, description, created_by)
        VALUES ($1, $2, $3, $4)
        RETURNING id`,
-      [floorId, trimmedName, description || null, userId || null]
+      [zoneId, trimmedName, description || null, userId || null]
     );
     locationId = locationResult[0].id;
   }
@@ -1077,17 +1082,17 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     );
     const currentLocationName = (currentLocation[0]?.name || "").trim();
 
-    // 只有當名稱真正改變時才檢查重複並更新
-    if (trimmedName !== currentLocationName) {
-      // 檢查是否有其他地點使用相同名稱（同一樓層內）
-      const nameCheck = await query(
-        "SELECT id FROM locations WHERE floor_id = (SELECT floor_id FROM locations WHERE id = $1) AND name = $2 AND id != $1",
-        [locationId, trimmedName]
-      );
-      if (nameCheck.length > 0) {
-        const duplicateError = new Error(
-          `地點名稱 "${trimmedName}" 已被該樓層的其他地點使用。由於地點是跨系統共用的，請直接使用該地點。`
+      // 只有當名稱真正改變時才檢查重複並更新
+      if (trimmedName !== currentLocationName) {
+        // 檢查是否有其他地點使用相同名稱（同一區域內）
+        const nameCheck = await query(
+          "SELECT id FROM locations WHERE zone_id = (SELECT zone_id FROM locations WHERE id = $1) AND name = $2 AND id != $1",
+          [locationId, trimmedName]
         );
+        if (nameCheck.length > 0) {
+          const duplicateError = new Error(
+            `地點名稱 "${trimmedName}" 已被該區域的其他地點使用。由於地點是跨系統共用的，請直接使用該地點。`
+          );
         duplicateError.statusCode = 400;
         throw duplicateError;
       }
@@ -1172,16 +1177,18 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
 }
 
 module.exports = {
-  getFloors,
-  getFloorById,
-  createFloor,
-  updateFloor,
-  deleteFloor,
+  // 區域管理 API
+  getZones,
+  getZoneById,
+  createZone,
+  updateZone,
+  deleteZone,
+  loadZoneLocations,
+  formatZone,
+  formatLocation,
+  // 地點管理 API
   getLocationById,
   createLocation,
   updateLocation,
   deleteLocation,
-  loadFloorLocations,
-  formatFloor,
-  formatLocation,
 };

@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const EventEmitter = require("events");
 const os = require("os");
 const websocketService = require("../websocket/websocketService");
+const ffmpegService = require("./ffmpegService");
 
 /**
  * MediaMTX 服務管理類別
@@ -111,10 +112,11 @@ class MediaMTXService extends EventEmitter {
    * @param {string} webrtcUrl - WebRTC URL
    * @param {number} timestamp - 時間戳
    * @param {string} status - 狀態
+   * @param {Object} gpuOptions - GPU 編碼選項（可選）
    * @returns {Object} 串流資訊對象
    * @private
    */
-  _createStreamInfo(streamId, pathName, rtspUrl, hlsUrl, webrtcUrl, timestamp, status = "running") {
+  _createStreamInfo(streamId, pathName, rtspUrl, hlsUrl, webrtcUrl, timestamp, status = "running", gpuOptions = null) {
     return {
       streamId,
       pathName,
@@ -124,6 +126,8 @@ class MediaMTXService extends EventEmitter {
       timestamp,
       status,
       startedAt: new Date(),
+      useGpuEncoding: gpuOptions !== null,
+      gpuOptions: gpuOptions || undefined,
     };
   }
 
@@ -445,9 +449,14 @@ class MediaMTXService extends EventEmitter {
   /**
    * 啟動 RTSP 串流
    * @param {string} rtspUrl - RTSP 串流 URL
+   * @param {Object} options - 串流選項
+   * @param {boolean} options.useGpuEncoding - 是否使用 GPU 編碼
+   * @param {string} options.gpuType - GPU 類型: 'nvidia', 'intel', 'amd'
+   * @param {string} options.bitrate - 位元率，例如 '2M'
+   * @param {string} options.preset - 編碼預設值（NVIDIA 使用）
    * @returns {Promise<{streamId: string, hlsUrl: string, webrtcUrl: string, status: string}>}
    */
-  async startStream(rtspUrl) {
+  async startStream(rtspUrl, options = {}) {
     if (!rtspUrl || typeof rtspUrl !== "string") {
       throw new Error("RTSP URL 是必需的");
     }
@@ -456,6 +465,14 @@ class MediaMTXService extends EventEmitter {
     if (!rtspUrl.startsWith("rtsp://")) {
       throw new Error("無效的 RTSP URL 格式，必須以 rtsp:// 開頭");
     }
+
+    // 解析 GPU 編碼選項
+    const {
+      useGpuEncoding = false,
+      gpuType = "nvidia",
+      bitrate = "2M",
+      preset = "p4",
+    } = options;
 
     const streamId = this.generateStreamId(rtspUrl);
     let pathName = this.generatePathName(rtspUrl); // 使用 let，因為可能需要在移除失敗時重新賦值
@@ -544,53 +561,104 @@ class MediaMTXService extends EventEmitter {
         }
       }
 
+      // 根據是否使用 GPU 編碼決定串流來源
+      let actualRtspSource = rtspUrl;
+      let gpuOptions = null;
+
+      if (useGpuEncoding) {
+        // 使用 GPU 編碼：先啟動 FFmpeg，再添加 MediaMTX 路徑
+        const serverIP = this.getServerIP();
+        const rtspOutput = `rtsp://${serverIP}:8554/${pathName}`;
+
+        console.log(
+          `[MediaMTX Service] 使用 GPU 編碼 (${gpuType}): ${streamId}`
+        );
+
+        // 啟動 FFmpeg GPU 編碼
+        ffmpegService.startGpuEncoding(streamId, rtspUrl, rtspOutput, {
+          gpuType,
+          bitrate,
+          preset,
+        });
+
+        // 設置錯誤處理器（使用 once 確保只處理一次）
+        const errorHandler = (errorData) => {
+          if (errorData.streamId === streamId) {
+            console.error(
+              `[MediaMTX Service] FFmpeg GPU 編碼錯誤: ${streamId}`,
+              errorData.error
+            );
+            // 移除監聽器避免記憶體洩漏
+            ffmpegService.removeListener("error", errorHandler);
+            // 清理失敗的串流
+            this.streams.delete(streamId);
+            websocketService.emitRTSPStreamError({
+              streamId,
+              error: errorData.error,
+            });
+          }
+        };
+        ffmpegService.once("error", errorHandler);
+
+        // 等待 FFmpeg 進程啟動並就緒（動態等待，最多 3 秒）
+        const ffmpegReady = await ffmpegService.waitForProcessReady(
+          streamId,
+          3000,
+          200
+        );
+
+        if (!ffmpegReady) {
+          // FFmpeg 啟動失敗，清理並拋出錯誤
+          await ffmpegService.stopGpuEncoding(streamId);
+          throw new Error(
+            "FFmpeg GPU 編碼進程啟動失敗或超時"
+          );
+        }
+
+        // 使用 FFmpeg 輸出的 RTSP URL 作為 MediaMTX 的來源
+        actualRtspSource = rtspOutput;
+        gpuOptions = { gpuType, bitrate, preset };
+      }
+
       // 添加路徑到 MediaMTX（重新創建，確保從最新片段開始）
-      const addPathResult = await this.addPath(pathName, rtspUrl);
+      const addPathResult = await this.addPath(pathName, actualRtspSource);
 
       // 生成播放 URL（統一方法，包含時間戳以防止緩存）
       const timestamp = Date.now();
       const hlsUrl = this.generateHlsUrl(pathName, timestamp);
       const webrtcUrl = this.generateWebRTCUrl(pathName);
 
-      // 存儲串流資訊（使用統一方法）
+      // 存儲串流資訊（使用統一方法，包含 GPU 選項）
       const streamInfo = this._createStreamInfo(
         streamId,
         pathName,
         rtspUrl,
         hlsUrl,
         webrtcUrl,
-        timestamp
+        timestamp,
+        "running",
+        gpuOptions
       );
       this.streams.set(streamId, streamInfo);
 
-      // 如果路徑已存在（addPath 返回 exists），這表示路徑可能沒有被完全移除
-      // 注意：如果已經使用了帶時間戳的新路徑名稱，addPath 不應該返回 exists
-      // 但如果仍然返回 exists，等待 MediaMTX 重新初始化（通常不需要，因為已使用新路徑）
+      // 等待路徑就緒（無論是新路徑還是已存在的路徑）
       const isExistingPath = addPathResult && addPathResult.exists;
       if (isExistingPath) {
         console.log(
           `[MediaMTX Service] 路徑 ${pathName} 已存在，等待 MediaMTX 重新初始化`
         );
-        // ⭐ 優化：輪詢檢查路徑是否就緒，而不是固定等待時間
-        const ready = await this.waitForPathReady(pathName, 5000, 200);
-        if (ready) {
-          this._emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl);
-          console.log(
-            `[MediaMTX Service] 串流已重新創建並就緒: ${streamId} (路徑: ${pathName})`
-          );
-          return this._createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl);
-        }
       } else {
-        // ⭐ 優化：新路徑，輪詢檢查路徑是否就緒（減少前端 404 錯誤）
         console.log(
           `[MediaMTX Service] 等待新路徑 ${pathName} 就緒（MediaMTX 生成 HLS manifest）`
         );
-        const ready = await this.waitForPathReady(pathName, 5000, 200);
-        if (!ready) {
-          console.warn(
-            `[MediaMTX Service] 路徑 ${pathName} 就緒超時（5秒），但繼續啟動流程（HLS.js 會自動重試）`
-          );
-        }
+      }
+
+      // ⭐ 優化：輪詢檢查路徑是否就緒，而不是固定等待時間
+      const ready = await this.waitForPathReady(pathName, 5000, 200);
+      if (!ready) {
+        console.warn(
+          `[MediaMTX Service] 路徑 ${pathName} 就緒超時（5秒），但繼續啟動流程（HLS.js 會自動重試）`
+        );
       }
 
       // 路徑已就緒或超時，推送 WebSocket 事件
@@ -601,6 +669,17 @@ class MediaMTXService extends EventEmitter {
 
       return this._createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl);
     } catch (error) {
+      // 如果使用 GPU 編碼，停止 FFmpeg 進程
+      if (useGpuEncoding) {
+        try {
+          await ffmpegService.stopGpuEncoding(streamId);
+        } catch (ffmpegError) {
+          console.error(
+            `[MediaMTX Service] 清理 FFmpeg 進程失敗: ${ffmpegError.message}`
+          );
+        }
+      }
+
       // 清理失敗的串流
       this.streams.delete(streamId);
       
@@ -627,6 +706,14 @@ class MediaMTXService extends EventEmitter {
     const streamInfo = this.streams.get(streamId);
 
     try {
+      // 如果使用 GPU 編碼，先停止 FFmpeg 進程
+      if (streamInfo.useGpuEncoding) {
+        console.log(
+          `[MediaMTX Service] 停止 FFmpeg GPU 編碼進程: ${streamId}`
+        );
+        await ffmpegService.stopGpuEncoding(streamId);
+      }
+
       // 從 MediaMTX 移除路徑
       await this.removePath(streamInfo.pathName);
 
@@ -653,6 +740,17 @@ class MediaMTXService extends EventEmitter {
         message: `串流 ${streamId} 已停止`,
       };
     } catch (error) {
+      // 即使移除失敗，也停止 FFmpeg 進程（如果使用 GPU 編碼）
+      if (streamInfo && streamInfo.useGpuEncoding) {
+        try {
+          await ffmpegService.stopGpuEncoding(streamId);
+        } catch (ffmpegError) {
+          console.error(
+            `[MediaMTX Service] 停止 FFmpeg 進程失敗: ${ffmpegError.message}`
+          );
+        }
+      }
+
       // 即使移除失敗，也從記憶體中移除
       this.streams.delete(streamId);
       

@@ -12,28 +12,6 @@ const db = require("../src/database/db");
  * - 使用事務確保資料一致性
  */
 
-// 取得警示歷史紀錄數量（用於統計）
-async function getAlertHistoryCount(alertIds = null) {
-  try {
-    if (alertIds && alertIds.length > 0) {
-      const placeholders = alertIds.map((_, i) => `$${i + 1}`).join(", ");
-      const result = await db.query(
-        `SELECT COUNT(*) as count FROM alert_history WHERE alert_id IN (${placeholders})`,
-        alertIds
-      );
-      return parseInt(result[0]?.count || 0);
-    } else {
-      const result = await db.query(
-        "SELECT COUNT(*) as count FROM alert_history"
-      );
-      return parseInt(result[0]?.count || 0);
-    }
-  } catch (error) {
-    console.error("   ⚠️  取得警示歷史紀錄數量失敗:", error.message);
-    return 0;
-  }
-}
-
 // 主函數
 async function main() {
   const args = process.argv.slice(2);
@@ -119,30 +97,6 @@ async function main() {
       }`
     );
 
-    // 取得警示歷史紀錄數量（如果清除所有警報，歷史記錄會因 CASCADE 自動刪除）
-    let historyTotal = 0;
-    if (!statusFilter) {
-      historyTotal = await getAlertHistoryCount();
-      if (historyTotal > 0) {
-        console.log(
-          `   alert_history 表: ${historyTotal} 筆（將因 CASCADE 自動刪除）`
-        );
-      }
-    } else {
-      // 如果只清除特定狀態的警報，需要先取得這些警報的 ID
-      let alertsQuery = "SELECT id FROM alerts WHERE status = ?";
-      const alertIds = await db.query(alertsQuery, [statusFilter]);
-      if (alertIds.length > 0) {
-        const ids = alertIds.map((a) => a.id);
-        historyTotal = await getAlertHistoryCount(ids);
-        if (historyTotal > 0) {
-          console.log(
-            `   alert_history 表: ${historyTotal} 筆（將因 CASCADE 自動刪除）`
-          );
-        }
-      }
-    }
-
     // 取得錯誤追蹤紀錄數量
     let trackingTotal = 0;
     if (clearTracking) {
@@ -175,11 +129,6 @@ async function main() {
         const deletedResult = await txQuery(deleteQuery, deleteParams);
         const deletedCount = deletedResult.length;
         console.log(`   ✅ 已清除 ${deletedCount} 筆警示紀錄`);
-        if (historyTotal > 0) {
-          console.log(
-            `   ✅ 已自動清除 ${historyTotal} 筆相關的警示歷史紀錄（CASCADE）`
-          );
-        }
       }
 
       // 清除錯誤追蹤表
@@ -235,5 +184,4 @@ module.exports = {
   clearAllAlerts,
   clearErrorTracking,
   clearAlerts,
-  getAlertHistoryCount,
 };

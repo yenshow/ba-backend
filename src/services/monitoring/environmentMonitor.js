@@ -9,6 +9,7 @@ const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
 const alertRuleService = require("../alerts/alertRuleService");
 const alertService = require("../alerts/alertService");
+const deviceDataLogger = require("../devices/deviceDataLogger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
@@ -23,14 +24,14 @@ async function checkEnvironmentLocations() {
 			SELECT 
 				l.id as location_id,
 				l.name as location_name,
-				l.floor_id,
-				f.name as floor_name,
+				l.zone_id,
+				z.name as zone_name,
 				ls.id as system_id,
 				ls.system_config->>'device_id' as device_id,
 				d.config as device_config,
 				dt.code as device_type_code
 			FROM locations l
-			INNER JOIN floors f ON l.floor_id = f.id
+			INNER JOIN zones z ON l.zone_id = z.id
 			INNER JOIN location_systems ls ON l.id = ls.location_id
 			INNER JOIN devices d ON (ls.system_config->>'device_id')::integer = d.id
 			INNER JOIN device_types dt ON d.type_id = dt.id
@@ -77,6 +78,76 @@ async function checkEnvironmentLocations() {
         // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
         await systemAlert.clearError("environment", location.system_id, { skipWebSocket: true });
 
+        // 記錄設備數值（如果設備配置了 logging）
+        const deviceId = location.device_id ? parseInt(location.device_id) : null;
+        if (deviceId) {
+          try {
+            const loggingConfig = await deviceDataLogger.getDeviceLoggingConfig(deviceId);
+            
+            if (loggingConfig.enabled && loggingConfig.values && loggingConfig.values.length > 0) {
+              // 找出所有需要讀取的 holding 寄存器
+              const holdingRegisters = loggingConfig.values.filter(
+                v => v.enabled && v.register_type === "holding"
+              );
+
+              if (holdingRegisters.length > 0) {
+                // 計算需要讀取的寄存器範圍
+                let minAddress = holdingRegisters[0].address;
+                let maxAddress = holdingRegisters[0].address + (holdingRegisters[0].length || 1);
+                
+                for (const valueConfig of holdingRegisters) {
+                  const startAddr = valueConfig.address;
+                  const endAddr = valueConfig.address + (valueConfig.length || 1);
+                  minAddress = Math.min(minAddress, startAddr);
+                  maxAddress = Math.max(maxAddress, endAddr);
+                }
+
+                const readLength = maxAddress - minAddress;
+
+                // 讀取所有需要的寄存器
+                if (readLength > 0) {
+                  const modbusData = await modbusClient.readHoldingRegisters(
+                    minAddress,
+                    readLength,
+                    deviceConfig
+                  );
+
+                  // 轉換為實際數值（需要調整地址偏移，因為我們從 minAddress 開始讀取）
+                  const deviceValues = {};
+                  
+                  for (const valueConfig of holdingRegisters) {
+                    // 計算在讀取資料中的相對地址
+                    const relativeAddress = valueConfig.address - minAddress;
+                    const rawValue = Array.isArray(modbusData) && relativeAddress >= 0 && relativeAddress < modbusData.length
+                      ? (valueConfig.length === 1 ? modbusData[relativeAddress] : modbusData.slice(relativeAddress, relativeAddress + (valueConfig.length || 1)))
+                      : null;
+
+                    if (rawValue !== null && rawValue !== undefined) {
+                      // 套用轉換
+                      const convertedValue = deviceDataLogger.applyConversion(rawValue, valueConfig.conversion);
+                      
+                      deviceValues[valueConfig.name] = {
+                        value: convertedValue,
+                        unit: valueConfig.conversion?.unit || null,
+                      };
+                    }
+                  }
+
+                  // 記錄到 device_data_logs（非阻塞，傳入配置避免重複查詢）
+                  if (Object.keys(deviceValues).length > 0) {
+                    deviceDataLogger.logDeviceValues(deviceId, deviceValues, loggingConfig).catch((error) => {
+                      console.error(`[environmentMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, error.message);
+                    });
+                  }
+                }
+              }
+            }
+          } catch (logError) {
+            // 記錄失敗不影響監控流程
+            console.error(`[environmentMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, logError.message);
+          }
+        }
+
         // 讀取成功後，檢查閾值（僅在設備連接正常時）
         // 從最新的感測器讀數中獲取數據進行閾值檢查
         try {
@@ -107,7 +178,7 @@ async function checkEnvironmentLocations() {
             // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
             await checkAndResolveThresholds(location.system_id, sensorData, {
               name: location.location_name,
-              floor_name: location.floor_name,
+              zone_name: location.zone_name,
             });
           }
         } catch (thresholdError) {

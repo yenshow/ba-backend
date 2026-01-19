@@ -14,8 +14,8 @@ const { validateIntegers } = require("../middleware/validation");
 
 // 取得人流統計地點列表
 router.get("/locations", noCache, asyncHandler(async (req, res) => {
-  const { floorId } = req.query;
-  const options = floorId ? { floorId: parseInt(floorId) } : {};
+  const { zoneId } = req.query;
+  const options = zoneId ? { zoneId: parseInt(zoneId) } : {};
   const result = await peopleCountingService.getPeopleCountingLocations(options);
   res.sendSuccess(result);
 }));

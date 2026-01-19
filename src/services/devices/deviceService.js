@@ -1,5 +1,5 @@
 const db = require("../../database/db");
-const { parseConfig, stringifyConfig, validateDeviceConfig } = require("../../utils/deviceHelpers");
+const { parseConfig, stringifyConfig, validateDeviceConfig, validateLoggingConfig } = require("../../utils/deviceHelpers");
 const websocketService = require("../websocket/websocketService");
 
 // 取得設備列表
@@ -197,6 +197,14 @@ async function createDevice(deviceData, userId) {
 
 		// 驗證配置
 		validateDeviceConfig(config, typeCode);
+
+		// 驗證 logging 配置（如果提供）
+		if (config.logging) {
+			const loggingValidation = validateLoggingConfig(config.logging);
+			if (!loggingValidation.valid) {
+				throw new Error(`logging 配置驗證失敗: ${loggingValidation.error}`);
+			}
+		}
 
 		// 對於 controller 類型的設備，處理連接資訊和自動生成 unitId
 		if (typeCode === "controller") {
@@ -438,6 +446,14 @@ async function updateDevice(id, deviceData, userId) {
 
 			// 驗證配置
 			validateDeviceConfig(config, typeCode);
+
+			// 驗證 logging 配置（如果提供）
+			if (config.logging) {
+				const loggingValidation = validateLoggingConfig(config.logging);
+				if (!loggingValidation.valid) {
+					throw new Error(`logging 配置驗證失敗: ${loggingValidation.error}`);
+				}
+			}
 
 			// 對於 controller 類型的設備，處理連接資訊和自動生成 unitId
 			if (typeCode === "controller") {

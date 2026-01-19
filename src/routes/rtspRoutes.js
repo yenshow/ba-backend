@@ -10,21 +10,46 @@ const rtspLogger = logger.createLogger("RTSP Routes");
 /**
  * POST /api/rtsp/start
  * 啟動 RTSP 串流轉換為 HLS
- * Body: { rtspUrl: string }
+ * Body: { 
+ *   rtspUrl: string,
+ *   useGpuEncoding?: boolean,  // 是否使用 GPU 編碼
+ *   gpuType?: string,          // GPU 類型: 'nvidia', 'intel', 'amd'
+ *   bitrate?: string,          // 位元率，例如 '2M'
+ *   preset?: string            // 編碼預設值（NVIDIA 使用）
+ * }
  */
 router.post("/start", validateRequired("rtspUrl"), asyncHandler(async (req, res) => {
-  const { rtspUrl } = req.body;
+  const { 
+    rtspUrl, 
+    useGpuEncoding, 
+    gpuType, 
+    bitrate, 
+    preset 
+  } = req.body;
 
   // 驗證 RTSP URL 格式
   if (!rtspUrl.startsWith("rtsp://")) {
     return res.sendError("無效的 RTSP URL 格式，必須以 rtsp:// 開頭", 400);
   }
 
+  // 驗證 GPU 類型（如果提供）
+  if (gpuType && !['nvidia', 'intel', 'amd'].includes(gpuType)) {
+    return res.sendError("無效的 GPU 類型，必須為 'nvidia', 'intel' 或 'amd'", 400);
+  }
+
   rtspLogger.info("收到啟動串流請求", { 
-    rtspUrl: rtspUrl.replace(/:[^:@]+@/, ":****@") // 隱藏密碼
+    rtspUrl: rtspUrl.replace(/:[^:@]+@/, ":****@"), // 隱藏密碼
+    useGpuEncoding: useGpuEncoding || false,
+    gpuType: gpuType || 'nvidia',
+    bitrate: bitrate || '2M'
   });
 
-  const result = await mediaMTXService.startStream(rtspUrl);
+  const result = await mediaMTXService.startStream(rtspUrl, {
+    useGpuEncoding: useGpuEncoding || false,
+    gpuType: gpuType || 'nvidia',
+    bitrate: bitrate || '2M',
+    preset: preset || 'p4'
+  });
 
   rtspLogger.info("串流啟動成功", { streamId: result.streamId });
 
