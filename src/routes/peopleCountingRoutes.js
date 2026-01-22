@@ -8,7 +8,7 @@ const peopleCountingService = require("../services/systems/peopleCountingService
 const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
-const { validateIntegers } = require("../middleware/validation");
+const { validateIntegers, validateNumbers } = require("../middleware/validation");
 
 // ========== 地點管理路由 ==========
 
@@ -68,11 +68,18 @@ router.get("/sites", noCache, authenticate, asyncHandler(async (req, res) => {
 /**
  * 取得單一工地詳情
  * GET /api/people-counting/sites/:id
+ * 注意：前端主要使用統計數據，此路由返回地點詳情和統計
  */
 router.get("/sites/:id", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const locationResult = await peopleCountingService.getPeopleCountingLocationById(parseInt(id));
-  const stats = await peopleCountingService.getSiteStats(parseInt(id));
+  const siteId = parseInt(id);
+  
+  // 並行查詢地點和統計，提高性能
+  const [locationResult, stats] = await Promise.all([
+    peopleCountingService.getPeopleCountingLocationById(siteId),
+    peopleCountingService.getSiteStats(siteId)
+  ]);
+  
   res.sendSuccess({
     ...locationResult,
     stats,
@@ -93,7 +100,13 @@ router.get("/sites/:id/stats", noCache, authenticate, validateIntegers("id"), as
  * 取得工地進出場記錄（含資料關聯和事件類型判斷）
  * GET /api/people-counting/sites/:id/logs?limit=50&unitId=34
  */
-router.get("/sites/:id/logs", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.get(
+  "/sites/:id/logs",
+  noCache,
+  authenticate,
+  validateIntegers("id"),
+  validateNumbers("limit", "unitId"),
+  asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { limit, unitId } = req.query;
   const options = {
@@ -102,17 +115,31 @@ router.get("/sites/:id/logs", noCache, authenticate, validateIntegers("id"), asy
   };
   const result = await peopleCountingService.getSiteLogs(parseInt(id), options);
   res.sendSuccess(result);
-}));
+  })
+);
 
 /**
- * 取得單位人員列表（含狀態計算）
- * GET /api/people-counting/units/:id/personnel
+ * 取得單位人員列表（含狀態計算和今日統計）
+ * GET /api/people-counting/units/:id/personnel?siteId=1
  */
-router.get("/units/:id/personnel", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.get(
+  "/units/:id/personnel",
+  noCache,
+  authenticate,
+  validateIntegers("id"),
+  validateNumbers("siteId"),
+  asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const result = await peopleCountingService.getUnitPersonnel(parseInt(id));
+  const { siteId } = req.query;
+  
+  // 傳遞 siteId 給 service，讓 service 層處理設備 ID 取得邏輯
+  const result = await peopleCountingService.getUnitPersonnel(
+    parseInt(id),
+    siteId ? parseInt(siteId) : null
+  );
   res.sendSuccess(result);
-}));
+  })
+);
 
 module.exports = router;
 

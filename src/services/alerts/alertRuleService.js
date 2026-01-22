@@ -254,6 +254,50 @@ function groupRulesByParameter(rules) {
   return grouped;
 }
 
+/**
+ * 匹配規則（通用函數）
+ * 優先級：指定來源規則 > 全域規則
+ * @param {Array} rules - 規則列表
+ * @param {string} conditionType - 條件類型（用於過濾）
+ * @param {number} sourceId - 來源 ID（用於匹配指定來源規則）
+ * @returns {Object|null} 匹配到的規則，如果沒有則返回 null
+ */
+function matchRule(rules, conditionType, sourceId) {
+  if (!rules || rules.length === 0) {
+    return null;
+  }
+
+  // 過濾出指定條件類型的規則
+  const candidateRules = rules.filter(
+    (r) => r.condition_type === conditionType
+  );
+
+  if (candidateRules.length === 0) {
+    return null;
+  }
+
+  // 優先級匹配：指定來源規則 > 全域規則
+  // 1. 先找指定 source_id 的規則（確保類型匹配）
+  const specificRule = candidateRules.find(
+    (r) =>
+      r.condition_config?.source_id !== undefined &&
+      Number(r.condition_config.source_id) === Number(sourceId)
+  );
+
+  if (specificRule) {
+    return specificRule;
+  }
+
+  // 2. 再找沒有指定 source_id 的全域規則
+  const globalRule = candidateRules.find(
+    (r) =>
+      !r.condition_config ||
+      r.condition_config.source_id === undefined
+  );
+
+  return globalRule || null;
+}
+
 module.exports = {
   getAlertRules,
   getThresholdRules,
@@ -262,6 +306,7 @@ module.exports = {
   formatMessage,
   getParameterDisplayName,
   groupRulesByParameter,
+  matchRule,
   clearThresholdRulesCache,
   SEVERITY_ORDER,
 };

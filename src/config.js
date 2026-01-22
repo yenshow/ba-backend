@@ -139,6 +139,17 @@ const logging = {
 	enableDetailedLogs: toBoolean(getEnv("ENABLE_DETAILED_LOGS"), false),
 };
 
+/**
+ * YSCP API 配置
+ */
+const yscp = {
+	host: getEnv("YSCP_HOST", "https://192.168.2.2"),
+	accessKey: getEnv("YSCP_AK", ""),
+	secretKey: getEnv("YSCP_SK", ""),
+	apiVersion: getEnv("YSCP_API_VER", "v1"),
+	rejectUnauthorized: toBoolean(getEnv("YSCP_REJECT_UNAUTHORIZED"), false), // 是否拒絕自簽名證書（預設為 false，允許自簽名證書）
+};
+
 module.exports = {
 	server,
 	modbus,
@@ -147,6 +158,7 @@ module.exports = {
 	mediaMTX,
 	monitoring,
 	externalDatabase,
+	yscp,
 	cors,
 	logging,
 	// 向後兼容：保留舊的配置結構

@@ -43,13 +43,14 @@ router.delete("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(a
 
 // ========== 感測器讀數路由 ==========
 
-// 儲存感測器讀數（公開，因為是系統自動儲存）
+// 儲存感測器讀數（已廢棄：改由後端監控服務自動記錄到 device_data_logs）
+// 保留此端點僅用於向後兼容，實際資料已由 environmentMonitor 自動記錄
 router.post("/readings", noCache, asyncHandler(async (req, res) => {
   const result = await environmentService.saveReading(req.body);
   res.sendSuccess(result, 201);
 }));
 
-// 取得歷史讀數（公開）
+// 取得歷史讀數（公開，從 device_data_logs 聚合查詢）
 router.get("/readings/:locationId", noCache, asyncHandler(async (req, res) => {
   const { locationId } = req.params;
   const { startTime, endTime, limit } = req.query;

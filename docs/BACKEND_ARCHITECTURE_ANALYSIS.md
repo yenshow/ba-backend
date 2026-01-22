@@ -73,10 +73,12 @@ device_data_logs (
 - 備份格式：JSON + CSV
 - **用途**：保留歷史資料用於趨勢分析和報表
 
-**與 sensor_readings 的區別：**
+**與 sensor_readings 的區別（已統一使用 device_data_logs）：**
 
-- `sensor_readings`：位置級別，由外部系統透過 API 寫入，用於環境系統
+- ~~`sensor_readings`~~（已廢棄）：原用於環境系統的位置級別讀數，現已統一改為使用 `device_data_logs`
 - `device_data_logs`：設備級別，由監控服務自動寫入，記錄所有設備的實際數值
+  - 查詢時按時間點聚合多個數值記錄為完整的讀數格式（向後兼容前端 API）
+  - 支援環境系統的趨勢圖查詢和閾值檢查
 
 ---
 
@@ -154,14 +156,14 @@ alerts (
 
 - **地點管理**
 
-  - `floors` - 樓層
+  - `zones` - 區域
   - `locations` - 地點
   - `location_systems` - 地點系統關聯
 
 - **系統資料**
 
-  - `sensor_readings` - 感測器讀數（環境系統）
   - `lighting_categories` - 照明分類點
+  - **注意**：感測器讀數已統一使用 `device_data_logs` 表（設備級別記錄）
 
 - **用戶管理**
   - `users` - 用戶帳號

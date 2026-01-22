@@ -438,16 +438,13 @@ async function initSchema() {
     console.log("✅ lighting_categories 表已建立");
 
     // ========== 統一地點管理架構 ==========
-    // 注意：已移除舊表 lighting_floors, lighting_areas, environment_floors, environment_locations
-    // 統一使用 zones, locations, location_systems 表
 
-    // 建立統一的 zones 表（統一區域表，原 floors 表）
+    // 建立統一的 zones 表
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS zones (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL UNIQUE,
 				building_id INTEGER,
-				floor_number INTEGER,
 				image_url TEXT,
 				description TEXT,
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -505,26 +502,6 @@ async function initSchema() {
 					ALTER TABLE locations ADD COLUMN description TEXT;
 					RAISE NOTICE '已添加 locations.description 欄位';
 				END IF;
-				
-				-- 如果存在 location_type 或 config 欄位，需要遷移到 location_systems 表
-				-- 這裡先移除欄位（實際遷移邏輯應該在應用層處理）
-				IF EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'locations' AND column_name = 'location_type'
-				) THEN
-					-- 注意：在實際生產環境中，應該先遷移資料再移除欄位
-					-- 這裡為了簡化，直接移除（假設資料已遷移或為空）
-					ALTER TABLE locations DROP COLUMN location_type;
-					RAISE NOTICE '已移除 locations.location_type 欄位';
-				END IF;
-				
-				IF EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'locations' AND column_name = 'config'
-				) THEN
-					ALTER TABLE locations DROP COLUMN config;
-					RAISE NOTICE '已移除 locations.config 欄位';
-				END IF;
 			END $$;
 		`);
 
@@ -579,41 +556,7 @@ async function initSchema() {
 
     console.log("✅ location_systems 表已建立（地點系統關聯表）");
 
-    // 移除舊表（如果存在）
-    await targetPool.query(`
-			DROP TABLE IF EXISTS environment_locations CASCADE;
-			DROP TABLE IF EXISTS environment_floors CASCADE;
-			DROP TABLE IF EXISTS lighting_areas CASCADE;
-			DROP TABLE IF EXISTS lighting_floors CASCADE;
-			DROP TABLE IF EXISTS floors CASCADE;
-		`);
-
-    console.log(
-      "✅ 已移除舊表（environment_locations, environment_floors, lighting_areas, lighting_floors, floors）"
-    );
-
-    // 建立 sensor_readings 表（感測器讀數歷史資料）
-    // 注意：location_id 關聯到統一的 locations 表
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS sensor_readings (
-				id BIGSERIAL PRIMARY KEY,
-				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				data JSONB NOT NULL DEFAULT '{}'::jsonb,
-				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-			)
-		`);
-
-    // sensor_readings 表的外鍵已直接指向 locations 表（在 CREATE TABLE 中定義）
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_sensor_readings_location_id ON sensor_readings(location_id);
-			CREATE INDEX IF NOT EXISTS idx_sensor_readings_timestamp ON sensor_readings(timestamp);
-			CREATE INDEX IF NOT EXISTS idx_sensor_readings_location_timestamp ON sensor_readings(location_id, timestamp);
-			CREATE INDEX IF NOT EXISTS idx_sensor_readings_data ON sensor_readings USING GIN(data);
-		`);
-
-    console.log("✅ sensor_readings 表已建立");
+    // 注意：sensor_readings 表已移除，統一使用 device_data_logs 表記錄設備數值
 
     await targetPool.end();
 

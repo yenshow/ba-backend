@@ -101,6 +101,38 @@ async function getAreaInfo(systemId) {
 }
 
 /**
+ * 獲取人流統計地點資訊（使用新架構 location_systems）
+ * @param {number} systemId - 地點系統 ID (location_systems.id) 或地點 ID (locations.id)
+ * @returns {Promise<Object|null>} 地點資訊
+ */
+async function getPeopleCountingLocationInfo(systemId) {
+  try {
+    // 使用單一查詢同時匹配 location_systems.id 和 locations.id
+    const result = await db.query(
+      `SELECT 
+        ls.id,
+        ls.system_type,
+        l.id as location_id,
+        l.name,
+        l.zone_id,
+        z.name as zone_name
+      FROM location_systems ls
+      INNER JOIN locations l ON ls.location_id = l.id
+      INNER JOIN zones z ON l.zone_id = z.id
+      WHERE ls.system_type = 'people_counting'
+        AND (ls.id = $1 OR l.id = $1)
+      LIMIT 1`,
+      [systemId]
+    );
+
+    return result && result.length > 0 ? result[0] : null;
+  } catch (error) {
+    console.error(`[systemAlertHelper] 獲取人流統計地點資訊失敗:`, error);
+    return null;
+  }
+}
+
+/**
  * 獲取設備資訊
  * @param {number} deviceId - 設備 ID
  * @returns {Promise<Object|null>} 設備資訊
@@ -202,6 +234,11 @@ const SYSTEM_CONFIGS = {
     source: alertService.ALERT_SOURCES.LIGHTING,
     getSourceInfo: getAreaInfo,
     getDeviceId: getDeviceIdFromArea,
+  },
+  people_counting: {
+    source: alertService.ALERT_SOURCES.PEOPLE_COUNTING,
+    getSourceInfo: getPeopleCountingLocationInfo,
+    getDeviceId: async () => null, // 人流統計不使用設備 ID
   },
   device: {
     source: alertService.ALERT_SOURCES.DEVICE,
@@ -411,7 +448,10 @@ module.exports = {
   // 導出輔助函數供內部使用
   getLocationInfo,
   getAreaInfo,
+  getPeopleCountingLocationInfo,
   getDeviceInfo,
   isDeviceConnectionError,
+  // 導出系統配置供檢查
+  SYSTEM_CONFIGS,
 };
 

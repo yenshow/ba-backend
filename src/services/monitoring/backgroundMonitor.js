@@ -19,6 +19,15 @@ let monitoringTimer = null;
 let isRunning = false;
 
 /**
+ * 是否啟用背景監控詳細日誌
+ * - 設置環境變數 ENABLE_DETAILED_LOGS=true 可啟用
+ * - 目的：排查「某個任務是否有被執行」與任務耗時/錯誤
+ */
+function isDetailedLogsEnabled() {
+  return process.env.ENABLE_DETAILED_LOGS === "true";
+}
+
+/**
  * 註冊監控任務
  * @param {string} systemName - 系統名稱（用於日誌）
  * @param {Function} taskFunction - 監控任務函數（返回 Promise）
@@ -47,12 +56,16 @@ async function runTask(task) {
   const startTime = Date.now();
 
   try {
+    if (isDetailedLogsEnabled()) {
+      console.log(`[backgroundMonitor] 開始執行: ${task.systemName}`);
+    }
+
     await task.taskFunction();
     task.lastRun = new Date();
     task.errorCount = 0;
 
     const duration = Date.now() - startTime;
-    if (duration > 1000) {
+    if (isDetailedLogsEnabled() || duration > 1000) {
       console.log(
         `[backgroundMonitor] ${task.systemName} 監控完成（耗時: ${duration}ms）`
       );
@@ -87,11 +100,19 @@ async function runAllTasks() {
   const startTime = Date.now();
 
   try {
+    if (isDetailedLogsEnabled()) {
+      console.log(
+        `[backgroundMonitor] 本輪執行任務數: ${monitoringTasks.length}（${monitoringTasks
+          .map((t) => t.systemName)
+          .join("、")}）`
+      );
+    }
+
     // 並行執行所有監控任務（提高效率）
     await Promise.all(monitoringTasks.map((task) => runTask(task)));
 
     const totalDuration = Date.now() - startTime;
-    if (totalDuration > 2000) {
+    if (isDetailedLogsEnabled() || totalDuration > 2000) {
       console.log(
         `[backgroundMonitor] 所有監控任務完成（總耗時: ${totalDuration}ms）`
       );

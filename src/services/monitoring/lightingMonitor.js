@@ -8,6 +8,7 @@ const modbusClient = require("../devices/modbusClient");
 const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
 const deviceDataLogger = require("../devices/deviceDataLogger");
+const logger = require("../../utils/logger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
@@ -151,7 +152,11 @@ async function checkLightingAreas() {
 									}
 								} catch (readError) {
 									// 單個讀取失敗不影響其他數值
-									console.error(`[lightingMonitor] 讀取 ${valueConfig.name} 失敗:`, readError.message);
+									logger.error(`讀取 ${valueConfig.name} 失敗`, {
+										error: readError.message,
+										valueName: valueConfig.name,
+										module: "lightingMonitor",
+									});
 								}
 							}
 
@@ -170,13 +175,21 @@ async function checkLightingAreas() {
 							// 記錄到 device_data_logs（非阻塞，傳入配置避免重複查詢）
 							if (Object.keys(deviceValues).length > 0) {
 								deviceDataLogger.logDeviceValues(deviceId, deviceValues, loggingConfig).catch((error) => {
-									console.error(`[lightingMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, error.message);
+									logger.error(`記錄設備數值失敗 (deviceId: ${deviceId})`, {
+										error: error.message,
+										deviceId,
+										module: "lightingMonitor",
+									});
 								});
 							}
 						}
 					} catch (logError) {
 						// 記錄失敗不影響監控流程
-						console.error(`[lightingMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, logError.message);
+						logger.error(`記錄設備數值失敗 (deviceId: ${deviceId})`, {
+							error: logError.message,
+							deviceId,
+							module: "lightingMonitor",
+						});
 					}
 				}
 
@@ -261,10 +274,11 @@ async function checkLightingAreas() {
 						});
 					}
 				}
-				console.error(
-					`[lightingMonitor] 檢查區域失敗 (Promise rejected):`,
-					result.reason
-				);
+				logger.error("檢查區域失敗 (Promise rejected)", {
+					error: result.reason?.message || result.reason,
+					areaId: area?.location_id,
+					module: "lightingMonitor",
+				});
 			}
 		});
 
@@ -274,13 +288,18 @@ async function checkLightingAreas() {
 		}
 
 		if (successCount > 0 || failCount > 0) {
-			console.log(
-				`[lightingMonitor] 檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`
-			);
+			logger.info(`檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`, {
+				successCount,
+				failCount,
+				module: "lightingMonitor",
+			});
 		}
 	} catch (error) {
-		console.error("[lightingMonitor] 檢查照明區域失敗:", error);
-		throw error;
+		logger.error("檢查照明區域失敗", {
+			error,
+			module: "lightingMonitor",
+		});
+		// 不重新拋出錯誤，由 backgroundMonitor 統一處理
 	}
 }
 

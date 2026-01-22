@@ -83,11 +83,11 @@ class DeviceDataLogger {
 
       const loggingConfig = {
         enabled:
-          deviceConfig.logging?.enabled ?? modelConfig.logging?.enabled ?? false,
+          deviceConfig?.logging?.enabled ?? modelConfig?.logging?.enabled ?? false,
         interval:
-          deviceConfig.logging?.interval ?? modelConfig.logging?.interval ?? 60,
+          deviceConfig?.logging?.interval ?? modelConfig?.logging?.interval ?? 60,
         values:
-          deviceConfig.logging?.values ?? modelConfig.logging?.values ?? [],
+          deviceConfig?.logging?.values ?? modelConfig?.logging?.values ?? [],
       };
 
       // 快取配置（5 分鐘過期）

@@ -29,6 +29,7 @@ const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
+const yscpEventRoutes = require("./routes/yscpEventRoutes");
 
 // 服務
 const mediaMTXService = require("./services/communication/mediaMTXService");
@@ -40,6 +41,7 @@ const websocketService = require("./services/websocket/websocketService");
 const backgroundMonitor = require("./services/monitoring/backgroundMonitor");
 const environmentMonitor = require("./services/monitoring/environmentMonitor");
 const lightingMonitor = require("./services/monitoring/lightingMonitor");
+// 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
 // 警報自動清理服務
 const alertCleanupService = require("./services/alerts/alertCleanupService");
@@ -121,6 +123,7 @@ app.use("/api/locations", locationRoutes); // 統一地點管理 API
 app.use("/api/people-counting", peopleCountingRoutes); // 人流統計地點管理 API
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes);
+app.use("/api/yscp", yscpEventRoutes);
 
 // 注意：HLS 串流現在由 MediaMTX 提供，不再需要本地靜態文件服務
 // MediaMTX 在 http://localhost:8888 提供 HLS 服務
@@ -181,6 +184,7 @@ async function startServer() {
       "照明系統",
       lightingMonitor.checkLightingAreas
     );
+    // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
     // 啟動背景監控服務
     backgroundMonitor.startMonitoring();

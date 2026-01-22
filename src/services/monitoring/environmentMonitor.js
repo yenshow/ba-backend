@@ -10,6 +10,7 @@ const websocketService = require("../websocket/websocketService");
 const alertRuleService = require("../alerts/alertRuleService");
 const alertService = require("../alerts/alertService");
 const deviceDataLogger = require("../devices/deviceDataLogger");
+const logger = require("../../utils/logger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
@@ -136,7 +137,11 @@ async function checkEnvironmentLocations() {
                   // 記錄到 device_data_logs（非阻塞，傳入配置避免重複查詢）
                   if (Object.keys(deviceValues).length > 0) {
                     deviceDataLogger.logDeviceValues(deviceId, deviceValues, loggingConfig).catch((error) => {
-                      console.error(`[environmentMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, error.message);
+                      logger.error(`記錄設備數值失敗 (deviceId: ${deviceId})`, {
+                        error: error.message,
+                        deviceId,
+                        module: "environmentMonitor",
+                      });
                     });
                   }
                 }
@@ -144,35 +149,51 @@ async function checkEnvironmentLocations() {
             }
           } catch (logError) {
             // 記錄失敗不影響監控流程
-            console.error(`[environmentMonitor] 記錄設備數值失敗 (deviceId: ${deviceId}):`, logError.message);
+            logger.error(`記錄設備數值失敗 (deviceId: ${deviceId})`, {
+              error: logError.message,
+              deviceId,
+              module: "environmentMonitor",
+            });
           }
         }
 
         // 讀取成功後，檢查閾值（僅在設備連接正常時）
-        // 從最新的感測器讀數中獲取數據進行閾值檢查
+        // 從 device_data_logs 獲取最新數據進行閾值檢查（聚合同一時間點的所有數值）
         try {
+          const deviceId = location.device_id ? parseInt(location.device_id) : null;
+          if (!deviceId) {
+            return { systemId: location.system_id, locationId: location.location_id, success: true };
+          }
+
+          // 獲取最新的設備數值記錄（使用時間窗口聚合，確保批次寫入的記錄能被正確聚合）
           const latestReading = await db.query(
-            `SELECT data, timestamp 
-             FROM sensor_readings 
-             WHERE location_id = $1 
+            `SELECT 
+               date_trunc('second', recorded_at) as timestamp,
+               jsonb_object_agg(
+                 value->>'name',
+                 (value->>'value')::numeric
+               ) as data
+             FROM device_data_logs
+             WHERE device_id = $1
+               AND recorded_at >= NOW() - INTERVAL '1 minute'
+             GROUP BY date_trunc('second', recorded_at)
              ORDER BY timestamp DESC 
              LIMIT 1`,
-            [location.location_id]
+            [deviceId]
           );
 
-          if (latestReading && latestReading.length > 0) {
-            const sensorData =
-              typeof latestReading[0].data === "string"
-                ? JSON.parse(latestReading[0].data)
-                : latestReading[0].data;
+          if (latestReading && latestReading.length > 0 && latestReading[0].data) {
+            const sensorData = latestReading[0].data;
 
             // 調試日誌：只在需要時輸出（可通過環境變數控制）
             // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
             if (process.env.ENABLE_DETAILED_LOGS === "true") {
-              console.log(
-                `[environmentMonitor] 位置 ${location.location_id} (${location.location_name}) 感測器數據:`,
-                JSON.stringify(sensorData, null, 2)
-              );
+              logger.debug(`位置 ${location.location_id} (${location.location_name}) 感測器數據`, {
+                locationId: location.location_id,
+                locationName: location.location_name,
+                sensorData,
+                module: "environmentMonitor",
+              });
             }
 
             // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
@@ -183,10 +204,11 @@ async function checkEnvironmentLocations() {
           }
         } catch (thresholdError) {
           // 閾值檢查失敗不影響連線檢查結果
-          console.error(
-            `[environmentMonitor] 檢查位置 ${location.location_id} 閾值失敗:`,
-            thresholdError.message
-          );
+          logger.error(`檢查位置 ${location.location_id} 閾值失敗`, {
+            error: thresholdError.message,
+            locationId: location.location_id,
+            module: "environmentMonitor",
+          });
         }
 
         return { systemId: location.system_id, locationId: location.location_id, success: true };
@@ -270,10 +292,11 @@ async function checkEnvironmentLocations() {
             });
           }
         }
-        console.error(
-          `[environmentMonitor] 檢查位置失敗 (Promise rejected):`,
-          result.reason
-        );
+          logger.error("檢查位置失敗 (Promise rejected)", {
+            error: result.reason?.message || result.reason,
+            locationId: location?.location_id,
+            module: "environmentMonitor",
+          });
       }
     });
 
@@ -283,13 +306,18 @@ async function checkEnvironmentLocations() {
     }
 
     if (successCount > 0 || failCount > 0) {
-      console.log(
-        `[environmentMonitor] 檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`
-      );
+      logger.info(`檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`, {
+        successCount,
+        failCount,
+        module: "environmentMonitor",
+      });
     }
   } catch (error) {
-    console.error("[environmentMonitor] 檢查環境位置失敗:", error);
-    throw error;
+    logger.error("檢查環境位置失敗", {
+      error,
+      module: "environmentMonitor",
+    });
+    // 不重新拋出錯誤，由 backgroundMonitor 統一處理
   }
 }
 
@@ -314,18 +342,23 @@ async function resolveThresholdAlert(systemId, parameter, value, reason = "數�
 
     // 只在啟用詳細日誌時輸出
     if (process.env.ENABLE_DETAILED_LOGS === "true") {
-      console.log(
-        `[environmentMonitor] 解決警報 | 系統 ${systemId} | 參數 ${parameter} | ` +
-          `數值: ${value} (${reason})`
-      );
+      logger.debug(`解決警報 | 系統 ${systemId} | 參數 ${parameter} | 數值: ${value} (${reason})`, {
+        systemId,
+        parameter,
+        value,
+        reason,
+        module: "environmentMonitor",
+      });
     }
   } catch (error) {
     // 如果警報不存在或已經解決，靜默處理（這在自動解決中是正常的）
     if (process.env.NODE_ENV === "development") {
-      console.warn(
-        `[environmentMonitor] 解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}:`,
-        error.message
-      );
+      logger.warn(`解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}`, {
+        error: error.message,
+        systemId,
+        parameter,
+        module: "environmentMonitor",
+      });
     }
   }
 }
@@ -405,9 +438,14 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         const status = thresholdExceeded
           ? `超過閾值 (${matchedRule.severity})`
           : "正常";
-        console.log(
-          `[environmentMonitor] 位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`
-        );
+        logger.debug(`位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`, {
+          locationName: locationInfo?.name,
+          systemId,
+          parameter,
+          value,
+          status,
+          module: "environmentMonitor",
+        });
       }
     }
 
@@ -524,10 +562,11 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
       }
     }
   } catch (error) {
-    console.error(
-      `[environmentMonitor] 檢查並解決閾值失敗 (systemId: ${systemId}):`,
-      error
-    );
+    logger.error(`檢查並解決閾值失敗 (systemId: ${systemId})`, {
+      error,
+      systemId,
+      module: "environmentMonitor",
+    });
   }
 }
 
@@ -559,18 +598,21 @@ async function resolveAllThresholdAlerts(systemId) {
       );
 
       if (process.env.ENABLE_DETAILED_LOGS === "true") {
-        console.log(
-          `[environmentMonitor] 解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`
-        );
+        logger.debug(`解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`, {
+          systemId,
+          alertCount: activeAlerts.length,
+          module: "environmentMonitor",
+        });
       }
     }
   } catch (error) {
     // 如果警報不存在或已經解決，靜默處理
     if (process.env.NODE_ENV === "development") {
-      console.warn(
-        `[environmentMonitor] 解決所有閾值警報失敗（可能已解決） | 系統 ${systemId}:`,
-        error.message
-      );
+      logger.warn(`解決所有閾值警報失敗（可能已解決） | 系統 ${systemId}`, {
+        error: error.message,
+        systemId,
+        module: "environmentMonitor",
+      });
     }
   }
 }

@@ -1,8 +1,5 @@
 const locationService = require("./locationService");
 
-// 注意：formatArea, formatFloor, loadFloorAreas, validateAndCreateArea, validateAndUpdateArea 
-// 等函數已移除，統一使用 locationService 處理
-
 // ========== 區域管理函數 ==========
 
 // 取得區域列表（使用統一表，轉換為 lighting 格式）

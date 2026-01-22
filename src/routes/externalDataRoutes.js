@@ -163,6 +163,48 @@ router.get(
 );
 
 /**
+ * 取得刷卡記錄的快照圖片
+ * GET /api/external-data/baseacs/slot_card_records/:id/picture
+ * 注意：必須放在 /:schema/:table 之前，避免路由衝突
+ */
+router.get(
+  "/baseacs/slot_card_records/:id/picture",
+  authenticate,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
+    const result = await handler.getPictureById(parseInt(req.params.id));
+    
+    if (!result.success) {
+      return res.sendError(result.error || "獲取圖片失敗", result.status || 500);
+    }
+    
+    res.sendSuccess(result.data);
+  })
+);
+
+/**
+ * 根據 picUri 獲取圖片
+ * POST /api/external-data/baseacs/slot_card_records/picture
+ * 注意：必須放在 /:schema/:table 之前，避免路由衝突
+ */
+router.post(
+  "/baseacs/slot_card_records/picture",
+  authenticate,
+  validateRequired("picUri"),
+  asyncHandler(async (req, res) => {
+    const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
+    const result = await handler.getPictureByUri(req.body.picUri);
+    
+    if (!result.success) {
+      return res.sendError(result.error || "獲取圖片失敗", result.status || 500);
+    }
+    
+    res.sendSuccess(result.data);
+  })
+);
+
+/**
  * 取得資料列表
  * GET /api/external-data/:schema/:table
  * 注意：必須放在最後，避免與其他路由衝突

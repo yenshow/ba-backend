@@ -440,6 +440,35 @@ function emitRTSPStreamStatusChanged(data) {
   );
 }
 
+/**
+ * 推送人流統計新記錄事件
+ * @param {Object} data - 事件資料
+ * @param {string} data.id - 記錄 ID
+ * @param {number} data.personId - 人員 ID
+ * @param {string} data.personName - 人員名稱
+ * @param {number|null} data.unitId - 單位 ID
+ * @param {string} data.unitName - 單位名稱
+ * @param {string} data.eventType - 事件類型 (entry/exit/failed)
+ * @param {string} data.timestamp - 時間戳
+ * @param {string} data.deviceScreenshotUrl - 設備截圖 URL
+ * @param {number|null} data.physicalId - 設備 ID
+ * @param {number|null} data.locationId - 地點 ID
+ * @param {string|null} data.locationName - 地點名稱
+ */
+function emitPeopleCountingRecord(data) {
+  safeEmit(
+    "people_counting:record:new",
+    {
+      ...data,
+      // 保留原始時間戳（記錄的實際刷卡時間）
+      timestamp: data.timestamp || new Date().toISOString(),
+    },
+    {
+      logMessage: `人員 ID: ${data.personId}, 事件: ${data.eventType}`,
+    }
+  );
+}
+
 module.exports = {
   initializeWebSocket,
   getIO,
@@ -458,4 +487,5 @@ module.exports = {
   emitRTSPStreamStopped,
   emitRTSPStreamError,
   emitRTSPStreamStatusChanged,
+  emitPeopleCountingRecord,
 };

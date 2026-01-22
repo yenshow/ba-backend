@@ -6,7 +6,6 @@ const db = require("../../database/db");
  * 此服務提供統一的地點和區域管理 API，支援一個地點多個系統
  * 使用 location_systems 表來關聯地點和系統
  * 
- * 注意：資料庫中仍使用 floors 表，但 API 層面統一使用 zones 命名
  */
 
 // ========== 共用輔助函數 ==========
@@ -136,7 +135,6 @@ function formatZone(zone, locations = []) {
     id: String(zone.id),
     name: zone.name,
     buildingId: zone.building_id || undefined,
-    floorNumber: zone.floor_number || undefined,
     imageUrl: zone.image_url || undefined,
     description: zone.description || undefined,
     locations: locations,
@@ -381,7 +379,6 @@ async function createZone(zoneData, userId) {
     const {
       name,
       buildingId,
-      floorNumber,
       description,
       imageUrl,
       locations = [],
@@ -413,10 +410,6 @@ async function createZone(zoneData, userId) {
         updates.push(`building_id = $${paramIndex++}`);
         params.push(buildingId || null);
       }
-      if (floorNumber !== undefined) {
-        updates.push(`floor_number = $${paramIndex++}`);
-        params.push(floorNumber || null);
-      }
       if (imageUrl !== undefined) {
         updates.push(`image_url = $${paramIndex++}`);
         params.push(imageUrl || null);
@@ -438,13 +431,12 @@ async function createZone(zoneData, userId) {
     } else {
       // 建立新區域
       const zoneResult = await db.query(
-        `INSERT INTO zones (name, building_id, floor_number, image_url, description, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO zones (name, building_id, image_url, description, created_by)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id`,
         [
           trimmedName,
           buildingId || null,
-          floorNumber || null,
           imageUrl || null,
           description || null,
           userId || null,
@@ -492,7 +484,7 @@ function getValidLocations(locations) {
  */
 async function updateZone(id, zoneData, userId) {
   try {
-    const { name, buildingId, floorNumber, imageUrl, description, locations } =
+    const { name, buildingId, imageUrl, description, locations } =
       zoneData;
 
     // 檢查區域是否存在
@@ -591,11 +583,6 @@ async function updateZone(id, zoneData, userId) {
       if (buildingId !== undefined) {
         updates.push(`building_id = $${paramIndex++}`);
         params.push(buildingId || null);
-      }
-
-      if (floorNumber !== undefined) {
-        updates.push(`floor_number = $${paramIndex++}`);
-        params.push(floorNumber || null);
       }
 
       if (imageUrl !== undefined) {
@@ -823,8 +810,8 @@ async function updateLocation(id, locationData, userId) {
     }
     handleUniqueConstraintError(
       error,
-      "unique_floor_location_name",
-      "該樓層已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。"
+      "unique_zone_location_name",
+      "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。"
     );
     console.error("更新地點失敗:", error);
     throw new Error("更新地點失敗: " + error.message);

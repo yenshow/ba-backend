@@ -19,9 +19,9 @@ function sendSuccess(res, data, statusCode = 200) {
   }
 
   // 常見響應結構的鍵名列表
-  const commonKeys = ['floors', 'floor', 'locations', 'location', 'users', 'user', 'alerts', 'alert', 'devices', 'device', 'device_types', 'device_models', 'device_type', 'device_model'];
+  const commonKeys = ['zones', 'zone', 'locations', 'location', 'users', 'user', 'alerts', 'alert', 'devices', 'device', 'device_types', 'device_models', 'device_type', 'device_model'];
   
-  // 檢查是否是常見的響應結構（如 { floors: [...] }、{ devices: [...] }）
+  // 檢查是否是常見的響應結構（如 { zones: [...] }、{ devices: [...] }）
   const hasCommonStructure = data && typeof data === "object" && !Array.isArray(data) && 
     Object.keys(data).some(key => commonKeys.includes(key));
 
