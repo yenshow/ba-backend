@@ -294,6 +294,57 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
   }
 
   /**
+   * 批次獲取圖片
+   * @param {Array<string>} picUris - 圖片 URI 列表
+   * @returns {Promise<Array<object>>} 圖片數據列表
+   */
+  async getBatchPicturesByUri(picUris) {
+    if (!Array.isArray(picUris) || picUris.length === 0) {
+      return [];
+    }
+
+    const results = await Promise.allSettled(
+      picUris.map(async (picUri) => {
+        if (!picUri?.trim()) {
+          return {
+            picUri: picUri || "",
+            success: false,
+            error: "picUri 參數不能為空",
+          };
+        }
+
+        const pictureResult = await this._getAlarmPicture(picUri.trim());
+        if (!pictureResult.success) {
+          return {
+            picUri: picUri.trim(),
+            success: false,
+            error: pictureResult.error || "獲取圖片失敗",
+            status: pictureResult.status,
+          };
+        }
+
+        return {
+          picUri: picUri.trim(),
+          success: true,
+          image: pictureResult.data,
+        };
+      })
+    );
+
+    return results.map((result, index) => {
+      if (result.status === "fulfilled") {
+        return result.value;
+      } else {
+        return {
+          picUri: picUris[index] || "",
+          success: false,
+          error: result.reason?.message || "獲取圖片失敗",
+        };
+      }
+    });
+  }
+
+  /**
    * 根據 snap_pic_url 直接獲取圖片
    * @param {string} picUri - 圖片 URI
    * @returns {Promise<object>} 圖片數據
@@ -303,20 +354,22 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
       return { success: false, error: "picUri 參數不能為空" };
     }
 
-    const pictureResult = await this._getAlarmPicture(picUri.trim());
-    if (!pictureResult.success) {
+    const results = await this.getBatchPicturesByUri([picUri]);
+    const result = results[0];
+
+    if (!result || !result.success) {
       return {
         success: false,
-        error: pictureResult.error || "獲取圖片失敗",
-        status: pictureResult.status,
+        error: result?.error || "獲取圖片失敗",
+        status: result?.status,
       };
     }
 
     return {
       success: true,
       data: {
-        picUri: picUri.trim(),
-        image: pictureResult.data,
+        picUri: result.picUri,
+        image: result.image,
       },
     };
   }

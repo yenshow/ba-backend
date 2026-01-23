@@ -6,8 +6,7 @@
 
 const externalDb = require("../../database/externalDb");
 const alertService = require("../alerts/alertService");
-const alertRuleService = require("../alerts/alertRuleService");
-const systemAlert = require("../alerts/systemAlertHelper");
+const errorTracker = require("../alerts/errorTracker");
 const {
   getPeopleCountingLocations,
   getPeopleCountingConfig,
@@ -154,7 +153,7 @@ async function checkPeopleCountingRecords(options = {}) {
 
       // 1. 檢查是否為未註冊人員（person_id = -1）
       if (record.person_id === -1) {
-        // 創建未註冊人員警報（使用統一規範）
+        // 使用 errorTracker 累積機制：達到 5 次以上才創建警報
         const locationName = locationConfig?.locationName || "未知地點";
         const deviceInfo = physicalId ? `設備 ID: ${physicalId}` : "未知設備";
 
@@ -162,74 +161,43 @@ async function checkPeopleCountingRecords(options = {}) {
           // 使用地點 ID 作為 source_id（如果找不到地點，使用 physical_id）
           const sourceId = locationConfig?.locationId || physicalId || 0;
 
-          // 查詢警報規則（統一規範：使用 getAlertRules）
-          const rules = await alertRuleService.getAlertRules(
+          // 構建錯誤訊息（用於 errorTracker）
+          const errorMessage = `未註冊人員刷卡 - ${locationName} (${deviceInfo})`;
+
+          // 使用 errorTracker 記錄錯誤（會自動累積次數，達到閾值時創建警報）
+          // errorTracker 內部會：
+          // 1. 查詢規則獲取 min_errors 閾值（預設 5 次）
+          // 2. 使用規則的 severity 和 message_template
+          // 3. 達到閾值時自動創建警報
+          const alertCreated = await errorTracker.recordError(
             alertService.ALERT_SOURCES.PEOPLE_COUNTING,
-            alertService.ALERT_TYPES.ERROR
-          );
-
-          // 使用通用規則匹配函數（統一規範）
-          const matchedRule = alertRuleService.matchRule(
-            rules,
-            "unregistered_person",
-            sourceId
-          );
-
-          // 使用規則中的嚴重程度，如果沒有規則則使用預設值
-          const severity =
-            matchedRule?.severity || alertService.SEVERITIES.WARNING;
-
-          // 構建訊息：如果有規則模板則使用模板，否則使用預設訊息（統一規範）
-          let message;
-          if (matchedRule?.message_template) {
-            message = alertRuleService.formatMessage(
-              matchedRule.message_template,
-              {
-                location_name: locationName,
-                device_info: deviceInfo,
-                physical_id: physicalId || "",
-                source_id: sourceId,
-              }
-            );
-          } else {
-            message = `未註冊人員刷卡 - ${locationName} (${deviceInfo})`;
-          }
-
-          // 使用統一接口創建警報（統一規範：優先使用 systemAlert.createAlert）
-          // 注意：如果來源不存在，systemAlert 會驗證失敗，此時降級使用 alertService
-          try {
-            await systemAlert.createAlert(
-              "people_counting",
-              sourceId,
-              alertService.ALERT_TYPES.ERROR,
-              severity,
-              message
-            );
-          } catch (systemAlertError) {
-            // 降級處理：當來源驗證失敗時，直接使用 alertService（不驗證來源存在性）
-            if (systemAlertError.message.includes("不存在") || systemAlertError.message.includes("來源")) {
-              await alertService.createAlert({
-                source: alertService.ALERT_SOURCES.PEOPLE_COUNTING,
-                source_id: sourceId,
-                alert_type: alertService.ALERT_TYPES.ERROR,
-                severity,
-                message,
-              });
-            } else {
-              throw systemAlertError;
+            sourceId,
+            alertService.ALERT_TYPES.ERROR,
+            errorMessage,
+            {
+              name: locationName,
+              device_info: deviceInfo,
+              physical_id: physicalId || "",
             }
-          }
+          );
 
-          logger.warn("未註冊人員警報已創建", {
+          if (alertCreated) {
+            logger.warn("未註冊人員警報已創建（達到累積閾值）", {
+              physicalId,
+              locationId: sourceId,
+              timestamp: record.swip_card_rev_time,
+              module: "peopleCountingMonitor",
+            });
+          } else if (process.env.ENABLE_DETAILED_LOGS === "true") {
+            logger.debug("未註冊人員事件已記錄（未達累積閾值）", {
             physicalId,
             locationId: sourceId,
             timestamp: record.swip_card_rev_time,
-            severity,
-            hasRule: !!matchedRule,
             module: "peopleCountingMonitor",
           });
+          }
         } catch (error) {
-          logger.error("創建未註冊人員警報失敗", {
+          logger.error("記錄未註冊人員錯誤失敗", {
             error,
             record,
             module: "peopleCountingMonitor",

@@ -8,7 +8,6 @@ const SYSTEM_TABLE_MAPPING = {
   people_counting: [
     { schema: "platform", table: "person" },
     { schema: "platform", table: "person_group" },
-    { schema: "platform", table: "person_head_pic" },
     { schema: "baseacs", table: "slot_card_records" },
     { schema: "deviceaccess", table: "door" },
   ],

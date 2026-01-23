@@ -158,15 +158,18 @@ class MediaMTXService extends EventEmitter {
    * @param {string} hlsUrl - HLS URL
    * @param {string} webrtcUrl - WebRTC URL
    * @param {string} status - 狀態
+   * @param {Object} gpuOptions - GPU 編碼選項（可選）
    * @private
    */
-  _emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl, status = "running") {
+  _emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl, status = "running", gpuOptions = null) {
     websocketService.emitRTSPStreamStarted({
       streamId,
       rtspUrl,
       hlsUrl,
       webrtcUrl,
       status,
+      useGpuEncoding: gpuOptions !== null,
+      gpuOptions: gpuOptions || undefined,
     });
   }
 
@@ -582,14 +585,18 @@ class MediaMTXService extends EventEmitter {
         });
 
         // 設置錯誤處理器（使用 once 確保只處理一次）
+        let ffmpegError = null;
+        let errorHandled = false;
+        
         const errorHandler = (errorData) => {
-          if (errorData.streamId === streamId) {
+          if (errorData.streamId === streamId && !errorHandled) {
+            errorHandled = true;
             console.error(
               `[MediaMTX Service] FFmpeg GPU 編碼錯誤: ${streamId}`,
               errorData.error
             );
-            // 移除監聽器避免記憶體洩漏
-            ffmpegService.removeListener("error", errorHandler);
+            // 記錄錯誤
+            ffmpegError = errorData.error;
             // 清理失敗的串流
             this.streams.delete(streamId);
             websocketService.emitRTSPStreamError({
@@ -607,12 +614,30 @@ class MediaMTXService extends EventEmitter {
           200
         );
 
-        if (!ffmpegReady) {
-          // FFmpeg 啟動失敗，清理並拋出錯誤
+        // 檢查是否有錯誤發生（優先檢查錯誤）
+        if (ffmpegError || !ffmpegReady) {
           await ffmpegService.stopGpuEncoding(streamId);
-          throw new Error(
-            "FFmpeg GPU 編碼進程啟動失敗或超時"
-          );
+          
+          // 提供更詳細的錯誤訊息
+          let errorMessage = "FFmpeg GPU 編碼失敗";
+          if (ffmpegError) {
+            if (ffmpegError.includes("nvcuda.dll") || ffmpegError.includes("Cannot load nvcuda")) {
+              errorMessage = "無法載入 NVIDIA CUDA 運行時庫 (nvcuda.dll)。\n" +
+                "可能原因：\n" +
+                "1. 未安裝 NVIDIA GPU 驅動程式\n" +
+                "2. 未安裝 CUDA Toolkit\n" +
+                "3. FFmpeg 版本與驅動程式不匹配\n" +
+                "建議：安裝最新版本的 NVIDIA 驅動程式或使用 CPU 編碼";
+            } else if (ffmpegError.includes("Cannot load")) {
+              errorMessage = `GPU 編碼器載入失敗: ${ffmpegError}`;
+            } else {
+              errorMessage = `FFmpeg GPU 編碼錯誤: ${ffmpegError}`;
+            }
+          } else {
+            errorMessage = "FFmpeg GPU 編碼進程啟動失敗或超時";
+          }
+          
+          throw new Error(errorMessage);
         }
 
         // 使用 FFmpeg 輸出的 RTSP URL 作為 MediaMTX 的來源
@@ -654,15 +679,15 @@ class MediaMTXService extends EventEmitter {
       }
 
       // ⭐ 優化：輪詢檢查路徑是否就緒，而不是固定等待時間
-      const ready = await this.waitForPathReady(pathName, 5000, 200);
-      if (!ready) {
-        console.warn(
-          `[MediaMTX Service] 路徑 ${pathName} 就緒超時（5秒），但繼續啟動流程（HLS.js 會自動重試）`
-        );
+        const ready = await this.waitForPathReady(pathName, 5000, 200);
+        if (!ready) {
+          console.warn(
+            `[MediaMTX Service] 路徑 ${pathName} 就緒超時（5秒），但繼續啟動流程（HLS.js 會自動重試）`
+          );
       }
 
       // 路徑已就緒或超時，推送 WebSocket 事件
-      this._emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl);
+      this._emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl, "running", gpuOptions);
       console.log(
         `[MediaMTX Service] 串流啟動成功: ${streamId} (路徑: ${pathName})`
       );

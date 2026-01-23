@@ -1,32 +1,8 @@
 const { spawn } = require("child_process");
 const EventEmitter = require("events");
+const { resolveFfmpegPath } = require("../../utils/ffmpegPath");
 
-/**
- * 取得 FFmpeg 執行檔路徑
- * 優先順序：
- * 1) 環境變數 FFMPEG_PATH
- * 2) @ffmpeg-installer/ffmpeg（npm install 時自動帶下來）
- * 3) 系統 PATH 中的 ffmpeg
- */
-function resolveFfmpegPath() {
-  if (process.env.FFMPEG_PATH && typeof process.env.FFMPEG_PATH === "string") {
-    return process.env.FFMPEG_PATH;
-  }
-
-  try {
-    // eslint-disable-next-line global-require
-    const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
-    if (ffmpegInstaller && ffmpegInstaller.path) {
-      return ffmpegInstaller.path;
-    }
-  } catch (e) {
-    // ignore, fallback to PATH
-  }
-
-  return "ffmpeg";
-}
-
-const FFMPEG_BIN = resolveFfmpegPath();
+const FFMPEG_BIN = resolveFfmpegPath(__dirname);
 let _ffmpegPathLogged = false;
 
 /**
@@ -104,14 +80,34 @@ class FFmpegService extends EventEmitter {
     // 處理標準錯誤輸出（FFmpeg 通常將信息輸出到 stderr）
     ffmpeg.stderr.on("data", (data) => {
       const output = data.toString();
-      // 檢查是否為錯誤訊息
-      if (
+      // 檢查是否為嚴重錯誤訊息（排除警告）
+      const isCriticalError = 
+        (output.toLowerCase().includes("error initializing") ||
+         output.toLowerCase().includes("error while opening encoder") ||
+         output.toLowerCase().includes("unable to parse option") ||
+         output.toLowerCase().includes("error setting option")) &&
+        !output.toLowerCase().includes("warning");
+      
+      if (isCriticalError) {
+        console.error(`[FFmpeg ${streamId}] ${output.trim()}`);
+        // 使用 setImmediate 避免在事件處理過程中觸發錯誤
+        setImmediate(() => {
+          // 檢查是否有監聽器，避免未處理的錯誤導致服務器崩潰
+          if (this.listenerCount("error") > 0) {
+            this.emit("error", { streamId, error: output });
+          } else {
+            console.warn(
+              `[FFmpeg Service] 嚴重錯誤但沒有錯誤監聽器: ${streamId}`
+            );
+          }
+        });
+      } else if (
         output.toLowerCase().includes("error") ||
         output.toLowerCase().includes("failed") ||
         output.toLowerCase().includes("cannot")
       ) {
-        console.error(`[FFmpeg ${streamId}] ${output.trim()}`);
-        this.emit("error", { streamId, error: output });
+        // 一般錯誤或警告，記錄但不觸發錯誤事件
+        console.warn(`[FFmpeg ${streamId}] ${output.trim()}`);
       } else {
         // 一般信息輸出
         console.log(`[FFmpeg ${streamId}] ${output.trim()}`);
@@ -123,23 +119,47 @@ class FFmpegService extends EventEmitter {
       console.log(
         `[FFmpeg Service] 進程退出: ${streamId}, 代碼: ${code}, 信號: ${signal}`
       );
-      this.processes.delete(streamId);
+      
+      // 先發出 exit 事件
       this.emit("exit", { streamId, code, signal });
-
+      
       // 如果不是正常退出（code !== 0），發出錯誤事件
+      // 使用 setImmediate 確保錯誤事件在事件循環的下一個階段處理，避免未處理的錯誤導致崩潰
       if (code !== 0 && code !== null) {
-        this.emit("error", {
-          streamId,
-          error: `FFmpeg 進程異常退出，代碼: ${code}`,
+        setImmediate(() => {
+          // 檢查是否有監聽器，避免未處理的錯誤導致服務器崩潰
+          if (this.listenerCount("error") > 0) {
+            this.emit("error", {
+              streamId,
+              error: `FFmpeg 進程異常退出，代碼: ${code}`,
+            });
+          } else {
+            console.warn(
+              `[FFmpeg Service] 進程異常退出但沒有錯誤監聽器: ${streamId}, 代碼: ${code}`
+            );
+          }
         });
       }
+      
+      // 最後才從 Map 中移除（確保所有事件都已發出）
+      this.processes.delete(streamId);
     });
 
     // 處理進程錯誤
     ffmpeg.on("error", (error) => {
       console.error(`[FFmpeg Service] 進程錯誤: ${streamId}`, error);
       this.processes.delete(streamId);
-      this.emit("error", { streamId, error: error.message });
+      // 使用 setImmediate 確保錯誤事件在事件循環的下一個階段處理
+      setImmediate(() => {
+        // 檢查是否有監聽器，避免未處理的錯誤導致服務器崩潰
+        if (this.listenerCount("error") > 0) {
+          this.emit("error", { streamId, error: error.message });
+        } else {
+          console.warn(
+            `[FFmpeg Service] 進程錯誤但沒有錯誤監聽器: ${streamId}, ${error.message}`
+          );
+        }
+      });
     });
 
     // 存儲進程信息
@@ -169,11 +189,24 @@ class FFmpegService extends EventEmitter {
     // 根據 GPU 類型添加視訊編碼參數
     switch (gpuType) {
       case "nvidia":
+        // NVENC preset 映射：將 p1-p7 轉換為 NVENC 支援的 preset 值
+        // NVENC 支援的 preset: slow, medium, fast, hp, hq, bd, ll, llhq, llhp, lossless, losslesshp
+        const nvencPresetMap = {
+          p1: "slow",      // 最高品質
+          p2: "medium",    // 高品質
+          p3: "fast",      // 平衡
+          p4: "fast",      // 平衡（預設）
+          p5: "hp",        // 高性能
+          p6: "hp",        // 高性能
+          p7: "hp",        // 最高性能
+        };
+        const nvencPreset = nvencPresetMap[preset] || "fast"; // 預設使用 fast
+        
         args.push(
           "-c:v",
           "h264_nvenc", // NVIDIA 硬體編碼器
           "-preset",
-          preset, // p1-p7，p4 為平衡選項
+          nvencPreset, // NVENC preset 值
           "-tune",
           "ll", // 低延遲
           "-rc",

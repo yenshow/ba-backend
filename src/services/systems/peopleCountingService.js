@@ -7,6 +7,7 @@
 const locationService = require("./locationService");
 const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
+const yscpPersonService = require("../yscp/yscpPersonService");
 
 // ========== 統一錯誤處理和驗證工具 ==========
 
@@ -377,9 +378,7 @@ async function getSites() {
     const siteDataMap = await batchGetSitesData(allLocations);
 
     // 3. 為每個地點計算統計
-    // 取得今日時間範圍（提取到循環外部，避免重複計算）
-    const { start, end } = getTodayTimeRange();
-    
+    // 注意：batchGetSitesData 已經使用 getTodayRecordsOnly 取得今日記錄，無需再次過濾
     for (const location of allLocations) {
       const { personGroupIds, entryDoorId, exitDoorId } = getPeopleCountingConfig(location);
 
@@ -394,14 +393,9 @@ async function getSites() {
         continue;
       }
 
-      // 取得今日記錄（用於統計）
-      const todayRecords = siteData.records.filter((r) => {
-        const recordTime = new Date(r.swip_card_rev_time);
-        return recordTime >= start && recordTime <= end;
-      });
-
-      // 計算統計（使用 physical_id 判斷）
-      const stats = calculateTodayStatsByPhysicalId(todayRecords, entryDoorId, exitDoorId);
+      // 計算統計（使用事件序列邏輯，確保先進後出）
+      // siteData.records 已經是今日記錄，由 getTodayRecordsOnly 過濾
+      const stats = calculateTodayStatsByPhysicalId(siteData.records, entryDoorId, exitDoorId);
 
       // 取得單位列表（傳入設備 ID）
       const units = await getUnitsByGroupIds(personGroupIds, siteData.records, entryDoorId, exitDoorId);
@@ -623,14 +617,13 @@ async function getTodayRecordsOnly(personIds) {
 
 /**
  * 計算今日統計（進場/出場人數，基於 physical_id）
- * 使用時間窗口去重：在同一個時間窗口內（預設1分鐘），同一人的相同事件類型只計算一次
+ * 使用事件序列去重：確保先進後出的邏輯，同一人的連續相同事件類型只計算一次
  * @param {Array} records - 記錄列表（應該只包含今日記錄）
  * @param {number} entryDoorId - 入口設備 ID
  * @param {number} exitDoorId - 出口設備 ID
- * @param {number} dedupeWindowMinutes - 去重時間窗口（分鐘），預設1分鐘
  * @returns {Object} 統計資料
  */
-function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId, dedupeWindowMinutes = 1) {
+function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId) {
   if (records.length === 0) {
     return { entryCount: 0, exitCount: 0 };
   }
@@ -638,38 +631,37 @@ function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId, dedup
   // 按時間排序
   const sortedRecords = sortRecordsByTime(records);
 
-  // 使用 Map 追蹤每個人在每個事件類型下的最後計數時間
-  // Key: `${personId}_${eventType}`, Value: 最後計數的時間戳
-  const lastCountedTime = new Map();
-  const dedupeWindowMs = dedupeWindowMinutes * 60 * 1000;
+  // 使用 Map 追蹤每個人的最後事件類型
+  // Key: personId, Value: 最後的事件類型（"entry" 或 "exit"）
+  const lastEventType = new Map();
 
   let entryCount = 0;
   let exitCount = 0;
 
   sortedRecords.forEach((record) => {
+    const personId = record.person_id;
     const eventType = parseEventType(record, entryDoorId, exitDoorId);
-      const personId = record.person_id;
     
     // 未註冊人員（eventType 為 null）跳過，不計入統計
     if (eventType === null) {
       return;
     }
 
-    const recordTime = new Date(record.swip_card_rev_time).getTime();
-    const key = `${personId}_${eventType}`;
+    const previousEventType = lastEventType.get(personId);
 
-    // 檢查是否在去重時間窗口內
-    const lastTime = lastCountedTime.get(key);
-    if (!lastTime || (recordTime - lastTime) >= dedupeWindowMs) {
-      // 不在時間窗口內，計數並更新時間
+    // 事件序列邏輯：確保先進後出
+    // 1. 如果沒有前一個事件，直接計數（第一個事件）
+    // 2. 如果前一個事件與當前事件不同，計數（進場後出場，或出場後進場）
+    // 3. 如果前一個事件與當前事件相同，跳過（連續相同事件，可能是重複刷卡）
+    if (previousEventType === undefined || previousEventType !== eventType) {
+      // 計數並更新最後事件類型
       if (eventType === "entry") {
         entryCount++;
       } else {
         exitCount++;
       }
-      lastCountedTime.set(key, recordTime);
+      lastEventType.set(personId, eventType);
     }
-    // 在時間窗口內的記錄會被忽略（去重）
   });
 
   return { entryCount, exitCount };
@@ -787,21 +779,34 @@ async function getUnitPersonnel(unitId, siteId = null) {
     // 批次取得人員照片（優化：使用 SQL 查詢）
     const headPicMap = await batchGetHeadPics(personIds);
 
-    // 取得今日刷卡記錄（00:00 - 24:00，用於統計）
+    // 取得今日刷卡記錄（00:00 - 24:00，用於統計和人員狀態）
     const todayRecords = await getTodayRecordsOnly(personIds);
 
     // 計算今日進場/出場人數統計
     const todayStats = calculateTodayStatsByPhysicalId(todayRecords, entryDoorId, exitDoorId);
 
-    // 取得所有人的最近進場/出場記錄（不受時間限制，用於顯示最近進場日期）
-    const latestRecords = await getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId);
-
     // 取得今日時間範圍（用於判斷是否為今日進場）
     const { start: todayStart, end: todayEnd } = getTodayTimeRange();
+
+    // 預先建立每個人的今日記錄 Map（優化：避免在循環中重複過濾）
+    const personTodayRecordsMap = new Map();
+    todayRecords.forEach((record) => {
+      const personId = record.person_id;
+      if (personId !== -1) {
+        if (!personTodayRecordsMap.has(personId)) {
+          personTodayRecordsMap.set(personId, []);
+        }
+        personTodayRecordsMap.get(personId).push(record);
+      }
+    });
+
+    // 取得所有人的最近進場/出場記錄（不受時間限制，用於顯示最近進場日期）
+    const latestRecords = await getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId);
 
     // 建立人員列表
     const personnel = persons.map((person) => {
       const headPic = headPicMap.get(person.id);
+      const personTodayRecords = personTodayRecordsMap.get(person.id) || [];
       const latestRecord = latestRecords.get(person.id);
 
       let photoUrl = undefined;
@@ -817,19 +822,15 @@ async function getUnitPersonnel(unitId, siteId = null) {
 
       // 處理進場記錄
       let lastEntryDate = null;
-      let lastEntryDateTime = null;
       let isTodayEntry = false;
       let entryTimeStr = null;
       let entryTime = null;
 
       if (lastEntryRecord) {
         entryTime = new Date(lastEntryRecord.swip_card_rev_time);
-        lastEntryDateTime = lastEntryRecord.swip_card_rev_time;
         
-        // 檢查是否為今日
-        if (entryTime >= todayStart && entryTime <= todayEnd) {
-          isTodayEntry = true;
-        }
+        // 檢查是否為今日進場
+        isTodayEntry = entryTime >= todayStart && entryTime <= todayEnd;
         
         // 格式化日期和時間
         lastEntryDate = formatDate(entryTime);
@@ -840,26 +841,42 @@ async function getUnitPersonnel(unitId, siteId = null) {
       let exitTimeStr = null;
       let exitTime = null;
 
-      if (lastExitRecord) {
+      if (isTodayEntry) {
+        // 如果是今日進場，從今日記錄中找到對應的出場記錄（在進場時間之後）
+        const todayExitRecord = personTodayRecords.find((r) => {
+          const recordTime = new Date(r.swip_card_rev_time);
+          const eventType = parseEventType(r, entryDoorId, exitDoorId);
+          return eventType === "exit" && recordTime > entryTime;
+        });
+
+        if (todayExitRecord) {
+          exitTime = new Date(todayExitRecord.swip_card_rev_time);
+          exitTimeStr = formatTime(exitTime);
+        }
+        // 如果今日沒有出場記錄，exitTimeStr 保持為 null（前端會顯示 "- -"）
+      } else if (lastExitRecord) {
+        // 如果不是今日進場，顯示最近出場時間
         exitTime = new Date(lastExitRecord.swip_card_rev_time);
         exitTimeStr = formatTime(exitTime);
       }
 
       // 判斷是否在場（isPresent）
-      // 邏輯：如果沒有進場記錄，則不在場
-      // 如果有進場記錄但沒有出場記錄，則在場
-      // 如果有進場和出場記錄，則比較時間：如果出場時間 > 進場時間，則不在場；否則在場
+      // 邏輯：
+      // 1. 如果沒有進場記錄，則不在場
+      // 2. 只有今日進場且沒有今日出場時，才在場
+      // 3. 如果不是今日進場，無論是否有出場記錄，都不在場（因為進場是昨天或更早的）
       let isPresent = false;
-      if (lastEntryRecord) {
-        if (!lastExitRecord) {
-          // 有進場但沒有出場，則在場
+      if (lastEntryRecord && isTodayEntry) {
+        // 只有今日進場時才判斷是否在場
+        if (!exitTime) {
+          // 今日沒有出場，則在場
           isPresent = true;
         } else {
-          // 有進場和出場，比較時間（使用已創建的 Date 對象）
-          // 如果出場時間 > 進場時間，則不在場
+          // 今日有出場，比較時間（如果出場時間 <= 進場時間，表示邏輯錯誤，但為了安全起見仍判斷為不在場）
           isPresent = exitTime <= entryTime;
         }
       }
+      // 如果不是今日進場，isPresent 保持為 false（不在場）
 
       return {
         id: person.id,
@@ -868,7 +885,7 @@ async function getUnitPersonnel(unitId, siteId = null) {
         photoUrl: photoUrl,
         isInside: isPresent, // 與 isPresent 保持一致（向後兼容）
         isPresent: isPresent,
-        lastEntryTime: lastEntryDateTime,
+        lastEntryTime: lastEntryRecord ? lastEntryRecord.swip_card_rev_time : null,
         lastExitTime: lastExitRecord ? lastExitRecord.swip_card_rev_time : null,
         lastEntryDate: lastEntryDate,
         entryTime: entryTimeStr,
@@ -985,12 +1002,20 @@ function getTwoDaysAgo() {
 
 /**
  * 取得今日時間範圍（00:00:00 - 23:59:59.999）
- * @returns {Object} 包含 start 和 end 的時間範圍
+ * 使用 UTC 時間確保與資料庫時區一致
+ * @returns {Object} 包含 start 和 end 的時間範圍（UTC 時間）
  */
 function getTodayTimeRange() {
-  const start = getDaysAgoStart(0);
-  const end = new Date(start);
-  end.setHours(23, 59, 59, 999);
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const date = now.getUTCDate();
+  
+  // 取得今日 UTC 時間的 00:00:00
+  const start = new Date(Date.UTC(year, month, date, 0, 0, 0, 0));
+  // 取得今日 UTC 時間的 23:59:59.999
+  const end = new Date(Date.UTC(year, month, date, 23, 59, 59, 999));
+  
   return { start, end };
 }
 
@@ -1026,6 +1051,7 @@ async function getPersonIdsByGroupIds(groupIds) {
 
 /**
  * 取得近兩天刷卡記錄（優化：直接在 SQL 中過濾）
+ * @deprecated 已改為使用 getTodayRecordsOnly() 統一查詢今日記錄，此函數保留僅為向後兼容
  * @param {Array<number>} personIds - 人員 ID 列表
  * @returns {Promise<Array>} 記錄列表
  */
@@ -1100,9 +1126,10 @@ async function getRecordsByPersonIds(personIds, limit = null) {
 }
 
 /**
- * 批次取得人員照片（優化：使用 SQL 查詢）
+ * 批次取得人員照片（使用 YSCP API）
  * @param {Array<number>} personIds - 人員 ID 列表
  * @returns {Promise<Map<number, Object>>} 人員 ID -> 照片資料的映射
+ * 返回格式：{ person_id, standard_head_portrait, thumbnail_head_portrait }
  */
 async function batchGetHeadPics(personIds) {
   if (personIds.length === 0) {
@@ -1111,23 +1138,27 @@ async function batchGetHeadPics(personIds) {
 
   return handleNonCriticalError(
     async () => {
-  // 使用 SQL 查詢取得每個人的最新照片（使用 DISTINCT ON）
-  const placeholders = generatePlaceholders(personIds);
-  const sql = `
-    SELECT DISTINCT ON (person_id)
-      person_id,
-      standard_head_portrait,
-      thumbnail_head_portrait
-    FROM platform.person_head_pic
-    WHERE person_id IN (${placeholders})
-    ORDER BY person_id, id DESC
-  `;
+      const results = await yscpPersonService.getBatchPersonInfo(personIds, {
+        includePicture: true,
+      });
 
-    const rows = await externalDb.query(sql, personIds);
-    const headPicMap = new Map();
-    rows.forEach((row) => {
-      headPicMap.set(row.person_id, row);
-    });
+      const headPicMap = new Map();
+      
+      results.forEach((result) => {
+        if (result.success && result.personInfo) {
+          const personId = parseInt(result.personId, 10);
+          const pictureUrl = result.picture
+            ? `data:image/jpeg;base64,${result.picture}`
+            : null;
+          
+          headPicMap.set(personId, {
+            person_id: personId,
+            standard_head_portrait: pictureUrl,
+            thumbnail_head_portrait: pictureUrl,
+          });
+        }
+      });
+
     return headPicMap;
     },
     "無法批次取得人員照片",
@@ -1396,8 +1427,8 @@ async function batchGetSitesData(locations) {
     return siteDataMap;
   }
 
-  // 批次取得今日所有記錄
-  const todayRecords = await getTodayRecords(Array.from(allPersonIds));
+  // 批次取得今日所有記錄（統一使用 getTodayRecordsOnly）
+  const todayRecords = await getTodayRecordsOnly(Array.from(allPersonIds));
 
   // 為每個工地建立資料
   siteGroupMap.forEach((groupIds, siteId) => {
@@ -1407,6 +1438,8 @@ async function batchGetSitesData(locations) {
       personIds.forEach((id) => sitePersonIds.add(id));
     });
 
+    // 過濾該工地的人員記錄
+    // getTodayRecordsOnly 已經過濾了今日時間範圍，這裡只需要過濾人員 ID
     const siteRecords = todayRecords.filter(
       (r) => r.person_id !== -1 && sitePersonIds.has(r.person_id)
     );

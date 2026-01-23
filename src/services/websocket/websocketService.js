@@ -359,6 +359,8 @@ function emitEnvironmentReading(data) {
  * @param {string} data.rtspUrl - RTSP URL
  * @param {string} data.hlsUrl - HLS URL
  * @param {string} data.status - 串流狀態
+ * @param {boolean} data.useGpuEncoding - 是否使用 GPU 編碼（可選）
+ * @param {Object} data.gpuOptions - GPU 編碼選項（可選）
  */
 function emitRTSPStreamStarted(data) {
   safeEmit(
@@ -369,6 +371,8 @@ function emitRTSPStreamStarted(data) {
       hlsUrl: data.hlsUrl,
       webrtcUrl: data.webrtcUrl,
       status: data.status,
+      useGpuEncoding: data.useGpuEncoding,
+      gpuOptions: data.gpuOptions,
       timestamp: new Date().toISOString(),
     },
     {

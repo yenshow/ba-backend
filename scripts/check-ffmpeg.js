@@ -1,24 +1,7 @@
 const { spawnSync } = require("child_process");
+const { resolveFfmpegPath } = require("../src/utils/ffmpegPath");
 
-function resolveFfmpegPath() {
-  if (process.env.FFMPEG_PATH && typeof process.env.FFMPEG_PATH === "string") {
-    return process.env.FFMPEG_PATH;
-  }
-
-  try {
-    // eslint-disable-next-line global-require
-    const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
-    if (ffmpegInstaller && ffmpegInstaller.path) {
-      return ffmpegInstaller.path;
-    }
-  } catch (e) {
-    // ignore, fallback to PATH
-  }
-
-  return "ffmpeg";
-}
-
-const ffmpegBin = resolveFfmpegPath();
+const ffmpegBin = resolveFfmpegPath(__dirname);
 
 function run(args) {
   const result = spawnSync(ffmpegBin, args, { encoding: "utf8" });

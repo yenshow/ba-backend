@@ -120,7 +120,7 @@ async addPath(pathName, rtspUrl, options = {}) {
   if (useGpuEncoding) {
     // 使用 FFmpeg 作為源（GPU 編碼）
     const ffmpegCommand = this.buildFFmpegCommand(rtspUrl, gpuType, bitrate, pathName);
-
+    
     pathConfig = {
       runOnInit: ffmpegCommand,
       runOnInitRestart: true,  // FFmpeg 退出時自動重啟
@@ -140,9 +140,9 @@ async addPath(pathName, rtspUrl, options = {}) {
 buildFFmpegCommand(rtspUrl, gpuType, bitrate, pathName) {
   const serverIP = this.getServerIP();
   const rtspOutput = `rtsp://${serverIP}:8554/${pathName}`;
-
+  
   let encoderArgs = '';
-
+  
   switch (gpuType) {
     case 'nvidia':
       encoderArgs = `-c:v h264_nvenc -preset p4 -tune ll -rc vbr -b:v ${bitrate} -maxrate ${bitrate} -bufsize ${parseInt(bitrate) * 2}M -gpu 0`;
@@ -156,7 +156,7 @@ buildFFmpegCommand(rtspUrl, gpuType, bitrate, pathName) {
     default:
       throw new Error(`不支援的 GPU 類型: ${gpuType}`);
   }
-
+  
   // 構建完整的 FFmpeg 命令
   return `ffmpeg -i ${rtspUrl} ${encoderArgs} -f rtsp ${rtspOutput}`;
 }
@@ -169,16 +169,16 @@ buildFFmpegCommand(rtspUrl, gpuType, bitrate, pathName) {
 ```javascript
 async startStream(rtspUrl, options = {}) {
   // ... 現有代碼 ...
-
+  
   const pathName = this.generatePathName(rtspUrl);
-
+  
   // 添加路徑時傳入 GPU 選項
   await this.addPath(pathName, rtspUrl, {
     useGpuEncoding: options.useGpuEncoding || false,
     gpuType: options.gpuType || 'nvidia',
     bitrate: options.bitrate || '2M'
   });
-
+  
   // ... 其餘代碼 ...
 }
 ```
@@ -191,15 +191,15 @@ async startStream(rtspUrl, options = {}) {
 router.post("/start", async (req, res, next) => {
   try {
     const { rtspUrl, useGpuEncoding, gpuType, bitrate } = req.body;
-
+    
     // ... 驗證代碼 ...
-
+    
     const result = await mediaMTXService.startStream(rtspUrl, {
       useGpuEncoding: useGpuEncoding || false,
       gpuType: gpuType || "nvidia",
       bitrate: bitrate || "2M",
     });
-
+    
     // ... 其餘代碼 ...
   } catch (error) {
     // ... 錯誤處理 ...
@@ -511,14 +511,24 @@ POST /api/rtsp/start
 
 1. **FFmpeg 版本**：
 
-   - 確保 FFmpeg 編譯時啟用了 GPU 硬體編碼支援
-   - Windows：下載包含硬體編碼的 FFmpeg 版本
-   - Linux：可能需要重新編譯 FFmpeg
+   - ✅ **已內建下載功能**：執行 `npm run ffmpeg:download` 可下載最新版本
+   - 下載的版本包含 GPU 硬體編碼支援（NVENC、QSV、AMF）
+   - Windows：從 gyan.dev 下載（包含所有編碼器）
+   - Linux：從 johnvansickle.com 下載靜態編譯版本
+   - macOS：從 evermeet.cx 下載
+   - 如需手動指定版本，可設置環境變數 `FFMPEG_PATH`
 
 2. **GPU 驅動程式**：
 
-   - 確保安裝最新 GPU 驅動程式
-   - NVIDIA：需要 CUDA Toolkit（可選但建議）
+   - **NVIDIA GPU（如 GeForce GT 1030）**：
+     - ✅ **必須安裝 NVIDIA 驅動程式**：從 [NVIDIA 官方網站](https://www.nvidia.com/drivers) 下載並安裝最新驅動程式
+     - ⚠️ **如果出現 `Cannot load nvcuda.dll` 錯誤**：
+       - 這表示缺少 CUDA 運行時庫
+       - **解決方案 1（推薦）**：更新到最新 NVIDIA 驅動程式（通常包含 CUDA 運行時）
+       - **解決方案 2**：安裝 [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)（如果驅動程式更新後仍無法解決）
+     - ✅ **GT 1030 支援 NVENC**：所有 GeForce GT 1030 都支援硬體編碼（NVENC）
+   - **Intel GPU**：需要安裝 Intel Media SDK
+   - **AMD GPU**：需要安裝 AMD Media Framework
 
 3. **性能監控**：
 

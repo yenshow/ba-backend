@@ -10,7 +10,6 @@ const { validateRequired, validateIntegers } = require("../middleware/validation
 const ALLOWED_TABLES = [
   { schema: "platform", table: "person" },
   { schema: "platform", table: "person_group" },
-  { schema: "platform", table: "person_head_pic" },
   { schema: "baseacs", table: "slot_card_records" },
   { schema: "deviceaccess", table: "door" },
   // 未來可以繼續加入其他允許的資料表
@@ -180,6 +179,35 @@ router.get(
     }
     
     res.sendSuccess(result.data);
+  })
+);
+
+/**
+ * 批次獲取圖片
+ * POST /api/external-data/baseacs/slot_card_records/pictures
+ * 注意：必須放在 /picture 之前，避免路由衝突
+ */
+router.post(
+  "/baseacs/slot_card_records/pictures",
+  authenticate,
+  validateRequired("picUris"),
+  asyncHandler(async (req, res) => {
+    const { picUris } = req.body;
+    
+    if (!Array.isArray(picUris) || picUris.length === 0) {
+      return res.sendError("picUris 必須為非空陣列", 400);
+    }
+
+    const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
+    const results = await handler.getBatchPicturesByUri(picUris);
+    const successCount = results.filter((r) => r.success).length;
+    
+    res.sendSuccess({
+      results,
+      total: picUris.length,
+      success: successCount,
+      failed: picUris.length - successCount,
+    });
   })
 );
 

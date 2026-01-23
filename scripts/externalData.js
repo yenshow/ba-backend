@@ -303,32 +303,6 @@ async function runTests() {
     "取得群組總數"
   );
 
-  // 測試 platform.person_head_pic
-  console.log("\n" + "=".repeat(60));
-  console.log("測試 platform.person_head_pic");
-  console.log("=".repeat(60));
-
-  await testAPI(
-    "GET",
-    `${API_BASE}/platform/person_head_pic`,
-    { limit: 3, offset: 0 },
-    "取得人員照片列表（前 3 筆）"
-  );
-
-  await testAPI(
-    "GET",
-    `${API_BASE}/platform/person_head_pic`,
-    { limit: 3, columns: "id,person_id,thumbnail_head_portrait" },
-    "取得人員照片列表（指定欄位，不包含大圖）"
-  );
-
-  await testAPI(
-    "GET",
-    `${API_BASE}/platform/person_head_pic/1`,
-    null,
-    "取得單一人員照片（ID = 1）"
-  );
-
   // 測試 baseacs.slot_card_records
   console.log("\n" + "=".repeat(60));
   console.log("測試 baseacs.slot_card_records");
@@ -414,10 +388,6 @@ function getDefaultOptionsForTable(schema, table) {
     "platform.person_group": {
       limit: 100,
         columns: ["id", "name", "is_deleted"],
-      },
-    "platform.person_head_pic": {
-      limit: 50,
-        columns: ["id", "person_id", "standard_head_portrait"],
       },
     "baseacs.slot_card_records": {
       limit: 1000,
