@@ -1,7 +1,10 @@
 const { spawnSync } = require("child_process");
+const path = require("path");
 const { resolveFfmpegPath } = require("../src/utils/ffmpegPath");
 
-const ffmpegBin = resolveFfmpegPath(__dirname);
+// 從 scripts 目錄計算專案根目錄
+const projectRoot = path.resolve(__dirname, "..");
+const ffmpegBin = resolveFfmpegPath(projectRoot);
 
 function run(args) {
   const result = spawnSync(ffmpegBin, args, { encoding: "utf8" });

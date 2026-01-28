@@ -556,6 +556,26 @@ async function initSchema() {
 
     console.log("✅ location_systems 表已建立（地點系統關聯表）");
 
+    // 建立 system_settings 表（系統設定表）
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS system_settings (
+				id SERIAL PRIMARY KEY,
+				key VARCHAR(100) NOT NULL UNIQUE,
+				value TEXT,
+				description TEXT,
+				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+    await createUpdatedAtTrigger(targetPool, "system_settings");
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(key);
+		`);
+
+    console.log("✅ system_settings 表已建立（系統設定表）");
+
     // 注意：sensor_readings 表已移除，統一使用 device_data_logs 表記錄設備數值
 
     await targetPool.end();

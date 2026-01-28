@@ -7,6 +7,8 @@
     "start": "node src/server.js",
     "ffmpeg:check": "node scripts/check-ffmpeg.js",
     "ffmpeg:download": "node scripts/download-ffmpeg.js",
+    "nvidia:check": "node scripts/check-nvidia-installation.js",
+    "test:nvenc:rtsp": "node scripts/test-nvenc-rtsp.js",
     "scan:modbus": "node scripts/scanModbusAddresses.js",
     "test:modbus": "node scripts/testModbusConnection.js",
     "db:init": "node src/database/initSchema.js",
@@ -40,6 +42,7 @@
     "jsonwebtoken": "^9.0.2",
     "modbus-serial": "^8.0.23",
     "morgan": "^1.10.1",
+    "multer": "^2.0.2",
     "pg": "^8.11.3",
     "socket.io": "^4.8.3"
   },

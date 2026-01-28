@@ -312,7 +312,6 @@ const ALERT_SOURCES = {
   DEVICE: "device",
   ENVIRONMENT: "environment",
   LIGHTING: "lighting",
-  PEOPLE_COUNTING: "people_counting",
   HVAC: "hvac",
   FIRE: "fire",
   SECURITY: "security",

@@ -8,6 +8,10 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const dotenv = require("dotenv");
+
+// 載入 .env 以讀取 DB_PORT 等配置
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const POSTGRES_DIR = path.join(PROJECT_DIR, "postgres");

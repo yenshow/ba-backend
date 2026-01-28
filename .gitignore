@@ -4,6 +4,9 @@ node_modules
 .vscode
 backups/
 
+# 上傳的檔案（運行時生成，不需要版本控制）
+uploads/
+
 # HLS 串流文件（運行時生成，不需要版本控制）
 public/hls/
 

@@ -37,6 +37,38 @@ class MediaMTXService extends EventEmitter {
     this.pathStatusCache = new Map();
     this.lastStatusUpdate = 0;
     this.statusUpdateInterval = 2000; // 批量更新間隔 2 秒
+
+    // 全域監聽 FFmpeg 服務錯誤（避免每次 startStream 臨時掛 listener）
+    // 目的：FFmpeg 任何時候掛掉，都能把 stream 標記錯誤並清理 MediaMTX path。
+    ffmpegService.on("error", async ({ streamId, error }) => {
+      try {
+        const stream = this.streams.get(streamId);
+        if (!stream) return;
+
+        // 只處理 GPU 編碼串流
+        if (!stream.useGpuEncoding) return;
+
+        console.error(`[MediaMTX Service] FFmpeg 進程錯誤(全域監聽): ${streamId}`, error);
+
+        // 清理：移除 MediaMTX path、停止 FFmpeg（如果還在）
+        try {
+          await ffmpegService.stopGpuEncoding(streamId);
+        } catch (_) {}
+        try {
+          await this.removePath(stream.pathName);
+        } catch (_) {}
+
+        // 從記憶體移除
+        this.streams.delete(streamId);
+
+        websocketService.emitRTSPStreamError({
+          streamId,
+          error: error,
+        });
+      } catch (e) {
+        console.error(`[MediaMTX Service] 全域 FFmpeg 錯誤處理失敗: ${e.message}`);
+      }
+    });
   }
 
   /**
@@ -147,7 +179,7 @@ class MediaMTXService extends EventEmitter {
       rtspUrl,
       hlsUrl,
       webrtcUrl,
-      status,
+      status: status || "running",
     };
   }
 
@@ -236,7 +268,73 @@ class MediaMTXService extends EventEmitter {
   }
 
   /**
-   * 添加路徑配置到 MediaMTX
+   * 添加路徑配置到 MediaMTX（Publisher 模式，等待 RTSP 推送）
+   * @param {string} pathName - 路徑名稱
+   * @returns {Promise<Object>}
+   */
+  async addPathForPublisher(pathName) {
+    // MediaMTX 路徑配置（Publisher 模式）
+    // 不設置 source，讓路徑等待 RTSP publisher 連接
+    const pathConfig = {
+      sourceOnDemand: false, // 立即啟動，不等待客戶端連接
+      // 注意：不設置 source，表示等待 publisher 推送
+    };
+
+    try {
+      console.log(
+        `[MediaMTX Service] 添加路徑（Publisher 模式）: ${pathName}`
+      );
+
+      const response = await axios.post(
+        `${this.apiBaseUrl}/v3/config/paths/add/${pathName}`,
+        pathConfig,
+        {
+          timeout: this.apiTimeout,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        if (error.response.status === 409 || error.response.status === 400) {
+          const errorMsg =
+            error.response.data?.error ||
+            error.response.data?.message ||
+            error.message ||
+            "";
+          const errorMsgLower = errorMsg.toLowerCase();
+          if (
+            errorMsgLower.includes("already exists") ||
+            errorMsgLower.includes("already exist") ||
+            errorMsgLower.includes("path already")
+          ) {
+            // 路徑已存在，但可能配置不正確，需要重新配置
+            console.warn(
+              `[MediaMTX Service] 路徑 ${pathName} 已存在，但可能不是 Publisher 模式，將嘗試移除並重新添加`
+            );
+            // 返回特殊標記，讓調用者知道需要處理
+            return { exists: true, needsReconfig: true };
+          }
+        }
+        const errorMsg =
+          error.response.data?.error ||
+          error.response.data?.message ||
+          error.message;
+        console.error(
+          `[MediaMTX Service] 添加路徑失敗 (${error.response.status}):`,
+          errorMsg
+        );
+        throw new Error(`添加路徑失敗: ${errorMsg}`);
+      }
+      throw new Error(`添加路徑失敗: ${error.message}`);
+    }
+  }
+
+  /**
+   * 添加路徑配置到 MediaMTX（Source 模式，拉取 RTSP 串流）
    * @param {string} pathName - 路徑名稱
    * @param {string} rtspUrl - RTSP 來源 URL
    * @returns {Promise<Object>}
@@ -469,12 +567,9 @@ class MediaMTXService extends EventEmitter {
       throw new Error("無效的 RTSP URL 格式，必須以 rtsp:// 開頭");
     }
 
-    // 解析 GPU 編碼選項
+    // 解析 GPU 編碼選項（簡化：只保留開關）
     const {
       useGpuEncoding = false,
-      gpuType = "nvidia",
-      bitrate = "2M",
-      preset = "p4",
     } = options;
 
     const streamId = this.generateStreamId(rtspUrl);
@@ -574,79 +669,74 @@ class MediaMTXService extends EventEmitter {
         const rtspOutput = `rtsp://${serverIP}:8554/${pathName}`;
 
         console.log(
-          `[MediaMTX Service] 使用 GPU 編碼 (${gpuType}): ${streamId}`
+          `[MediaMTX Service] 使用 GPU 編碼: ${streamId}`
         );
 
-        // 啟動 FFmpeg GPU 編碼
-        ffmpegService.startGpuEncoding(streamId, rtspUrl, rtspOutput, {
-          gpuType,
-          bitrate,
-          preset,
-        });
-
-        // 設置錯誤處理器（使用 once 確保只處理一次）
-        let ffmpegError = null;
-        let errorHandled = false;
-        
-        const errorHandler = (errorData) => {
-          if (errorData.streamId === streamId && !errorHandled) {
-            errorHandled = true;
-            console.error(
-              `[MediaMTX Service] FFmpeg GPU 編碼錯誤: ${streamId}`,
-              errorData.error
+        // ⭐ 關鍵：先移除舊路徑（如果存在），然後配置為 publisher 模式
+        const existingPathStatus = await this.getPathStatus(pathName);
+        if (existingPathStatus && existingPathStatus.ready) {
+          console.log(
+            `[MediaMTX Service] 路徑 ${pathName} 已存在，先移除以重新配置為 Publisher 模式`
+          );
+          try {
+            await this.removePath(pathName);
+            await this.waitForPathRemoval(pathName, 2000, 200);
+          } catch (removeError) {
+            console.warn(
+              `[MediaMTX Service] 移除舊路徑失敗: ${removeError.message}`
             );
-            // 記錄錯誤
-            ffmpegError = errorData.error;
-            // 清理失敗的串流
-            this.streams.delete(streamId);
-            websocketService.emitRTSPStreamError({
-              streamId,
-              error: errorData.error,
-            });
           }
-        };
-        ffmpegService.once("error", errorHandler);
-
-        // 等待 FFmpeg 進程啟動並就緒（動態等待，最多 3 秒）
-        const ffmpegReady = await ffmpegService.waitForProcessReady(
-          streamId,
-          3000,
-          200
-        );
-
-        // 檢查是否有錯誤發生（優先檢查錯誤）
-        if (ffmpegError || !ffmpegReady) {
-          await ffmpegService.stopGpuEncoding(streamId);
-          
-          // 提供更詳細的錯誤訊息
-          let errorMessage = "FFmpeg GPU 編碼失敗";
-          if (ffmpegError) {
-            if (ffmpegError.includes("nvcuda.dll") || ffmpegError.includes("Cannot load nvcuda")) {
-              errorMessage = "無法載入 NVIDIA CUDA 運行時庫 (nvcuda.dll)。\n" +
-                "可能原因：\n" +
-                "1. 未安裝 NVIDIA GPU 驅動程式\n" +
-                "2. 未安裝 CUDA Toolkit\n" +
-                "3. FFmpeg 版本與驅動程式不匹配\n" +
-                "建議：安裝最新版本的 NVIDIA 驅動程式或使用 CPU 編碼";
-            } else if (ffmpegError.includes("Cannot load")) {
-              errorMessage = `GPU 編碼器載入失敗: ${ffmpegError}`;
-            } else {
-              errorMessage = `FFmpeg GPU 編碼錯誤: ${ffmpegError}`;
-            }
-          } else {
-            errorMessage = "FFmpeg GPU 編碼進程啟動失敗或超時";
-          }
-          
-          throw new Error(errorMessage);
         }
 
-        // 使用 FFmpeg 輸出的 RTSP URL 作為 MediaMTX 的來源
-        actualRtspSource = rtspOutput;
-        gpuOptions = { gpuType, bitrate, preset };
+        // 配置 MediaMTX 路徑為 publisher 模式（等待 FFmpeg 推送）
+        await this.addPathForPublisher(pathName);
+
+        // 等待一小段時間，確保 MediaMTX 路徑已準備好接收推送
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        // 啟動 FFmpeg GPU 編碼（推送到 MediaMTX）
+        // ⚠️ 性能警告：2560x1440 解析度編碼負擔重，建議縮放到 1080p 或 720p
+        // 如果編碼速度 < 0.8x，會導致延遲累積
+        ffmpegService.startGpuEncoding(streamId, rtspUrl, rtspOutput, {
+          gpuType: "nvidia", // 固定使用 NVIDIA
+          scale: "1920:1080", // ⭐ 關鍵優化：縮放到 1080p，大幅降低編碼負擔
+          // 可選：使用 "1280:720" 獲得最低延遲（但畫質較低）
+        });
+
+        // 等待 FFmpeg 穩定啟動（避免 “剛啟動就秒退” 卻被視為成功）
+        const ok = await ffmpegService.waitForProcessStable(streamId, 2000, 8000, 200);
+        if (!ok) {
+          const last = ffmpegService.getLastError(streamId);
+          const ffmpegError = last?.error || "FFmpeg GPU 編碼啟動失敗";
+
+          await ffmpegService.stopGpuEncoding(streamId);
+          try {
+            await this.removePath(pathName);
+          } catch (_) {}
+
+          const { generateErrorMessage } = require("../../config/ffmpegConfig");
+          throw new Error(
+            generateErrorMessage({
+              ffmpegError,
+              isStillRunning: ffmpegService.isRunning(streamId),
+              ffmpegReady: false,
+            })
+          );
+        }
+
+        // GPU 編碼模式下，路徑已經配置為 publisher，不需要再次添加
+        actualRtspSource = null; // 標記為已配置
+        gpuOptions = { useGpuEncoding: true };
+      } else {
+        // 非 GPU 編碼：直接使用原始 RTSP URL（Source 模式）
+        actualRtspSource = rtspUrl;
       }
 
-      // 添加路徑到 MediaMTX（重新創建，確保從最新片段開始）
-      const addPathResult = await this.addPath(pathName, actualRtspSource);
+      // 添加路徑到 MediaMTX（僅在非 GPU 編碼模式下需要）
+      let addPathResult = null;
+      if (actualRtspSource) {
+        addPathResult = await this.addPath(pathName, actualRtspSource);
+      }
 
       // 生成播放 URL（統一方法，包含時間戳以防止緩存）
       const timestamp = Date.now();
@@ -679,11 +769,19 @@ class MediaMTXService extends EventEmitter {
       }
 
       // ⭐ 優化：輪詢檢查路徑是否就緒，而不是固定等待時間
-        const ready = await this.waitForPathReady(pathName, 5000, 200);
-        if (!ready) {
-          console.warn(
-            `[MediaMTX Service] 路徑 ${pathName} 就緒超時（5秒），但繼續啟動流程（HLS.js 會自動重試）`
-          );
+      const ready = await this.waitForPathReady(pathName, 8000, 200);
+      if (!ready) {
+        // 不再回傳成功（避免前端拿到 404 manifest）
+        // 清理：移除路徑、停止 FFmpeg（若有）
+        try {
+          if (useGpuEncoding) await ffmpegService.stopGpuEncoding(streamId);
+        } catch (_) {}
+        try {
+          await this.removePath(pathName);
+        } catch (_) {}
+
+        this.streams.delete(streamId);
+        throw new Error(`HLS manifest 尚未就緒（${pathName}），請稍後重試`);
       }
 
       // 路徑已就緒或超時，推送 WebSocket 事件

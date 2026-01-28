@@ -20,7 +20,26 @@ function resolveFfmpegPath(baseDir = __dirname) {
 
   // 2. 檢查下載的最新版本（ffmpeg/bin/）
   // 從 baseDir 計算到專案根目錄的路徑
-  const projectRoot = path.resolve(baseDir, "..", "..");
+  // 如果 baseDir 已經是專案根目錄（包含 package.json），直接使用
+  // 否則往上查找，直到找到包含 package.json 的目錄
+  let projectRoot = baseDir;
+  let currentDir = baseDir;
+  
+  // 最多往上查找 5 層，避免無限循環
+  for (let i = 0; i < 5; i++) {
+    const packageJsonPath = path.join(currentDir, "package.json");
+    if (fs.existsSync(packageJsonPath)) {
+      projectRoot = currentDir;
+      break;
+    }
+    const parentDir = path.resolve(currentDir, "..");
+    // 如果已經到達根目錄，停止查找
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+  
   const downloadedPath = path.join(
     projectRoot,
     "ffmpeg",

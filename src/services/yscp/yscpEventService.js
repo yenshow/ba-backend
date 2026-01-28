@@ -6,6 +6,9 @@ const serviceLogger = logger.createLogger("YSCP Event Service");
 /**
  * YSCP 事件處理服務
  * 處理從 YSCP 系統接收的事件
+ * 
+ * 注意：YSCP 系統已設定為只發送一種類型的事件（包含 events 數組的警報事件）
+ * 因此不需要進行事件類型判斷，統一處理即可
  */
 class YscpEventService {
 	/**
@@ -16,63 +19,26 @@ class YscpEventService {
 	async handleEvent(eventData) {
 		try {
 			// YSCP 實際事件結構：{ method: 'OnEventNotify', params: { events: [...] }, ... }
-			// 從 params.events 中提取事件類型
-			const events = eventData?.params?.events || [];
-			const hasEvents = events.length > 0;
-			
-			// 如果有 events 數組，視為警報事件；否則視為通用事件
-			if (hasEvents) {
-				return await this.handleAlarmEvent(eventData);
-			} else {
-				return await this.handleGenericEvent(eventData);
+			// YSCP 系統已設定為只發送包含 events 數組的警報事件，統一處理即可
+			const io = websocketService.getIO();
+			if (io) {
+				io.emit("yscp:event:alarm", {
+					type: "alarm",
+					data: eventData,
+					timestamp: new Date().toISOString(),
+				});
 			}
+
+			return {
+				processed: true,
+				eventType: "alarm",
+			};
 		} catch (error) {
 			serviceLogger.error("處理事件時發生錯誤", {
 				error: error.message,
 			});
 			throw error;
 		}
-	}
-
-	/**
-	 * 處理事件並推送 WebSocket 通知給前端
-	 * @param {object} eventData - 事件數據
-	 * @param {string} eventType - 事件類型（'alarm' | 'generic'）
-	 * @returns {Promise<object>} 處理結果
-	 */
-	async _processEvent(eventData, eventType) {
-		// 通過 WebSocket 推送事件給前端，由前端決定是否重新載入資料
-		const io = websocketService.getIO();
-		if (io) {
-			io.emit(`yscp:event:${eventType}`, {
-				type: eventType,
-				data: eventData,
-				timestamp: new Date().toISOString(),
-			});
-		}
-
-		return {
-			processed: true,
-			eventType,
-		};
-	}
-
-	/**
-	 * 處理警報事件
-	 * @param {object} eventData - 事件數據
-	 * @returns {Promise<object>} 處理結果
-	 */
-	async handleAlarmEvent(eventData) {
-		return await this._processEvent(eventData, "alarm");
-	}
-
-	/**
-	 * 處理通用事件
-	 * @param {object} eventData - 事件數據
-	 * @returns {Promise<object>} 處理結果
-	 */
-	async handleGenericEvent(eventData) {
-		return await this._processEvent(eventData, "generic");
 	}
 }
 

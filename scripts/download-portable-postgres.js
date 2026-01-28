@@ -11,6 +11,10 @@ const https = require("https");
 const http = require("http");
 const { execSync } = require("child_process");
 const os = require("os");
+const dotenv = require("dotenv");
+
+// 載入 .env 以讀取 DB_PORT 等配置
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const VERSION = "16.11.0"; // PostgreSQL 版本（對應 GitHub Releases 標籤，例如 v16.11.0）
 const {
@@ -391,13 +395,55 @@ function initDatabase() {
 	const postgresqlConf = getPostgresqlConfPath();
 	// 從環境變數讀取端口，預設為 5432
 	const dbPort = process.env.DB_PORT || "5432";
-	fs.appendFileSync(postgresqlConf, "\nlisten_addresses = 'localhost'\n");
-	fs.appendFileSync(postgresqlConf, `port = ${dbPort}\n`);
-	fs.appendFileSync(postgresqlConf, "max_connections = 100\n");
+	
+	// 讀取現有配置
+	let confContent = "";
+	if (fs.existsSync(postgresqlConf)) {
+		confContent = fs.readFileSync(postgresqlConf, "utf8");
+	}
+	
+	// 更新或添加配置項
+	let needsWrite = false;
+	
+	if (!confContent.includes("listen_addresses =")) {
+		confContent += "\nlisten_addresses = 'localhost'\n";
+		needsWrite = true;
+	}
+	
+	// 更新 port 配置
+	if (confContent.match(/^port\s*=/m)) {
+		// 如果 port 已存在，更新它
+		confContent = confContent.replace(/^port\s*=\s*\d+/m, `port = ${dbPort}`);
+		needsWrite = true;
+	} else {
+		// 如果 port 不存在，添加它
+		confContent += `port = ${dbPort}\n`;
+		needsWrite = true;
+	}
+	
+	if (!confContent.includes("max_connections =")) {
+		confContent += "max_connections = 100\n";
+		needsWrite = true;
+	}
+	
+	// 如果有變更，寫入檔案
+	if (needsWrite) {
+		fs.writeFileSync(postgresqlConf, confContent);
+	}
 
 	const pgHbaConf = path.join(DATA_DIR, "pg_hba.conf");
-	fs.appendFileSync(pgHbaConf, "\nhost all all 127.0.0.1/32 trust\n");
-	fs.appendFileSync(pgHbaConf, "host all all ::1/128 trust\n");
+	// 檢查 trust 規則是否已存在，避免重複添加
+	let pgHbaContent = "";
+	if (fs.existsSync(pgHbaConf)) {
+		pgHbaContent = fs.readFileSync(pgHbaConf, "utf8");
+	}
+	
+	if (!pgHbaContent.includes("host all all 127.0.0.1/32 trust")) {
+		fs.appendFileSync(pgHbaConf, "\nhost all all 127.0.0.1/32 trust\n");
+	}
+	if (!pgHbaContent.includes("host all all ::1/128 trust")) {
+		fs.appendFileSync(pgHbaConf, "host all all ::1/128 trust\n");
+	}
 
 	log(`✅ 資料庫已初始化`, "green");
 }
@@ -534,11 +580,7 @@ function setupDatabase() {
 
 	try {
 		// 建立資料庫
-		// Windows 需要特殊處理 SQL 中的引號
-		const dbCheckCmd =
-			process.platform === "win32"
-				? `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`
-				: `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
+		const dbCheckCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
 		const dbCheck = execSync(dbCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",

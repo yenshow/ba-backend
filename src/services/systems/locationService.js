@@ -480,6 +480,46 @@ function getValidLocations(locations) {
 }
 
 /**
+ * 刪除指定區域中無系統的地點（用於事務內部）
+ */
+async function deleteLocationsWithoutSystems(query, zoneId) {
+  await query(
+    `DELETE FROM locations 
+     WHERE zone_id = $1 
+     AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
+    [zoneId]
+  );
+}
+
+/**
+ * 刪除指定地點列表中無系統的地點（用於事務內部）
+ */
+async function deleteLocationsByIdsWithoutSystems(query, locationIds) {
+  if (locationIds.length === 0) return;
+  await query(
+    `DELETE FROM locations 
+     WHERE id = ANY($1::int[]) 
+     AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
+    [locationIds]
+  );
+}
+
+/**
+ * 檢查並刪除空區域（用於事務內部）
+ */
+async function deleteEmptyZoneIfNeeded(query, zoneId) {
+  const remainingLocations = await query(
+    "SELECT id FROM locations WHERE zone_id = $1",
+    [zoneId]
+  );
+  if (remainingLocations.length === 0) {
+    await query("DELETE FROM zones WHERE id = $1", [zoneId]);
+    return true;
+  }
+  return false;
+}
+
+/**
  * 更新區域
  */
 async function updateZone(id, zoneData, userId) {
@@ -538,21 +578,10 @@ async function updateZone(id, zoneData, userId) {
         }
 
         // 刪除當前區域中沒有系統的地點
-        await query(
-          `DELETE FROM locations 
-           WHERE zone_id = $1 
-           AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
-          [id]
-        );
+        await deleteLocationsWithoutSystems(query, id);
 
         // 如果當前區域沒有地點了，刪除它
-        const remainingLocations = await query(
-          "SELECT id FROM locations WHERE zone_id = $1",
-          [id]
-        );
-        if (remainingLocations.length === 0) {
-          await query("DELETE FROM zones WHERE id = $1", [id]);
-        }
+        await deleteEmptyZoneIfNeeded(query, id);
       });
 
       // 返回目標區域的資料
@@ -647,15 +676,13 @@ async function updateZone(id, zoneData, userId) {
         const locationsToDelete = Array.from(existingLocationIds).filter(
           (id) => !updatedLocationIds.has(id)
         );
-        if (locationsToDelete.length > 0) {
-          // 只刪除沒有系統的地點（避免誤刪其他系統使用的地點）
-          await query(
-            `DELETE FROM locations 
-             WHERE id = ANY($1::int[]) 
-             AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
-            [locationsToDelete.map((id) => parseInt(id))]
-          );
-        }
+        await deleteLocationsByIdsWithoutSystems(
+          query,
+          locationsToDelete.map((id) => parseInt(id))
+        );
+
+        // 清理更新後無系統的地點（確保資料一致性）
+        await deleteLocationsWithoutSystems(query, id);
       }
     });
 
@@ -795,9 +822,25 @@ async function updateLocation(id, locationData, userId) {
     }
 
     // 使用事務更新地點和系統
+    let locationDeleted = false;
     await db.transaction(async (query) => {
       await updateLocationWithSystems(query, id, locationData, userId);
+      
+      // 檢查地點是否已被刪除（因為變成無系統）
+      const locationCheck = await query(
+        "SELECT id FROM locations WHERE id = $1",
+        [id]
+      );
+      locationDeleted = locationCheck.length === 0;
     });
+
+    // 如果地點已被刪除（因為變成無系統），返回特殊訊息
+    if (locationDeleted) {
+      return {
+        message: "地點已刪除（無系統關聯）",
+        location: null,
+      };
+    }
 
     const result = await getLocationById(id);
     return {
@@ -1159,6 +1202,28 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
       await query(`DELETE FROM location_systems WHERE id = ANY($1::int[])`, [
         systemsToDelete.map((id) => parseInt(id)),
       ]);
+    }
+
+    // 檢查更新後地點是否還有系統，如果沒有則刪除地點
+    const remainingSystems = await query(
+      "SELECT id FROM location_systems WHERE location_id = $1",
+      [locationId]
+    );
+    if (remainingSystems.length === 0) {
+      // 獲取 zoneId 以便後續清理
+      const locationInfo = await query(
+        "SELECT zone_id FROM locations WHERE id = $1",
+        [locationId]
+      );
+      const zoneId = locationInfo[0]?.zone_id;
+      
+      // 刪除無系統的地點
+      await query("DELETE FROM locations WHERE id = $1", [locationId]);
+      
+      // 如果區域沒有地點了，刪除區域
+      if (zoneId) {
+        await deleteEmptyZoneIfNeeded(query, zoneId);
+      }
     }
   }
 }

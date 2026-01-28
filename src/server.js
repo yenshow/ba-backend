@@ -3,6 +3,7 @@ const http = require("http");
 const cors = require("cors");
 const morgan = require("morgan");
 const os = require("os");
+const path = require("path");
 const config = require("./config");
 
 // 向後兼容：使用新的配置結構
@@ -30,6 +31,7 @@ const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
+const settingsRoutes = require("./routes/settingsRoutes");
 
 // 服務
 const mediaMTXService = require("./services/communication/mediaMTXService");
@@ -112,6 +114,9 @@ app.use(
 // 統一響應格式中間件
 app.use(responseHandler);
 
+// 靜態檔案服務（用於提供上傳的檔案）
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+
 // 註冊路由
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
@@ -124,6 +129,7 @@ app.use("/api/people-counting", peopleCountingRoutes); // 人流統計地點管�
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes);
 app.use("/api/yscp", yscpEventRoutes);
+app.use("/api/settings", settingsRoutes); // 系統設定 API
 
 // 注意：HLS 串流現在由 MediaMTX 提供，不再需要本地靜態文件服務
 // MediaMTX 在 http://localhost:8888 提供 HLS 服務

@@ -5,8 +5,6 @@
  */
 
 const externalDb = require("../../database/externalDb");
-const alertService = require("../alerts/alertService");
-const errorTracker = require("../alerts/errorTracker");
 const {
   getPeopleCountingLocations,
   getPeopleCountingConfig,
@@ -151,68 +149,14 @@ async function checkPeopleCountingRecords(options = {}) {
       const physicalId = record.physical_id;
       const locationConfig = physicalId ? locationConfigMap.get(Number(physicalId)) : null;
 
-      // 1. 檢查是否為未註冊人員（person_id = -1）
-      if (record.person_id === -1) {
-        // 使用 errorTracker 累積機制：達到 5 次以上才創建警報
-        const locationName = locationConfig?.locationName || "未知地點";
-        const deviceInfo = physicalId ? `設備 ID: ${physicalId}` : "未知設備";
-
-        try {
-          // 使用地點 ID 作為 source_id（如果找不到地點，使用 physical_id）
-          const sourceId = locationConfig?.locationId || physicalId || 0;
-
-          // 構建錯誤訊息（用於 errorTracker）
-          const errorMessage = `未註冊人員刷卡 - ${locationName} (${deviceInfo})`;
-
-          // 使用 errorTracker 記錄錯誤（會自動累積次數，達到閾值時創建警報）
-          // errorTracker 內部會：
-          // 1. 查詢規則獲取 min_errors 閾值（預設 5 次）
-          // 2. 使用規則的 severity 和 message_template
-          // 3. 達到閾值時自動創建警報
-          const alertCreated = await errorTracker.recordError(
-            alertService.ALERT_SOURCES.PEOPLE_COUNTING,
-            sourceId,
-            alertService.ALERT_TYPES.ERROR,
-            errorMessage,
-            {
-              name: locationName,
-              device_info: deviceInfo,
-              physical_id: physicalId || "",
-            }
-          );
-
-          if (alertCreated) {
-            logger.warn("未註冊人員警報已創建（達到累積閾值）", {
-              physicalId,
-              locationId: sourceId,
-              timestamp: record.swip_card_rev_time,
-              module: "peopleCountingMonitor",
-            });
-          } else if (process.env.ENABLE_DETAILED_LOGS === "true") {
-            logger.debug("未註冊人員事件已記錄（未達累積閾值）", {
-            physicalId,
-            locationId: sourceId,
-            timestamp: record.swip_card_rev_time,
-            module: "peopleCountingMonitor",
-          });
-          }
-        } catch (error) {
-          logger.error("記錄未註冊人員錯誤失敗", {
-            error,
-            record,
-            module: "peopleCountingMonitor",
-          });
-        }
-      }
-
-      // 2. 判斷事件類型（entry/exit）- 重用 peopleCountingService 的邏輯
+      // 判斷事件類型（entry/exit）- 重用 peopleCountingService 的邏輯
       const eventType = parseEventType(
         record,
         locationConfig?.entryDoorId,
         locationConfig?.exitDoorId
       );
 
-      // 3. 記錄處理完成（不再推送 WebSocket，由前端收到 YSCP 事件後重新載入資料）
+      // 記錄處理完成（不再推送 WebSocket，由前端收到 YSCP 事件後重新載入資料）
       if (isDetailedLogsEnabled()) {
         logger.info("處理人流記錄完成", {
           module: "peopleCountingMonitor",
