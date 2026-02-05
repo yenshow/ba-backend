@@ -1,4 +1,5 @@
 const BaseExternalDataService = require("../baseExternalDataService");
+const { applyDefaultTimeFilters } = require("../../../utils/dateRangeUtils");
 const axios = require("axios");
 const https = require("https");
 const crypto = require("crypto");
@@ -6,8 +7,8 @@ const config = require("../../../config");
 const logger = require("../../../utils/logger");
 
 /**
- * Baseacs Slot Card Records 專用處理器
- * 處理 baseacs.slot_card_records 資料表的特殊邏輯
+ * Baseacs 刷卡記錄專用處理器（baseacs.slot_card_records）
+ * 時間：timeRange=today 或 startTime/endTime；未指定時預設今天
  */
 class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
   constructor() {
@@ -19,126 +20,19 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
     });
   }
 
-  /**
-   * 覆寫：取得可搜尋的欄位
-   */
   getSearchableColumns() {
     return ["full_name", "card_no", "message_key"];
   }
 
-  /**
-   * 取得時間範圍的開始和結束時間
-   */
-  getTimeRange(timeRange) {
-    const now = new Date();
-    const start = new Date();
-    const end = new Date(now);
-
-    switch (timeRange) {
-      case "last_hour":
-        // 過去一小時
-        start.setHours(now.getHours() - 1);
-        break;
-
-      case "today":
-        // 今天
-        start.setHours(0, 0, 0, 0);
-        end.setHours(23, 59, 59, 999);
-        break;
-
-      case "yesterday":
-        // 昨天
-        start.setDate(now.getDate() - 1);
-        start.setHours(0, 0, 0, 0);
-        end.setDate(now.getDate() - 1);
-        end.setHours(23, 59, 59, 999);
-        break;
-
-      case "this_week":
-        // 本週（週一到今天）
-        const dayOfWeek = now.getDay();
-        const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // 週日視為週六
-        start.setDate(now.getDate() - diff);
-        start.setHours(0, 0, 0, 0);
-        end.setHours(23, 59, 59, 999);
-        break;
-
-      case "last_week":
-        // 上週（週一到週日）
-        const lastWeekStart = new Date(now);
-        const lastWeekEnd = new Date(now);
-        const lastDayOfWeek = now.getDay();
-        const lastDiff = lastDayOfWeek === 0 ? 6 : lastDayOfWeek - 1;
-        lastWeekStart.setDate(now.getDate() - lastDiff - 7);
-        lastWeekStart.setHours(0, 0, 0, 0);
-        lastWeekEnd.setDate(now.getDate() - lastDiff - 1);
-        lastWeekEnd.setHours(23, 59, 59, 999);
-        return { start: lastWeekStart, end: lastWeekEnd };
-
-      case "last_30_days":
-        // 最近 30 天
-        start.setDate(now.getDate() - 30);
-        start.setHours(0, 0, 0, 0);
-        end.setHours(23, 59, 59, 999);
-        break;
-
-      default:
-        return null;
-    }
-
-    return { start, end };
-  }
-
-  /**
-   * 計算近兩天的開始時間（兩天前的 00:00:00）
-   */
-  getTwoDaysAgo() {
-    const now = new Date();
-    const twoDaysAgo = new Date(now);
-    twoDaysAgo.setDate(now.getDate() - 2);
-    twoDaysAgo.setHours(0, 0, 0, 0);
-    return twoDaysAgo;
-  }
-
-  /**
-   * 套用預設篩選條件（is_deleted 和近兩天時間範圍）
-   */
   applyDefaultFilters(filters) {
-    // 預設只顯示未刪除的記錄（is_deleted = false）
-    if (filters.is_deleted === undefined) {
-      filters.is_deleted = false;
-    }
-
-    // 預設篩選近兩天的資料
-    // 如果未指定時間範圍且未指定自訂時間，則使用近兩天
-    if (!filters.timeRange && !filters.startTime && !filters.endTime) {
-      filters.swip_card_rev_time_start = this.getTwoDaysAgo().toISOString();
-    }
-
-    // 處理時間範圍篩選
-    if (filters.timeRange) {
-      const timeRange = this.getTimeRange(filters.timeRange);
-      if (timeRange) {
-        filters.swip_card_rev_time_start = timeRange.start.toISOString();
-        filters.swip_card_rev_time_end = timeRange.end.toISOString();
-      }
-      delete filters.timeRange;
-    }
-
-    // 處理自訂時間範圍
-    if (filters.startTime) {
-      filters.swip_card_rev_time_start = filters.startTime;
-      delete filters.startTime;
-    }
-    if (filters.endTime) {
-      filters.swip_card_rev_time_end = filters.endTime;
-      delete filters.endTime;
-    }
+    if (filters.is_deleted === undefined) filters.is_deleted = false;
+    applyDefaultTimeFilters(
+      filters,
+      "swip_card_rev_time_start",
+      "swip_card_rev_time_end",
+    );
   }
 
-  /**
-   * 覆寫：取得資料列表
-   */
   async getList(filters = {}) {
     this.applyDefaultFilters(filters);
 
@@ -156,9 +50,6 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
     return result;
   }
 
-  /**
-   * 覆寫：取得單筆資料
-   */
   async getById(id) {
     const result = await super.getById(id);
 
@@ -173,9 +64,6 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
     return result;
   }
 
-  /**
-   * 覆寫：取得資料總數
-   */
   async getCount(filters = {}) {
     this.applyDefaultFilters(filters);
     return await super.getCount(filters);
@@ -204,7 +92,7 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
    */
   async _getAlarmPicture(picUri) {
     const serviceLogger = logger.createLogger("YSCP Alarm Picture Service");
-    
+
     try {
       // 構建 URL 路徑
       const urlPath = `/artemis/api/eventService/${config.yscp.apiVersion}/image_data`;
@@ -236,7 +124,7 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
             "X-Ca-Signature": signature,
           },
           httpsAgent,
-        }
+        },
       );
 
       return {
@@ -264,7 +152,7 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
    */
   async getPictureById(id) {
     const recordResult = await this.getById(id);
-    
+
     if (!recordResult.success || !recordResult.data) {
       return { success: false, error: "記錄不存在" };
     }
@@ -328,7 +216,7 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
           success: true,
           image: pictureResult.data,
         };
-      })
+      }),
     );
 
     return results.map((result, index) => {

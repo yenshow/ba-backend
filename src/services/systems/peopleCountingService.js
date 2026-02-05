@@ -1,6 +1,6 @@
 /**
  * 人流統計地點管理服務
- * 
+ *
  * 使用統一地點管理架構，location_type = 'people_counting'
  */
 
@@ -8,6 +8,7 @@ const locationService = require("./locationService");
 const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
 const yscpPersonService = require("../yscp/yscpPersonService");
+const { getTodayTimeRange } = require("../../utils/dateRangeUtils");
 
 // ========== 統一錯誤處理和驗證工具 ==========
 
@@ -56,7 +57,12 @@ async function handleServiceError(fn, errorMessage, context = {}) {
  * @param {Object} context - 上下文信息
  * @returns {Promise} 函數執行結果或預設值
  */
-async function handleNonCriticalError(fn, warnMessage, defaultValue, context = {}) {
+async function handleNonCriticalError(
+  fn,
+  warnMessage,
+  defaultValue,
+  context = {},
+) {
   try {
     return await fn();
   } catch (error) {
@@ -76,7 +82,8 @@ async function handleNonCriticalError(fn, warnMessage, defaultValue, context = {
  * @throws {Error} 驗證失敗時拋出錯誤
  */
 function validateLocationData(locationData, isUpdate = false) {
-  const { name, zoneId, personGroupIds, entryDoorId, exitDoorId } = locationData;
+  const { name, zoneId, personGroupIds, entryDoorId, exitDoorId } =
+    locationData;
 
   // 建立時驗證必填欄位
   if (!isUpdate) {
@@ -102,14 +109,19 @@ function validateLocationData(locationData, isUpdate = false) {
     if (name !== undefined && !name?.trim()) {
       throw createValidationError("地點名稱不能為空");
     }
-    if (personGroupIds !== undefined && (!Array.isArray(personGroupIds) || personGroupIds.length === 0)) {
+    if (
+      personGroupIds !== undefined &&
+      (!Array.isArray(personGroupIds) || personGroupIds.length === 0)
+    ) {
       throw createValidationError("至少需要選擇一個進場單位");
     }
   }
 
   // 驗證入口和出口不能相同
-  const finalEntry = entryDoorId !== undefined ? entryDoorId : (locationData.currentEntry || null);
-  const finalExit = exitDoorId !== undefined ? exitDoorId : (locationData.currentExit || null);
+  const finalEntry =
+    entryDoorId !== undefined ? entryDoorId : locationData.currentEntry || null;
+  const finalExit =
+    exitDoorId !== undefined ? exitDoorId : locationData.currentExit || null;
   if (finalEntry && finalExit && finalEntry === finalExit) {
     throw createValidationError("入口和出口不能是同一個設備");
   }
@@ -132,35 +144,33 @@ function ensureArray(value) {
 async function getPeopleCountingLocations(options = {}) {
   return handleServiceError(
     async () => {
-    const { zoneId } = options;
-    
-    // 使用統一服務，篩選 people_counting 類型
-    const result = await locationService.getZones({
-      locationType: "people_counting",
-    });
-    const zones = result.zones;
-    
-    // 如果指定了 zoneId，只返回該區域的地點
-    if (zoneId) {
-      const zone = zones.find((z) => String(z.id) === String(zoneId));
-      if (zone) {
-        return {
+      const { zoneId } = options;
+
+      // 使用統一服務，篩選 people_counting 類型
+      const result = await locationService.getZones({
+        locationType: "people_counting",
+      });
+      const zones = result.zones;
+
+      // 如果指定了 zoneId，只返回該區域的地點
+      if (zoneId) {
+        const zone = zones.find((z) => String(z.id) === String(zoneId));
+        if (zone) {
+          return {
             locations: ensureArray(zone.locations),
-        };
+          };
+        }
+        return { locations: [] };
       }
-      return { locations: [] };
-    }
-    
-    // 返回所有地點（扁平化）
-    const allLocations = zones.flatMap(
-        (zone) => ensureArray(zone.locations)
-    );
-    return {
-      locations: allLocations,
-    };
+
+      // 返回所有地點（扁平化）
+      const allLocations = zones.flatMap((zone) => ensureArray(zone.locations));
+      return {
+        locations: allLocations,
+      };
     },
     "取得人流統計地點列表失敗",
-    { options }
+    { options },
   );
 }
 
@@ -170,23 +180,23 @@ async function getPeopleCountingLocations(options = {}) {
 async function getPeopleCountingLocationById(id) {
   return handleServiceError(
     async () => {
-    // 先取得地點
-    const locationResult = await locationService.getLocationById(id);
-    const location = locationResult.location;
-    
-    // 驗證地點類型：檢查 systems 中是否有 people_counting 系統
+      // 先取得地點
+      const locationResult = await locationService.getLocationById(id);
+      const location = locationResult.location;
+
+      // 驗證地點類型：檢查 systems 中是否有 people_counting 系統
       const hasPeopleCountingSystem = ensureArray(location.systems).some(
-      (sys) => sys.systemType === "people_counting"
-    );
-    
-    if (!hasPeopleCountingSystem) {
+        (sys) => sys.systemType === "people_counting",
+      );
+
+      if (!hasPeopleCountingSystem) {
         throw createValidationError("地點類型不正確");
-    }
-    
-    return { location };
+      }
+
+      return { location };
     },
     "取得人流統計地點失敗",
-    { id }
+    { id },
   );
 }
 
@@ -196,39 +206,39 @@ async function getPeopleCountingLocationById(id) {
 async function createPeopleCountingLocation(locationData, userId) {
   return handleServiceError(
     async () => {
-    const {
-      name,
-      zoneId,
-      personGroupIds = [],
-      entryDoorId,
-      exitDoorId,
-    } = locationData;
+      const {
+        name,
+        zoneId,
+        personGroupIds = [],
+        entryDoorId,
+        exitDoorId,
+      } = locationData;
 
       // 使用統一驗證函數
       validateLocationData(locationData, false);
 
-    // 使用統一服務建立地點（傳入正確的配置格式）
-    const result = await locationService.createLocation(
-      {
-        zoneId: parseInt(zoneId),
-        name: name.trim(),
-        locationType: "people_counting",
-        config: {
-          personGroupIds,
-          entryDoorId,
-          exitDoorId,
+      // 使用統一服務建立地點（傳入正確的配置格式）
+      const result = await locationService.createLocation(
+        {
+          zoneId: parseInt(zoneId),
+          name: name.trim(),
+          locationType: "people_counting",
+          config: {
+            personGroupIds,
+            entryDoorId,
+            exitDoorId,
+          },
         },
-      },
-      userId
-    );
+        userId,
+      );
 
-    return {
-      message: "人流統計地點建立成功",
-      location: result.location,
-    };
+      return {
+        message: "人流統計地點建立成功",
+        location: result.location,
+      };
     },
     "建立人流統計地點失敗",
-    { userId }
+    { userId },
   );
 }
 
@@ -238,10 +248,10 @@ async function createPeopleCountingLocation(locationData, userId) {
 async function updatePeopleCountingLocation(id, locationData, userId) {
   return handleServiceError(
     async () => {
-    const { name, personGroupIds, entryDoorId, exitDoorId } = locationData;
+      const { name, personGroupIds, entryDoorId, exitDoorId } = locationData;
 
-    // 驗證地點是否存在且類型正確
-    const existing = await getPeopleCountingLocationById(id);
+      // 驗證地點是否存在且類型正確
+      const existing = await getPeopleCountingLocationById(id);
 
       // 準備驗證資料（包含現有值）
       const validationData = {
@@ -253,45 +263,51 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       // 使用統一驗證函數
       validateLocationData(validationData, true);
 
-    // 建立更新配置
-    const updates = {};
-    if (name !== undefined) {
-      updates.name = name.trim();
-    }
+      // 建立更新配置
+      const updates = {};
+      if (name !== undefined) {
+        updates.name = name.trim();
+      }
 
-    // 建立配置物件（合併現有配置）
-    const currentConfig = {
-      person_group_ids: existing.location.personGroupIds || [],
-      entry_door_id: existing.location.entryDoorId || null,
-      exit_door_id: existing.location.exitDoorId || null,
-    };
+      // 建立配置物件（合併現有配置）
+      const currentConfig = {
+        person_group_ids: existing.location.personGroupIds || [],
+        entry_door_id: existing.location.entryDoorId || null,
+        exit_door_id: existing.location.exitDoorId || null,
+      };
 
-    const config = {
-      ...currentConfig,
-      ...(personGroupIds !== undefined && { person_group_ids: personGroupIds }),
-      ...(entryDoorId !== undefined && { entry_door_id: entryDoorId }),
-      ...(exitDoorId !== undefined && { exit_door_id: exitDoorId }),
-    };
+      const config = {
+        ...currentConfig,
+        ...(personGroupIds !== undefined && {
+          person_group_ids: personGroupIds,
+        }),
+        ...(entryDoorId !== undefined && { entry_door_id: entryDoorId }),
+        ...(exitDoorId !== undefined && { exit_door_id: exitDoorId }),
+      };
 
-    // 使用統一服務更新地點（傳入正確的格式）
-    const updateData = {
-      ...(updates.name && { name: updates.name }),
-      config: {
-        personGroupIds: config.person_group_ids,
-        entryDoorId: config.entry_door_id,
-        exitDoorId: config.exit_door_id,
-      },
-    };
+      // 使用統一服務更新地點（傳入正確的格式）
+      const updateData = {
+        ...(updates.name && { name: updates.name }),
+        config: {
+          personGroupIds: config.person_group_ids,
+          entryDoorId: config.entry_door_id,
+          exitDoorId: config.exit_door_id,
+        },
+      };
 
-    const result = await locationService.updateLocation(id, updateData, userId);
+      const result = await locationService.updateLocation(
+        id,
+        updateData,
+        userId,
+      );
 
-    return {
-      message: "人流統計地點更新成功",
-      location: result.location,
-    };
+      return {
+        message: "人流統計地點更新成功",
+        location: result.location,
+      };
     },
     "更新人流統計地點失敗",
-    { id, userId }
+    { id, userId },
   );
 }
 
@@ -301,14 +317,14 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
 async function deletePeopleCountingLocation(id) {
   return handleServiceError(
     async () => {
-    // 驗證地點是否存在且類型正確
-    await getPeopleCountingLocationById(id);
+      // 驗證地點是否存在且類型正確
+      await getPeopleCountingLocationById(id);
 
-    // 使用統一服務刪除地點
-    return await locationService.deleteLocation(id);
+      // 使用統一服務刪除地點
+      return await locationService.deleteLocation(id);
     },
     "刪除人流統計地點失敗",
-    { id }
+    { id },
   );
 }
 
@@ -358,16 +374,15 @@ function parseEventType(record, entryDoorId, exitDoorId) {
  * @returns {Promise<Object>} 工地列表
  */
 async function getSites() {
-  return handleServiceError(
-    async () => {
+  return handleServiceError(async () => {
     // 1. 取得所有地點（工地）
     const locationsResult = await locationService.getZones({
       locationType: "people_counting",
     });
 
     const sites = [];
-      const allLocations = ensureArray(locationsResult.zones).flatMap(
-        (zone) => ensureArray(zone.locations)
+    const allLocations = ensureArray(locationsResult.zones).flatMap((zone) =>
+      ensureArray(zone.locations),
     );
 
     if (allLocations.length === 0) {
@@ -380,7 +395,8 @@ async function getSites() {
     // 3. 為每個地點計算統計
     // 注意：batchGetSitesData 已經使用 getTodayRecordsOnly 取得今日記錄，無需再次過濾
     for (const location of allLocations) {
-      const { personGroupIds, entryDoorId, exitDoorId } = getPeopleCountingConfig(location);
+      const { personGroupIds, entryDoorId, exitDoorId } =
+        getPeopleCountingConfig(location);
 
       if (personGroupIds.length === 0) {
         continue;
@@ -395,10 +411,19 @@ async function getSites() {
 
       // 計算統計（使用事件序列邏輯，確保先進後出）
       // siteData.records 已經是今日記錄，由 getTodayRecordsOnly 過濾
-      const stats = calculateTodayStatsByPhysicalId(siteData.records, entryDoorId, exitDoorId);
+      const stats = calculateTodayStatsByPhysicalId(
+        siteData.records,
+        entryDoorId,
+        exitDoorId,
+      );
 
       // 取得單位列表（傳入設備 ID）
-      const units = await getUnitsByGroupIds(personGroupIds, siteData.records, entryDoorId, exitDoorId);
+      const units = await getUnitsByGroupIds(
+        personGroupIds,
+        siteData.records,
+        entryDoorId,
+        exitDoorId,
+      );
 
       sites.push({
         id: locationId,
@@ -410,9 +435,7 @@ async function getSites() {
     }
 
     return { sites };
-    },
-    "取得工地列表失敗"
-  );
+  }, "取得工地列表失敗");
 }
 
 /**
@@ -423,47 +446,50 @@ async function getSites() {
 async function getSiteStats(siteId) {
   return handleServiceError(
     async () => {
-    // 取得工地配置（統一處理）
-    const { personGroupIds, entryDoorId, exitDoorId } = await getSiteConfig(siteId);
+      // 取得工地配置（統一處理）
+      const { personGroupIds, entryDoorId, exitDoorId } =
+        await getSiteConfig(siteId);
 
       // 統一空值處理：返回預設統計值
-    if (personGroupIds.length === 0) {
-      return {
-        entryCount: 0,
-        exitCount: 0,
-        currentCount: 0,
-      };
-    }
+      if (personGroupIds.length === 0) {
+        return {
+          entryCount: 0,
+          exitCount: 0,
+          currentCount: 0,
+        };
+      }
 
-    // 取得該工地所有人員的 person_id
-    const personIds = await getPersonIdsByGroupIds(personGroupIds);
+      // 取得該工地所有人員的 person_id
+      const personIds = await getPersonIdsByGroupIds(personGroupIds);
 
       // 統一空值處理：返回預設統計值
-    if (personIds.length === 0) {
+      if (personIds.length === 0) {
+        return {
+          entryCount: 0,
+          exitCount: 0,
+          currentCount: 0,
+        };
+      }
+
+      // 取得今日所有刷卡記錄（00:00 - 24:00）
+      const todayRecords = await getTodayRecordsOnly(personIds);
+
+      // 單次遍歷計算進場/出場/在場人數
+      const { entryCount, exitCount, currentCount } =
+        calculateTodayStatsAndCurrentCount(
+          todayRecords,
+          entryDoorId,
+          exitDoorId,
+        );
+
       return {
-        entryCount: 0,
-        exitCount: 0,
-        currentCount: 0,
+        entryCount,
+        exitCount,
+        currentCount,
       };
-    }
-
-    // 取得今日所有刷卡記錄（00:00 - 24:00）
-    const todayRecords = await getTodayRecordsOnly(personIds);
-
-    // 計算統計（使用 physical_id 判斷）
-    const stats = calculateTodayStatsByPhysicalId(todayRecords, entryDoorId, exitDoorId);
-
-    // 計算當前在場人數（使用 physical_id 判斷）
-    const currentCount = calculateCurrentCount(todayRecords, entryDoorId, exitDoorId);
-
-    return {
-      entryCount: stats.entryCount,
-      exitCount: stats.exitCount,
-      currentCount: currentCount,
-    };
     },
     "取得工地統計失敗",
-    { siteId }
+    { siteId },
   );
 }
 
@@ -478,60 +504,59 @@ async function getSiteStats(siteId) {
 async function getSiteLogs(siteId, options = {}) {
   return handleServiceError(
     async () => {
-    const { limit = 50, unitId } = options;
+      const { limit = 50, unitId } = options;
 
-    // 取得工地配置（統一處理）
-    const { entryDoorId, exitDoorId } = await getSiteConfig(siteId);
+      // 取得工地配置（統一處理）
+      const { entryDoorId, exitDoorId } = await getSiteConfig(siteId);
 
-    const allowedPhysicalIds = [entryDoorId, exitDoorId]
-      .filter((v) => v !== null && v !== undefined)
-      .map((v) => Number(v))
-      .filter((v) => !Number.isNaN(v));
+      const allowedPhysicalIds = [entryDoorId, exitDoorId]
+        .filter((v) => v !== null && v !== undefined)
+        .map((v) => Number(v))
+        .filter((v) => !Number.isNaN(v));
 
-    if (allowedPhysicalIds.length === 0) {
-      return { logs: [] };
-    }
+      if (allowedPhysicalIds.length === 0) {
+        return { logs: [] };
+      }
 
-    // 取得刷卡記錄（用 physical_id 查，才能包含未註冊人員 person_id = -1）
-    // - 若有 unitId，仍可在 SQL 中篩選對應單位（person_group_id），未註冊人員會自然被排除
-    const records = await getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, {
-      limit,
-      daysAgo: 2,
-      unitId: unitId || null,
-    });
+      // 取得刷卡記錄（用 physical_id 查，才能包含未註冊人員 person_id = -1）
+      // - 若有 unitId，仍可在 SQL 中篩選對應單位（person_group_id），未註冊人員會自然被排除
+      const records = await getRecordsByPhysicalIdsWithJoin(
+        allowedPhysicalIds,
+        { limit, unitId: unitId || null },
+      );
 
-    // 判斷事件類型
-    // 按時間降序排序（最新的在最上方）
-    const sortedRecords = [...records].sort(
-      (a, b) =>
-        new Date(b.swip_card_rev_time).getTime() -
-        new Date(a.swip_card_rev_time).getTime()
-    );
+      // 判斷事件類型
+      // 按時間降序排序（最新的在最上方）
+      const sortedRecords = [...records].sort(
+        (a, b) =>
+          new Date(b.swip_card_rev_time).getTime() -
+          new Date(a.swip_card_rev_time).getTime(),
+      );
 
-    const logs = sortedRecords.map((record) => {
-      const eventType = parseEventType(record, entryDoorId, exitDoorId);
+      const logs = sortedRecords.map((record) => {
+        const eventType = parseEventType(record, entryDoorId, exitDoorId);
 
-      return {
-        id: generateRecordId(record.person_id, record.swip_card_rev_time),
-        personId: record.person_id,
-        personName: record.person_name || "未註冊人員",
-        unitId: record.unit_id || null,
-        unitName: record.unit_name || "",
-        eventType: eventType || "failed", // 未註冊人員標記為 "failed"
-        timestamp: record.swip_card_rev_time,
-        deviceScreenshotUrl: record.snap_pic_url || "",
-      };
-    });
+        return {
+          id: generateRecordId(record.person_id, record.swip_card_rev_time),
+          personId: record.person_id,
+          personName: record.person_name || "陌生人員",
+          unitId: record.unit_id || null,
+          unitName: record.unit_name || "",
+          eventType: eventType || "failed", // 未註冊人員標記為 "failed"
+          timestamp: record.swip_card_rev_time,
+          deviceScreenshotUrl: record.snap_pic_url || "",
+        };
+      });
 
-    return { logs };
+      return { logs };
     },
     "取得工地進出場記錄失敗",
-    { siteId, options }
+    { siteId, options },
   );
 }
 
 /**
- * 依 physical_id 取得記錄（含關聯資料）
+ * 依 physical_id 取得今日刷卡記錄（含關聯資料）
  * - 可包含未註冊人員（person_id = -1）
  * - 可選擇以 unitId（person_group_id）做篩選
  */
@@ -540,14 +565,16 @@ async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
     return [];
   }
 
-  const { limit = 50, daysAgo = 2, unitId = null } = options;
-  const startTime = getDaysAgoStart(daysAgo);
+  const { limit = 50, unitId = null } = options;
+  const { start, end } = getTodayTimeRange();
 
   const placeholders = generatePlaceholders(physicalIds);
   const baseParamIndex = physicalIds.length + 1;
 
-  const unitFilterSql = unitId ? `AND p.person_group_id = $${baseParamIndex + 1}` : "";
-  const limitSql = limit ? `LIMIT $${baseParamIndex + (unitId ? 2 : 1)}` : "";
+  const unitFilterSql = unitId
+    ? `AND p.person_group_id = $${baseParamIndex + 2}`
+    : "";
+  const limitSql = limit ? `LIMIT $${baseParamIndex + (unitId ? 3 : 2)}` : "";
 
   const sql = `
     SELECT 
@@ -564,18 +591,15 @@ async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
     WHERE r.physical_id IN (${placeholders})
       AND r.is_deleted = false
       AND r.swip_card_rev_time >= $${baseParamIndex}
+      AND r.swip_card_rev_time <= $${baseParamIndex + 1}
       ${unitFilterSql}
     ORDER BY r.swip_card_rev_time DESC
     ${limitSql}
   `;
 
-  const params = [...physicalIds, startTime.toISOString()];
-  if (unitId) {
-    params.push(unitId);
-  }
-  if (limit) {
-    params.push(limit);
-  }
+  const params = [...physicalIds, start.toISOString(), end.toISOString()];
+  if (unitId) params.push(unitId);
+  if (limit) params.push(limit);
 
   return await externalDb.query(sql, params);
 }
@@ -592,9 +616,9 @@ async function getTodayRecordsOnly(personIds) {
 
   return handleNonCriticalError(
     async () => {
-  const { start, end } = getTodayTimeRange();
-  const placeholders = generatePlaceholders(personIds);
-    const sql = `
+      const { start, end } = getTodayTimeRange();
+      const placeholders = generatePlaceholders(personIds);
+      const sql = `
     SELECT *
     FROM baseacs.slot_card_records
     WHERE person_id IN (${placeholders})
@@ -605,19 +629,31 @@ async function getTodayRecordsOnly(personIds) {
     ORDER BY swip_card_rev_time ASC
     `;
 
-  const params = [...personIds, start.toISOString(), end.toISOString()];
-    const rows = await externalDb.query(sql, params);
-    return rows;
+      const params = [...personIds, start.toISOString(), end.toISOString()];
+      const rows = await externalDb.query(sql, params);
+      return rows;
     },
     "無法取得今日刷卡記錄",
     [],
-    { personIds }
+    { personIds },
   );
 }
 
 /**
+ * 當天第一筆為出場時是否應跳過（不計入、不更新狀態）
+ * 人員當日須先有進場，出場才計數；當日首筆為出場時不計入（避免跨日留場造成出場被重複計入）
+ * @param {string|undefined} previousEventType - 該人上一筆已計數的事件類型
+ * @param {string} eventType - 當前事件類型
+ * @returns {boolean}
+ */
+function isFirstEventOfDayExit(previousEventType, eventType) {
+  return previousEventType === undefined && eventType === "exit";
+}
+
+/**
  * 計算今日統計（進場/出場人數，基於 physical_id）
- * 使用事件序列去重：確保先進後出的邏輯，同一人的連續相同事件類型只計算一次
+ * - 使用事件序列去重：同一人的連續相同事件類型只計算一次
+ * - 當天第一筆為出場不計入：人員當日須先有進場，出場才計數；當日首筆為出場時不計入（避免跨日留場造成出場被重複計入）
  * @param {Array} records - 記錄列表（應該只包含今日記錄）
  * @param {number} entryDoorId - 入口設備 ID
  * @param {number} exitDoorId - 出口設備 ID
@@ -628,33 +664,27 @@ function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId) {
     return { entryCount: 0, exitCount: 0 };
   }
 
-  // 按時間排序
   const sortedRecords = sortRecordsByTime(records);
-
-  // 使用 Map 追蹤每個人的最後事件類型
-  // Key: personId, Value: 最後的事件類型（"entry" 或 "exit"）
   const lastEventType = new Map();
-
   let entryCount = 0;
   let exitCount = 0;
 
   sortedRecords.forEach((record) => {
     const personId = record.person_id;
     const eventType = parseEventType(record, entryDoorId, exitDoorId);
-    
-    // 未註冊人員（eventType 為 null）跳過，不計入統計
+
     if (eventType === null) {
       return;
     }
 
     const previousEventType = lastEventType.get(personId);
 
-    // 事件序列邏輯：確保先進後出
-    // 1. 如果沒有前一個事件，直接計數（第一個事件）
-    // 2. 如果前一個事件與當前事件不同，計數（進場後出場，或出場後進場）
-    // 3. 如果前一個事件與當前事件相同，跳過（連續相同事件，可能是重複刷卡）
+    if (isFirstEventOfDayExit(previousEventType, eventType)) {
+      return;
+    }
+
+    // 事件類型與上一筆不同才計數（進→出、出→進、或首筆為進場）
     if (previousEventType === undefined || previousEventType !== eventType) {
-      // 計數並更新最後事件類型
       if (eventType === "entry") {
         entryCount++;
       } else {
@@ -665,6 +695,27 @@ function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId) {
   });
 
   return { entryCount, exitCount };
+}
+
+/**
+ * 計算今日進場/出場人數與當前在場人數；在場人數複用 calculateCurrentCount，確保邏輯單一。
+ * @param {Array} records - 記錄列表（應只包含今日記錄）
+ * @param {number} entryDoorId - 入口設備 ID
+ * @param {number} exitDoorId - 出口設備 ID
+ * @returns {{ entryCount: number, exitCount: number, currentCount: number }}
+ */
+function calculateTodayStatsAndCurrentCount(records, entryDoorId, exitDoorId) {
+  const { entryCount, exitCount } = calculateTodayStatsByPhysicalId(
+    records,
+    entryDoorId,
+    exitDoorId,
+  );
+  const currentCount = calculateCurrentCount(
+    records,
+    entryDoorId,
+    exitDoorId,
+  );
+  return { entryCount, exitCount, currentCount };
 }
 
 /**
@@ -680,7 +731,7 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
   }
 
   const placeholders = generatePlaceholders(personIds);
-  
+
   // 取得所有人的最近進場和出場記錄（不受時間限制）
   const sql = `
     SELECT 
@@ -695,16 +746,16 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
   `;
 
   const allRecords = await externalDb.query(sql, personIds);
-  
+
   // SQL 已經按時間降序排序，直接使用（不需要再次排序）
   const sortedRecords = allRecords;
 
   const personRecords = new Map();
   personIds.forEach((personId) => {
-        personRecords.set(personId, {
-          lastEntry: null,
-          lastExit: null,
-        });
+    personRecords.set(personId, {
+      lastEntry: null,
+      lastExit: null,
+    });
   });
 
   // 找出每個人最近的一次進場和出場記錄
@@ -717,13 +768,13 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
     // 跳過失敗事件（未註冊人員）
     if (eventType === null) return;
 
-      const personRecord = personRecords.get(personId);
+    const personRecord = personRecords.get(personId);
 
     if (eventType === "entry" && !personRecord.lastEntry) {
-          personRecord.lastEntry = record;
+      personRecord.lastEntry = record;
     } else if (eventType === "exit" && !personRecord.lastExit) {
-          personRecord.lastExit = record;
-        }
+      personRecord.lastExit = record;
+    }
   });
 
   return personRecords;
@@ -738,24 +789,24 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
 async function getUnitPersonnel(unitId, siteId = null) {
   return handleServiceError(
     async () => {
-    let entryDoorId = null;
-    let exitDoorId = null;
+      let entryDoorId = null;
+      let exitDoorId = null;
 
       // 如果提供了 siteId，從地點取得設備 ID（非關鍵錯誤，使用降級處理）
-    if (siteId) {
+      if (siteId) {
         const config = await handleNonCriticalError(
           async () => await getSiteConfig(siteId),
           "無法取得工地配置，使用預設值",
           null,
-          { siteId, unitId }
+          { siteId, unitId },
         );
         if (config) {
-        entryDoorId = config.entryDoorId;
-        exitDoorId = config.exitDoorId;
+          entryDoorId = config.entryDoorId;
+          exitDoorId = config.exitDoorId;
+        }
       }
-    }
-    // 取得該單位的人員（優化：直接使用 SQL 查詢）
-    const sql = `
+      // 取得該單位的人員（優化：直接使用 SQL 查詢）
+      const sql = `
       SELECT id, person_group_id, person_type, full_name
       FROM platform.person
       WHERE person_group_id = $1
@@ -763,145 +814,157 @@ async function getUnitPersonnel(unitId, siteId = null) {
       ORDER BY id ASC
     `;
 
-    const persons = await externalDb.query(sql, [unitId]);
+      const persons = await externalDb.query(sql, [unitId]);
 
       // 統一空值處理：返回空陣列和預設統計值
-    if (!persons || persons.length === 0) {
-      return { 
-        personnel: [],
-        entryCount: 0,
-        exitCount: 0
-      };
-    }
+      if (!persons || persons.length === 0) {
+        return {
+          personnel: [],
+          entryCount: 0,
+          exitCount: 0,
+        };
+      }
 
-    const personIds = persons.map((p) => p.id);
+      const personIds = persons.map((p) => p.id);
 
-    // 批次取得人員照片（優化：使用 SQL 查詢）
-    const headPicMap = await batchGetHeadPics(personIds);
+      // 批次取得人員照片（優化：使用 SQL 查詢）
+      const headPicMap = await batchGetHeadPics(personIds);
 
-    // 取得今日刷卡記錄（00:00 - 24:00，用於統計和人員狀態）
-    const todayRecords = await getTodayRecordsOnly(personIds);
+      // 取得今日刷卡記錄（00:00 - 24:00，用於統計和人員狀態）
+      const todayRecords = await getTodayRecordsOnly(personIds);
 
-    // 計算今日進場/出場人數統計
-    const todayStats = calculateTodayStatsByPhysicalId(todayRecords, entryDoorId, exitDoorId);
+      // 計算今日進場/出場人數統計
+      const todayStats = calculateTodayStatsByPhysicalId(
+        todayRecords,
+        entryDoorId,
+        exitDoorId,
+      );
 
-    // 取得今日時間範圍（用於判斷是否為今日進場）
-    const { start: todayStart, end: todayEnd } = getTodayTimeRange();
+      // 取得今日時間範圍（用於判斷是否為今日進場）
+      const { start: todayStart, end: todayEnd } = getTodayTimeRange();
 
-    // 預先建立每個人的今日記錄 Map（優化：避免在循環中重複過濾）
-    const personTodayRecordsMap = new Map();
-    todayRecords.forEach((record) => {
-      const personId = record.person_id;
-      if (personId !== -1) {
-        if (!personTodayRecordsMap.has(personId)) {
-          personTodayRecordsMap.set(personId, []);
+      // 預先建立每個人的今日記錄 Map（優化：避免在循環中重複過濾）
+      const personTodayRecordsMap = new Map();
+      todayRecords.forEach((record) => {
+        const personId = record.person_id;
+        if (personId !== -1) {
+          if (!personTodayRecordsMap.has(personId)) {
+            personTodayRecordsMap.set(personId, []);
+          }
+          personTodayRecordsMap.get(personId).push(record);
         }
-        personTodayRecordsMap.get(personId).push(record);
-      }
-    });
+      });
 
-    // 取得所有人的最近進場/出場記錄（不受時間限制，用於顯示最近進場日期）
-    const latestRecords = await getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId);
+      // 取得所有人的最近進場/出場記錄（不受時間限制，用於顯示最近進場日期）
+      const latestRecords = await getLatestEntryExitRecords(
+        personIds,
+        entryDoorId,
+        exitDoorId,
+      );
 
-    // 建立人員列表
-    const personnel = persons.map((person) => {
-      const headPic = headPicMap.get(person.id);
-      const personTodayRecords = personTodayRecordsMap.get(person.id) || [];
-      const latestRecord = latestRecords.get(person.id);
+      // 建立人員列表
+      const personnel = persons.map((person) => {
+        const headPic = headPicMap.get(person.id);
+        const personTodayRecords = personTodayRecordsMap.get(person.id) || [];
+        const latestRecord = latestRecords.get(person.id);
 
-      let photoUrl = undefined;
-      if (headPic?.standard_head_portrait) {
-        photoUrl = headPic.standard_head_portrait;
-      } else if (headPic?.thumbnail_head_portrait) {
-        photoUrl = headPic.thumbnail_head_portrait;
-      }
+        let photoUrl = undefined;
+        if (headPic?.standard_head_portrait) {
+          photoUrl = headPic.standard_head_portrait;
+        } else if (headPic?.thumbnail_head_portrait) {
+          photoUrl = headPic.thumbnail_head_portrait;
+        }
 
-      // 最近進場記錄（不受時間限制）
-      const lastEntryRecord = latestRecord?.lastEntry;
-      const lastExitRecord = latestRecord?.lastExit;
+        // 最近進場記錄（不受時間限制）
+        const lastEntryRecord = latestRecord?.lastEntry;
+        const lastExitRecord = latestRecord?.lastExit;
 
-      // 處理進場記錄
-      let lastEntryDate = null;
-      let isTodayEntry = false;
-      let entryTimeStr = null;
-      let entryTime = null;
+        // 處理進場記錄
+        let lastEntryDate = null;
+        let isTodayEntry = false;
+        let entryTimeStr = null;
+        let entryTime = null;
 
-      if (lastEntryRecord) {
-        entryTime = new Date(lastEntryRecord.swip_card_rev_time);
-        
-        // 檢查是否為今日進場
-        isTodayEntry = entryTime >= todayStart && entryTime <= todayEnd;
-        
-        // 格式化日期和時間
-        lastEntryDate = formatDate(entryTime);
-        entryTimeStr = formatTime(entryTime);
-      }
+        if (lastEntryRecord) {
+          entryTime = new Date(lastEntryRecord.swip_card_rev_time);
 
-      // 處理出場記錄
-      let exitTimeStr = null;
-      let exitTime = null;
+          // 檢查是否為今日進場
+          isTodayEntry = entryTime >= todayStart && entryTime <= todayEnd;
 
-      if (isTodayEntry) {
-        // 如果是今日進場，從今日記錄中找到對應的出場記錄（在進場時間之後）
-        const todayExitRecord = personTodayRecords.find((r) => {
-          const recordTime = new Date(r.swip_card_rev_time);
-          const eventType = parseEventType(r, entryDoorId, exitDoorId);
-          return eventType === "exit" && recordTime > entryTime;
-        });
+          // 格式化日期和時間
+          lastEntryDate = formatDate(entryTime);
+          entryTimeStr = formatTime(entryTime);
+        }
 
-        if (todayExitRecord) {
-          exitTime = new Date(todayExitRecord.swip_card_rev_time);
+        // 處理出場記錄
+        let exitTimeStr = null;
+        let exitTime = null;
+
+        if (isTodayEntry) {
+          // 今日進場：取該次進場後「最早一筆」出場（成對）；personTodayRecords 已按時間升序
+          const todayExitRecord = personTodayRecords.find((r) => {
+            const recordTime = new Date(r.swip_card_rev_time);
+            const eventType = parseEventType(r, entryDoorId, exitDoorId);
+            return eventType === "exit" && recordTime > entryTime;
+          });
+
+          if (todayExitRecord) {
+            exitTime = new Date(todayExitRecord.swip_card_rev_time);
+            exitTimeStr = formatTime(exitTime);
+          }
+          // 如果今日沒有出場記錄，exitTimeStr 保持為 null（前端會顯示 "- -"）
+        } else if (lastExitRecord) {
+          // 如果不是今日進場，顯示最近出場時間
+          exitTime = new Date(lastExitRecord.swip_card_rev_time);
           exitTimeStr = formatTime(exitTime);
         }
-        // 如果今日沒有出場記錄，exitTimeStr 保持為 null（前端會顯示 "- -"）
-      } else if (lastExitRecord) {
-        // 如果不是今日進場，顯示最近出場時間
-        exitTime = new Date(lastExitRecord.swip_card_rev_time);
-        exitTimeStr = formatTime(exitTime);
-      }
 
-      // 判斷是否在場（isPresent）
-      // 邏輯：
-      // 1. 如果沒有進場記錄，則不在場
-      // 2. 只有今日進場且沒有今日出場時，才在場
-      // 3. 如果不是今日進場，無論是否有出場記錄，都不在場（因為進場是昨天或更早的）
-      let isPresent = false;
-      if (lastEntryRecord && isTodayEntry) {
-        // 只有今日進場時才判斷是否在場
-        if (!exitTime) {
-          // 今日沒有出場，則在場
-          isPresent = true;
-        } else {
-          // 今日有出場，比較時間（如果出場時間 <= 進場時間，表示邏輯錯誤，但為了安全起見仍判斷為不在場）
-          isPresent = exitTime <= entryTime;
+        // 判斷是否在場（isPresent）
+        // 邏輯：
+        // 1. 如果沒有進場記錄，則不在場
+        // 2. 只有今日進場且沒有今日出場時，才在場
+        // 3. 如果不是今日進場，無論是否有出場記錄，都不在場（因為進場是昨天或更早的）
+        let isPresent = false;
+        if (lastEntryRecord && isTodayEntry) {
+          // 只有今日進場時才判斷是否在場
+          if (!exitTime) {
+            // 今日沒有出場，則在場
+            isPresent = true;
+          } else {
+            // 今日有出場，比較時間（如果出場時間 <= 進場時間，表示邏輯錯誤，但為了安全起見仍判斷為不在場）
+            isPresent = exitTime <= entryTime;
+          }
         }
-      }
-      // 如果不是今日進場，isPresent 保持為 false（不在場）
+        // 如果不是今日進場，isPresent 保持為 false（不在場）
+
+        return {
+          id: person.id,
+          employeeId: String(person.id),
+          name: person.full_name || "",
+          photoUrl: photoUrl,
+          isInside: isPresent, // 與 isPresent 保持一致（向後兼容）
+          isPresent: isPresent,
+          lastEntryTime: lastEntryRecord
+            ? lastEntryRecord.swip_card_rev_time
+            : null,
+          lastExitTime: lastExitRecord
+            ? lastExitRecord.swip_card_rev_time
+            : null,
+          lastEntryDate: lastEntryDate,
+          entryTime: entryTimeStr,
+          exitTime: exitTimeStr,
+          isTodayEntry: isTodayEntry,
+        };
+      });
 
       return {
-        id: person.id,
-        employeeId: String(person.id),
-        name: person.full_name || "",
-        photoUrl: photoUrl,
-        isInside: isPresent, // 與 isPresent 保持一致（向後兼容）
-        isPresent: isPresent,
-        lastEntryTime: lastEntryRecord ? lastEntryRecord.swip_card_rev_time : null,
-        lastExitTime: lastExitRecord ? lastExitRecord.swip_card_rev_time : null,
-        lastEntryDate: lastEntryDate,
-        entryTime: entryTimeStr,
-        exitTime: exitTimeStr,
-        isTodayEntry: isTodayEntry,
+        personnel,
+        entryCount: todayStats.entryCount,
+        exitCount: todayStats.exitCount,
       };
-    });
-
-    return { 
-      personnel,
-      entryCount: todayStats.entryCount,
-      exitCount: todayStats.exitCount
-    };
     },
     "取得單位人員列表失敗",
-    { unitId, siteId }
+    { unitId, siteId },
   );
 }
 
@@ -938,7 +1001,7 @@ function formatTime(date) {
  */
 function getPeopleCountingConfig(location) {
   const peopleCountingSystem = ensureArray(location.systems).find(
-    (sys) => sys.systemType === "people_counting"
+    (sys) => sys.systemType === "people_counting",
   );
   return {
     peopleCountingSystem,
@@ -971,52 +1034,7 @@ async function getSiteConfig(siteId) {
  * @returns {number} 轉換後的數字 ID
  */
 function normalizeId(id) {
-  return typeof id === 'string' ? Number(id) : id;
-}
-
-/**
- * 時間範圍工具函數
- */
-
-/**
- * 計算指定天數前的開始時間（00:00:00）
- * @param {number} daysAgo - 幾天前，預設為 0（今天）
- * @returns {Date} 指定天數前的日期時間
- */
-function getDaysAgoStart(daysAgo = 0) {
-  const now = new Date();
-  const targetDate = new Date(now);
-  targetDate.setDate(now.getDate() - daysAgo);
-  targetDate.setHours(0, 0, 0, 0);
-  return targetDate;
-}
-
-/**
- * 計算近兩天的開始時間（兩天前的 00:00:00）
- * @returns {Date} 兩天前的日期時間
- * @deprecated 使用 getDaysAgoStart(2) 替代
- */
-function getTwoDaysAgo() {
-  return getDaysAgoStart(2);
-}
-
-/**
- * 取得今日時間範圍（00:00:00 - 23:59:59.999）
- * 使用 UTC 時間確保與資料庫時區一致
- * @returns {Object} 包含 start 和 end 的時間範圍（UTC 時間）
- */
-function getTodayTimeRange() {
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth();
-  const date = now.getUTCDate();
-  
-  // 取得今日 UTC 時間的 00:00:00
-  const start = new Date(Date.UTC(year, month, date, 0, 0, 0, 0));
-  // 取得今日 UTC 時間的 23:59:59.999
-  const end = new Date(Date.UTC(year, month, date, 23, 59, 59, 999));
-  
-  return { start, end };
+  return typeof id === "string" ? Number(id) : id;
 }
 
 /**
@@ -1031,62 +1049,36 @@ async function getPersonIdsByGroupIds(groupIds) {
 
   return handleNonCriticalError(
     async () => {
-  // 使用單一 SQL 查詢取代多個 API 呼叫
-  const placeholders = generatePlaceholders(groupIds);
-  const sql = `
+      // 使用單一 SQL 查詢取代多個 API 呼叫
+      const placeholders = generatePlaceholders(groupIds);
+      const sql = `
     SELECT DISTINCT id
     FROM platform.person
     WHERE person_group_id IN (${placeholders})
       AND person_type = 0
   `;
 
-    const rows = await externalDb.query(sql, groupIds);
-    return rows.map((row) => row.id);
+      const rows = await externalDb.query(sql, groupIds);
+      return rows.map((row) => row.id);
     },
     "無法取得群組的人員",
     [],
-    { groupIds }
+    { groupIds },
   );
 }
 
 /**
- * 取得近兩天刷卡記錄（優化：直接在 SQL 中過濾）
- * @deprecated 已改為使用 getTodayRecordsOnly() 統一查詢今日記錄，此函數保留僅為向後兼容
+ * 取得今日刷卡記錄
+ * @deprecated 請使用 getTodayRecordsOnly()，此函數保留僅為向後兼容
  * @param {Array<number>} personIds - 人員 ID 列表
  * @returns {Promise<Array>} 記錄列表
  */
 async function getTodayRecords(personIds) {
-  if (personIds.length === 0) {
-    return [];
-  }
-
-  return handleNonCriticalError(
-    async () => {
-  // 使用 SQL 直接查詢，避免取得所有記錄後再過濾
-  const placeholders = generatePlaceholders(personIds);
-  const startTime = getDaysAgoStart(2);
-  const sql = `
-    SELECT *
-    FROM baseacs.slot_card_records
-    WHERE person_id IN (${placeholders})
-      AND person_id != -1
-      AND is_deleted = false
-      AND swip_card_rev_time >= $${personIds.length + 1}
-    ORDER BY swip_card_rev_time ASC
-  `;
-
-  const params = [...personIds, startTime.toISOString()];
-    const rows = await externalDb.query(sql, params);
-    return rows;
-    },
-    "無法取得近兩天刷卡記錄",
-    [],
-    { personIds }
-  );
+  return getTodayRecordsOnly(personIds);
 }
 
 /**
- * 取得指定人員的近兩天刷卡記錄（優化：直接在 SQL 中過濾）
+ * 取得指定人員的今日刷卡記錄
  * @param {Array<number>} personIds - 人員 ID 列表
  * @param {number} limit - 限制筆數（可選）
  * @returns {Promise<Array>} 記錄列表
@@ -1098,30 +1090,31 @@ async function getRecordsByPersonIds(personIds, limit = null) {
 
   return handleNonCriticalError(
     async () => {
-  const placeholders = generatePlaceholders(personIds);
-  const startTime = getDaysAgoStart(2);
-  let sql = `
+      const placeholders = generatePlaceholders(personIds);
+      const { start, end } = getTodayTimeRange();
+      let sql = `
     SELECT *
     FROM baseacs.slot_card_records
     WHERE person_id IN (${placeholders})
       AND person_id != -1
       AND is_deleted = false
       AND swip_card_rev_time >= $${personIds.length + 1}
+      AND swip_card_rev_time <= $${personIds.length + 2}
     ORDER BY swip_card_rev_time DESC
   `;
 
-  const params = [...personIds, startTime.toISOString()];
-  if (limit) {
-    sql += ` LIMIT $${params.length + 1}`;
-    params.push(limit);
-  }
+      const params = [...personIds, start.toISOString(), end.toISOString()];
+      if (limit) {
+        sql += ` LIMIT $${params.length + 1}`;
+        params.push(limit);
+      }
 
-    const rows = await externalDb.query(sql, params);
-    return rows;
+      const rows = await externalDb.query(sql, params);
+      return rows;
     },
     "無法取得人員的刷卡記錄",
     [],
-    { personIds, limit }
+    { personIds, limit },
   );
 }
 
@@ -1143,14 +1136,14 @@ async function batchGetHeadPics(personIds) {
       });
 
       const headPicMap = new Map();
-      
+
       results.forEach((result) => {
         if (result.success && result.personInfo) {
           const personId = parseInt(result.personId, 10);
           const pictureUrl = result.picture
             ? `data:image/jpeg;base64,${result.picture}`
             : null;
-          
+
           headPicMap.set(personId, {
             person_id: personId,
             standard_head_portrait: pictureUrl,
@@ -1159,11 +1152,11 @@ async function batchGetHeadPics(personIds) {
         }
       });
 
-    return headPicMap;
+      return headPicMap;
     },
     "無法批次取得人員照片",
     new Map(),
-    { personIds }
+    { personIds },
   );
 }
 
@@ -1182,11 +1175,10 @@ function generatePlaceholders(ids, startIndex = 1) {
 }
 
 /**
- * 使用 JOIN 查詢取得記錄（含關聯資料）
+ * 使用 JOIN 查詢取得今日記錄（含關聯資料）
  * @param {Array<number>} personIds - 人員 ID 列表
  * @param {Object} options - 查詢選項
  * @param {number} options.limit - 限制筆數
- * @param {number} options.daysAgo - 查詢幾天前的記錄，預設為 2（近兩天）
  * @returns {Promise<Array>} 記錄列表
  */
 async function getRecordsWithJoin(personIds, options = {}) {
@@ -1194,12 +1186,12 @@ async function getRecordsWithJoin(personIds, options = {}) {
     return [];
   }
 
-  const { limit, daysAgo = 2 } = options;
+  const { limit } = options;
 
   return handleServiceError(
     async () => {
       const placeholders = generatePlaceholders(personIds);
-      const startTime = getDaysAgoStart(daysAgo);
+      const { start, end } = getTodayTimeRange();
       const paramIndex = personIds.length + 1;
 
       const sql = `
@@ -1218,32 +1210,31 @@ async function getRecordsWithJoin(personIds, options = {}) {
           AND r.person_id != -1
           AND r.is_deleted = false
           AND r.swip_card_rev_time >= $${paramIndex}
+          AND r.swip_card_rev_time <= $${paramIndex + 1}
         ORDER BY r.swip_card_rev_time DESC
-        ${limit ? `LIMIT $${paramIndex + 1}` : ""}
+        ${limit ? `LIMIT $${paramIndex + 2}` : ""}
       `;
 
-      const params = [...personIds, startTime.toISOString()];
-      if (limit) {
-        params.push(limit);
-      }
+      const params = [...personIds, start.toISOString(), end.toISOString()];
+      if (limit) params.push(limit);
 
       const rows = await externalDb.query(sql, params);
       return rows;
     },
     "取得 JOIN 記錄失敗",
-    { personIds, options }
+    { personIds, options },
   );
 }
 
 /**
- * 使用 JOIN 查詢取得近兩天記錄（含關聯資料）
+ * 使用 JOIN 查詢取得今日記錄（含關聯資料）
  * @param {Array<number>} personIds - 人員 ID 列表
  * @param {number} limit - 限制筆數
  * @returns {Promise<Array>} 記錄列表
- * @deprecated 使用 getRecordsWithJoin(personIds, { limit, daysAgo: 2 }) 替代
+ * @deprecated 使用 getRecordsWithJoin(personIds, { limit }) 替代
  */
 async function getTodayRecordsWithJoin(personIds, limit) {
-  return getRecordsWithJoin(personIds, { limit, daysAgo: 2 });
+  return getRecordsWithJoin(personIds, { limit });
 }
 
 /**
@@ -1255,25 +1246,14 @@ function sortRecordsByTime(records) {
   return [...records].sort(
     (a, b) =>
       new Date(a.swip_card_rev_time).getTime() -
-      new Date(b.swip_card_rev_time).getTime()
+      new Date(b.swip_card_rev_time).getTime(),
   );
 }
 
 /**
- * 計算今日統計（進場/出場人數，基於 physical_id）
- * @deprecated 此函數已被 calculateTodayStatsByPhysicalId 取代，保留僅為向後兼容
- * @param {Array} records - 記錄列表
- * @param {number} entryDoorId - 入口設備 ID
- * @param {number} exitDoorId - 出口設備 ID
- * @returns {Object} 統計資料
- */
-function calculateTodayStats(records, entryDoorId, exitDoorId) {
-  return calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId);
-}
-
-/**
  * 計算當前在場人數（基於 physical_id）
- * @param {Array} records - 記錄列表
+ * 語意：當日有刷卡記錄且「最後一筆」為進場的人數；昨日進場、今日未刷卡者不計入。
+ * @param {Array} records - 記錄列表（應只包含今日記錄）
  * @param {number} entryDoorId - 入口設備 ID
  * @param {number} exitDoorId - 出口設備 ID
  * @returns {number} 當前在場人數
@@ -1329,24 +1309,24 @@ async function batchGetGroups(groupIds) {
 
   return handleNonCriticalError(
     async () => {
-  const placeholders = generatePlaceholders(groupIds);
-  const sql = `
+      const placeholders = generatePlaceholders(groupIds);
+      const sql = `
     SELECT id, name
     FROM platform.person_group
     WHERE id IN (${placeholders})
       AND is_deleted = 0
   `;
 
-    const rows = await externalDb.query(sql, groupIds);
-    const groupMap = new Map();
-    rows.forEach((row) => {
-      groupMap.set(row.id, row);
-    });
-    return groupMap;
+      const rows = await externalDb.query(sql, groupIds);
+      const groupMap = new Map();
+      rows.forEach((row) => {
+        groupMap.set(row.id, row);
+      });
+      return groupMap;
     },
     "無法取得群組資訊",
     new Map(),
-    { groupIds }
+    { groupIds },
   );
 }
 
@@ -1362,29 +1342,29 @@ async function batchGetGroupPersonIds(groupIds) {
 
   return handleNonCriticalError(
     async () => {
-  const placeholders = generatePlaceholders(groupIds);
-  const sql = `
+      const placeholders = generatePlaceholders(groupIds);
+      const sql = `
     SELECT person_group_id, id
     FROM platform.person
     WHERE person_group_id IN (${placeholders})
       AND person_type = 0
   `;
 
-    const rows = await externalDb.query(sql, groupIds);
-    const groupPersonMap = new Map();
-    groupIds.forEach((groupId) => {
-      groupPersonMap.set(groupId, []);
-    });
-    rows.forEach((row) => {
-      const personIds = groupPersonMap.get(row.person_group_id) || [];
-      personIds.push(row.id);
-      groupPersonMap.set(row.person_group_id, personIds);
-    });
-    return groupPersonMap;
+      const rows = await externalDb.query(sql, groupIds);
+      const groupPersonMap = new Map();
+      groupIds.forEach((groupId) => {
+        groupPersonMap.set(groupId, []);
+      });
+      rows.forEach((row) => {
+        const personIds = groupPersonMap.get(row.person_group_id) || [];
+        personIds.push(row.id);
+        groupPersonMap.set(row.person_group_id, personIds);
+      });
+      return groupPersonMap;
     },
     "無法取得群組的人員 ID",
     new Map(),
-    { groupIds }
+    { groupIds },
   );
 }
 
@@ -1441,7 +1421,7 @@ async function batchGetSitesData(locations) {
     // 過濾該工地的人員記錄
     // getTodayRecordsOnly 已經過濾了今日時間範圍，這裡只需要過濾人員 ID
     const siteRecords = todayRecords.filter(
-      (r) => r.person_id !== -1 && sitePersonIds.has(r.person_id)
+      (r) => r.person_id !== -1 && sitePersonIds.has(r.person_id),
     );
 
     siteDataMap.set(siteId, {
@@ -1461,7 +1441,12 @@ async function batchGetSitesData(locations) {
  * @param {number} exitDoorId - 出口設備 ID（可選）
  * @returns {Promise<Array>} 單位列表
  */
-async function getUnitsByGroupIds(groupIds, records, entryDoorId = null, exitDoorId = null) {
+async function getUnitsByGroupIds(
+  groupIds,
+  records,
+  entryDoorId = null,
+  exitDoorId = null,
+) {
   if (groupIds.length === 0) {
     return [];
   }
@@ -1483,11 +1468,15 @@ async function getUnitsByGroupIds(groupIds, records, entryDoorId = null, exitDoo
 
     // 過濾該單位的記錄
     const unitRecords = records.filter(
-      (r) => r.person_id !== -1 && unitPersonIds.includes(r.person_id)
+      (r) => r.person_id !== -1 && unitPersonIds.includes(r.person_id),
     );
 
     // 計算當前在場人數（使用 physical_id 判斷）
-    const currentCount = calculateCurrentCount(unitRecords, entryDoorId, exitDoorId);
+    const currentCount = calculateCurrentCount(
+      unitRecords,
+      entryDoorId,
+      exitDoorId,
+    );
 
     units.push({
       id: group.id,

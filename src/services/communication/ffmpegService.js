@@ -2,7 +2,6 @@ const { spawn } = require("child_process");
 const EventEmitter = require("events");
 const { resolveFfmpegPath } = require("../../utils/ffmpegPath");
 const {
-  DEFAULT_CONFIG,
   getRtspInputOptions,
   buildNvencArgs,
   buildQsvArgs,
@@ -10,6 +9,7 @@ const {
   isCriticalError,
   isWarningOrError,
 } = require("../../config/ffmpegConfig");
+const logger = require("../../utils/logger").createLogger("FFmpeg Service");
 
 let _ffmpegPathLogged = false;
 
@@ -26,10 +26,10 @@ function getFfmpegBin() {
 
 /**
  * FFmpeg GPU 硬體編碼服務
- * 
+ *
  * 負責管理 FFmpeg 進程，實現 GPU 硬體加速編碼
  * 支援 NVIDIA NVENC、Intel Quick Sync Video、AMD VCE
- * 
+ *
  * @class FFmpegService
  * @extends EventEmitter
  */
@@ -39,7 +39,7 @@ class FFmpegService extends EventEmitter {
     /**
      * 存儲所有活躍的 FFmpeg 進程
      * Map<streamId, ProcessInfo>
-     * 
+     *
      * @typedef {Object} ProcessInfo
      * @property {ChildProcess} process - FFmpeg 子進程
      * @property {Object} options - 編碼選項
@@ -57,7 +57,7 @@ class FFmpegService extends EventEmitter {
 
   /**
    * 啟動 FFmpeg GPU 編碼進程
-   * 
+   *
    * @param {string} streamId - 串流 ID（唯一標識符）
    * @param {string} rtspInput - RTSP 輸入 URL（來源串流）
    * @param {string} rtspOutput - RTSP 輸出 URL（目標串流）
@@ -70,7 +70,6 @@ class FFmpegService extends EventEmitter {
    * @throws {Error} 如果 GPU 類型不支援或參數無效
    */
   startGpuEncoding(streamId, rtspInput, rtspOutput, options = {}) {
-    // 驗證參數
     if (!streamId || typeof streamId !== "string") {
       throw new Error("streamId 必須是非空字符串");
     }
@@ -81,55 +80,41 @@ class FFmpegService extends EventEmitter {
       throw new Error("rtspOutput 必須是非空字符串");
     }
 
-    // 簡化配置：固定使用 NVIDIA，使用默認參數
     const config = {
-      gpuType: "nvidia", // 固定使用 NVIDIA
+      gpuType: "nvidia",
+      scale: options.scale ?? null,
+      bitrate: options.bitrate,
+      preset: options.preset,
+      gpuIndex: options.gpuIndex,
     };
 
-    // 檢查是否已經有進程在運行
     if (this.processes.has(streamId)) {
-      console.warn(
-        `[FFmpeg Service] 串流 ${streamId} 的 FFmpeg 進程已存在，先停止舊進程`
-      );
-      // 異步停止舊進程（不等待完成）
+      logger.warn(`串流 ${streamId} 的 FFmpeg 進程已存在，先停止舊進程`);
       this.stopGpuEncoding(streamId).catch((err) => {
-        console.error(
-          `[FFmpeg Service] 停止舊進程失敗: ${err.message}`
-        );
+        logger.error("停止舊進程失敗", { error: err.message });
       });
     }
 
-    // 清除上一輪錯誤（避免讀到舊錯誤）
     this.lastErrors.delete(streamId);
-
-    // 構建 FFmpeg 命令參數
     const args = this._buildFFmpegArgs(rtspInput, rtspOutput, config);
 
-    // 記錄啟動信息
-    console.log(`[FFmpeg Service] 啟動 GPU 編碼進程: ${streamId}`, {
+    logger.info(`啟動 GPU 編碼進程: ${streamId}`, {
       gpuType: config.gpuType,
       rtspInput: this._maskPassword(rtspInput),
       rtspOutput,
     });
 
-    // 動態獲取 FFmpeg 執行檔路徑（確保使用最新版本）
     const ffmpegBin = getFfmpegBin();
-
-    // 記錄 FFmpeg 執行檔路徑（僅記錄一次）
     if (!_ffmpegPathLogged) {
       _ffmpegPathLogged = true;
-      console.log(`[FFmpeg Service] 使用 FFmpeg 執行檔: ${ffmpegBin}`);
+      logger.info(`使用 FFmpeg 執行檔: ${ffmpegBin}`);
     }
 
-    // 啟動 FFmpeg 進程
     const ffmpeg = spawn(ffmpegBin, args, {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    // 設置事件監聽器
     this._setupProcessHandlers(ffmpeg, streamId);
-
-    // 存儲進程信息
     this.processes.set(streamId, {
       process: ffmpeg,
       options: config,
@@ -153,10 +138,7 @@ class FFmpegService extends EventEmitter {
   _buildFFmpegArgs(rtspInput, rtspOutput, config) {
     const args = [];
 
-    // 動態獲取 RTSP 輸入選項（根據 FFmpeg 版本）
-    const ffmpegBin = getFfmpegBin();
-    const rtspOptions = getRtspInputOptions(ffmpegBin);
-    args.push(...rtspOptions);
+    args.push(...getRtspInputOptions());
 
     // 輸入 URL
     args.push("-i", rtspInput);
@@ -186,11 +168,15 @@ class FFmpegService extends EventEmitter {
     // -f rtsp: RTSP 輸出格式
     // 注意：h264_nvenc 已經輸出 Annex-B 格式，不需要額外的 bitstream filter
     args.push(
-      "-flags", "+global_header",
-      "-fflags", "+nobuffer+flush_packets",
-      "-rtsp_transport", "tcp",
-      "-f", "rtsp",
-      rtspOutput
+      "-flags",
+      "+global_header",
+      "-fflags",
+      "+nobuffer+flush_packets",
+      "-rtsp_transport",
+      "tcp",
+      "-f",
+      "rtsp",
+      rtspOutput,
     );
 
     return args;
@@ -206,9 +192,7 @@ class FFmpegService extends EventEmitter {
     // 處理標準輸出
     ffmpeg.stdout.on("data", (data) => {
       const output = data.toString().trim();
-      if (output) {
-        console.log(`[FFmpeg ${streamId}] ${output}`);
-      }
+      if (output) logger.info(output, { streamId });
     });
 
     // 處理標準錯誤輸出（FFmpeg 通常將信息輸出到 stderr）
@@ -249,21 +233,22 @@ class FFmpegService extends EventEmitter {
           processInfo.speedHistory = [];
         }
         processInfo.speedHistory.push({ speed, timestamp: Date.now() });
-        
-        // 只保留最近 10 次記錄
+
         if (processInfo.speedHistory.length > 10) {
           processInfo.speedHistory.shift();
         }
 
-        // 如果編碼速度持續低於 0.8x，發出警告
-        if (speed < 0.8 && processInfo.speedHistory.length >= 3) {
-          const recentSpeeds = processInfo.speedHistory.slice(-3).map(s => s.speed);
-          const avgSpeed = recentSpeeds.reduce((a, b) => a + b, 0) / recentSpeeds.length;
-          if (avgSpeed < 0.8 && !processInfo.speedWarningShown) {
+        if (speed < 0.8 && processInfo.speedHistory.length >= 5) {
+          const recentSpeeds = processInfo.speedHistory
+            .slice(-5)
+            .map((s) => s.speed);
+          const avgSpeed =
+            recentSpeeds.reduce((a, b) => a + b, 0) / recentSpeeds.length;
+          if (avgSpeed < 0.7 && !processInfo.speedWarningShown) {
             processInfo.speedWarningShown = true;
-            console.warn(
-              `[FFmpeg ${streamId}] ⚠️ 編碼速度過慢（${avgSpeed.toFixed(2)}x），會導致延遲累積。` +
-              `建議：1) 降低解析度（已自動縮放到 1080p） 2) 或使用 MediaMTX 直接拉取（不勾選 GPU 編碼）`
+            logger.warn(
+              `編碼速度過慢（${avgSpeed.toFixed(2)}x），會導致延遲累積`,
+              { streamId },
             );
           }
         }
@@ -271,16 +256,24 @@ class FFmpegService extends EventEmitter {
     }
 
     if (isCriticalError(output)) {
-      // 嚴重錯誤：記錄並觸發錯誤事件
-      console.error(`[FFmpeg ${streamId}] 嚴重錯誤: ${trimmed}`);
+      logger.error(`嚴重錯誤: ${trimmed}`, { streamId });
       this._emitErrorSafely(streamId, trimmed);
-    } else if (isWarningOrError(output)) {
-      // 一般錯誤或警告：記錄但不觸發錯誤事件
-      console.warn(`[FFmpeg ${streamId}] ${trimmed}`);
-    } else {
-      // 一般信息：正常記錄
-      console.log(`[FFmpeg ${streamId}] ${trimmed}`);
+      return;
     }
+    if (isWarningOrError(output)) {
+      logger.warn(trimmed, { streamId });
+      return;
+    }
+    // FFmpeg 進度與冗長輸出改為 debug，減少日誌量
+    const isVerboseProgress =
+      /^frame=\s\d+\s+fps|^Input #|^Stream #|^Stream mapping|^Output #|^Press \[|^\s{2,}/.test(
+        trimmed,
+      );
+    if (isVerboseProgress) {
+      logger.debug(trimmed, { streamId });
+      return;
+    }
+    logger.info(trimmed, { streamId });
   }
 
   /**
@@ -291,9 +284,7 @@ class FFmpegService extends EventEmitter {
    * @param {string|null} signal - 退出信號
    */
   _handleProcessExit(streamId, code, signal) {
-    console.log(
-      `[FFmpeg Service] 進程退出: ${streamId}, 代碼: ${code}, 信號: ${signal}`
-    );
+    logger.info(`進程退出`, { streamId, code, signal });
 
     // 發出 exit 事件
     this.emit("exit", { streamId, code, signal });
@@ -315,7 +306,7 @@ class FFmpegService extends EventEmitter {
    * @param {Error} error - 錯誤對象
    */
   _handleProcessError(streamId, error) {
-    console.error(`[FFmpeg Service] 進程錯誤: ${streamId}`, error);
+    logger.error("進程錯誤", { streamId, error: error.message });
     this.processes.delete(streamId);
     this._emitErrorSafely(streamId, error.message);
   }
@@ -335,9 +326,7 @@ class FFmpegService extends EventEmitter {
       if (this.listenerCount("error") > 0) {
         this.emit("error", { streamId, error });
       } else {
-        console.warn(
-          `[FFmpeg Service] 錯誤但沒有錯誤監聽器: ${streamId}, ${error}`
-        );
+        logger.warn("錯誤但沒有錯誤監聽器", { streamId, error });
       }
     });
   }
@@ -354,16 +343,14 @@ class FFmpegService extends EventEmitter {
 
   /**
    * 停止 FFmpeg 進程
-   * 
+   *
    * @param {string} streamId - 串流 ID
    * @returns {Promise<boolean>} 是否成功停止
    */
   async stopGpuEncoding(streamId) {
     const processInfo = this.processes.get(streamId);
     if (!processInfo) {
-      console.warn(
-        `[FFmpeg Service] 串流 ${streamId} 的 FFmpeg 進程不存在`
-      );
+      logger.warn(`串流 ${streamId} 的 FFmpeg 進程不存在`);
       return false;
     }
 
@@ -403,15 +390,11 @@ class FFmpegService extends EventEmitter {
       const timeoutPromise = new Promise((resolve) => {
         const timeout = setTimeout(() => {
           if (!process.killed && process.exitCode === null) {
-            console.warn(
-              `[FFmpeg Service] 串流 ${streamId} 的 FFmpeg 進程未正常退出，強制終止`
-            );
+            logger.warn(`串流 ${streamId} 的 FFmpeg 進程未正常退出，強制終止`);
             try {
               process.kill("SIGKILL");
             } catch (killError) {
-              console.error(
-                `[FFmpeg Service] 強制終止失敗: ${killError.message}`
-              );
+              logger.error("強制終止失敗", { error: killError.message });
             }
           }
           resolve(false);
@@ -431,13 +414,10 @@ class FFmpegService extends EventEmitter {
 
       this.processes.delete(streamId);
       this.lastErrors.delete(streamId);
-      console.log(`[FFmpeg Service] 已停止串流 ${streamId} 的 FFmpeg 進程`);
+      logger.info(`已停止串流 ${streamId} 的 FFmpeg 進程`);
       return true;
     } catch (error) {
-      console.error(
-        `[FFmpeg Service] 停止串流 ${streamId} 的 FFmpeg 進程失敗:`,
-        error.message
-      );
+      logger.error("停止 FFmpeg 進程失敗", { streamId, error: error.message });
       // 即使出錯也從 Map 中移除
       this.processes.delete(streamId);
       this.lastErrors.delete(streamId);
@@ -468,7 +448,7 @@ class FFmpegService extends EventEmitter {
     streamId,
     stableMs = 1000,
     maxWaitMs = 5000,
-    checkIntervalMs = 100
+    checkIntervalMs = 100,
   ) {
     const startedAt = Date.now();
 
@@ -494,7 +474,7 @@ class FFmpegService extends EventEmitter {
 
   /**
    * 檢查 FFmpeg 進程是否正在運行
-   * 
+   *
    * @param {string} streamId - 串流 ID
    * @returns {boolean} 是否正在運行
    */
@@ -510,7 +490,7 @@ class FFmpegService extends EventEmitter {
 
   /**
    * 獲取所有活躍的 FFmpeg 進程信息
-   * 
+   *
    * @returns {Array<Object>} 進程信息陣列
    */
   getAllProcesses() {
@@ -532,17 +512,16 @@ class FFmpegService extends EventEmitter {
 
   /**
    * 停止所有 FFmpeg 進程
-   * 
+   *
    * @returns {Promise<Array>} 停止結果陣列（Promise.allSettled 格式）
    */
   async stopAllProcesses() {
     const streamIds = Array.from(this.processes.keys());
     const results = await Promise.allSettled(
-      streamIds.map((id) => this.stopGpuEncoding(id))
+      streamIds.map((id) => this.stopGpuEncoding(id)),
     );
     return results;
   }
-
 }
 
 // 導出單例

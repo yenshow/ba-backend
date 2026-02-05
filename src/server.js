@@ -8,9 +8,9 @@ const config = require("./config");
 
 // 向後兼容：使用新的配置結構
 const serverConfig = {
-	serverHost: config.server.host,
-	serverPort: config.server.port,
-	...config,
+  serverHost: config.server.host,
+  serverPort: config.server.port,
+  ...config,
 };
 
 // 中間件
@@ -108,7 +108,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(
   morgan("dev", {
     skip: (req) => req.url === "/ws",
-  })
+  }),
 );
 
 // 統一響應格式中間件
@@ -164,71 +164,76 @@ async function startServer() {
   const serverLogger = logger.createLogger("Server");
 
   try {
-  // 測試資料庫連線
-  const dbConnected = await db.testConnection();
-  if (!dbConnected) {
+    // 測試資料庫連線
+    const dbConnected = await db.testConnection();
+    if (!dbConnected) {
       serverLogger.warn("資料庫連線失敗，但伺服器仍會啟動");
     } else {
       serverLogger.info("資料庫連線成功");
-  }
+    }
 
-  // 測試外部資料庫連線
-  const externalDbConnected = await externalDb.testConnection();
-  if (!externalDbConnected) {
+    // 測試外部資料庫連線
+    const externalDbConnected = await externalDb.testConnection();
+    if (!externalDbConnected) {
       serverLogger.warn("外部資料庫連線失敗，外部資料功能可能無法使用");
     } else {
       serverLogger.info("外部資料庫連線成功");
-  }
+    }
 
-  // 註冊並啟動背景監控任務（如果啟用）
-  if (serverConfig.monitoring.enabled) {
-    backgroundMonitor.registerMonitoringTask(
-      "環境系統",
-      environmentMonitor.checkEnvironmentLocations
-    );
-    backgroundMonitor.registerMonitoringTask(
-      "照明系統",
-      lightingMonitor.checkLightingAreas
-    );
-    // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
+    // 註冊並啟動背景監控任務（如果啟用）
+    if (serverConfig.monitoring.enabled) {
+      backgroundMonitor.registerMonitoringTask(
+        "環境系統",
+        environmentMonitor.checkEnvironmentLocations,
+      );
+      backgroundMonitor.registerMonitoringTask(
+        "照明系統",
+        lightingMonitor.checkLightingAreas,
+      );
+      // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
-    // 啟動背景監控服務
-    backgroundMonitor.startMonitoring();
+      // 啟動背景監控服務
+      backgroundMonitor.startMonitoring();
       serverLogger.info("背景監控服務已啟用");
-  } else {
+    } else {
       serverLogger.warn("背景監控服務已停用（設定 MONITORING_ENABLED=false）");
-  }
+    }
 
-  // 啟動警報自動清理服務
-  alertCleanupService.startCleanupScheduler();
+    // 啟動警報自動清理服務
+    alertCleanupService.startCleanupScheduler();
     serverLogger.info("警報自動清理服務已啟用");
 
-  // 啟動設備資料記錄服務的定時刷新
-  deviceDataLogger.start();
+    // 啟動設備資料記錄服務的定時刷新
+    deviceDataLogger.start();
     serverLogger.info("設備資料記錄服務已啟用");
 
-  const localIP = getLocalIPAddress();
+    const localIP = getLocalIPAddress();
 
-  // 創建 HTTP 伺服器
-  const httpServer = http.createServer(app);
+    // 創建 HTTP 伺服器
+    const httpServer = http.createServer(app);
 
-  // 初始化 WebSocket 服務
-  websocketService.initializeWebSocket(httpServer, corsOptions);
+    // 初始化 WebSocket 服務
+    websocketService.initializeWebSocket(httpServer, corsOptions);
 
-  // 啟動 HTTP 伺服器（Socket.IO 會自動附加到 HTTP 伺服器）
+    // 啟動 HTTP 伺服器（Socket.IO 會自動附加到 HTTP 伺服器）
     httpServer.listen(serverConfig.serverPort, serverConfig.serverHost, () => {
-      serverLogger.info(`BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`);
+      serverLogger.info(
+        `BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`,
+      );
       serverLogger.info(`本機連線: http://localhost:${config.serverPort}`);
       serverLogger.info(`區域網路連線: http://${localIP}:${config.serverPort}`);
       serverLogger.info(`WebSocket 服務已啟用 (Socket.IO)`);
-      
-    if (localIP !== "localhost") {
-      console.log(`\n💡 其他裝置可透過以下網址訪問:`);
-      console.log(`   http://${localIP}:${config.serverPort}`);
-    }
-  });
+
+      if (localIP !== "localhost") {
+        console.log(`\n💡 其他裝置可透過以下網址訪問:`);
+        console.log(`   http://${localIP}:${config.serverPort}`);
+      }
+    });
   } catch (error) {
-    serverLogger.error("啟動伺服器失敗", { error: error.message, stack: error.stack });
+    serverLogger.error("啟動伺服器失敗", {
+      error: error.message,
+      stack: error.stack,
+    });
     process.exit(1);
   }
 }
@@ -243,7 +248,7 @@ async function gracefulShutdown(signal) {
 
   try {
     // 停止背景監控服務
-  backgroundMonitor.stopMonitoring();
+    backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
 
     // 停止設備資料記錄服務
@@ -253,21 +258,24 @@ async function gracefulShutdown(signal) {
     // 停止所有 RTSP 串流（包括 FFmpeg 進程）
     await mediaMTXService.stopAllStreams();
     shutdownLogger.info("所有 RTSP 串流已停止");
-    
+
     // 確保所有 FFmpeg 進程都已停止
     const ffmpegService = require("./services/communication/ffmpegService");
     await ffmpegService.stopAllProcesses();
     shutdownLogger.info("所有 FFmpeg 進程已停止");
 
     // 關閉資料庫連線
-  await db.close();
-  await externalDb.close();
+    await db.close();
+    await externalDb.close();
     shutdownLogger.info("資料庫連線已關閉");
 
     shutdownLogger.info("伺服器已優雅關閉");
-  process.exit(0);
+    process.exit(0);
   } catch (error) {
-    shutdownLogger.error("關閉伺服器時發生錯誤", { error: error.message, stack: error.stack });
+    shutdownLogger.error("關閉伺服器時發生錯誤", {
+      error: error.message,
+      stack: error.stack,
+    });
     process.exit(1);
   }
 }

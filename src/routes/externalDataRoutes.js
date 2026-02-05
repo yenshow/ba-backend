@@ -4,7 +4,10 @@ const handlerFactory = require("../services/externalData/handlerFactory");
 const systemMapping = require("../services/externalData/systemMapping");
 const { authenticate } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
-const { validateRequired, validateIntegers } = require("../middleware/validation");
+const {
+  validateRequired,
+  validateIntegers,
+} = require("../middleware/validation");
 
 // 白名單：允許存取的 schema 和 table
 const ALLOWED_TABLES = [
@@ -12,7 +15,8 @@ const ALLOWED_TABLES = [
   { schema: "platform", table: "person_group" },
   { schema: "baseacs", table: "slot_card_records" },
   { schema: "deviceaccess", table: "door" },
-  // 未來可以繼續加入其他允許的資料表
+  { schema: "vehiclebiz", table: "passageway_log_data" },
+  { schema: "vehiclebiz", table: "lane_info" },
 ];
 
 /**
@@ -20,7 +24,7 @@ const ALLOWED_TABLES = [
  */
 function validateTableAccess(schema, table) {
   return ALLOWED_TABLES.some(
-    (allowed) => allowed.schema === schema && allowed.table === table
+    (allowed) => allowed.schema === schema && allowed.table === table,
   );
 }
 
@@ -54,24 +58,32 @@ function validateTableAndHandler(req, res, next) {
  * GET /api/external-data/handlers
  * 注意：固定路徑必須放在動態路徑之前
  */
-router.get("/handlers", authenticate, asyncHandler(async (req, res) => {
-  const handlers = handlerFactory.getAllHandlers();
-  res.sendSuccess(handlers);
-}));
+router.get(
+  "/handlers",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const handlers = handlerFactory.getAllHandlers();
+    res.sendSuccess(handlers);
+  }),
+);
 
 /**
  * 取得所有系統及其資料表對應關係
  * GET /api/external-data/systems
  */
-router.get("/systems", authenticate, asyncHandler(async (req, res) => {
-  const mapping = handlerFactory.getSystemTableMapping();
-  const systems = Object.keys(mapping).map((systemType) => ({
-    systemType,
-    tables: mapping[systemType],
-    tableCount: mapping[systemType].length,
-  }));
-  res.sendSuccess({ systems });
-}));
+router.get(
+  "/systems",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const mapping = handlerFactory.getSystemTableMapping();
+    const systems = Object.keys(mapping).map((systemType) => ({
+      systemType,
+      tables: mapping[systemType],
+      tableCount: mapping[systemType].length,
+    }));
+    res.sendSuccess({ systems });
+  }),
+);
 
 /**
  * 取得指定系統使用的資料表列表
@@ -82,21 +94,24 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     const { systemType } = req.params;
-    
+
     if (!systemMapping.hasSystem(systemType)) {
-      return res.sendError(`找不到系統 ${systemType}。可用的系統類型：${systemMapping.getAllSystemTypes().join(", ")}`, 404);
+      return res.sendError(
+        `找不到系統 ${systemType}。可用的系統類型：${systemMapping.getAllSystemTypes().join(", ")}`,
+        404,
+      );
     }
-    
+
     const tables = systemMapping.getTablesBySystem(systemType);
     const handlers = handlerFactory.getHandlersBySystem(systemType);
-    
+
     res.sendSuccess({
       systemType,
       tables,
       handlers: handlers.map(({ schema, table }) => `${schema}.${table}`),
       tableCount: tables.length,
     });
-  })
+  }),
 );
 
 /**
@@ -110,14 +125,14 @@ router.get(
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;
     const systems = systemMapping.getSystemsByTable(schema, table);
-    
+
     res.sendSuccess({
       schema,
       table,
       systems,
       systemCount: systems.length,
     });
-  })
+  }),
 );
 
 /**
@@ -135,7 +150,7 @@ router.get(
     const handler = handlerFactory.getHandler(schema, table);
     const result = await handler.getCount(req.query);
     res.sendSuccess(result);
-  })
+  }),
 );
 
 /**
@@ -158,7 +173,7 @@ router.get(
     }
 
     res.sendSuccess(result);
-  })
+  }),
 );
 
 /**
@@ -173,13 +188,16 @@ router.get(
   asyncHandler(async (req, res) => {
     const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
     const result = await handler.getPictureById(parseInt(req.params.id));
-    
+
     if (!result.success) {
-      return res.sendError(result.error || "獲取圖片失敗", result.status || 500);
+      return res.sendError(
+        result.error || "獲取圖片失敗",
+        result.status || 500,
+      );
     }
-    
+
     res.sendSuccess(result.data);
-  })
+  }),
 );
 
 /**
@@ -193,7 +211,7 @@ router.post(
   validateRequired("picUris"),
   asyncHandler(async (req, res) => {
     const { picUris } = req.body;
-    
+
     if (!Array.isArray(picUris) || picUris.length === 0) {
       return res.sendError("picUris 必須為非空陣列", 400);
     }
@@ -201,14 +219,14 @@ router.post(
     const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
     const results = await handler.getBatchPicturesByUri(picUris);
     const successCount = results.filter((r) => r.success).length;
-    
+
     res.sendSuccess({
       results,
       total: picUris.length,
       success: successCount,
       failed: picUris.length - successCount,
     });
-  })
+  }),
 );
 
 /**
@@ -223,13 +241,16 @@ router.post(
   asyncHandler(async (req, res) => {
     const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
     const result = await handler.getPictureByUri(req.body.picUri);
-    
+
     if (!result.success) {
-      return res.sendError(result.error || "獲取圖片失敗", result.status || 500);
+      return res.sendError(
+        result.error || "獲取圖片失敗",
+        result.status || 500,
+      );
     }
-    
+
     res.sendSuccess(result.data);
-  })
+  }),
 );
 
 /**
@@ -247,8 +268,7 @@ router.get(
     const handler = handlerFactory.getHandler(schema, table);
     const result = await handler.getList(req.query);
     res.sendSuccess(result);
-  })
+  }),
 );
 
 module.exports = router;
-

@@ -1,6 +1,6 @@
 /**
  * 統一錯誤處理中間件
- * 
+ *
  * 提供統一的錯誤處理邏輯，根據錯誤類型自動決定 HTTP 狀態碼
  * 並記錄設備錯誤（Modbus、RTSP 等）
  */
@@ -167,4 +167,3 @@ async function errorHandler(err, req, res, next) {
 }
 
 module.exports = errorHandler;
-

@@ -5,7 +5,7 @@ const db = require("../../database/db");
  *
  * 此服務提供統一的地點和區域管理 API，支援一個地點多個系統
  * 使用 location_systems 表來關聯地點和系統
- * 
+ *
  */
 
 // ========== 共用輔助函數 ==========
@@ -106,6 +106,15 @@ function formatSystem(system) {
         },
       };
 
+    case "vehicle_access":
+      return {
+        ...baseSystem,
+        config: {
+          entryLaneId: config.entry_lane_id ?? undefined,
+          exitLaneId: config.exit_lane_id ?? undefined,
+        },
+      };
+
     default:
       return {
         ...baseSystem,
@@ -147,7 +156,7 @@ function formatZone(zone, locations = []) {
 async function loadLocationSystems(locationId) {
   const systems = await db.query(
     `SELECT * FROM location_systems WHERE location_id = $1 ORDER BY created_at ASC`,
-    [locationId]
+    [locationId],
   );
   return systems;
 }
@@ -234,7 +243,7 @@ async function loadZoneLocations(zoneId, systemType = null) {
 
   // 格式化為前端格式
   const locationsWithSystems = Array.from(locationMap.values()).map(
-    (location) => formatLocation(location, location.systems)
+    (location) => formatLocation(location, location.systems),
   );
 
   return locationsWithSystems;
@@ -328,7 +337,7 @@ async function getZones(filters = {}) {
       const zoneRows = locationsByZoneId.get(zone.id) || [];
       const locationMap = groupLocationRowsByLocation(zoneRows);
       const locations = Array.from(locationMap.values()).map((location) =>
-        formatLocation(location, location.systems)
+        formatLocation(location, location.systems),
       );
       return formatZone(zone, locations);
     });
@@ -339,7 +348,6 @@ async function getZones(filters = {}) {
     throw new Error("取得區域列表失敗: " + error.message);
   }
 }
-
 
 /**
  * 取得單一區域
@@ -390,7 +398,7 @@ async function createZone(zoneData, userId) {
     // 檢查區域名稱是否已存在
     const existingZone = await db.query(
       "SELECT id FROM zones WHERE name = $1",
-      [trimmedName]
+      [trimmedName],
     );
 
     let zoneId;
@@ -423,9 +431,9 @@ async function createZone(zoneData, userId) {
         params.push(zoneId);
         await db.query(
           `UPDATE zones SET ${updates.join(
-            ", "
+            ", ",
           )}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`,
-          params
+          params,
         );
       }
     } else {
@@ -440,7 +448,7 @@ async function createZone(zoneData, userId) {
           imageUrl || null,
           description || null,
           userId || null,
-        ]
+        ],
       );
       zoneId = zoneResult[0].id;
     }
@@ -487,7 +495,7 @@ async function deleteLocationsWithoutSystems(query, zoneId) {
     `DELETE FROM locations 
      WHERE zone_id = $1 
      AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
-    [zoneId]
+    [zoneId],
   );
 }
 
@@ -500,7 +508,7 @@ async function deleteLocationsByIdsWithoutSystems(query, locationIds) {
     `DELETE FROM locations 
      WHERE id = ANY($1::int[]) 
      AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
-    [locationIds]
+    [locationIds],
   );
 }
 
@@ -510,7 +518,7 @@ async function deleteLocationsByIdsWithoutSystems(query, locationIds) {
 async function deleteEmptyZoneIfNeeded(query, zoneId) {
   const remainingLocations = await query(
     "SELECT id FROM locations WHERE zone_id = $1",
-    [zoneId]
+    [zoneId],
   );
   if (remainingLocations.length === 0) {
     await query("DELETE FROM zones WHERE id = $1", [zoneId]);
@@ -524,13 +532,12 @@ async function deleteEmptyZoneIfNeeded(query, zoneId) {
  */
 async function updateZone(id, zoneData, userId) {
   try {
-    const { name, buildingId, imageUrl, description, locations } =
-      zoneData;
+    const { name, buildingId, imageUrl, description, locations } = zoneData;
 
     // 檢查區域是否存在
     const existing = await db.query(
       "SELECT id, name FROM zones WHERE id = $1",
-      [id]
+      [id],
     );
     if (existing.length === 0) {
       const error = new Error("區域不存在");
@@ -551,7 +558,7 @@ async function updateZone(id, zoneData, userId) {
         }
         const nameCheck = await db.query(
           "SELECT id FROM zones WHERE name = $1 AND id != $2",
-          [trimmedName, id]
+          [trimmedName, id],
         );
         if (nameCheck.length > 0) {
           targetZoneId = nameCheck[0].id;
@@ -572,7 +579,7 @@ async function updateZone(id, zoneData, userId) {
               query,
               targetZoneId,
               location,
-              userId
+              userId,
             );
           }
         }
@@ -630,7 +637,7 @@ async function updateZone(id, zoneData, userId) {
           `UPDATE zones 
            SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP
            WHERE id = $${paramIndex}`,
-          params
+          params,
         );
       }
 
@@ -640,10 +647,10 @@ async function updateZone(id, zoneData, userId) {
 
         const existingLocations = await query(
           "SELECT id FROM locations WHERE zone_id = $1",
-          [id]
+          [id],
         );
         const existingLocationIds = new Set(
-          existingLocations.map((l) => String(l.id))
+          existingLocations.map((l) => String(l.id)),
         );
 
         const updatedLocationIds = new Set();
@@ -656,7 +663,7 @@ async function updateZone(id, zoneData, userId) {
               query,
               parseInt(locationId),
               location,
-              userId
+              userId,
             );
             updatedLocationIds.add(locationId);
           } else {
@@ -666,7 +673,7 @@ async function updateZone(id, zoneData, userId) {
               query,
               id,
               location,
-              userId
+              userId,
             );
             updatedLocationIds.add(String(newLocationId));
           }
@@ -674,11 +681,11 @@ async function updateZone(id, zoneData, userId) {
 
         // 刪除不在更新列表中的地點（只刪除完全沒有系統的地點）
         const locationsToDelete = Array.from(existingLocationIds).filter(
-          (id) => !updatedLocationIds.has(id)
+          (id) => !updatedLocationIds.has(id),
         );
         await deleteLocationsByIdsWithoutSystems(
           query,
-          locationsToDelete.map((id) => parseInt(id))
+          locationsToDelete.map((id) => parseInt(id)),
         );
 
         // 清理更新後無系統的地點（確保資料一致性）
@@ -709,7 +716,7 @@ async function deleteZone(id) {
   try {
     const result = await db.query(
       "DELETE FROM zones WHERE id = $1 RETURNING id",
-      [id]
+      [id],
     );
 
     if (result.length === 0) {
@@ -783,7 +790,7 @@ async function createLocation(locationData, userId) {
         query,
         zoneId,
         locationData,
-        userId
+        userId,
       );
     });
 
@@ -799,7 +806,7 @@ async function createLocation(locationData, userId) {
     handleUniqueConstraintError(
       error,
       "unique_zone_location_name",
-      "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。"
+      "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。",
     );
     console.error("建立地點失敗:", error);
     throw new Error("建立地點失敗: " + error.message);
@@ -825,11 +832,11 @@ async function updateLocation(id, locationData, userId) {
     let locationDeleted = false;
     await db.transaction(async (query) => {
       await updateLocationWithSystems(query, id, locationData, userId);
-      
+
       // 檢查地點是否已被刪除（因為變成無系統）
       const locationCheck = await query(
         "SELECT id FROM locations WHERE id = $1",
-        [id]
+        [id],
       );
       locationDeleted = locationCheck.length === 0;
     });
@@ -854,7 +861,7 @@ async function updateLocation(id, locationData, userId) {
     handleUniqueConstraintError(
       error,
       "unique_zone_location_name",
-      "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。"
+      "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。",
     );
     console.error("更新地點失敗:", error);
     throw new Error("更新地點失敗: " + error.message);
@@ -868,7 +875,7 @@ async function deleteLocation(id) {
   try {
     const result = await db.query(
       "DELETE FROM locations WHERE id = $1 RETURNING id",
-      [id]
+      [id],
     );
 
     if (result.length === 0) {
@@ -918,6 +925,12 @@ function buildSystemConfig(systemType, config) {
         exit_door_id: config.exitDoorId || null,
       };
 
+    case "vehicle_access":
+      return {
+        entry_lane_id: config.entryLaneId ?? null,
+        exit_lane_id: config.exitLaneId ?? null,
+      };
+
     default:
       return config || {};
   }
@@ -931,7 +944,9 @@ async function createSystem(query, locationId, system) {
 
   if (
     !systemType ||
-    !["environment", "lighting", "people_counting"].includes(systemType)
+    !["environment", "lighting", "people_counting", "vehicle_access"].includes(
+      systemType,
+    )
   ) {
     throw new Error(`無效的系統類型: ${systemType}`);
   }
@@ -942,7 +957,7 @@ async function createSystem(query, locationId, system) {
     `INSERT INTO location_systems (location_id, system_type, system_config)
      VALUES ($1, $2, $3)
      RETURNING id`,
-    [locationId, systemType, JSON.stringify(systemConfig)]
+    [locationId, systemType, JSON.stringify(systemConfig)],
   );
 
   return result[0].id;
@@ -957,7 +972,7 @@ async function updateSystem(query, systemId, system) {
   // 檢查系統是否存在
   const existing = await query(
     "SELECT system_type FROM location_systems WHERE id = $1",
-    [systemId]
+    [systemId],
   );
   if (existing.length === 0) {
     throw new Error(`系統 ID ${systemId} 不存在`);
@@ -967,7 +982,9 @@ async function updateSystem(query, systemId, system) {
   const targetSystemType = systemType || currentSystemType;
 
   if (
-    !["environment", "lighting", "people_counting"].includes(targetSystemType)
+    !["environment", "lighting", "people_counting", "vehicle_access"].includes(
+      targetSystemType,
+    )
   ) {
     throw new Error(`無效的系統類型: ${targetSystemType}`);
   }
@@ -978,7 +995,7 @@ async function updateSystem(query, systemId, system) {
     `UPDATE location_systems
      SET system_type = $1, system_config = $2, updated_at = CURRENT_TIMESTAMP
      WHERE id = $3`,
-    [targetSystemType, JSON.stringify(systemConfig), systemId]
+    [targetSystemType, JSON.stringify(systemConfig), systemId],
   );
 }
 
@@ -1000,6 +1017,8 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       personGroupIds,
       entryDoorId,
       exitDoorId,
+      entryLaneId,
+      exitLaneId,
       config,
     } = location;
 
@@ -1025,6 +1044,10 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           if (entryDoorId !== undefined) systemConfig.entryDoorId = entryDoorId;
           if (exitDoorId !== undefined) systemConfig.exitDoorId = exitDoorId;
           break;
+        case "vehicle_access":
+          if (entryLaneId !== undefined) systemConfig.entryLaneId = entryLaneId;
+          if (exitLaneId !== undefined) systemConfig.exitLaneId = exitLaneId;
+          break;
       }
 
       if (Object.keys(systemConfig).length > 0) {
@@ -1038,7 +1061,7 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
   // 檢查地點是否已存在（同一區域內）
   const existingLocation = await query(
     "SELECT id, description FROM locations WHERE zone_id = $1 AND name = $2",
-    [zoneId, trimmedName]
+    [zoneId, trimmedName],
   );
 
   let locationId;
@@ -1054,7 +1077,7 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
     ) {
       await query(
         `UPDATE locations SET description = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-        [description || null, locationId]
+        [description || null, locationId],
       );
     }
   } else {
@@ -1063,7 +1086,7 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       `INSERT INTO locations (zone_id, name, description, created_by)
        VALUES ($1, $2, $3, $4)
        RETURNING id`,
-      [zoneId, trimmedName, description || null, userId || null]
+      [zoneId, trimmedName, description || null, userId || null],
     );
     locationId = locationResult[0].id;
   }
@@ -1076,7 +1099,7 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
     // 檢查該地點是否已有相同類型的系統
     const existingSystem = await query(
       "SELECT id FROM location_systems WHERE location_id = $1 AND system_type = $2",
-      [locationId, systemType]
+      [locationId, systemType],
     );
 
     if (existingSystem.length > 0) {
@@ -1108,21 +1131,21 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     // 檢查當前地點的名稱
     const currentLocation = await query(
       "SELECT name FROM locations WHERE id = $1",
-      [locationId]
+      [locationId],
     );
     const currentLocationName = (currentLocation[0]?.name || "").trim();
 
-      // 只有當名稱真正改變時才檢查重複並更新
-      if (trimmedName !== currentLocationName) {
-        // 檢查是否有其他地點使用相同名稱（同一區域內）
-        const nameCheck = await query(
-          "SELECT id FROM locations WHERE zone_id = (SELECT zone_id FROM locations WHERE id = $1) AND name = $2 AND id != $1",
-          [locationId, trimmedName]
+    // 只有當名稱真正改變時才檢查重複並更新
+    if (trimmedName !== currentLocationName) {
+      // 檢查是否有其他地點使用相同名稱（同一區域內）
+      const nameCheck = await query(
+        "SELECT id FROM locations WHERE zone_id = (SELECT zone_id FROM locations WHERE id = $1) AND name = $2 AND id != $1",
+        [locationId, trimmedName],
+      );
+      if (nameCheck.length > 0) {
+        const duplicateError = new Error(
+          `地點名稱 "${trimmedName}" 已被該區域的其他地點使用。由於地點是跨系統共用的，請直接使用該地點。`,
         );
-        if (nameCheck.length > 0) {
-          const duplicateError = new Error(
-            `地點名稱 "${trimmedName}" 已被該區域的其他地點使用。由於地點是跨系統共用的，請直接使用該地點。`
-          );
         duplicateError.statusCode = 400;
         throw duplicateError;
       }
@@ -1140,9 +1163,9 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     params.push(locationId);
     await query(
       `UPDATE locations SET ${updates.join(
-        ", "
+        ", ",
       )}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`,
-      params
+      params,
     );
   }
 
@@ -1153,11 +1176,11 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     // 2. 以 (location_id, system_type) 為鍵（用於檢查唯一約束）
     const existingSystems = await query(
       "SELECT id, system_type FROM location_systems WHERE location_id = $1",
-      [locationId]
+      [locationId],
     );
     const existingSystemIds = new Set(existingSystems.map((s) => String(s.id)));
     const existingSystemTypes = new Map(
-      existingSystems.map((s) => [s.system_type, s.id])
+      existingSystems.map((s) => [s.system_type, s.id]),
     );
 
     const updatedSystemIds = new Set();
@@ -1196,7 +1219,7 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
 
     // 刪除不在更新列表中的系統
     const systemsToDelete = Array.from(existingSystemIds).filter(
-      (id) => !updatedSystemIds.has(id)
+      (id) => !updatedSystemIds.has(id),
     );
     if (systemsToDelete.length > 0) {
       await query(`DELETE FROM location_systems WHERE id = ANY($1::int[])`, [
@@ -1207,19 +1230,19 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     // 檢查更新後地點是否還有系統，如果沒有則刪除地點
     const remainingSystems = await query(
       "SELECT id FROM location_systems WHERE location_id = $1",
-      [locationId]
+      [locationId],
     );
     if (remainingSystems.length === 0) {
       // 獲取 zoneId 以便後續清理
       const locationInfo = await query(
         "SELECT zone_id FROM locations WHERE id = $1",
-        [locationId]
+        [locationId],
       );
       const zoneId = locationInfo[0]?.zone_id;
-      
+
       // 刪除無系統的地點
       await query("DELETE FROM locations WHERE id = $1", [locationId]);
-      
+
       // 如果區域沒有地點了，刪除區域
       if (zoneId) {
         await deleteEmptyZoneIfNeeded(query, zoneId);

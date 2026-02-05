@@ -58,7 +58,9 @@ src/
 │           ├── platformPersonGroupHandler.js
 │           ├── platformPersonHeadPicHandler.js
 │           ├── baseacsSlotCardRecordsHandler.js
-│           └── deviceaccessDoorHandler.js
+│           ├── deviceaccessDoorHandler.js
+│           ├── passagewayLogDataHandler.js
+│           └── laneInfoHandler.js
 ├── routes/
 │   └── externalDataRoutes.js             # API 路由
 └── scripts/
@@ -148,18 +150,13 @@ src/
 - `snap_pic_url` - 抓拍圖片 URL
 - `is_registered` - 是否已註冊（自動計算，`person_id !== -1` 時為 `true`）
 
-**時間範圍篩選**：
+**時間範圍篩選**（精簡）：
 
-支援以下時間範圍參數（`timeRange`）：
+支援 `timeRange=today` 或 `startTime` / `endTime` 自訂。未指定時預設今天。
 
-| 值             | 說明               |
-| -------------- | ------------------ |
-| `last_hour`    | 過去一小時         |
-| `today`        | 今天               |
-| `yesterday`    | 昨天               |
-| `this_week`    | 本週（週一到今天） |
-| `last_week`    | 上週（週一到週日） |
-| `last_30_days` | 最近 30 天         |
+| 值      | 說明 |
+| ------- | ---- |
+| `today` | 今天 |
 
 **自訂時間範圍**：
 
@@ -201,6 +198,51 @@ GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&
 GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&endTime=2025-01-31T23:59:59Z
 ```
 
+### 6. Passageway Log Data Handler（車輛進出）
+
+**資料表**：`vehiclebiz.passageway_log_data`
+
+**功能**：
+
+- 預設按 `trigger_time` 降序排序（最新的在前）
+- 可搜尋欄位：`lane_name`、`license_plate`、`plate_capital`、`owner_name`、`vehicle_list_name`、`passageway_name`
+- **時間範圍篩選**：`timeRange=today` | `yesterday` | `last7days` 或 `startTime` / `endTime`（對應 `trigger_time`）；未指定時預設今天
+- **後處理輸出**：`plate_license_image_url`（來自 DB `license_plate_image_url`）；`vehicle_list_id` / `vehicle_list_name` 為 DB 直接欄位（無則補 -1 / 空字串）；`vehicle_category`（來自 `vehicle_type`）、`is_blacklist`（`vehicle_type === 5` 為黑名單）
+
+**關鍵欄位（API 輸出）**：
+
+- `lane_name` - 車道名稱
+- `trigger_time` - 過車時間
+- `owner_id` / `owner_name` / `owner_phone` - 車主資訊（車主大頭照可參考人流統計，依 owner_id 向 platform 取得）
+- `license_plate` - 車牌
+- `plate_license_image_url` - 車牌圖片 URL（DB 欄位為 `license_plate_image_url`）
+- `vehicle_list_id` - 群組 ID（DB 直接欄位；-1 或 0 代表沒有群組）
+- `vehicle_list_name` - 群組名稱（DB 直接欄位）
+- `vehicle_category` - 車輛類別（對應 `vehicle_type`；**5 = 黑名單**）
+- `is_blacklist` - 是否黑名單（後處理，`vehicle_category === 5`）
+
+**篩選**：支援 `passageway_id`、`lane_id`（可多筆，逗號分隔或陣列，會轉為 IN 條件）、`vehicle_list_id`、`vehicle_category`（如 `5` 僅黑名單）。
+
+### 7. Lane Info Handler（車道配置，供地點設定）
+
+**資料表**：`vehiclebiz.lane_info`
+
+**功能**：
+
+- 預設只顯示 `deleted = 0`（未刪除）
+- 可搜尋欄位：`lane_name`
+- 供前端地點設定使用：取得車道列表作為「入口／出口」選項（參考人流統計入口／出口設備）
+
+**關鍵欄位**：
+
+- `id` - 車道 ID（對應 `passageway_log_data.lane_id`，地點設定後以此篩選過車紀錄）
+- `lane_name` - 車道名稱
+- `lane_type` - 車道類型（1: 進，2: 出），用於判定車輛紀錄的進出
+- `passageway_id` - 出入口 ID
+- `deleted` - 是否已刪除（0: 未刪除；API 預設只回傳 0）
+
+**篩選**：預設 `deleted=0`；可傳 `lane_type`（1 進／2 出）、`passageway_id` 等。
+
 ## API 端點
 
 ### 1. 取得資料列表
@@ -239,12 +281,6 @@ GET /api/external-data/deviceaccess/door?is_deleted=0
 
 # 取得特定設備的門列表
 GET /api/external-data/deviceaccess/door?device_id=28
-
-# 取得過去一小時的刷卡記錄
-GET /api/external-data/baseacs/slot_card_records?timeRange=last_hour
-
-# 取得最近 30 天的刷卡記錄
-GET /api/external-data/baseacs/slot_card_records?timeRange=last_30_days
 
 # 自訂時間範圍
 GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&endTime=2025-01-31T23:59:59Z
@@ -387,7 +423,6 @@ const ALLOWED_TABLES = [
 提供所有處理器的通用功能：
 
 - **查詢方法**：
-
   - `getList(filters)` - 取得資料列表
   - `getById(id)` - 取得單筆資料
   - `getCount(filters)` - 取得資料總數
@@ -553,12 +588,10 @@ const SYSTEM_TABLE_MAPPING = {
    ```
 
 2. **建立對應的處理器**（如需要特殊邏輯）
-
    - 在 `src/services/externalData/handlers/` 建立處理器
    - 繼承 `BaseExternalDataService`
 
 3. **註冊處理器**
-
    - 在 `handlerFactory.js` 中註冊
 
 4. **加入白名單**

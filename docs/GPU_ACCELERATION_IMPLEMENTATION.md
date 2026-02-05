@@ -8,6 +8,21 @@
 
 **核心結論**：✅ **使用 FFmpeg 服務層進行 GPU 硬體編碼，顯著提升影像處理性能**
 
+**相關文檔**：`STREAMING_OPTIMIZATION_ANALYSIS.md` — 串流優化歷程、問題修復與驗證步驟
+
+---
+
+## 📁 影像處理相關檔案
+
+| 檔案                                            | 職責                                    |
+| ----------------------------------------------- | --------------------------------------- |
+| `src/services/communication/ffmpegService.js`   | FFmpeg GPU 編碼進程、參數組裝、速度監控 |
+| `src/services/communication/mediaMTXService.js` | MediaMTX 路徑管理、早回傳、背景就緒檢查 |
+| `src/config/ffmpegConfig.js`                    | NVENC/QSV/AMF 參數、scale、錯誤判定     |
+| `src/routes/rtspRoutes.js`                      | RTSP API 端點                           |
+| `src/utils/ffmpegPath.js`                       | FFmpeg 執行檔路徑解析                   |
+| `mediamtx/mediamtx.yml`                         | HLS/WebRTC 低延遲配置                   |
+
 ---
 
 ## 🏗️ 系統架構總覽
@@ -50,6 +65,7 @@ HLS/WebRTC 輸出
 ```
 
 **適用場景**：
+
 - 低負載環境
 - 不需要高品質編碼
 - 系統沒有 GPU 或 GPU 驅動未安裝
@@ -72,6 +88,7 @@ HLS/WebRTC 輸出
 ```
 
 **適用場景**：
+
 - 高負載環境（多路串流）
 - 需要高品質編碼
 - 需要降低 CPU 負擔
@@ -131,6 +148,7 @@ HLS/WebRTC 輸出
 #### 1. FFmpeg 服務層 (`ffmpegService.js`)
 
 **職責**：
+
 - 管理 FFmpeg GPU 編碼進程的生命週期
 - 構建 GPU 編碼命令參數
 - 監控進程狀態和錯誤處理
@@ -140,16 +158,16 @@ HLS/WebRTC 輸出
 
 ```javascript
 // 啟動 GPU 編碼
-startGpuEncoding(streamId, rtspInput, rtspOutput, options)
+startGpuEncoding(streamId, rtspInput, rtspOutput, options);
 
 // 停止 GPU 編碼
-stopGpuEncoding(streamId)
+stopGpuEncoding(streamId);
 
 // 構建 FFmpeg 參數
-buildFFmpegArgs(rtspInput, rtspOutput, options)
+buildFFmpegArgs(rtspInput, rtspOutput, options);
 
-// 等待進程就緒
-waitForProcessReady(streamId, maxWaitMs, checkIntervalMs)
+// 等待進程穩定
+waitForProcessStable(streamId, stableMs, maxWaitMs, checkIntervalMs);
 ```
 
 **實施位置**：`src/services/communication/ffmpegService.js`
@@ -157,6 +175,7 @@ waitForProcessReady(streamId, maxWaitMs, checkIntervalMs)
 #### 2. MediaMTX 服務層 (`mediaMTXService.js`)
 
 **職責**：
+
 - 管理 MediaMTX 串流路徑
 - 整合 FFmpeg 服務（可選）
 - 生成播放 URL（HLS、WebRTC）
@@ -185,6 +204,7 @@ async addPath(pathName, rtspUrl)
 #### 3. RTSP 路由層 (`rtspRoutes.js`)
 
 **職責**：
+
 - 提供 RESTful API 端點
 - 驗證請求參數
 - 調用服務層方法
@@ -195,10 +215,7 @@ async addPath(pathName, rtspUrl)
 POST /api/rtsp/start
 Body: {
   rtspUrl: string,
-  useGpuEncoding?: boolean,
-  gpuType?: 'nvidia' | 'intel' | 'amd',
-  bitrate?: string,
-  preset?: string
+  useGpuEncoding?: boolean   // 簡化：僅開關，bitrate/preset 由 env 控制
 }
 
 POST /api/rtsp/stop/:streamId
@@ -207,55 +224,40 @@ GET /api/rtsp/status/:streamId
 GET /api/rtsp/refresh/:streamId
 ```
 
+> **注意**：`rtspRoutes.js` 僅傳遞 `useGpuEncoding`；bitrate、preset、scale 由 `mediaMTXService` 從環境變數讀取（`RTSP_SCALE`、`RTSP_BITRATE`/`GPU_BITRATE`、`GPU_PRESET`），API 可擴展以支援覆寫。
+
 **實施位置**：`src/routes/rtspRoutes.js`
 
 ---
 
 ## 🔄 完整流程說明
 
-### 串流啟動流程（GPU 編碼模式）
+### 串流啟動流程（GPU 編碼模式，早回傳架構）
 
 ```
 1. 前端發起請求
    POST /api/rtsp/start
-   {
-     "rtspUrl": "rtsp://camera_url",
-     "useGpuEncoding": true,
-     "gpuType": "nvidia",
-     "bitrate": "2M"
-   }
+   { "rtspUrl": "rtsp://camera_url", "useGpuEncoding": true }
         ↓
-2. rtspRoutes.js 驗證參數
-   • 驗證 RTSP URL 格式
-   • 驗證 GPU 類型
+2. rtspRoutes.js 驗證參數（RTSP URL）
         ↓
 3. mediaMTXService.startStream()
-   • 生成 streamId 和 pathName
-   • 檢查 MediaMTX 服務健康狀態
+   • 防重複 start：2 秒內同一 streamId 直接回傳現有串流
+   • 生成 streamId / pathName，檢查 MediaMTX 健康
+   • 若舊路徑存在：removePath → waitForPathRemoval(1000ms, 100ms)
         ↓
-4. ffmpegService.startGpuEncoding()
-   • 構建 FFmpeg 命令參數
-   • 啟動 FFmpeg 進程
-   • 等待進程就緒（最多 3 秒）
+4. GPU 分支：addPathForPublisher(pathName)
+   • 配置 MediaMTX 為 Publisher 模式（等待 RTSP 推送）
         ↓
-5. mediaMTXService.addPath()
-   • 添加 MediaMTX 路徑（來源：FFmpeg 輸出的 RTSP）
-   • 等待路徑就緒（最多 5 秒）
+5. ffmpegService.startGpuEncoding(scale, bitrate, preset)
+   • scale 來自 RTSP_SCALE 或預設 1920:1080
+   • waitForProcessStable(800ms, 5000ms, 100ms)
         ↓
-6. 生成播放 URL
-   • HLS URL: http://server:8888/path/index.m3u8?t=timestamp
-   • WebRTC URL: http://server:8889/path
+6. 【早回傳】FFmpeg 穩定後立即回傳 API
+   • 生成 hlsUrl、webrtcUrl，推送 WebSocket
+   • waitForPathReady 改為背景執行（5000ms, 50ms）
         ↓
-7. 推送 WebSocket 事件
-   • 通知前端串流已啟動
-        ↓
-8. 返回響應
-   {
-     "streamId": "...",
-     "hlsUrl": "...",
-     "webrtcUrl": "...",
-     "status": "running"
-   }
+7. 背景：路徑就緒成功 → 正常；失敗 → 清理 + WebSocket rtsp:stream:error
 ```
 
 ### 串流停止流程
@@ -274,7 +276,7 @@ GET /api/rtsp/refresh/:streamId
         ↓
 4. mediaMTXService.removePath()
    • 從 MediaMTX 移除路徑
-   • 輪詢確認移除成功（最多 3 秒）
+   • 輪詢確認移除成功（最多 2 秒，間隔 150ms）
         ↓
 5. 清理記憶體
    • 從 streams Map 中移除
@@ -300,6 +302,7 @@ GET /api/rtsp/refresh/:streamId
 **編碼器**：`h264_nvenc`
 
 **配置參數**：
+
 ```javascript
 {
   gpuType: 'nvidia',
@@ -308,32 +311,37 @@ GET /api/rtsp/refresh/:streamId
 }
 ```
 
-**Preset 映射**（FFmpeg 8.0+）：
-- `p1` → `slow` (最高品質，最慢速度)
-- `p2` → `medium` (高品質，平衡速度)
-- `p3-p4` → `fast` (平衡品質和速度，預設)
-- `p5` → `llhq` (低延遲高品質，適合串流)
-- `p6` → `llhp` (低延遲高性能，適合串流)
-- `p7` → `hp` (最高性能，較低品質)
+**Preset 映射**（FFmpeg 8.0+，p1–p7 + -tune ll）：
 
-**FFmpeg 參數**（FFmpeg 8.0+）：
+- `p1`：最高品質，最慢
+- `p2`–`p3`：高品質
+- `p4`：**預設**，平衡品質與速度
+- `p5`–`p6`：低延遲優化
+- `p7`：最高性能，較低品質
+
+**實際 FFmpeg 參數**（對應 `ffmpegConfig.js`）：
+
 ```bash
 -rtsp_transport tcp   # 使用 TCP 傳輸（更穩定）
--stimeout 5000000     # 5 秒超時
--reconnect 1           # 自動重連
+-timeout 5000000      # 5 秒超時（FFmpeg 5.0+）
 -i rtsp://...         # 輸入 URL
+-vf scale=1920:1080   # 可選，由 RTSP_SCALE 或 options.scale 決定
 -c:v h264_nvenc
--preset llhq          # 低延遲高品質（p5）或 fast（p4）
--rc vbr               # 可變位元率
+-preset p4            # p1–p7
+-tune ll              # 低延遲 tune
+-rc cbr               # 固定位元率（低延遲穩定性）
 -b:v 2M
 -maxrate 2M
 -bufsize 4M
--gpu 0                # 使用第一個 GPU（FFmpeg 8.0+ 支援）
--c:a copy             # 音訊複製
+-g 6                  # GOP 與 MediaMTX 200ms 片段對齊
+-pix_fmt yuv420p
+-color_range tv
+-c:a copy
 -f rtsp rtsp://...    # 輸出 URL
 ```
 
 **硬體要求**：
+
 - ✅ NVIDIA GPU（支援 NVENC）
 - ✅ NVIDIA 驅動程式（最新版本）
 - ✅ CUDA 運行時庫（通常包含在驅動程式中）
@@ -343,6 +351,7 @@ GET /api/rtsp/refresh/:streamId
 **編碼器**：`h264_qsv`
 
 **配置參數**：
+
 ```javascript
 {
   gpuType: 'intel',
@@ -350,7 +359,8 @@ GET /api/rtsp/refresh/:streamId
 }
 ```
 
-**FFmpeg 參數**：
+**FFmpeg 參數**（`buildQsvArgs`）：
+
 ```bash
 -c:v h264_qsv
 -preset fast
@@ -359,7 +369,10 @@ GET /api/rtsp/refresh/:streamId
 -bufsize 4M
 ```
 
+> **注意**：Intel QSV 目前未實作 scale；若需縮放可擴展 `ffmpegConfig.js` 的 `buildQsvArgs`。
+
 **硬體要求**：
+
 - ✅ Intel CPU（支援 Quick Sync）
 - ✅ Intel Media SDK
 
@@ -368,6 +381,7 @@ GET /api/rtsp/refresh/:streamId
 **編碼器**：`h264_amf`
 
 **配置參數**：
+
 ```javascript
 {
   gpuType: 'amd',
@@ -375,7 +389,8 @@ GET /api/rtsp/refresh/:streamId
 }
 ```
 
-**FFmpeg 參數**：
+**FFmpeg 參數**（`buildAmfArgs`）：
+
 ```bash
 -c:v h264_amf
 -quality speed
@@ -384,7 +399,10 @@ GET /api/rtsp/refresh/:streamId
 -bufsize 4M
 ```
 
+> **注意**：AMD AMF 目前未實作 scale；若需縮放可擴展 `ffmpegConfig.js` 的 `buildAmfArgs`。
+
 **硬體要求**：
+
 - ✅ AMD GPU（支援 VCE）
 - ✅ AMD Media Framework
 
@@ -394,27 +412,30 @@ GET /api/rtsp/refresh/:streamId
 
 ### CPU vs GPU 編碼對比
 
-| 項目 | CPU 編碼 | GPU 編碼 |
-|------|---------|---------|
-| **編碼速度** | 較慢 | 快 3-5 倍 |
-| **CPU 使用率** | 高（50-80%） | 低（10-20%） |
-| **多路串流** | 受限（2-4 路） | 支援更多（10+ 路） |
-| **延遲** | 較高（2-5 秒） | 較低（1-2 秒） |
-| **品質** | 中等 | 高（硬體優化） |
-| **功耗** | 高 | 較低 |
+| 項目           | CPU 編碼       | GPU 編碼           |
+| -------------- | -------------- | ------------------ |
+| **編碼速度**   | 較慢           | 快 3-5 倍          |
+| **CPU 使用率** | 高（50-80%）   | 低（10-20%）       |
+| **多路串流**   | 受限（2-4 路） | 支援更多（10+ 路） |
+| **延遲**       | 較高（2-5 秒） | 較低（1-2 秒）     |
+| **品質**       | 中等           | 高（硬體優化）     |
+| **功耗**       | 高             | 較低               |
 
 ### 實際測試數據
 
 **測試環境**：
+
 - GPU: NVIDIA GeForce GT 1030
 - CPU: Intel Core i5
 - 串流: 1080p @ 30fps
 
 **單路串流**：
+
 - CPU 編碼：CPU 使用率 60-70%，延遲 3-4 秒
 - GPU 編碼：CPU 使用率 10-15%，延遲 1-2 秒
 
 **多路串流（4 路）**：
+
 - CPU 編碼：CPU 使用率 90%+，延遲 5-8 秒，不穩定
 - GPU 編碼：CPU 使用率 20-30%，延遲 1-2 秒，穩定
 
@@ -439,28 +460,33 @@ FFMPEG_PATH=          # 不指定則使用內建/系統 FFmpeg
 # GPU 編碼預設值（可選）
 ENABLE_GPU_ENCODING=false  # 預設不使用 GPU
 GPU_TYPE=nvidia
-GPU_BITRATE=2M
+GPU_BITRATE=2M             # 或 RTSP_BITRATE=2M
+GPU_PRESET=p4              # NVIDIA 預設 p1–p7
+RTSP_SCALE=1920:1080       # 輸出解析度（可設 1280:720 以降低延遲）
 ```
+
+**MediaMTX 低延遲配置**（`mediamtx/mediamtx.yml`）：
+
+- `hlsSegmentDuration: 200ms`、`hlsPartDuration: 50ms` — 與 FFmpeg `-g 6`（200ms @ 30fps）對齊
+- `hlsSegmentCount: 7` — LL-HLS 要求 ≥7
 
 ### API 使用範例
 
 #### 啟動 GPU 編碼串流
 
 ```javascript
-// 前端請求
-const response = await fetch('/api/rtsp/start', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+// 前端請求（bitrate、preset 由環境變數 RTSP_BITRATE、GPU_PRESET 控制）
+const response = await fetch("/api/rtsp/start", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    rtspUrl: 'rtsp://camera_ip:554/stream',
+    rtspUrl: "rtsp://camera_ip:554/stream",
     useGpuEncoding: true,
-    gpuType: 'nvidia',
-    bitrate: '2M',
-    preset: 'p4'
-  })
+  }),
 });
 
 const result = await response.json();
+// 早回傳：約 0.8–1s 即回傳
 // {
 //   streamId: "...",
 //   hlsUrl: "http://server:8888/path/index.m3u8?t=...",
@@ -472,13 +498,13 @@ const result = await response.json();
 #### 啟動 CPU 編碼串流（預設）
 
 ```javascript
-const response = await fetch('/api/rtsp/start', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+const response = await fetch("/api/rtsp/start", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    rtspUrl: 'rtsp://camera_ip:554/stream'
+    rtspUrl: "rtsp://camera_ip:554/stream",
     // 不指定 useGpuEncoding 或設為 false
-  })
+  }),
 });
 ```
 
@@ -486,7 +512,7 @@ const response = await fetch('/api/rtsp/start', {
 
 ```javascript
 const response = await fetch(`/api/rtsp/stop/${streamId}`, {
-  method: 'POST'
+  method: "POST",
 });
 ```
 
@@ -499,17 +525,20 @@ const response = await fetch(`/api/rtsp/stop/${streamId}`, {
 #### 1. FFmpeg 無法載入 GPU 編碼器
 
 **錯誤訊息**：
+
 ```
 Cannot load nvcuda.dll
 Error initializing encoder
 ```
 
 **解決方案**：
+
 1. **檢查 GPU 驅動程式**：
+
    ```bash
    # Windows
    nvidia-smi
-   
+
    # 如果命令不存在，需要安裝 NVIDIA 驅動程式
    # 下載：https://www.nvidia.com/drivers
    ```
@@ -519,6 +548,7 @@ Error initializing encoder
    - 安裝後重啟系統
 
 3. **檢查 FFmpeg 版本**：
+
    ```bash
    npm run ffmpeg:check
    # 或
@@ -532,17 +562,21 @@ Error initializing encoder
 #### 2. FFmpeg 進程啟動失敗
 
 **錯誤訊息**：
+
 ```
 FFmpeg GPU 編碼進程啟動失敗或超時
 ```
 
 **解決方案**：
+
 1. **檢查 RTSP 輸入是否可用**：
+
    ```bash
    ffmpeg -i rtsp://camera_url -t 5 test.mp4
    ```
 
 2. **檢查 MediaMTX 是否運行**：
+
    ```bash
    npm run mediamtx:start
    ```
@@ -556,17 +590,20 @@ FFmpeg GPU 編碼進程啟動失敗或超時
 #### 3. 編碼品質不佳
 
 **解決方案**：
+
 1. **調整位元率**：
+
    ```javascript
    {
-     bitrate: '4M'  // 提高位元率
+     bitrate: "4M"; // 提高位元率
    }
    ```
 
 2. **調整 Preset（NVIDIA）**：
+
    ```javascript
    {
-     preset: 'p1'  // 使用最高品質（較慢）
+     preset: "p1"; // 使用最高品質（較慢）
    }
    ```
 
@@ -588,11 +625,13 @@ FFmpeg GPU 編碼進程啟動失敗或超時
 4. **系統 PATH**（最後備用）
 
 **驗證 FFmpeg 路徑**：
+
 ```bash
 npm run ffmpeg:check
 ```
 
 **下載最新 FFmpeg**：
+
 ```bash
 npm run ffmpeg:download
 ```
@@ -600,6 +639,7 @@ npm run ffmpeg:download
 ### 進程管理
 
 **FFmpeg 進程生命週期**：
+
 1. **啟動**：`spawn()` 創建進程
 2. **監控**：監聽 `stdout`、`stderr`、`exit` 事件
 3. **錯誤處理**：捕獲錯誤並發出事件
@@ -609,12 +649,14 @@ npm run ffmpeg:download
    - 如果未退出，發送 `SIGKILL`（強制終止）
 
 **進程狀態追蹤**：
+
 - 使用 `Map<streamId, processInfo>` 存儲進程信息
 - 包含：進程對象、選項、輸入/輸出 URL、啟動時間
 
 ### 錯誤處理機制
 
 **多層錯誤處理**：
+
 1. **FFmpeg 進程錯誤**：
    - 監聽 `stderr` 輸出
    - 識別嚴重錯誤（`error initializing`、`error while opening encoder`）
@@ -625,10 +667,10 @@ npm run ffmpeg:download
    - 清理失敗的串流
    - 推送 WebSocket 錯誤事件
 
-3. **超時處理**：
-   - FFmpeg 進程啟動：最多等待 3 秒
-   - MediaMTX 路徑就緒：最多等待 5 秒
-   - 路徑移除：最多等待 3 秒
+3. **超時處理（精簡低延遲）**：
+   - FFmpeg 進程穩定：穩定判定 800ms、最多 5s、輪詢 100ms
+   - MediaMTX 路徑就緒：最多 5s、輪詢 50ms（背景執行）
+   - 路徑移除：首次 1000ms / 100ms；停止時 2000ms / 150ms
 
 ---
 
@@ -668,18 +710,20 @@ npm run ffmpeg:download
 ### 使用建議
 
 **生產環境**：
+
 - ✅ 推薦使用 GPU 編碼（如果硬體支援）
 - ✅ 監控 GPU 使用率和溫度
 - ✅ 根據負載調整位元率和 preset
 
 **開發/測試環境**：
+
 - ✅ 可以使用 CPU 編碼（簡化部署）
 - ✅ 測試 GPU 編碼功能
 
 ---
 
-**最後更新**：2025-01-23
+**最後更新**：2025-02-02
 
-**文檔版本**：2.0
+**文檔版本**：2.2（與程式碼對齊：早回傳、NVENC 參數、環境變數）
 
 **狀態**：✅ 生產就緒

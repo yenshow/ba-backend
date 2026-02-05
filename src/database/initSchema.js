@@ -27,7 +27,7 @@ async function initSchema() {
     // 檢查資料庫是否存在
     const dbCheck = await pool.query(
       "SELECT 1 FROM pg_database WHERE datname = $1",
-      [config.database.database]
+      [config.database.database],
     );
 
     if (dbCheck.rows.length === 0) {
@@ -282,7 +282,7 @@ async function initSchema() {
           `INSERT INTO device_types (name, code, description) 
 					 VALUES ($1, $2, $3) 
 					 ON CONFLICT (code) DO NOTHING`,
-          [type.name, type.code, type.description]
+          [type.name, type.code, type.description],
         );
       } catch (error) {
         // 如果因為 name 衝突而失敗，嘗試使用 code 衝突處理
@@ -538,12 +538,19 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				UNIQUE(location_id, system_type)
 			)
+		`);
+
+    // 若表已存在且為舊版 CHECK（無 vehicle_access），則擴充約束
+    await targetPool.query(`
+			ALTER TABLE location_systems DROP CONSTRAINT IF EXISTS location_systems_system_type_check;
+			ALTER TABLE location_systems ADD CONSTRAINT location_systems_system_type_check
+				CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access'));
 		`);
 
     await createUpdatedAtTrigger(targetPool, "location_systems");

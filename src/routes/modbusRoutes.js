@@ -3,7 +3,10 @@ const modbusClient = require("../services/devices/modbusClient");
 const systemAlert = require("../services/alerts/systemAlertHelper");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
-const { validateRequired, validateNumbers } = require("../middleware/validation");
+const {
+  validateRequired,
+  validateNumbers,
+} = require("../middleware/validation");
 const logger = require("../utils/logger");
 
 const router = express.Router();
@@ -59,79 +62,108 @@ const parseDeviceParams = (req) => {
   return { host, port, unitId };
 };
 
-const routeFactory = (reader) => asyncHandler(async (req, res) => {
-  const { address, length } = parseAddressParams(req);
-  const deviceConfig = parseDeviceParams(req);
-  const data = await reader(address, length, deviceConfig);
+const routeFactory = (reader) =>
+  asyncHandler(async (req, res) => {
+    const { address, length } = parseAddressParams(req);
+    const deviceConfig = parseDeviceParams(req);
+    const data = await reader(address, length, deviceConfig);
 
-  // 成功讀取資料時，清除設備錯誤狀態（設備已恢復連線）
-  systemAlert
-    .getDeviceIdFromConfig(deviceConfig)
-    .then((deviceId) => {
-      if (deviceId) {
-        return systemAlert.clearError("device", deviceId);
-      }
-    })
-    .catch((error) => {
-      // 靜默處理，不影響正常響應
-      modbusLogger.warn("清除設備錯誤狀態失敗", { error: error.message });
-    });
+    // 成功讀取資料時，清除設備錯誤狀態（設備已恢復連線）
+    systemAlert
+      .getDeviceIdFromConfig(deviceConfig)
+      .then((deviceId) => {
+        if (deviceId) {
+          return systemAlert.clearError("device", deviceId);
+        }
+      })
+      .catch((error) => {
+        // 靜默處理，不影響正常響應
+        modbusLogger.warn("清除設備錯誤狀態失敗", { error: error.message });
+      });
 
-  res.sendSuccess({ address, length, data, device: deviceConfig });
-});
+    res.sendSuccess({ address, length, data, device: deviceConfig });
+  });
 
-router.get("/health", noCache, asyncHandler(async (req, res) => {
-  const deviceConfig = parseDeviceParams(req);
-  const status = modbusClient.getStatus(deviceConfig);
-  res.sendSuccess(status);
-}));
+router.get(
+  "/health",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const deviceConfig = parseDeviceParams(req);
+    const status = modbusClient.getStatus(deviceConfig);
+    res.sendSuccess(status);
+  }),
+);
 
 router.get(
   "/holding-registers",
-  routeFactory(modbusClient.readHoldingRegisters.bind(modbusClient))
+  routeFactory(modbusClient.readHoldingRegisters.bind(modbusClient)),
 );
 router.get(
   "/input-registers",
-  routeFactory(modbusClient.readInputRegisters.bind(modbusClient))
+  routeFactory(modbusClient.readInputRegisters.bind(modbusClient)),
 );
 router.get("/coils", routeFactory(modbusClient.readCoils.bind(modbusClient)));
 router.get(
   "/discrete-inputs",
-  routeFactory(modbusClient.readDiscreteInputs.bind(modbusClient))
+  routeFactory(modbusClient.readDiscreteInputs.bind(modbusClient)),
 );
 
 // PUT /coils - 寫入單個或多個 DO
-router.put("/coils", noCache, validateRequired("address"), asyncHandler(async (req, res) => {
-  const { address, value, values } = req.body;
-  const deviceConfig = parseDeviceParams(req);
+router.put(
+  "/coils",
+  noCache,
+  validateRequired("address"),
+  asyncHandler(async (req, res) => {
+    const { address, value, values } = req.body;
+    const deviceConfig = parseDeviceParams(req);
 
-  if (
-    typeof address !== "number" ||
-    address < 0 ||
-    !Number.isInteger(address)
-  ) {
-    return res.sendError("address must be a non-negative integer", 400);
-  }
-
-  // 單個寫入
-  if (typeof value === "boolean") {
-    const success = await modbusClient.writeCoil(address, value, deviceConfig);
-    return res.sendSuccess({ address, value, success, device: deviceConfig });
-  }
-
-  // 多個寫入
-  if (Array.isArray(values)) {
-    if (values.length === 0 || values.length > 125) {
-      return res.sendError("values array length must be between 1 and 125", 400);
+    if (
+      typeof address !== "number" ||
+      address < 0 ||
+      !Number.isInteger(address)
+    ) {
+      return res.sendError("address must be a non-negative integer", 400);
     }
-    if (!values.every((v) => typeof v === "boolean")) {
-      return res.sendError("all values must be boolean", 400);
-    }
-    const success = await modbusClient.writeCoils(address, values, deviceConfig);
-    return res.sendSuccess({ address, values, success, device: deviceConfig });
-  }
 
-  return res.sendError("must provide either value (boolean) or values (boolean[])", 400);
-}));
+    // 單個寫入
+    if (typeof value === "boolean") {
+      const success = await modbusClient.writeCoil(
+        address,
+        value,
+        deviceConfig,
+      );
+      return res.sendSuccess({ address, value, success, device: deviceConfig });
+    }
+
+    // 多個寫入
+    if (Array.isArray(values)) {
+      if (values.length === 0 || values.length > 125) {
+        return res.sendError(
+          "values array length must be between 1 and 125",
+          400,
+        );
+      }
+      if (!values.every((v) => typeof v === "boolean")) {
+        return res.sendError("all values must be boolean", 400);
+      }
+      const success = await modbusClient.writeCoils(
+        address,
+        values,
+        deviceConfig,
+      );
+      return res.sendSuccess({
+        address,
+        values,
+        success,
+        device: deviceConfig,
+      });
+    }
+
+    return res.sendError(
+      "must provide either value (boolean) or values (boolean[])",
+      400,
+    );
+  }),
+);
 
 module.exports = router;

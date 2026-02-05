@@ -12,16 +12,11 @@ const SYSTEM_TABLE_MAPPING = {
     { schema: "deviceaccess", table: "door" },
   ],
 
-  // 未來其他系統可以在這裡加入
-  // access_control: [
-  //   { schema: "baseacs", table: "slot_card_records" },
-  //   { schema: "deviceaccess", table: "door" },
-  // ],
-  //
-  // visitor_management: [
-  //   { schema: "platform", table: "person" },
-  //   { schema: "platform", table: "person_group" },
-  // ],
+  // 車輛進出系統（過車日誌 + 地點設定用車道列表）
+  vehicle_access: [
+    { schema: "vehiclebiz", table: "passageway_log_data" },
+    { schema: "vehiclebiz", table: "lane_info" },
+  ],
 };
 
 /**

@@ -2,6 +2,8 @@ const PlatformPersonHandler = require("./handlers/platformPersonHandler");
 const PlatformPersonGroupHandler = require("./handlers/platformPersonGroupHandler");
 const BaseacsSlotCardRecordsHandler = require("./handlers/baseacsSlotCardRecordsHandler");
 const DeviceaccessDoorHandler = require("./handlers/deviceaccessDoorHandler");
+const PassagewayLogDataHandler = require("./handlers/passagewayLogDataHandler");
+const LaneInfoHandler = require("./handlers/laneInfoHandler");
 const systemMapping = require("./systemMapping");
 
 /**
@@ -18,10 +20,22 @@ class HandlerFactory {
     this.register("platform", "person_group", new PlatformPersonGroupHandler());
 
     // 註冊 baseacs schema 的處理器
-    this.register("baseacs", "slot_card_records", new BaseacsSlotCardRecordsHandler());
+    this.register(
+      "baseacs",
+      "slot_card_records",
+      new BaseacsSlotCardRecordsHandler(),
+    );
 
     // 註冊 deviceaccess schema 的處理器
     this.register("deviceaccess", "door", new DeviceaccessDoorHandler());
+
+    // 註冊 vehiclebiz schema 的處理器（車輛進出／出入口過車日誌、車道配置）
+    this.register(
+      "vehiclebiz",
+      "passageway_log_data",
+      new PassagewayLogDataHandler(),
+    );
+    this.register("vehiclebiz", "lane_info", new LaneInfoHandler());
   }
 
   /**
@@ -40,7 +54,9 @@ class HandlerFactory {
     const handler = this.handlers.get(key);
 
     if (!handler) {
-      throw new Error(`找不到 ${key} 的處理器。請確認 schema 和 table 是否正確，或該處理器是否已註冊。`);
+      throw new Error(
+        `找不到 ${key} 的處理器。請確認 schema 和 table 是否正確，或該處理器是否已註冊。`,
+      );
     }
 
     return handler;
@@ -88,4 +104,3 @@ class HandlerFactory {
 
 // 匯出單例
 module.exports = new HandlerFactory();
-

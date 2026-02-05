@@ -1,9 +1,12 @@
 const axios = require("axios");
 const crypto = require("crypto");
+const net = require("net");
 const EventEmitter = require("events");
 const os = require("os");
 const websocketService = require("../websocket/websocketService");
 const ffmpegService = require("./ffmpegService");
+const { generateErrorMessage } = require("../../config/ffmpegConfig");
+const logger = require("../../utils/logger").createLogger("MediaMTX Service");
 
 /**
  * MediaMTX 服務管理類別
@@ -33,6 +36,10 @@ class MediaMTXService extends EventEmitter {
     // API 請求超時時間（毫秒）
     this.apiTimeout = 10000;
 
+    // 防重複 start：同一 streamId 在短時間內不重複處理（減少 path already exists）
+    this.lastStartRequest = new Map(); // streamId -> { at: number }
+    this.duplicateStartCooldownMs = 2000;
+
     // 路徑狀態緩存（優化性能：減少 API 請求）
     this.pathStatusCache = new Map();
     this.lastStatusUpdate = 0;
@@ -48,7 +55,7 @@ class MediaMTXService extends EventEmitter {
         // 只處理 GPU 編碼串流
         if (!stream.useGpuEncoding) return;
 
-        console.error(`[MediaMTX Service] FFmpeg 進程錯誤(全域監聽): ${streamId}`, error);
+        logger.error("FFmpeg 進程錯誤(全域監聽)", { streamId, error });
 
         // 清理：移除 MediaMTX path、停止 FFmpeg（如果還在）
         try {
@@ -60,13 +67,14 @@ class MediaMTXService extends EventEmitter {
 
         // 從記憶體移除
         this.streams.delete(streamId);
+        this.lastStartRequest.delete(streamId);
 
         websocketService.emitRTSPStreamError({
           streamId,
           error: error,
         });
       } catch (e) {
-        console.error(`[MediaMTX Service] 全域 FFmpeg 錯誤處理失敗: ${e.message}`);
+        logger.error("全域 FFmpeg 錯誤處理失敗", { error: e.message });
       }
     });
   }
@@ -148,7 +156,16 @@ class MediaMTXService extends EventEmitter {
    * @returns {Object} 串流資訊對象
    * @private
    */
-  _createStreamInfo(streamId, pathName, rtspUrl, hlsUrl, webrtcUrl, timestamp, status = "running", gpuOptions = null) {
+  _createStreamInfo(
+    streamId,
+    pathName,
+    rtspUrl,
+    hlsUrl,
+    webrtcUrl,
+    timestamp,
+    status = "running",
+    gpuOptions = null,
+  ) {
     return {
       streamId,
       pathName,
@@ -184,6 +201,51 @@ class MediaMTXService extends EventEmitter {
   }
 
   /**
+   * 以新時間戳更新現有串流 URL 並回傳響應（減少重複邏輯）
+   * @param {string} streamId
+   * @param {number} [timestamp=Date.now()]
+   * @returns {Object|null} 響應對象或 null
+   * @private
+   */
+  _returnExistingStreamWithFreshUrl(streamId, timestamp = Date.now()) {
+    const existing = this.streams.get(streamId);
+    if (!existing) return null;
+    const latestHlsUrl = this.generateHlsUrl(existing.pathName, timestamp);
+    existing.hlsUrl = latestHlsUrl;
+    existing.timestamp = timestamp;
+    this.streams.set(streamId, existing);
+    this._emitStreamStarted(
+      streamId,
+      existing.rtspUrl,
+      latestHlsUrl,
+      existing.webrtcUrl,
+      existing.status,
+    );
+    return this._createStreamResponse(
+      streamId,
+      existing.rtspUrl,
+      latestHlsUrl,
+      existing.webrtcUrl,
+      existing.status,
+    );
+  }
+
+  /**
+   * 從 axios 錯誤取得訊息字串
+   * @param {Object} error
+   * @returns {string}
+   * @private
+   */
+  _getAxiosErrorMsg(error) {
+    return (
+      error.response?.data?.error ||
+      error.response?.data?.message ||
+      error.message ||
+      ""
+    );
+  }
+
+  /**
    * 推送串流啟動 WebSocket 事件（統一方法）
    * @param {string} streamId - 串流 ID
    * @param {string} rtspUrl - RTSP URL
@@ -193,7 +255,14 @@ class MediaMTXService extends EventEmitter {
    * @param {Object} gpuOptions - GPU 編碼選項（可選）
    * @private
    */
-  _emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl, status = "running", gpuOptions = null) {
+  _emitStreamStarted(
+    streamId,
+    rtspUrl,
+    hlsUrl,
+    webrtcUrl,
+    status = "running",
+    gpuOptions = null,
+  ) {
     websocketService.emitRTSPStreamStarted({
       streamId,
       rtspUrl,
@@ -226,7 +295,6 @@ class MediaMTXService extends EventEmitter {
       }
 
       // 方法2: 使用 TCP 連接測試端口
-      const net = require("net");
       return new Promise((resolve) => {
         try {
           const url = new URL(this.apiBaseUrl);
@@ -246,15 +314,7 @@ class MediaMTXService extends EventEmitter {
             resolve(false);
           });
 
-          client.once("error", (err) => {
-            // 連接被拒絕表示端口未開放，但其他錯誤可能是網路問題
-            if (err.code === "ECONNREFUSED") {
-              resolve(false);
-            } else {
-              // 其他錯誤可能是暫時的，給一次機會
-              resolve(false);
-            }
-          });
+          client.once("error", () => resolve(false));
 
           client.connect(port, host);
         } catch (error) {
@@ -262,7 +322,7 @@ class MediaMTXService extends EventEmitter {
         }
       });
     } catch (error) {
-      console.error(`[MediaMTX Service] 健康檢查失敗:`, error.message);
+      logger.error("健康檢查失敗", { error: error.message });
       return false;
     }
   }
@@ -281,9 +341,7 @@ class MediaMTXService extends EventEmitter {
     };
 
     try {
-      console.log(
-        `[MediaMTX Service] 添加路徑（Publisher 模式）: ${pathName}`
-      );
+      logger.info(`添加路徑（Publisher 模式）: ${pathName}`);
 
       const response = await axios.post(
         `${this.apiBaseUrl}/v3/config/paths/add/${pathName}`,
@@ -293,40 +351,25 @@ class MediaMTXService extends EventEmitter {
           headers: {
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       return response.data;
     } catch (error) {
       if (error.response) {
+        const errorMsg = this._getAxiosErrorMsg(error);
         if (error.response.status === 409 || error.response.status === 400) {
-          const errorMsg =
-            error.response.data?.error ||
-            error.response.data?.message ||
-            error.message ||
-            "";
-          const errorMsgLower = errorMsg.toLowerCase();
+          const lower = errorMsg.toLowerCase();
           if (
-            errorMsgLower.includes("already exists") ||
-            errorMsgLower.includes("already exist") ||
-            errorMsgLower.includes("path already")
+            lower.includes("already exists") ||
+            lower.includes("already exist") ||
+            lower.includes("path already")
           ) {
-            // 路徑已存在，但可能配置不正確，需要重新配置
-            console.warn(
-              `[MediaMTX Service] 路徑 ${pathName} 已存在，但可能不是 Publisher 模式，將嘗試移除並重新添加`
-            );
-            // 返回特殊標記，讓調用者知道需要處理
+            logger.warn(`路徑 ${pathName} 已存在，可能非 Publisher 模式`);
             return { exists: true, needsReconfig: true };
           }
         }
-        const errorMsg =
-          error.response.data?.error ||
-          error.response.data?.message ||
-          error.message;
-        console.error(
-          `[MediaMTX Service] 添加路徑失敗 (${error.response.status}):`,
-          errorMsg
-        );
+        logger.error(`添加路徑失敗 (${error.response.status})`, { errorMsg });
         throw new Error(`添加路徑失敗: ${errorMsg}`);
       }
       throw new Error(`添加路徑失敗: ${error.message}`);
@@ -354,12 +397,9 @@ class MediaMTXService extends EventEmitter {
       // 注意：如果遇到 H265 DTS 錯誤，需要：
       // 1. 將攝像頭配置為輸出 H264 編碼
       // 2. 或使用 FFmpeg 進行轉碼（需要額外配置）
-      console.log(
-        `[MediaMTX Service] 添加路徑: ${pathName}, 來源: ${rtspUrl.replace(
-          /:[^:@]+@/,
-          ":****@"
-        )}`
-      );
+      logger.info(`添加路徑: ${pathName}`, {
+        source: rtspUrl.replace(/:[^:@]+@/, ":****@"),
+      });
 
       const response = await axios.post(
         `${this.apiBaseUrl}/v3/config/paths/add/${pathName}`,
@@ -369,43 +409,25 @@ class MediaMTXService extends EventEmitter {
           headers: {
             "Content-Type": "application/json",
           },
-        }
+        },
       );
 
       return response.data;
     } catch (error) {
       if (error.response) {
-        // 路徑可能已存在（MediaMTX 可能返回 400 或 409）
+        const errorMsg = this._getAxiosErrorMsg(error);
         if (error.response.status === 409 || error.response.status === 400) {
-          const errorMsg =
-            error.response.data?.error ||
-            error.response.data?.message ||
-            error.message ||
-            "";
-          // 檢查錯誤訊息是否包含 "already exists" 或類似的關鍵字
-          const errorMsgLower = errorMsg.toLowerCase();
+          const lower = errorMsg.toLowerCase();
           if (
-            errorMsgLower.includes("already exists") ||
-            errorMsgLower.includes("already exist") ||
-            errorMsgLower.includes("path already")
+            lower.includes("already exists") ||
+            lower.includes("already exist") ||
+            lower.includes("path already")
           ) {
-            console.log(`[MediaMTX Service] 路徑 ${pathName} 已存在`);
+            logger.info(`路徑 ${pathName} 已存在`);
             return { exists: true };
           }
         }
-        // 顯示詳細錯誤訊息
-        const errorMsg =
-          error.response.data?.error ||
-          error.response.data?.message ||
-          error.message;
-        console.error(
-          `[MediaMTX Service] 添加路徑失敗 (${error.response.status}):`,
-          errorMsg
-        );
-        console.error(
-          `[MediaMTX Service] 請求配置:`,
-          JSON.stringify(pathConfig, null, 2)
-        );
+        logger.error(`添加路徑失敗 (${error.response.status})`, { errorMsg });
         throw new Error(`添加路徑失敗: ${errorMsg}`);
       }
       throw new Error(`添加路徑失敗: ${error.message}`);
@@ -424,7 +446,7 @@ class MediaMTXService extends EventEmitter {
         {},
         {
           timeout: this.apiTimeout,
-        }
+        },
       );
       return true;
     } catch (error) {
@@ -432,7 +454,7 @@ class MediaMTXService extends EventEmitter {
         // 路徑不存在，視為成功
         return true;
       }
-      console.error(`[MediaMTX Service] 移除路徑失敗:`, error.message);
+      logger.error("移除路徑失敗", { error: error.message });
       throw new Error(`移除路徑失敗: ${error.message}`);
     }
   }
@@ -440,20 +462,18 @@ class MediaMTXService extends EventEmitter {
   /**
    * 輪詢檢查路徑是否真的被移除（統一方法）
    * @param {string} pathName - 路徑名稱
-   * @param {number} maxWaitMs - 最大等待時間（毫秒），預設 3000ms
-   * @param {number} checkIntervalMs - 檢查間隔（毫秒），預設 200ms
+   * @param {number} maxWaitMs - 最大等待時間（毫秒），預設 2000ms
+   * @param {number} checkIntervalMs - 檢查間隔（毫秒），預設 150ms
    * @returns {Promise<boolean>} 是否成功移除
    */
-  async waitForPathRemoval(pathName, maxWaitMs = 3000, checkIntervalMs = 200) {
+  async waitForPathRemoval(pathName, maxWaitMs = 2000, checkIntervalMs = 150) {
     const maxAttempts = Math.floor(maxWaitMs / checkIntervalMs);
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((resolve) => setTimeout(resolve, checkIntervalMs));
       const checkStatus = await this.getPathStatus(pathName);
       if (!checkStatus || !checkStatus.ready) {
         const waitTime = (i + 1) * checkIntervalMs;
-        console.log(
-          `[MediaMTX Service] 路徑 ${pathName} 已成功移除（等待 ${waitTime}ms）`
-        );
+        logger.info(`路徑 ${pathName} 已成功移除（等待 ${waitTime}ms）`);
         return true;
       }
     }
@@ -464,19 +484,17 @@ class MediaMTXService extends EventEmitter {
    * 輪詢檢查路徑是否就緒（用於等待 MediaMTX 生成 HLS manifest）
    * @param {string} pathName - 路徑名稱
    * @param {number} maxWaitMs - 最大等待時間（毫秒），預設 5000ms
-   * @param {number} checkIntervalMs - 檢查間隔（毫秒），預設 200ms
+   * @param {number} checkIntervalMs - 檢查間隔（毫秒），預設 50ms
    * @returns {Promise<boolean>} 是否成功就緒
    */
-  async waitForPathReady(pathName, maxWaitMs = 5000, checkIntervalMs = 200) {
+  async waitForPathReady(pathName, maxWaitMs = 5000, checkIntervalMs = 50) {
     const maxAttempts = Math.floor(maxWaitMs / checkIntervalMs);
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((resolve) => setTimeout(resolve, checkIntervalMs));
       const checkStatus = await this.getPathStatus(pathName);
       if (checkStatus && checkStatus.ready) {
         const waitTime = (i + 1) * checkIntervalMs;
-        console.log(
-          `[MediaMTX Service] 路徑 ${pathName} 已就緒（等待 ${waitTime}ms）`
-        );
+        logger.info(`路徑 ${pathName} 已就緒（等待 ${waitTime}ms）`);
         return true;
       }
     }
@@ -526,8 +544,7 @@ class MediaMTXService extends EventEmitter {
 
       return statusMap;
     } catch (error) {
-      console.error(`[MediaMTX Service] 獲取路徑狀態失敗:`, error.message);
-      // 返回緩存（即使過期），避免完全失敗
+      logger.error("獲取路徑狀態失敗", { error: error.message });
       return this.pathStatusCache;
     }
   }
@@ -542,7 +559,7 @@ class MediaMTXService extends EventEmitter {
       const allPaths = await this.getAllPathsStatus();
       return allPaths.get(pathName) || null;
     } catch (error) {
-      console.error(`[MediaMTX Service] 獲取路徑狀態失敗:`, error.message);
+      logger.error("獲取路徑狀態失敗", { error: error.message });
       return null;
     }
   }
@@ -568,53 +585,34 @@ class MediaMTXService extends EventEmitter {
     }
 
     // 解析 GPU 編碼選項（簡化：只保留開關）
-    const {
-      useGpuEncoding = false,
-    } = options;
+    const { useGpuEncoding = false } = options;
 
     const streamId = this.generateStreamId(rtspUrl);
     let pathName = this.generatePathName(rtspUrl); // 使用 let，因為可能需要在移除失敗時重新賦值
+
+    // 防重複 start：2 秒內同一 streamId 再次請求則直接返回現有串流（減少 path already exists）
+    const now = Date.now();
+    const lastReq = this.lastStartRequest.get(streamId);
+    if (lastReq && now - lastReq.at < this.duplicateStartCooldownMs) {
+      const resp = this._returnExistingStreamWithFreshUrl(streamId, now);
+      if (resp) return resp;
+    }
+    this.lastStartRequest.set(streamId, { at: now });
 
     // 如果串流已經存在，先檢查 MediaMTX 路徑狀態
     // 如果路徑已存在但串流剛停止，需要重新創建路徑以清除舊片段
     if (this.streams.has(streamId)) {
       const existingStream = this.streams.get(streamId);
-      
+
       // 檢查 MediaMTX 路徑是否真的存在
       const pathStatus = await this.getPathStatus(pathName);
-      
+
       if (pathStatus && pathStatus.ready) {
-        // 路徑存在且就緒，直接返回新的 URL（帶最新時間戳）
-        const timestamp = Date.now();
-        const latestHlsUrl = this.generateHlsUrl(existingStream.pathName, timestamp);
-        
-        // 更新現有串流的 URL
-        existingStream.hlsUrl = latestHlsUrl;
-        existingStream.timestamp = timestamp;
-        this.streams.set(streamId, existingStream);
-        
-        // 推送 WebSocket 事件（通知前端 URL 已更新）
-        this._emitStreamStarted(
-          streamId,
-          existingStream.rtspUrl,
-          latestHlsUrl,
-          existingStream.webrtcUrl,
-          existingStream.status
-        );
-        
-        return this._createStreamResponse(
-          streamId,
-          existingStream.rtspUrl,
-          latestHlsUrl,
-          existingStream.webrtcUrl,
-          existingStream.status
-        );
+        return this._returnExistingStreamWithFreshUrl(streamId);
       }
-      
+
       // 路徑不存在或未就緒，從記憶體中移除，重新創建
-      console.log(
-        `[MediaMTX Service] 串流 ${streamId} 的路徑不存在或未就緒，將重新創建`
-      );
+      logger.info(`串流 ${streamId} 的路徑不存在或未就緒，將重新創建`);
       this.streams.delete(streamId);
     }
 
@@ -625,86 +623,83 @@ class MediaMTXService extends EventEmitter {
     }
 
     try {
-      // 檢查路徑是否已存在，如果存在則先移除（確保清除舊片段）
+      let pathAlreadyRemoved = false;
       const existingPathStatus = await this.getPathStatus(pathName);
       if (existingPathStatus && existingPathStatus.ready) {
-        console.log(
-          `[MediaMTX Service] 路徑 ${pathName} 已存在，先移除以清除舊片段`
-        );
+        logger.info(`路徑 ${pathName} 已存在，先移除以清除舊片段`);
         try {
           await this.removePath(pathName);
-          
-          // ⭐ 關鍵：輪詢檢查路徑是否真的被移除（統一方法）
-          const removed = await this.waitForPathRemoval(pathName, 3000, 200);
-          
+          const removed = await this.waitForPathRemoval(pathName, 1000, 100);
+          pathAlreadyRemoved = removed;
           if (!removed) {
-            console.warn(
-              `[MediaMTX Service] 路徑 ${pathName} 移除超時（3秒），使用帶時間戳的路徑名稱強制重新創建`
-            );
-            // ⭐ 關鍵：如果路徑無法移除，使用帶時間戳的路徑名稱強制創建新路徑
+            logger.warn(`路徑 ${pathName} 移除超時，使用帶時間戳路徑`);
             pathName = this._generateTimestampedPathName(pathName);
-            console.log(
-              `[MediaMTX Service] 使用新路徑名稱: ${pathName}（避免使用舊片段）`
-            );
           }
         } catch (removeError) {
-          // 移除失敗，使用帶時間戳的路徑名稱
-          console.warn(
-            `[MediaMTX Service] 移除舊路徑失敗，使用帶時間戳的路徑名稱: ${removeError.message}`
-          );
+          logger.warn("移除舊路徑失敗", { error: removeError.message });
           pathName = this._generateTimestampedPathName(pathName);
-          console.log(
-            `[MediaMTX Service] 使用新路徑名稱: ${pathName}（避免使用舊片段）`
-          );
         }
       }
 
-      // 根據是否使用 GPU 編碼決定串流來源
       let actualRtspSource = rtspUrl;
       let gpuOptions = null;
 
       if (useGpuEncoding) {
-        // 使用 GPU 編碼：先啟動 FFmpeg，再添加 MediaMTX 路徑
         const serverIP = this.getServerIP();
         const rtspOutput = `rtsp://${serverIP}:8554/${pathName}`;
+        logger.info(`使用 GPU 編碼: ${streamId}`);
 
-        console.log(
-          `[MediaMTX Service] 使用 GPU 編碼: ${streamId}`
-        );
-
-        // ⭐ 關鍵：先移除舊路徑（如果存在），然後配置為 publisher 模式
-        const existingPathStatus = await this.getPathStatus(pathName);
-        if (existingPathStatus && existingPathStatus.ready) {
-          console.log(
-            `[MediaMTX Service] 路徑 ${pathName} 已存在，先移除以重新配置為 Publisher 模式`
-          );
-          try {
-            await this.removePath(pathName);
-            await this.waitForPathRemoval(pathName, 2000, 200);
-          } catch (removeError) {
-            console.warn(
-              `[MediaMTX Service] 移除舊路徑失敗: ${removeError.message}`
-            );
+        if (!pathAlreadyRemoved) {
+          const gpuPathStatus = await this.getPathStatus(pathName);
+          if (gpuPathStatus && gpuPathStatus.ready) {
+            try {
+              await this.removePath(pathName);
+              await this.waitForPathRemoval(pathName, 1000, 100);
+            } catch (removeError) {
+              logger.warn("GPU 路徑移除失敗", { error: removeError.message });
+            }
           }
         }
 
-        // 配置 MediaMTX 路徑為 publisher 模式（等待 FFmpeg 推送）
-        await this.addPathForPublisher(pathName);
+        let addPubResult = await this.addPathForPublisher(pathName);
+        if (addPubResult?.needsReconfig) {
+          try {
+            await this.removePath(pathName);
+            await this.waitForPathRemoval(pathName, 1000, 100);
+            await this.addPathForPublisher(pathName);
+          } catch (e) {
+            logger.warn("路徑重設失敗，繼續使用現有路徑", { error: e.message });
+          }
+        }
 
-        // 等待一小段時間，確保 MediaMTX 路徑已準備好接收推送
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        const scale =
+          process.env.RTSP_SCALE && /^\d+:\d+$/.test(process.env.RTSP_SCALE)
+            ? process.env.RTSP_SCALE
+            : "1920:1080";
+        const bitrate =
+          options.bitrate ||
+          process.env.RTSP_BITRATE ||
+          process.env.GPU_BITRATE ||
+          "2M";
+        const preset = options.preset || process.env.GPU_PRESET || "p4";
+        const validBitrate = /^\d+M?$/.test(String(bitrate).trim())
+          ? String(bitrate).trim()
+          : "2M";
+        const validPreset = /^p[1-7]$/.test(String(preset).trim())
+          ? String(preset).trim()
+          : "p4";
 
-        // 啟動 FFmpeg GPU 編碼（推送到 MediaMTX）
-        // ⚠️ 性能警告：2560x1440 解析度編碼負擔重，建議縮放到 1080p 或 720p
-        // 如果編碼速度 < 0.8x，會導致延遲累積
         ffmpegService.startGpuEncoding(streamId, rtspUrl, rtspOutput, {
-          gpuType: "nvidia", // 固定使用 NVIDIA
-          scale: "1920:1080", // ⭐ 關鍵優化：縮放到 1080p，大幅降低編碼負擔
-          // 可選：使用 "1280:720" 獲得最低延遲（但畫質較低）
+          scale,
+          bitrate: validBitrate,
+          preset: validPreset,
         });
-
-        // 等待 FFmpeg 穩定啟動（避免 “剛啟動就秒退” 卻被視為成功）
-        const ok = await ffmpegService.waitForProcessStable(streamId, 2000, 8000, 200);
+        const ok = await ffmpegService.waitForProcessStable(
+          streamId,
+          800,
+          5000,
+          100,
+        );
         if (!ok) {
           const last = ffmpegService.getLastError(streamId);
           const ffmpegError = last?.error || "FFmpeg GPU 編碼啟動失敗";
@@ -714,36 +709,79 @@ class MediaMTXService extends EventEmitter {
             await this.removePath(pathName);
           } catch (_) {}
 
-          const { generateErrorMessage } = require("../../config/ffmpegConfig");
           throw new Error(
             generateErrorMessage({
               ffmpegError,
               isStillRunning: ffmpegService.isRunning(streamId),
               ffmpegReady: false,
-            })
+            }),
           );
         }
 
-        // GPU 編碼模式下，路徑已經配置為 publisher，不需要再次添加
-        actualRtspSource = null; // 標記為已配置
+        actualRtspSource = null;
         gpuOptions = { useGpuEncoding: true };
-      } else {
-        // 非 GPU 編碼：直接使用原始 RTSP URL（Source 模式）
-        actualRtspSource = rtspUrl;
+
+        // GPU 早回傳：FFmpeg 穩定後立即回傳，路徑就緒改為背景檢查
+        const timestamp = Date.now();
+        const hlsUrl = this.generateHlsUrl(pathName, timestamp);
+        const webrtcUrl = this.generateWebRTCUrl(pathName);
+        const streamInfo = this._createStreamInfo(
+          streamId,
+          pathName,
+          rtspUrl,
+          hlsUrl,
+          webrtcUrl,
+          timestamp,
+          "running",
+          gpuOptions,
+        );
+        this.streams.set(streamId, streamInfo);
+        this._emitStreamStarted(
+          streamId,
+          rtspUrl,
+          hlsUrl,
+          webrtcUrl,
+          "running",
+          gpuOptions,
+        );
+        logger.info(
+          `串流已回傳（早回傳）: ${streamId}，路徑 ${pathName} 背景就緒中`,
+        );
+
+        // 背景等待路徑就緒；失敗則清理並推送錯誤
+        (async () => {
+          const ready = await this.waitForPathReady(pathName, 5000, 50);
+          if (!ready) {
+            try {
+              await ffmpegService.stopGpuEncoding(streamId);
+            } catch (_) {}
+            try {
+              await this.removePath(pathName);
+            } catch (_) {}
+            this.streams.delete(streamId);
+            this.lastStartRequest.delete(streamId);
+            websocketService.emitRTSPStreamError({
+              streamId,
+              error: new Error(
+                `HLS manifest 尚未就緒（${pathName}），請稍後重試`,
+              ),
+            });
+            logger.error(`路徑 ${pathName} 背景就緒失敗，已清理`);
+          }
+        })();
+
+        return this._createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl);
       }
 
-      // 添加路徑到 MediaMTX（僅在非 GPU 編碼模式下需要）
       let addPathResult = null;
       if (actualRtspSource) {
         addPathResult = await this.addPath(pathName, actualRtspSource);
       }
 
-      // 生成播放 URL（統一方法，包含時間戳以防止緩存）
       const timestamp = Date.now();
       const hlsUrl = this.generateHlsUrl(pathName, timestamp);
       const webrtcUrl = this.generateWebRTCUrl(pathName);
 
-      // 存儲串流資訊（使用統一方法，包含 GPU 選項）
       const streamInfo = this._createStreamInfo(
         streamId,
         pathName,
@@ -752,27 +790,19 @@ class MediaMTXService extends EventEmitter {
         webrtcUrl,
         timestamp,
         "running",
-        gpuOptions
+        gpuOptions,
       );
       this.streams.set(streamId, streamInfo);
 
-      // 等待路徑就緒（無論是新路徑還是已存在的路徑）
       const isExistingPath = addPathResult && addPathResult.exists;
       if (isExistingPath) {
-        console.log(
-          `[MediaMTX Service] 路徑 ${pathName} 已存在，等待 MediaMTX 重新初始化`
-        );
+        logger.info(`路徑 ${pathName} 已存在，等待重新初始化`);
       } else {
-        console.log(
-          `[MediaMTX Service] 等待新路徑 ${pathName} 就緒（MediaMTX 生成 HLS manifest）`
-        );
+        logger.info(`等待路徑 ${pathName} 就緒`);
       }
 
-      // ⭐ 優化：輪詢檢查路徑是否就緒，而不是固定等待時間
-      const ready = await this.waitForPathReady(pathName, 8000, 200);
+      const ready = await this.waitForPathReady(pathName, 5000, 50);
       if (!ready) {
-        // 不再回傳成功（避免前端拿到 404 manifest）
-        // 清理：移除路徑、停止 FFmpeg（若有）
         try {
           if (useGpuEncoding) await ffmpegService.stopGpuEncoding(streamId);
         } catch (_) {}
@@ -785,10 +815,15 @@ class MediaMTXService extends EventEmitter {
       }
 
       // 路徑已就緒或超時，推送 WebSocket 事件
-      this._emitStreamStarted(streamId, rtspUrl, hlsUrl, webrtcUrl, "running", gpuOptions);
-      console.log(
-        `[MediaMTX Service] 串流啟動成功: ${streamId} (路徑: ${pathName})`
+      this._emitStreamStarted(
+        streamId,
+        rtspUrl,
+        hlsUrl,
+        webrtcUrl,
+        "running",
+        gpuOptions,
       );
+      logger.info(`串流啟動成功: ${streamId} (路徑: ${pathName})`);
 
       return this._createStreamResponse(streamId, rtspUrl, hlsUrl, webrtcUrl);
     } catch (error) {
@@ -797,21 +832,18 @@ class MediaMTXService extends EventEmitter {
         try {
           await ffmpegService.stopGpuEncoding(streamId);
         } catch (ffmpegError) {
-          console.error(
-            `[MediaMTX Service] 清理 FFmpeg 進程失敗: ${ffmpegError.message}`
-          );
+          logger.error("清理 FFmpeg 進程失敗", { error: ffmpegError.message });
         }
       }
-
-      // 清理失敗的串流
       this.streams.delete(streamId);
-      
+      this.lastStartRequest.delete(streamId);
+
       // 推送 WebSocket 錯誤事件（streamId 已在上面計算過）
       websocketService.emitRTSPStreamError({
         streamId,
         error: error,
       });
-      
+
       throw new Error(`啟動串流失敗: ${error.message}`);
     }
   }
@@ -831,32 +863,28 @@ class MediaMTXService extends EventEmitter {
     try {
       // 如果使用 GPU 編碼，先停止 FFmpeg 進程
       if (streamInfo.useGpuEncoding) {
-        console.log(
-          `[MediaMTX Service] 停止 FFmpeg GPU 編碼進程: ${streamId}`
-        );
+        logger.info(`停止 FFmpeg GPU 編碼進程: ${streamId}`);
         await ffmpegService.stopGpuEncoding(streamId);
       }
 
-      // 從 MediaMTX 移除路徑
       await this.removePath(streamInfo.pathName);
-
-      // ⭐ 關鍵：輪詢檢查路徑是否真的被移除（統一方法）
-      // 這確保路徑被完全清理，避免重新啟動時使用舊片段
-      const removed = await this.waitForPathRemoval(streamInfo.pathName, 3000, 200);
-
+      const removed = await this.waitForPathRemoval(
+        streamInfo.pathName,
+        2000,
+        150,
+      );
       if (!removed) {
-        console.warn(
-          `[MediaMTX Service] 路徑 ${streamInfo.pathName} 移除超時（3秒），但繼續停止流程`
-        );
+        logger.warn(`路徑 ${streamInfo.pathName} 移除超時，繼續停止流程`);
       }
 
       // 從記憶體中移除
       this.streams.delete(streamId);
+      this.lastStartRequest.delete(streamId);
 
       // 推送 WebSocket 事件（整合 WebSocket 推送）
       websocketService.emitRTSPStreamStopped({ streamId });
 
-      console.log(`[MediaMTX Service] 串流已停止: ${streamId}`);
+      logger.info(`串流已停止: ${streamId}`);
 
       return {
         success: true,
@@ -868,21 +896,20 @@ class MediaMTXService extends EventEmitter {
         try {
           await ffmpegService.stopGpuEncoding(streamId);
         } catch (ffmpegError) {
-          console.error(
-            `[MediaMTX Service] 停止 FFmpeg 進程失敗: ${ffmpegError.message}`
-          );
+          logger.error("停止 FFmpeg 進程失敗", { error: ffmpegError.message });
         }
       }
 
       // 即使移除失敗，也從記憶體中移除
       this.streams.delete(streamId);
-      
+      this.lastStartRequest.delete(streamId);
+
       // 推送 WebSocket 錯誤事件
       websocketService.emitRTSPStreamError({
         streamId,
         error: error,
       });
-      
+
       throw new Error(`停止串流失敗: ${error.message}`);
     }
   }
@@ -941,7 +968,7 @@ class MediaMTXService extends EventEmitter {
   async stopAllStreams() {
     const streamIds = Array.from(this.streams.keys());
     const results = await Promise.allSettled(
-      streamIds.map((id) => this.stopStream(id))
+      streamIds.map((id) => this.stopStream(id)),
     );
     return results;
   }
