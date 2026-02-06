@@ -1,35 +1,23 @@
 const locationService = require("./locationService");
 
+const toLightingZone = (zone) => ({ ...zone, areas: zone.locations || [] });
+
 // ========== 區域管理函數 ==========
 
-// 取得區域列表（使用統一表，轉換為 lighting 格式）
 async function getZones() {
   try {
     const result = await locationService.getZones({ locationType: "lighting" });
-    // 轉換 locations 為 areas（照明系統使用 areas 術語）
-    return {
-      zones: result.zones.map((zone) => ({
-        ...zone,
-        areas: zone.locations || [],
-      })),
-    };
+    return { zones: result.zones.map(toLightingZone) };
   } catch (error) {
     console.error("取得區域列表失敗:", error);
     throw new Error("取得區域列表失敗: " + error.message);
   }
 }
 
-// 取得單一區域（使用統一表，轉換為 lighting 格式）
 async function getZoneById(id) {
   try {
     const result = await locationService.getZoneById(id, "lighting");
-    // 轉換 locations 為 areas（照明系統使用 areas 術語）
-    return {
-      zone: {
-        ...result.zone,
-        areas: result.zone.locations || [],
-      },
-    };
+    return { zone: toLightingZone(result.zone) };
   } catch (error) {
     if (error.statusCode) {
       throw error;
@@ -39,12 +27,9 @@ async function getZoneById(id) {
   }
 }
 
-// 建立區域（使用統一表）
 async function createZone(zoneData, userId) {
   try {
     const { name, imageUrl, areas = [] } = zoneData;
-
-    // 將 areas 轉換為統一格式（加入 locationType）
     const unifiedLocations = areas.map((area) => ({
       name: area.name,
       locationType: "lighting",
@@ -54,22 +39,13 @@ async function createZone(zoneData, userId) {
     }));
 
     const result = await locationService.createZone(
-      {
-        name,
-        imageUrl,
-        locations: unifiedLocations,
-      },
+      { name, imageUrl, locations: unifiedLocations },
       userId
     );
-
-    // 轉換 locations 為 areas（照明系統使用 areas 術語）
     return {
       merged: result.merged,
       message: result.message,
-      zone: {
-        ...result.zone,
-        areas: result.zone.locations || [],
-      },
+      zone: toLightingZone(result.zone),
     };
   } catch (error) {
     if (error.statusCode) {
@@ -80,15 +56,11 @@ async function createZone(zoneData, userId) {
   }
 }
 
-// 更新區域（使用統一表）
 async function updateZone(id, zoneData, userId) {
   try {
     const { name, imageUrl, areas } = zoneData;
-
-    // 將 areas 轉換為統一格式（加入 locationType）
     const unifiedLocations = areas
       ? areas.map((area) => ({
-          ...area,
           name: area.name,
           locationType: "lighting",
           deviceId: area.deviceId,
@@ -106,15 +78,10 @@ async function updateZone(id, zoneData, userId) {
       },
       userId
     );
-
-    // 轉換 locations 為 areas（照明系統使用 areas 術語）
     return {
       merged: result.merged,
       message: result.message,
-      zone: {
-        ...result.zone,
-        areas: result.zone.locations || [],
-      },
+      zone: toLightingZone(result.zone),
     };
   } catch (error) {
     if (error.statusCode) {
@@ -125,7 +92,6 @@ async function updateZone(id, zoneData, userId) {
   }
 }
 
-// 刪除區域（使用統一表）
 async function deleteZone(id) {
   try {
     return await locationService.deleteZone(id);

@@ -20,7 +20,7 @@ const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'onl
  */
 async function checkEnvironmentLocations() {
   try {
-    // 取得所有有環境監測系統的地點（使用新架構 location_systems）
+    // 取得所有環境監測地點
     const locations = await db.query(`
 			SELECT 
 				l.id as location_id,
@@ -143,6 +143,22 @@ async function checkEnvironmentLocations() {
                         module: "environmentMonitor",
                       });
                     });
+                    // 推送 WebSocket 供前端即時顯示
+                    const data = {};
+                    for (const [name, obj] of Object.entries(deviceValues)) {
+                      data[name] = obj?.value ?? null;
+                    }
+                    const ts = new Date().toISOString();
+                    websocketService.emitEnvironmentReading({
+                      locationId: location.location_id,
+                      reading: {
+                        id: `monitor_${location.location_id}_${Date.now()}`,
+                        locationId: String(location.location_id),
+                        timestamp: ts,
+                        data,
+                        createdAt: ts,
+                      },
+                    });
                   }
                 }
               }
@@ -160,7 +176,6 @@ async function checkEnvironmentLocations() {
         // 讀取成功後，檢查閾值（僅在設備連接正常時）
         // 從 device_data_logs 獲取最新數據進行閾值檢查（聚合同一時間點的所有數值）
         try {
-          const deviceId = location.device_id ? parseInt(location.device_id) : null;
           if (!deviceId) {
             return { systemId: location.system_id, locationId: location.location_id, success: true };
           }

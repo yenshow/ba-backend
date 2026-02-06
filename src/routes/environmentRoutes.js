@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const environmentService = require("../services/systems/environmentService");
+const systemAlert = require("../services/alerts/systemAlertHelper");
 const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -43,14 +44,7 @@ router.delete("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(a
 
 // ========== 感測器讀數路由 ==========
 
-// 儲存感測器讀數（已廢棄：改由後端監控服務自動記錄到 device_data_logs）
-// 保留此端點僅用於向後兼容，實際資料已由 environmentMonitor 自動記錄
-router.post("/readings", noCache, asyncHandler(async (req, res) => {
-  const result = await environmentService.saveReading(req.body);
-  res.sendSuccess(result, 201);
-}));
-
-// 取得歷史讀數（公開，從 device_data_logs 聚合查詢）
+// 取得歷史讀數（即時由 Monitor 推送 WebSocket）
 router.get("/readings/:locationId", noCache, asyncHandler(async (req, res) => {
   const { locationId } = req.params;
   const { startTime, endTime, limit } = req.query;
@@ -65,23 +59,19 @@ router.get("/readings/:locationId", noCache, asyncHandler(async (req, res) => {
 }));
 
 // ========== 錯誤追蹤路由 ==========
-// 注意：這裡的 locationId 實際上是 systemId (location_systems.id)
-// 為了向後兼容，保留 locationId 參數名，但實際接收的是 systemId
 
-// 記錄環境位置錯誤（公開，因為是系統自動記錄）
-// 注意：這裡的 locationId 實際上是 systemId (location_systems.id)
+// 記錄環境地點錯誤
 router.post(
-  "/locations/:locationId/errors",
+  "/systems/:systemId/errors",
   noCache,
-  validateIntegers("locationId"),
+  validateIntegers("systemId"),
   asyncHandler(async (req, res) => {
-    const { locationId } = req.params; // 實際上是 systemId (location_systems.id)
+    const { systemId } = req.params;
     const { errorMessage } = req.body;
-    const systemAlert = require("../services/alerts/systemAlertHelper");
 
     const alertCreated = await systemAlert.recordError(
       "environment",
-      parseInt(locationId),
+      parseInt(systemId),
       errorMessage || "無法讀取感測器資料"
     );
 
@@ -89,17 +79,15 @@ router.post(
   })
 );
 
-// 清除環境位置錯誤（公開，因為是系統自動清除）
-// 注意：這裡的 locationId 實際上是 systemId (location_systems.id)
+// 清除環境地點錯誤
 router.delete(
-  "/locations/:locationId/errors",
+  "/systems/:systemId/errors",
   noCache,
-  validateIntegers("locationId"),
+  validateIntegers("systemId"),
   asyncHandler(async (req, res) => {
-    const { locationId } = req.params; // 實際上是 systemId (location_systems.id)
-    const systemAlert = require("../services/alerts/systemAlertHelper");
+    const { systemId } = req.params;
 
-    await systemAlert.clearError("environment", parseInt(locationId));
+    await systemAlert.clearError("environment", parseInt(systemId));
     res.sendSuccess({ success: true });
   })
 );

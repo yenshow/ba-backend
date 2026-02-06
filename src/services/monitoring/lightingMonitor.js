@@ -18,7 +18,7 @@ const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'onl
  */
 async function checkLightingAreas() {
 	try {
-		// 取得所有有照明系統的地點（使用新架構 location_systems）
+		// 取得所有照明地點
 		const areas = await db.query(`
 			SELECT 
 				l.id as location_id,
