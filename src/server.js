@@ -45,11 +45,9 @@ const environmentMonitor = require("./services/monitoring/environmentMonitor");
 const lightingMonitor = require("./services/monitoring/lightingMonitor");
 // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
-// 警報自動清理服務
-const alertCleanupService = require("./services/alerts/alertCleanupService");
+// 備份排程
+const backupScheduler = require("./services/backup/backupScheduler");
 
-// 設備資料記錄服務
-const deviceDataLogger = require("./services/devices/deviceDataLogger");
 
 // 監聽 MediaMTX 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
 // 注意：WebSocket 事件推送已整合到 mediaMTXService 中
@@ -199,13 +197,10 @@ async function startServer() {
       serverLogger.warn("背景監控服務已停用（設定 MONITORING_ENABLED=false）");
     }
 
-    // 啟動警報自動清理服務
-    alertCleanupService.startCleanupScheduler();
-    serverLogger.info("警報自動清理服務已啟用");
+    // 啟動備份排程
+    backupScheduler.startScheduler();
+    serverLogger.info("備份排程已啟用");
 
-    // 啟動設備資料記錄服務的定時刷新
-    deviceDataLogger.start();
-    serverLogger.info("設備資料記錄服務已啟用");
 
     const localIP = getLocalIPAddress();
 
@@ -251,9 +246,6 @@ async function gracefulShutdown(signal) {
     backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
 
-    // 停止設備資料記錄服務
-    deviceDataLogger.stop();
-    shutdownLogger.info("設備資料記錄服務已停止");
 
     // 停止所有 RTSP 串流（包括 FFmpeg 進程）
     await mediaMTXService.stopAllStreams();

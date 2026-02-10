@@ -1,5 +1,6 @@
 const PlatformPersonHandler = require("./handlers/platformPersonHandler");
 const PlatformPersonGroupHandler = require("./handlers/platformPersonGroupHandler");
+const PlatformVehicleListHandler = require("./handlers/platformVehicleListHandler");
 const BaseacsSlotCardRecordsHandler = require("./handlers/baseacsSlotCardRecordsHandler");
 const DeviceaccessDoorHandler = require("./handlers/deviceaccessDoorHandler");
 const PassagewayLogDataHandler = require("./handlers/passagewayLogDataHandler");
@@ -18,6 +19,7 @@ class HandlerFactory {
     // 註冊 platform schema 的處理器
     this.register("platform", "person", new PlatformPersonHandler());
     this.register("platform", "person_group", new PlatformPersonGroupHandler());
+    this.register("platform", "vehicle_list", new PlatformVehicleListHandler());
 
     // 註冊 baseacs schema 的處理器
     this.register(

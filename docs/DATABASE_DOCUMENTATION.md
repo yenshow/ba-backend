@@ -1,14 +1,16 @@
-# 資料庫完整文檔
+# 資料庫文檔
 
 ## 目錄
 
 1. [概述](#概述)
 2. [快速開始](#快速開始)
 3. [PostgreSQL 設定](#postgresql-設定)
-4. [資料庫結構](#資料庫結構)
-5. [設備資料庫結構分析](#設備資料庫結構分析)
-6. [遷移歷史](#遷移歷史)
-7. [疑難排解](#疑難排解)
+4. [Schema 初始化](#schema-初始化)
+5. [資料庫結構](#資料庫結構)
+6. [設計原則](#設計原則)
+7. [遷移歷史](#遷移歷史)
+8. [疑難排解](#疑難排解)
+9. [連接與注意事項](#連接與注意事項)
 
 ---
 
@@ -16,58 +18,19 @@
 
 本專案使用 **PostgreSQL** 作為資料庫，並支援**可攜式 PostgreSQL**（無需系統安裝）。
 
-**主要特點**：
-
-- ✅ **完全開源**：使用 GitHub 開源二進制檔案，無需登入
-- ✅ **跨平台支援**：macOS、Windows、Linux
-- ✅ **自動下載**：腳本自動檢測平台並下載對應二進制檔案
-- ✅ **可攜式**：所有檔案都在專案目錄中，無需系統安裝
-- ✅ **統一配置**：所有設備連接資訊統一存儲在 `config` JSONB 欄位中
-- ✅ **自動生成**：`unitId` 可自動生成，無需手動指定
+**特點**：開源可攜式、跨平台、自動下載、連接資訊統一存於 `config` JSONB、`unitId` 可自動生成。備份由伺服器定時執行，見 `docs/SYSTEM_DATA_AND_BACKUP.md`。
 
 ---
 
 ## 快速開始
 
-### 1. 安裝依賴
-
 ```bash
 npm install
-```
-
-### 2. 下載並設定可攜式 PostgreSQL（只需一次）
-
-```bash
-npm run postgres:download
-```
-
-### 3. 啟動 PostgreSQL（之後每次使用）
-
-```bash
+npm run postgres:download   # 只需一次
 npm run postgres:start
-```
-
-### 4. 初始化資料庫 Schema
-
-```bash
 npm run db:init
-```
-
-### 5. 測試連線
-
-```bash
 npm run db:test
-```
-
-### 6. 建立首個管理員
-
-```bash
 npm run admin:create
-```
-
-### 7. 啟動應用程式
-
-```bash
 npm run dev
 ```
 
@@ -77,61 +40,11 @@ npm run dev
 
 ### 可攜式 PostgreSQL
 
-#### 下載與設定
+- **下載**：`npm run postgres:download`（失敗時可至 [GitHub Releases](https://github.com/theseus-rs/postgresql-binaries/releases) 手動下載對應平台的 `postgresql-<版本>-<target>.tar.gz` 放入 `postgres/`）
+- **支援平台**：macOS (aarch64/x86_64)、Windows x64、Linux (x64/aarch64)
+- **目錄**：`postgres/` → `bin/`、`lib/`、`data/`、`logs/`、`share/`
 
-**方式一：自動下載（推薦）**
-
-```bash
-npm run postgres:download
-```
-
-**方式二：手動下載**
-
-如果自動下載失敗，可以手動下載：
-
-1. **檢測您的系統平台**：執行腳本會自動顯示
-
-   ```bash
-   npm run postgres:download
-   ```
-
-2. **手動下載檔案**：
-
-   - 訪問：https://github.com/theseus-rs/postgresql-binaries/releases
-   - 找到可用版本（例如 **16.11.0**、**16.10.0** 等）
-   - 根據您的系統平台，找到對應的檔案：
-     - **macOS ARM64 (Apple Silicon)**：`postgresql-<版本>-aarch64-apple-darwin.tar.gz`
-     - **macOS Intel**：`postgresql-<版本>-x86_64-apple-darwin.tar.gz`
-     - **Windows x64**：`postgresql-<版本>-x86_64-pc-windows-msvc.tar.gz`
-     - **Linux x64**：`postgresql-<版本>-x86_64-unknown-linux-gnu.tar.gz`
-     - **Linux ARM64**：`postgresql-<版本>-aarch64-unknown-linux-gnu.tar.gz`
-   - 將下載的 `.tar.gz` 檔案放置到專案的 `postgres/` 目錄
-   - 重新執行 `npm run postgres:download`
-
-#### 支援的平台
-
-| 平台    | 架構                  | 目標標識符 (Target Triple)  |
-| ------- | --------------------- | --------------------------- |
-| macOS   | ARM64 (Apple Silicon) | `aarch64-apple-darwin`      |
-| macOS   | x86_64 (Intel)        | `x86_64-apple-darwin`       |
-| Windows | x64                   | `x86_64-pc-windows-msvc`    |
-| Linux   | x64                   | `x86_64-unknown-linux-gnu`  |
-| Linux   | ARM64                 | `aarch64-unknown-linux-gnu` |
-
-#### 目錄結構
-
-```
-postgres/
-├── bin/          # PostgreSQL 執行檔
-├── lib/          # 共享庫
-├── data/         # 資料庫資料
-├── logs/         # 日誌檔案
-└── share/        # 共享檔案
-```
-
-### 環境變數設定
-
-在 `.env` 檔案中設定：
+### 環境變數
 
 ```env
 DB_HOST=127.0.0.1
@@ -143,458 +56,152 @@ DB_NAME=ba_system
 
 ### 常用指令
 
-```bash
-# PostgreSQL 管理
-npm run postgres:download  # 下載並設定（只需一次）
-npm run postgres:start     # 啟動 PostgreSQL
-npm run postgres:stop      # 停止 PostgreSQL
+| 指令 | 說明 |
+|------|------|
+| `npm run postgres:download` | 下載並設定（只需一次） |
+| `npm run postgres:start` / `postgres:stop` | 啟動／停止 PostgreSQL |
+| `npm run db:init` | 初始化 Schema |
+| `npm run db:test` | 測試連線 |
+| `npm run admin:create` | 建立管理員 |
 
-# 資料庫操作
-npm run db:init            # 初始化 Schema
-npm run db:test            # 測試連線
-npm run db:backup          # 備份資料
-npm run db:cleanup         # 清理舊資料
-npm run admin:create       # 建立管理員
-```
+### 技術要點
 
-### PostgreSQL 技術特點
+- 驅動：`pg`，支援連線池；參數化查詢使用 `$1, $2, ...`
+- 自增：`SERIAL` / `BIGSERIAL`；JSON：`JSONB`；衝突：`INSERT ... ON CONFLICT`；插入 ID：`RETURNING id`
 
-#### 1. 資料庫驅動程式
+---
 
-- 使用 `pg` (PostgreSQL) 驅動程式
-- 支援連線池管理
-- 自動參數轉換（`?` → `$1, $2, ...`）
+## Schema 初始化
 
-#### 2. SQL 語法
-
-| 功能 | PostgreSQL 實現 |
-| ----------------------------- | ----------------------------------- |
-| 自動遞增 | `SERIAL` 或 `BIGSERIAL` |
-| 整數類型 | `INTEGER`（無 UNSIGNED） |
-| 枚舉類型 | `ENUM` 類型（需要 CREATE TYPE） |
-| 自動更新時間戳 | 使用觸發器實現 |
-| 衝突處理 | `INSERT ... ON CONFLICT DO NOTHING` |
-| 參數化查詢 | `$1, $2, ...` 佔位符 |
-| 取得插入 ID | `RETURNING id` |
-| 受影響行數 | `result.rowCount` |
-| JSON 存儲 | `JSONB`（高效能 JSON 類型） |
+- **執行**：`npm run db:init` 或 `node src/database/initSchema.js`
+- **流程**：連到 `postgres` → 若無目標庫則建立 `ba_system` → 連到目標庫 → 建立 ENUM、表、索引、觸發器、預設資料
+- **ENUM**：`user_role`、`user_status`、`device_status`、`register_type`、`alert_type`、`alert_severity`、`alert_source`、`alert_status`
+- **觸發器**：`update_updated_at_column()` 套用於所有含 `updated_at` 的表
+- **相容性**：腳本可重複執行（idempotent）；會補齊 `device_models.port`、`zones.image_url`、`locations.description`、`unique_zone_location_name`、`alert_source` 枚舉值、`location_systems` 的 `vehicle_access` 等
 
 ---
 
 ## 資料庫結構
 
-### devices 表
+### 使用者
 
-#### 欄位定義
+| 表 | 說明 | 關鍵欄位 |
+|----|------|----------|
+| **users** | 系統使用者 | `id`, `username`, `email`, `password_hash`, `role` (user_role), `status` (user_status), `created_at`/`updated_at` |
 
-| 欄位 | 類型 | 必填 | 說明 |
-|---|---|---|---|
-| `id` | SERIAL | ✅ | 主鍵 |
-| `name` | VARCHAR(100) | ✅ | 設備名稱 |
-| `type_id` | INTEGER | ✅ | 設備類型 ID（外鍵 → device_types.id） |
-| `model_id` | INTEGER | ✅ | 設備型號 ID（外鍵 → device_models.id，必填） |
-| `location` | VARCHAR(255) | ❌ | 設備位置 |
-| `description` | TEXT | ❌ | 設備描述/備註 |
-| `status` | device_status | ✅ | 狀態（active/inactive/error） |
-| `config` | JSONB | ❌ | 設備配置（連接資訊統一存儲在此） |
-| `last_seen_at` | TIMESTAMP | ❌ | 最後連線時間 |
-| `created_by` | INTEGER | ❌ | 建立者 ID（外鍵 → users.id） |
-| `created_at` | TIMESTAMP | ✅ | 建立時間 |
-| `updated_at` | TIMESTAMP | ✅ | 更新時間 |
+### 設備
 
-#### 索引
+| 表 | 說明 | 關鍵欄位 |
+|----|------|----------|
+| **device_types** | 設備類型 | `id`, `name`, `code` (唯一), `description`。預設：camera, sensor, controller, tablet, network |
+| **device_models** | 設備型號 | `id`, `name`, `type_id`→device_types, `port` (預設 502), `config` JSONB, `created_at`/`updated_at` |
+| **devices** | 設備實例 | `id`, `name`, `model_id`(必填)→device_models, `type_id`→device_types, `location`, `description`, `status` (device_status), `config` JSONB, `last_seen_at`, `created_by`→users, 時間戳。索引：status, type_id, model_id, GIN(config) |
 
-- `idx_devices_status` - 狀態索引
-- `idx_devices_type_id` - 類型 ID 索引
-- `idx_devices_model_id` - 型號 ID 索引
-- `idx_devices_config` - config JSONB GIN 索引（用於 JSON 查詢）
+**devices.config 依類型**（連接資訊皆在 config，無獨立 modbus 欄位）：
 
-#### 外鍵約束
+- **controller**：`type`, `host`(必), `port`(可選，可繼承 model.port), `unitId`(可選，可自動生成)
+- **camera**：`type`, `ip_address`(必)
+- **sensor**：`type`, `protocol`(modbus/http/mqtt), Modbus 時需 `host`, `port`, `unitId`
+- **tablet**：`type`, `mac_address`(必)
+- **network**：`type`, `ip_address`(必), `device_type`(router/switch/access_point/other)
 
-- `fk_devices_type` → `device_types(id)` ON DELETE RESTRICT
-- `fk_devices_model` → `device_models(id)` ON DELETE RESTRICT
-- `fk_devices_created_by` → `users(id)` ON DELETE SET NULL
-
-#### 連接資訊存儲
-
-**重要：** 所有連接資訊統一存儲在 `config` JSONB 欄位中，不再使用獨立的 `modbus_*` 欄位。
-
-##### controller 類型配置
-
-```json
-{
-  "type": "controller",
-  "host": "192.168.2.205",    // 必填：主機 IP
-  "port": 502,                 // 可選：端口（可從 device_models.port 繼承）
-  "unitId": 1                  // 可選：Unit ID（未提供時自動生成）
-}
-```
-
-##### camera 類型配置
-
-```json
-{
-  "type": "camera",
-  "ip_address": "192.168.2.100"  // 必填：IP 位址
-}
-```
-
-##### sensor 類型配置（Modbus）
-
-```json
-{
-  "type": "sensor",
-  "protocol": "modbus",           // 必填：協議類型（modbus/http/mqtt）
-  "host": "192.168.2.200",        // protocol=modbus 時必填
-  "port": 502,                     // protocol=modbus 時必填
-  "unitId": 1                      // protocol=modbus 時必填
-}
-```
-
-##### sensor 類型配置（HTTP）
-
-```json
-{
-  "type": "sensor",
-  "protocol": "http",
-  "api_endpoint": "http://192.168.2.200/api/data"  // 必填
-}
-```
-
-##### tablet 類型配置
-
-```json
-{
-  "type": "tablet",
-  "mac_address": "AA:BB:CC:DD:EE:FF"  // 必填：MAC 位址
-}
-```
-
-##### network 類型配置
-
-```json
-{
-  "type": "network",
-  "ip_address": "192.168.2.1",        // 必填：IP 位址
-  "device_type": "router"              // 必填：設備類型（router/switch/access_point/other）
-}
-```
-
-#### 查詢範例
-
-##### 查詢所有 controller 類型的設備
+**查詢範例**：
 
 ```sql
+-- 依類型
 SELECT * FROM devices d
 INNER JOIN device_types dt ON d.type_id = dt.id
 WHERE dt.code = 'controller';
-```
 
-##### 查詢特定 host 和 port 的設備
-
-```sql
+-- 依 config
 SELECT * FROM devices
-WHERE config->>'host' = '192.168.2.205'
-AND (config->>'port')::integer = 502;
+WHERE config->>'host' = '192.168.2.205' AND (config->>'port')::integer = 502;
 ```
 
-##### 查詢所有使用 Modbus 的設備（controller 或 sensor with modbus protocol）
+### 人流與環境
 
-```sql
-SELECT * FROM devices d
-INNER JOIN device_types dt ON d.type_id = dt.id
-WHERE dt.code = 'controller'
-OR (dt.code = 'sensor' AND config->>'protocol' = 'modbus');
-```
+| 表 | 說明 | 關鍵欄位 |
+|----|------|----------|
+| **people_counting_logs** | 人流刷卡記錄快取（同步自外部 baseacs） | `id` BIGSERIAL, `external_id`, `person_id`, `swip_card_rev_time`, `physical_id`, `person_name`, `unit_id`, `unit_name`, `snap_pic_url`, `location_id`, `created_at`。UNIQUE(person_id, swip_card_rev_time) |
+| **environment_readings** | 環境感測器讀數（依地點） | `id` BIGSERIAL, `location_id`→locations, `source_id`, `recorded_at`, `data` JSONB, `device_id`→devices, `created_at`。索引：(location_id, recorded_at), recorded_at |
+
+**說明**：`device_data_logs` 已移除，環境相關改為 `environment_readings`。
+
+### 警報
+
+| 表 | 說明 | 關鍵欄位 |
+|----|------|----------|
+| **alerts** | 統一警報 | `id`, `source` (alert_source), `source_id`, `alert_type`, `severity`, `message`, `status` (alert_status), `ignored_at`/`ignored_by`, `created_at`, `updated_at`。解決時間由 status=resolved 時之 updated_at 表示。索引：複合 (source, source_id, alert_type, status) 等。 |
+| **error_tracking** | 錯誤狀態追蹤 | `id`, `source`, `source_id`, `error_count`, `last_error_at`, `alert_created`, 時間戳。UNIQUE(source, source_id) |
+| **alert_rules** | 警報規則 | `id`, `source`, `alert_type`, `severity`, `condition_type`, `condition_config` JSONB, `message_template`, `enabled`, 時間戳 |
+
+### 地點
+
+| 表 | 說明 | 關鍵欄位 |
+|----|------|----------|
+| **zones** | 區域／樓層 | `id`, `name`(唯一), `building_id`, `image_url`, `description`, `created_by`→users, 時間戳 |
+| **locations** | 物理地點 | `id`, `zone_id`(必)→zones ON DELETE CASCADE, `name`, `description`, `created_by`, 時間戳。UNIQUE(zone_id, name) |
+| **location_systems** | 地點－系統關聯 | `id`, `location_id`→locations ON DELETE CASCADE, `system_type` ('environment' \| 'lighting' \| 'people_counting' \| 'vehicle_access'), `system_config` JSONB, 時間戳。UNIQUE(location_id, system_type) |
+
+### 照明與系統設定
+
+| 表 | 說明 | 關鍵欄位 |
+|----|------|----------|
+| **lighting_categories** | 照明分類點 | `id`, `name`, `zone_id`→zones, `location_x`/`location_y`, `description`, `device_id`→devices, `modbus_config` JSONB, `room_ids` INTEGER[], `status`, `created_by`, 時間戳 |
+| **system_settings** | 系統設定 | `id`, `key`(唯一), `value` TEXT, `description`, 時間戳 |
 
 ---
 
-### device_types 表
+## 設計原則
 
-| 欄位 | 類型 | 必填 | 說明 |
-|---|---|---|---|
-| `id` | SERIAL | ✅ | 主鍵 |
-| `name` | VARCHAR(100) | ✅ | 類型名稱 |
-| `code` | VARCHAR(50) | ✅ | 類型代碼（唯一） |
-| `description` | TEXT | ❌ | 描述 |
-
-#### 預設類型
-
-- `camera` - 攝影機
-- `sensor` - 感測器
-- `controller` - 控制器（Modbus）
-- `tablet` - 平板
-- `network` - 網路裝置
-
----
-
-### device_models 表
-
-| 欄位 | 類型 | 必填 | 說明 |
-|---|---|---|---|
-| `id` | SERIAL | ✅ | 主鍵 |
-| `name` | VARCHAR(100) | ✅ | 型號名稱 |
-| `type_id` | INTEGER | ✅ | 設備類型 ID（外鍵 → device_types.id） |
-| `port` | INTEGER | ✅ | 預設端口（如 Modbus TCP 標準端口 502） |
-| `description` | TEXT | ❌ | 描述 |
-| `config` | JSONB | ❌ | 型號配置 |
-| `created_at` | TIMESTAMP | ✅ | 建立時間 |
-| `updated_at` | TIMESTAMP | ✅ | 更新時間 |
-
-**注意：** `port` 欄位用於存儲該型號的預設端口，創建設備時可以從型號繼承此端口值。
-
----
-
-## 設備資料庫結構分析
-
-### 目前資料庫內容
-
-#### 設備類型 (device_types)
-
-| ID | 名稱 | 代碼 (code) | 描述 |
-|---|---|---|---|
-| 1 | 攝影機 | `camera` | 影像監控、車牌辨識、人流統計 |
-| 3 | 感測器 | `sensor` | 感測器設備 |
-| 40 | 控制器 | `controller` | modbus |
-| 41 | 平板 | `tablet` | 平板電腦設備 |
-| 42 | 網路裝置 | `network` | 路由器、交換器、無線基地台等網路設備 |
-
-#### 設備型號 (device_models)
-
-| ID | 名稱 | 類型 ID | Port | 描述 |
-|---|---|---|---|---|
-| 3 | ZC160 | 40 (controller) | 502 | 展廳測試 DI / DO |
-
-#### 設備列表 (devices)
-
-目前資料庫中**沒有設備資料**（空表）
-
----
-
-### 核心設計原則
-
-#### 1. 統一配置存儲
-
-**已移除獨立欄位：** `modbus_host`、`modbus_port`、`modbus_unit_id` 欄位已移除
-
-**新的設計：** 所有連接資訊統一存儲在 `config` JSONB 欄位中：
-- `controller` 類型：`config.host`、`config.port`、`config.unitId`（unitId 可自動生成）
-- 其他類型：根據類型不同，使用不同的 config 結構
-
-#### 2. 自動生成 unitId
-
-**功能：**
-- 對於 `controller` 類型，如果未提供 `unitId`，系統會自動生成
-- 自動查找相同 `host + port` 的設備，找出未使用的 `unitId`
-- 從 1 開始，最多到 255
-
-#### 3. model_id 必填
-
-**改進：**
-- `model_id` 現在是必填欄位（NOT NULL）
-- 每個設備都必須有對應的設備型號
-- 外鍵約束改為 `ON DELETE RESTRICT`（防止誤刪型號）
-
-#### 4. port 繼承機制
-
-**設計：**
-- `device_models` 表包含 `port` 欄位（預設 502）
-- 創建設備時，可以從型號繼承 `port` 值
-- 如果設備的 `config.port` 未提供，會使用 `device_models.port`
-
----
-
-### 各設備類型的 config 結構
-
-#### `controller` 類型
-
-```json
-{
-  "type": "controller",
-  "host": "192.168.2.205",    // 必填
-  "port": 502,                 // 可選（可從 model.port 繼承）
-  "unitId": 1                  // 可選（未提供時自動生成）
-}
-```
-
-#### `camera` 類型
-
-```json
-{
-  "type": "camera",
-  "ip_address": "192.168.2.100"  // 必填
-}
-```
-
-#### `sensor` 類型
-
-```json
-{
-  "type": "sensor",
-  "protocol": "modbus",        // modbus/http/mqtt
-  "host": "192.168.2.200",     // protocol=modbus 時必填
-  "port": 502,                 // protocol=modbus 時必填
-  "unitId": 1                  // protocol=modbus 時必填
-}
-```
-
-#### `tablet` 類型
-
-```json
-{
-  "type": "tablet",
-  "mac_address": "AA:BB:CC:DD:EE:FF"  // 必填
-}
-```
-
-#### `network` 類型
-
-```json
-{
-  "type": "network",
-  "ip_address": "192.168.2.1",        // 必填
-  "device_type": "router"              // router/switch/access_point/other
-}
-```
+- **統一配置**：設備連接資訊僅存於 `devices.config` JSONB；`unitId` 可自動生成（同 host+port 下 1..255）。
+- **地點架構**：zones → locations → location_systems，物理地點與系統配置分離，支援多 system_type。
+- **統一警報**：所有來源用 `alerts` + `source`/`source_id`；按天限制等邏輯在應用層。
+- **外鍵**：CASCADE（子隨父刪，如 locations→zones）、RESTRICT（防刪有引用，如 devices→device_models）、SET NULL（如 devices.created_by→users）。
+- **索引**：外鍵欄位、常用查詢複合索引、部分索引（如 alerts 活躍）、JSONB 用 GIN。
 
 ---
 
 ## 遷移歷史
 
-### 已完成的遷移
-
-#### 1. 移除 modbus 欄位 (`scripts/removeModbusFields.js`)
-
-- 移除 `modbus_host`、`modbus_port`、`modbus_unit_id` 欄位
-- 移除 `idx_devices_modbus_connection` 索引
-- 連接資訊統一存儲在 `config` JSONB 中
-
-#### 2. model_id 改為必填 (`scripts/makeModelIdRequired.js`)
-
-- 將 `model_id` 欄位改為 NOT NULL
-- 更新外鍵約束為 `ON DELETE RESTRICT`
-
-#### 3. 添加 port 欄位到 device_models (`scripts/addPortToDeviceModels.js`)
-
-- 為 `device_models` 表添加 `port` 欄位
-- 預設值為 502（Modbus TCP 標準端口）
+- 移除 devices 的 `modbus_host`、`modbus_port`、`modbus_unit_id`，改由 `config` 存儲。
+- `model_id` 改為 NOT NULL，外鍵 ON DELETE RESTRICT。
+- `device_models` 新增 `port`（預設 502）。
+- 移除 `device_data_logs`，新增 `environment_readings`；新增 `people_counting_logs`。
+- `location_systems.system_type` 支援 `vehicle_access`。
 
 ---
 
 ## 疑難排解
 
-### 問題：下載失敗 (404 或檔案不存在)
-
-**可能原因**：
-
-- 該版本尚未發布到 GitHub
-- 版本號格式不正確
-- 該平台沒有對應版本的二進制檔案
-
-**解決方案**：
-
-1. **檢查可用版本**：
-   - 訪問 [GitHub Releases](https://github.com/theseus-rs/postgresql-binaries/releases)
-   - 查看有哪些版本可用（例如：v16.11.0、v16.10.0 等）
-
-2. **手動下載**：
-   - 執行 `npm run postgres:download` 查看您的平台資訊
-   - 從 GitHub Releases 下載對應平台的 `.tar.gz` 檔案
-   - 將檔案放到 `postgres/` 目錄
-   - 重新執行 `npm run postgres:download`
-
-3. **檔案名稱格式**：
-   - 格式：`postgresql-<版本>-<目標標識符>.tar.gz`
-   - 例如：`postgresql-16.11.0-aarch64-apple-darwin.tar.gz`
-
-### 問題：Windows tar 命令不可用
-
-**解決方案**：
-
-1. **Windows 10+**: 通常已內建，確保已啟用
-2. **安裝 Git for Windows**: 包含 `tar` 命令
-3. **或使用 WSL**: 在 WSL 中執行腳本
-
-### 問題：連接埠被占用
-
-**解決方案**：
-
-```bash
-# macOS/Linux - 檢查占用 5432 的進程
-lsof -i :5432
-
-# Windows - 檢查占用 5432 的進程
-netstat -ano | findstr :5432
-
-# 或修改 .env 中的 DB_PORT
-DB_PORT=5433
-```
-
-### 問題：權限錯誤
-
-**解決方案**：
-
-```bash
-# macOS/Linux
-chmod +x scripts/*.js
-
-# Windows: 確保以管理員權限執行（如需要）
-```
-
-### 問題：解壓縮失敗
-
-**解決方案**：
-
-- 確保有足夠的磁碟空間
-- 確保有寫入權限
-- 檢查檔案是否完整下載
+| 問題 | 處理 |
+|------|------|
+| 下載失敗 404 | 檢查 [Releases](https://github.com/theseus-rs/postgresql-binaries/releases)，手動下載對應平台 `.tar.gz` 至 `postgres/`，再執行 download |
+| Windows 無 tar | 使用 Git for Windows 或 WSL |
+| 埠 5432 占用 | `lsof -i :5432`（macOS/Linux）或 `netstat -ano \| findstr :5432`（Windows）；或改 `.env` 的 `DB_PORT` |
+| 權限錯誤 | macOS/Linux：`chmod +x scripts/*.js` |
+| 解壓失敗 | 確認磁碟空間與寫入權限、檔案完整 |
 
 ---
 
-## 資料庫連接
+## 連接與注意事項
 
-### 使用 psql 連線
+**psql**：
 
 ```bash
-# 使用專案中的 PostgreSQL
 ./postgres/bin/psql -U postgres -d ba_system
-
-# Windows
-.\postgres\bin\psql.exe -U postgres -d ba_system
-
-# 或如果已加入 PATH
-psql -U postgres -d ba_system -h 127.0.0.1 -p 5432
+# Windows: .\postgres\bin\psql.exe -U postgres -d ba_system
+# 或: psql -U postgres -d ba_system -h 127.0.0.1 -p 5432
 ```
 
-### 使用外部工具
+**外部工具**：Host `127.0.0.1`，Port `5432`，Database `ba_system`，User/Password `postgres`。
 
-- **Host**: `127.0.0.1`
-- **Port**: `5432`
-- **Database**: `ba_system`
-- **User**: `postgres`
-- **Password**: `postgres`
-
----
-
-## 重要注意事項
-
-### 1. 可攜式 PostgreSQL 位置
-
-所有 PostgreSQL 檔案都在 `postgres/` 目錄中，此目錄已加入 `.gitignore`，不會被提交到版本控制。
-
-### 2. 開發環境設定
-
-此設定使用 `trust` 認證方式，僅適合開發環境。生產環境請修改 `postgres/data/pg_hba.conf`。
-
-### 3. 防火牆
-
-Windows 防火牆可能會詢問是否允許 PostgreSQL 存取網路，請選擇允許。
+**注意**：`postgres/` 已在 `.gitignore`；可攜式設定為 `trust` 僅適合開發，生產請改 `pg_hba.conf`；Windows 防火牆可能需允許 PostgreSQL。
 
 ---
 
 ## 參考資料
 
-- [theseus-rs/postgresql-binaries GitHub](https://github.com/theseus-rs/postgresql-binaries)
-- [GitHub Releases](https://github.com/theseus-rs/postgresql-binaries/releases)
+- [theseus-rs/postgresql-binaries](https://github.com/theseus-rs/postgresql-binaries)
 - [PostgreSQL 官方文檔](https://www.postgresql.org/docs/)
-
+- 後端架構：`docs/BACKEND_ARCHITECTURE_ANALYSIS.md`；警報實作：`docs/ALERT_IMPLEMENTATION_GUIDE.md`（若存在）

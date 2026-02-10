@@ -67,7 +67,7 @@ npm run db:init
 
 - `users` - 用戶管理
 - `devices` - 設備管理
-- `device_data_logs` - 設備資料歷史記錄
+- `environment_readings` - 環境品質感測器讀數
 - `device_alerts` - 設備告警記錄
 
 ### 測試資料庫連線
@@ -153,9 +153,8 @@ npm start
 - `npm run postgres:stop` - 停止 PostgreSQL
 - `npm run db:init` - 初始化資料庫 Schema
 - `npm run db:test` - 測試資料庫連線
-- `npm run db:backup [--days <天數>] [--backup-only]` - 備份舊資料（預設 30 天前）
-- `npm run db:cleanup [--days <天數>]` - 清理舊資料（先備份後刪除，預設 30 天前）
 - `npm run admin:create` - 建立系統管理員帳號
+- 資料備份由伺服器定時自動執行（見 `docs/SYSTEM_DATA_AND_BACKUP.md`）
 
 ### 資料庫架構
 
@@ -163,7 +162,7 @@ npm start
 
 - **users**: 用戶帳號、角色（admin/operator/viewer）、狀態管理
 - **devices**: 設備資訊、Modbus 連線參數、狀態追蹤
-- **device_data_logs**: 設備資料歷史記錄（時間序列）
+- **environment_readings**: 環境品質感測器讀數（時間序列）
 - **device_alerts**: 設備告警記錄與處理狀態
 
 ### 後續開發計劃

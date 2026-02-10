@@ -9,7 +9,8 @@ const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
 const alertRuleService = require("../alerts/alertRuleService");
 const alertService = require("../alerts/alertService");
-const deviceDataLogger = require("../devices/deviceDataLogger");
+const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
+const environmentReadingsService = require("../systems/environmentReadingsService");
 const logger = require("../../utils/logger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
@@ -83,7 +84,7 @@ async function checkEnvironmentLocations() {
         const deviceId = location.device_id ? parseInt(location.device_id) : null;
         if (deviceId) {
           try {
-            const loggingConfig = await deviceDataLogger.getDeviceLoggingConfig(deviceId);
+            const loggingConfig = await deviceLoggingConfig.getDeviceLoggingConfig(deviceId);
             
             if (loggingConfig.enabled && loggingConfig.values && loggingConfig.values.length > 0) {
               // 找出所有需要讀取的 holding 寄存器
@@ -125,7 +126,7 @@ async function checkEnvironmentLocations() {
 
                     if (rawValue !== null && rawValue !== undefined) {
                       // 套用轉換
-                      const convertedValue = deviceDataLogger.applyConversion(rawValue, valueConfig.conversion);
+                      const convertedValue = deviceLoggingConfig.applyConversion(rawValue, valueConfig.conversion);
                       
                       deviceValues[valueConfig.name] = {
                         value: convertedValue,
@@ -134,21 +135,27 @@ async function checkEnvironmentLocations() {
                     }
                   }
 
-                  // 記錄到 device_data_logs（非阻塞，傳入配置避免重複查詢）
+                  // 記錄到 environment_readings 並推送 WebSocket
                   if (Object.keys(deviceValues).length > 0) {
-                    deviceDataLogger.logDeviceValues(deviceId, deviceValues, loggingConfig).catch((error) => {
-                      logger.error(`記錄設備數值失敗 (deviceId: ${deviceId})`, {
-                        error: error.message,
-                        deviceId,
-                        module: "environmentMonitor",
-                      });
-                    });
-                    // 推送 WebSocket 供前端即時顯示
                     const data = {};
                     for (const [name, obj] of Object.entries(deviceValues)) {
                       data[name] = obj?.value ?? null;
                     }
                     const ts = new Date().toISOString();
+                    environmentReadingsService
+                      .saveReading({
+                        locationId: location.location_id,
+                        sourceId: location.system_id,
+                        deviceId: deviceId,
+                        data,
+                      })
+                      .catch((error) => {
+                        logger.error(`記錄環境讀數失敗 (locationId: ${location.location_id})`, {
+                          error: error.message,
+                          locationId: location.location_id,
+                          module: "environmentMonitor",
+                        });
+                      });
                     websocketService.emitEnvironmentReading({
                       locationId: location.location_id,
                       reading: {
@@ -174,31 +181,26 @@ async function checkEnvironmentLocations() {
         }
 
         // 讀取成功後，檢查閾值（僅在設備連接正常時）
-        // 從 device_data_logs 獲取最新數據進行閾值檢查（聚合同一時間點的所有數值）
+        // 從 environment_readings 獲取最新數據進行閾值檢查
         try {
           if (!deviceId) {
             return { systemId: location.system_id, locationId: location.location_id, success: true };
           }
 
-          // 獲取最新的設備數值記錄（使用時間窗口聚合，確保批次寫入的記錄能被正確聚合）
           const latestReading = await db.query(
-            `SELECT 
-               date_trunc('second', recorded_at) as timestamp,
-               jsonb_object_agg(
-                 value->>'name',
-                 (value->>'value')::numeric
-               ) as data
-             FROM device_data_logs
-             WHERE device_id = $1
+            `SELECT data
+             FROM environment_readings
+             WHERE location_id = $1
                AND recorded_at >= NOW() - INTERVAL '1 minute'
-             GROUP BY date_trunc('second', recorded_at)
-             ORDER BY timestamp DESC 
+             ORDER BY recorded_at DESC
              LIMIT 1`,
-            [deviceId]
+            [location.location_id]
           );
 
           if (latestReading && latestReading.length > 0 && latestReading[0].data) {
-            const sensorData = latestReading[0].data;
+            const sensorData = typeof latestReading[0].data === "object"
+              ? latestReading[0].data
+              : JSON.parse(latestReading[0].data || "{}");
 
             // 調試日誌：只在需要時輸出（可通過環境變數控制）
             // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
@@ -352,7 +354,6 @@ async function resolveThresholdAlert(systemId, parameter, value, reason = "數�
       "threshold",
       alertService.ALERT_STATUS.RESOLVED,
       null,
-      reason
     );
 
     // 只在啟用詳細日誌時輸出
@@ -484,19 +485,13 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
           }
         );
 
-        // 直接調用 createAlert，它會自動處理：
-        // 1. 檢查忽視狀態
-        // 2. 查找現有警報（使用參數匹配）
-        // 3. 更新現有警報或創建新警報
-        // 4. 輸出適當的日誌
-        // 使用 location_systems.id 作為 source_id
-          await systemAlert.createAlert(
-            "environment",
-            systemId,
-            "threshold",
-            matchedRule.severity,
-            message
-          );
+        await alertService.createAlert({
+          source: alertService.ALERT_SOURCES.ENVIRONMENT,
+          source_id: systemId,
+          alert_type: "threshold",
+          severity: matchedRule.severity,
+          message,
+        });
       } else {
         // 數值未超過閾值，如果有對應的 active 警報，則解決它
         // 使用 findAllActiveAlerts 並傳遞參數，精確匹配需要解決的警報
@@ -603,14 +598,13 @@ async function resolveAllThresholdAlerts(systemId) {
     // 如果有多個警報，updateAlertStatus 會一次性解決所有匹配的警報
     // 所以不需要循環調用，直接調用一次即可
     if (activeAlerts.length > 0) {
-      await alertService.updateAlertStatus(
-        systemId,
-        alertService.ALERT_SOURCES.ENVIRONMENT,
-        "threshold",
-        alertService.ALERT_STATUS.RESOLVED,
-        null, // 系統自動解決
-        "規則已移除，自動解決警報"
-      );
+    await alertService.updateAlertStatus(
+      systemId,
+      alertService.ALERT_SOURCES.ENVIRONMENT,
+      "threshold",
+      alertService.ALERT_STATUS.RESOLVED,
+      null,
+    );
 
       if (process.env.ENABLE_DETAILED_LOGS === "true") {
         logger.debug(`解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`, {

@@ -13,6 +13,7 @@ const {
 const ALLOWED_TABLES = [
   { schema: "platform", table: "person" },
   { schema: "platform", table: "person_group" },
+  { schema: "platform", table: "vehicle_list" },
   { schema: "baseacs", table: "slot_card_records" },
   { schema: "deviceaccess", table: "door" },
   { schema: "vehiclebiz", table: "passageway_log_data" },

@@ -365,49 +365,9 @@ async function clearError(system, sourceId, options = {}) {
   }
 }
 
-/**
- * 創建系統警報
- * @param {string} system - 系統名稱
- * @param {number} sourceId - 來源實體 ID
- * @param {string} alertType - 警報類型
- * @param {string} severity - 嚴重程度
- * @param {string} message - 警報訊息
- * @returns {Promise<Object>} 創建的警報
- */
-async function createAlert(system, sourceId, alertType, severity, message) {
-  try {
-    const config = SYSTEM_CONFIGS[system];
-    if (!config) {
-      throw new Error(`未知的系統: ${system}`);
-    }
-
-    // 驗證來源存在
-    const sourceInfo = await config.getSourceInfo(sourceId);
-    if (!sourceInfo) {
-      throw new Error(`${system} 來源 ID ${sourceId} 不存在`);
-    }
-
-    // 創建警報
-    return await alertService.createAlert({
-      source: config.source,
-      source_id: sourceId,
-      alert_type: alertType,
-      severity,
-      message,
-    });
-  } catch (error) {
-    console.error(
-      `[systemAlertHelper] 創建 ${system} 警報失敗 (sourceId: ${sourceId}):`,
-      error
-    );
-    throw error;
-  }
-}
-
 module.exports = {
   recordError,
   clearError,
-  createAlert,
   getDeviceIdFromConfig,
   // 導出輔助函數供內部使用
   getLocationInfo,

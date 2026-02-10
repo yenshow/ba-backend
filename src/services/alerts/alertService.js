@@ -58,8 +58,8 @@ function getTodayDateRange() {
       0,
       0,
       0,
-      0
-    )
+      0,
+    ),
   );
   const todayEnd = new Date(todayStart);
   todayEnd.setUTCDate(todayEnd.getUTCDate() + 1);
@@ -90,7 +90,7 @@ async function queryAlerts(
   parameter = null,
   dateRange = null,
   orderBy = "created_at DESC",
-  limit = null
+  limit = null,
 ) {
   let query = `SELECT * FROM alerts WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?`;
   const params = [source, sourceId, alertType, status];
@@ -145,7 +145,7 @@ async function findIgnoredAlert(source, sourceId, alertType, parameter = null) {
     parameter,
     null, // 不限日期
     null, // 不需要排序
-    1 // 只取第一個
+    1, // 只取第一個
   );
   return alerts.length > 0 ? alerts[0] : null;
 }
@@ -163,7 +163,7 @@ async function findExistingActiveAlert(
   source,
   sourceId,
   alertType,
-  parameter = null
+  parameter = null,
 ) {
   const { todayStart, todayEnd } = getTodayDateRange();
   const alerts = await queryAlerts(
@@ -174,7 +174,7 @@ async function findExistingActiveAlert(
     parameter,
     { start: todayStart, end: todayEnd }, // 按天限制
     null, // 不需要排序
-    1 // 只取第一個
+    1, // 只取第一個
   );
   return alerts.length > 0 ? alerts[0] : null;
 }
@@ -191,7 +191,7 @@ async function findAllActiveAlerts(
   source,
   sourceId,
   alertType,
-  parameter = null
+  parameter = null,
 ) {
   return await queryAlerts(
     source,
@@ -200,7 +200,7 @@ async function findAllActiveAlerts(
     ALERT_STATUS.ACTIVE,
     parameter,
     null, // 不限日期
-    "created_at DESC" // 按創建時間倒序
+    "created_at DESC", // 按創建時間倒序
   );
 }
 
@@ -233,7 +233,7 @@ async function handleAlertUpdate(
   message,
   actualSource,
   source_id,
-  alert_type
+  alert_type,
 ) {
   const currentSeverity = existingAlert.severity;
   const needsUpgrade = shouldUpgradeSeverity(currentSeverity, severity);
@@ -243,7 +243,7 @@ async function handleAlertUpdate(
     // 不需要更新，直接返回現有警報
     devLog.log(
       `[alertService] 警報已存在且未改變 | ID:${existingAlert.id} | ` +
-        `${actualSource}:${source_id} | 類型:${alert_type} | 嚴重程度:${currentSeverity}`
+        `${actualSource}:${source_id} | 類型:${alert_type} | 嚴重程度:${currentSeverity}`,
     );
     return enrichAlert(existingAlert);
   }
@@ -252,7 +252,7 @@ async function handleAlertUpdate(
   const updatedAlert = await updateAlertContent(
     existingAlert.id,
     severity,
-    message
+    message,
   );
 
   if (!updatedAlert) {
@@ -262,12 +262,12 @@ async function handleAlertUpdate(
   if (needsUpgrade) {
     devLog.log(
       `[alertService] 🔄 警報已更新 | ID:${updatedAlert.id} | ${actualSource}:${source_id} | ` +
-        `類型:${alert_type} | 嚴重程度:${currentSeverity} -> ${severity}`
+        `類型:${alert_type} | 嚴重程度:${currentSeverity} -> ${severity}`,
     );
   } else {
     devLog.log(
       `[alertService] 🔄 警報數值已更新 | ID:${updatedAlert.id} | ${actualSource}:${source_id} | ` +
-        `類型:${alert_type} | 新 message: ${message}`
+        `類型:${alert_type} | 新 message: ${message}`,
     );
   }
 
@@ -277,7 +277,7 @@ async function handleAlertUpdate(
   websocketService.emitAlertUpdated(
     enrichedAlert,
     ALERT_STATUS.ACTIVE,
-    ALERT_STATUS.ACTIVE
+    ALERT_STATUS.ACTIVE,
   );
 
   // 推送未解決警報數量
@@ -338,10 +338,8 @@ const SEVERITIES = {
   CRITICAL: "critical",
 };
 
-// 移除 parseMetadata 函數（不再需要 metadata）
-
 /**
- * 為警報添加向後兼容字段（提取為輔助函數，避免重複代碼）
+ * 為警報添加向後兼容字段
  * @param {Object} alert - 警報對象
  * @returns {Object} 添加了向後兼容字段的警報對象
  */
@@ -360,62 +358,54 @@ function enrichAlert(alert) {
   return enriched;
 }
 
-// 移除未使用的函數：deduplicateAlerts 和 sortAlerts
-// 原因：移除了環境/照明系統與設備警報的關聯邏輯後，這些函數不再需要
-
 /**
- * 生成警報查詢的 SELECT 語句（共用函數）
+ * 警報列表查詢（一列一筆，不 GROUP BY）
  * @returns {string} SELECT 語句
  */
 function buildAlertSelectQuery() {
   return `
     SELECT 
-      MIN(a.id) as id,
+      a.id,
       a.source,
       a.source_id,
       a.alert_type,
+      a.severity,
+      a.message,
       a.status,
-      MAX(a.severity) as severity,
-      MAX(a.message) as message,
-      MAX(a.resolved_at) as resolved_at,
-      MAX(a.resolved_by) as resolved_by,
-      MAX(a.ignored_at) as ignored_at,
-      MAX(a.ignored_by) as ignored_by,
-      MIN(a.created_at) as created_at,
-      MAX(a.updated_at) as updated_at,
-      COUNT(*) as alert_count,
-      MAX(ru.username) as resolved_by_username,
-      MAX(iu.username) as ignored_by_username,
-      -- 設備類型資訊（適用於設備來源和系統的關聯設備）
-      MAX(CASE 
+      a.ignored_at,
+      a.ignored_by,
+      a.created_at,
+      a.updated_at,
+      iu.username as ignored_by_username,
+      CASE 
         WHEN a.source = 'device' THEN dt.name
         WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN dt_system.name
         ELSE NULL
-      END) as device_type_name,
-      MAX(CASE 
+      END as device_type_name,
+      CASE 
         WHEN a.source = 'device' THEN dt.code
         WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN dt_system.code
         ELSE NULL
-      END) as device_type_code,
-      -- 來源名稱（統一欄位，適用於所有來源類型）
-      MAX(CASE 
+      END as device_type_code,
+      CASE 
         WHEN a.source = 'device' THEN d.name
         WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN l.name
         ELSE NULL
-      END) as source_name,
-      -- 向後兼容：device_name（與 source_name 相同，當 source = 'device' 時）
-      MAX(CASE WHEN a.source = 'device' THEN d.name END) as device_name,
-      -- 區域名稱（統一使用 zones 表）
-      MAX(CASE 
+      END as source_name,
+      CASE WHEN a.source = 'device' THEN d.name END as device_name,
+      CASE 
         WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN z.name 
         ELSE NULL 
-      END) as zone_name
+      END as zone_name,
+      CASE 
+        WHEN a.source = 'device' THEN d.config
+        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN d_system.config
+        ELSE NULL
+      END as device_config
     FROM alerts a
-    LEFT JOIN users ru ON a.resolved_by = ru.id
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
     LEFT JOIN device_types dt ON d.type_id = dt.id
-    -- 使用新架構：location_systems 關聯到 locations 和 zones
     LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
@@ -465,12 +455,10 @@ async function getAlerts(filters = {}) {
       }
     }
 
-    // 合併相同來源、相同類型、相同狀態的警報
     let query = buildAlertSelectQuery() + ` WHERE 1=1`;
     const params = [];
-    const countParams = []; // 單獨構建計數查詢的參數列表（不包含 updated_after、limit、offset）
+    const countParams = [];
 
-    // 應用篩選條件
     if (actualSource) {
       query += " AND a.source = ?";
       params.push(actualSource);
@@ -506,22 +494,11 @@ async function getAlerts(filters = {}) {
       params.push(end_date);
       countParams.push(end_date);
     }
-    // 增量查詢：只獲取創建時間或更新時間在此之後的警報（優化輪詢效率）
-    // 注意：需要同時檢查 created_at 和 updated_at，因為：
-    // 1. 新創建的警報：created_at > updated_after
-    // 2. 更新的警報：updated_at > updated_after
-    // countQuery 不包含 updated_after 條件，因為計數應該包含所有符合條件的記錄
     if (updated_after) {
-      // 使用 OR 條件檢查兩個時間戳，確保不遺漏新創建的警報
       query += " AND (a.created_at >= ? OR a.updated_at >= ?)";
       params.push(updated_after, updated_after);
-      // countParams 不添加 updated_after，因為計數查詢不需要這個條件
     }
 
-    // 按來源、來源ID、警報類型、狀態分組
-    query += ` GROUP BY a.source, a.source_id, a.alert_type, a.status`;
-
-    // 排序
     const validOrderBy = [
       "created_at",
       "updated_at",
@@ -529,29 +506,17 @@ async function getAlerts(filters = {}) {
       "alert_type",
       "status",
     ];
-    const orderByField = validOrderBy.includes(orderBy)
-      ? orderBy === "created_at"
-        ? "MIN(a.created_at)"
-        : orderBy === "updated_at"
-        ? "MAX(a.updated_at)"
-        : orderBy
-      : "MIN(a.created_at)";
+    const orderByCol = validOrderBy.includes(orderBy) ? orderBy : "created_at";
     const orderDirection = order.toLowerCase() === "asc" ? "ASC" : "DESC";
-    query += ` ORDER BY ${orderByField} ${orderDirection}`;
+    query += ` ORDER BY a.${orderByCol} ${orderDirection}`;
 
-    // 分頁
     query += " LIMIT ? OFFSET ?";
     params.push(parseInt(limit), parseInt(offset));
 
     let alerts = await db.query(query, params);
 
-    // 取得總數（使用單獨構建的 countParams，不包含 updated_after）
-    let countQuery = `
-			SELECT COUNT(DISTINCT (a.source::text || '-' || a.source_id::text || '-' || a.alert_type::text || '-' || a.status::text)) as total
-			FROM alerts a
-			WHERE 1=1
-		`;
-    // countQuery 的條件已經在構建 countParams 時同步添加，這裡只需要構建查詢字符串
+    // 總數：同一篩選條件的列數（不包含 limit/offset/updated_after）
+    let countQuery = `SELECT COUNT(*) as total FROM alerts a WHERE 1=1`;
     if (actualSource) countQuery += " AND a.source = ?";
     if (actualSourceId) countQuery += " AND a.source_id = ?";
     if (alert_type) countQuery += " AND a.alert_type = ?";
@@ -559,13 +524,9 @@ async function getAlerts(filters = {}) {
     if (actualStatus) countQuery += " AND a.status = ?";
     if (start_date) countQuery += " AND a.created_at >= ?";
     if (end_date) countQuery += " AND a.created_at <= ?";
-    // 注意：countQuery 不包含 updated_after 條件，因為計數應該包含所有符合條件的記錄
 
     const countResult = await db.query(countQuery, countParams);
     const total = parseInt(countResult[0]?.total || 0);
-
-    // 注意：由於移除了 metadata，環境/照明系統與設備警報的關聯功能已簡化
-    // 如果需要關聯設備警報到系統，需要重新設計（例如通過設備 ID 直接關聯）
 
     // 為每個 alert 添加向後兼容的字段
     const enrichedAlerts = (alerts || []).map(enrichAlert);
@@ -615,8 +576,8 @@ async function createAlert(alertData) {
     if (!Object.values(ALERT_SOURCES).includes(actualSource)) {
       throw new Error(
         `無效的 source: ${actualSource}。支援的來源: ${Object.values(
-          ALERT_SOURCES
-        ).join(", ")}`
+          ALERT_SOURCES,
+        ).join(", ")}`,
       );
     }
 
@@ -624,8 +585,8 @@ async function createAlert(alertData) {
     if (!Object.values(ALERT_TYPES).includes(alert_type)) {
       throw new Error(
         `無效的 alert_type: ${alert_type}。支援的類型: ${Object.values(
-          ALERT_TYPES
-        ).join(", ")}`
+          ALERT_TYPES,
+        ).join(", ")}`,
       );
     }
 
@@ -633,8 +594,8 @@ async function createAlert(alertData) {
     if (!Object.values(SEVERITIES).includes(severity)) {
       throw new Error(
         `無效的 severity: ${severity}。支援的級別: ${Object.values(
-          SEVERITIES
-        ).join(", ")}`
+          SEVERITIES,
+        ).join(", ")}`,
       );
     }
 
@@ -645,13 +606,13 @@ async function createAlert(alertData) {
       actualSource,
       source_id,
       alert_type,
-      parameter
+      parameter,
     );
 
     if (ignoredAlert) {
       // 如果警報已被忽視，不創建新警報（忽視功能：不再顯示相同來源和類型的警示）
       devLog.log(
-        `[alertService] 警報已被忽視，不創建新警報: source=${actualSource}, source_id=${source_id}, alert_type=${alert_type}`
+        `[alertService] 警報已被忽視，不創建新警報: source=${actualSource}, source_id=${source_id}, alert_type=${alert_type}`,
       );
       // 返回忽視的警報（不更新，保持忽視狀態）
       return enrichAlert(ignoredAlert);
@@ -664,7 +625,7 @@ async function createAlert(alertData) {
       actualSource,
       source_id,
       alert_type,
-      parameter
+      parameter,
     );
 
     if (existingAlert) {
@@ -675,7 +636,7 @@ async function createAlert(alertData) {
         message,
         actualSource,
         source_id,
-        alert_type
+        alert_type,
       );
       if (result) {
         return result;
@@ -689,7 +650,7 @@ async function createAlert(alertData) {
     // 使用 INSERT 語句，如果發生並發衝突，會由唯一索引捕獲
     devLog.log(
       `[alertService] ➕ 創建新警報 | ${actualSource}:${source_id} | ` +
-        `類型:${alert_type} | 嚴重程度:${severity}`
+        `類型:${alert_type} | 嚴重程度:${severity}`,
     );
 
     const insertQuery = `
@@ -713,7 +674,7 @@ async function createAlert(alertData) {
       // 記錄警報創建日誌（結構化日誌）
       devLog.log(
         `[alertService] ✅ 新警報創建 | ID:${alert.id} | ${actualSource}:${source_id} | ` +
-          `類型:${alert_type} | 嚴重程度:${severity}`
+          `類型:${alert_type} | 嚴重程度:${severity}`,
       );
 
       const enrichedAlert = enrichAlert(alert);
@@ -739,7 +700,7 @@ async function createAlert(alertData) {
           actualSource,
           source_id,
           alert_type,
-          parameter
+          parameter,
         );
 
         if (retryExistingAlert) {
@@ -751,7 +712,7 @@ async function createAlert(alertData) {
             message,
             actualSource,
             source_id,
-            alert_type
+            alert_type,
           );
           if (result) {
             return result;
@@ -778,7 +739,7 @@ async function unresolveAlert(id, userId = null) {
     // 先查詢當前狀態
     const currentAlert = await db.query(
       `SELECT id, status FROM alerts WHERE id = ?`,
-      [id]
+      [id],
     );
 
     if (!currentAlert || currentAlert.length === 0) {
@@ -791,8 +752,6 @@ async function unresolveAlert(id, userId = null) {
     const query = `
 			UPDATE alerts
 			SET status = ?,
-					resolved_at = NULL,
-					resolved_by = NULL,
 					ignored_at = NULL,
 					ignored_by = NULL
 			WHERE id = ?
@@ -813,7 +772,7 @@ async function unresolveAlert(id, userId = null) {
       websocketService.emitAlertUpdated(
         enrichedAlert,
         oldStatus,
-        ALERT_STATUS.ACTIVE
+        ALERT_STATUS.ACTIVE,
       );
 
       // 更新並推送未解決警報數量
@@ -828,13 +787,78 @@ async function unresolveAlert(id, userId = null) {
 }
 
 /**
- * 更新警報狀態
+ * 只解決「最新一筆」active 警報（一列一事件，避免多筆同時間戳）
+ * @param {string} source - 來源類型
+ * @param {number} sourceId - 來源 ID
+ * @param {string} alertType - 警報類型
+ * @returns {Promise<number>} 0 或 1
+ */
+async function resolveLatestActiveAlert(source, sourceId, alertType) {
+  const rows = await db.query(
+    `SELECT id FROM alerts
+     WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?
+     ORDER BY created_at DESC LIMIT 1`,
+    [source, sourceId, alertType, ALERT_STATUS.ACTIVE],
+  );
+  if (!rows || rows.length === 0) return 0;
+
+  const id = rows[0].id;
+  const updateQuery = `
+    UPDATE alerts
+    SET status = ?::alert_status, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+    RETURNING id
+  `;
+  const result = await db.query(updateQuery, [ALERT_STATUS.RESOLVED, id]);
+  if (!result || result.length === 0) return 0;
+
+  const alertQuery = `
+    SELECT a.*, iu.username as ignored_by_username
+    FROM alerts a
+    LEFT JOIN users iu ON a.ignored_by = iu.id
+    WHERE a.id = ?
+  `;
+  const alertResults = await db.query(alertQuery, [id]);
+  if (alertResults && alertResults.length > 0) {
+    const enriched = enrichAlert(alertResults[0]);
+    websocketService.emitAlertUpdated(
+      enriched,
+      ALERT_STATUS.ACTIVE,
+      ALERT_STATUS.RESOLVED,
+    );
+  }
+  emitUnresolvedAlertCount();
+  return 1;
+}
+
+/**
+ * 每日結案：將「創建時間早於今日 00:00 UTC」且仍為 active 的警報標記為已解決
+ * @returns {Promise<number>} 更新的筆數
+ */
+async function resolveStaleActiveAlerts() {
+  const { todayStart } = getTodayDateRange();
+  const result = await db.query(
+    `UPDATE alerts
+     SET status = 'resolved', updated_at = CURRENT_TIMESTAMP
+     WHERE status = 'active' AND created_at < ?
+     RETURNING id`,
+    [todayStart],
+  );
+  const count = result?.length ?? 0;
+  if (count > 0) {
+    devLog.log(`[alertService] 每日結案：${count} 筆歷史 active 已標記為已解決`);
+    emitUnresolvedAlertCount();
+  }
+  return count;
+}
+
+/**
+ * 更新警報狀態（RESOLVED 僅更新最新一筆 active；IGNORED/ACTIVE 為批次）
  * @param {number} sourceId - 來源 ID
  * @param {string} source - 來源類型
  * @param {string} alertType - 警報類型
  * @param {string} newStatus - 新狀態
  * @param {number} userId - 用戶 ID
- * @param {string|null} reason - 變更原因（可選）
  * @returns {Promise<number>} 更新的警報數量
  */
 async function updateAlertStatus(
@@ -843,11 +867,20 @@ async function updateAlertStatus(
   alertType,
   newStatus,
   userId,
-  reason = null
 ) {
   try {
     if (!Object.values(ALERT_STATUS).includes(newStatus)) {
       throw new Error(`無效的狀態: ${newStatus}`);
+    }
+
+    if (newStatus === ALERT_STATUS.RESOLVED) {
+      const updated = await resolveLatestActiveAlert(source, sourceId, alertType);
+      if (updated === 0) {
+        throw new Error(
+          `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
+        );
+      }
+      return updated;
     }
 
     // 先查詢所有匹配的警報（用於批量處理）
@@ -855,12 +888,12 @@ async function updateAlertStatus(
       `SELECT id, status FROM alerts 
 			WHERE source_id = ? AND source = ? AND alert_type = ? 
 			AND status != ?`,
-      [sourceId, source, alertType, newStatus]
+      [sourceId, source, alertType, newStatus],
     );
 
     if (!currentAlerts || currentAlerts.length === 0) {
       throw new Error(
-        `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`
+        `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
       );
     }
 
@@ -871,27 +904,16 @@ async function updateAlertStatus(
     const updateFields = [];
     const params = [];
 
-    if (newStatus === ALERT_STATUS.RESOLVED) {
-      updateFields.push("resolved_at = CURRENT_TIMESTAMP", "resolved_by = ?");
-      params.push(userId);
-    } else if (newStatus === ALERT_STATUS.IGNORED) {
+    if (newStatus === ALERT_STATUS.IGNORED) {
       updateFields.push("ignored_at = CURRENT_TIMESTAMP", "ignored_by = ?");
       params.push(userId);
     } else if (newStatus === ALERT_STATUS.ACTIVE) {
-      // 重新激活時清除解決和忽視資訊
-      updateFields.push(
-        "resolved_at = NULL",
-        "resolved_by = NULL",
-        "ignored_at = NULL",
-        "ignored_by = NULL"
-      );
+      updateFields.push("ignored_at = NULL", "ignored_by = NULL");
     }
 
     // 觸發器會自動更新 updated_at，但為了確保觸發，我們明確設置
     updateFields.push("status = ?", "updated_at = CURRENT_TIMESTAMP");
-    // SET 部分的參數：status = ? 的值
     params.push(newStatus);
-    // WHERE 條件的參數（順序要與 WHERE 子句中的條件順序一致）
     params.push(sourceId, source, alertType, newStatus);
 
     const query = `
@@ -908,7 +930,7 @@ async function updateAlertStatus(
 
     if (!result || result.length === 0) {
       throw new Error(
-        `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`
+        `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
       );
     }
 
@@ -920,10 +942,8 @@ async function updateAlertStatus(
       const alertQuery = `
         SELECT 
           a.*,
-          ru.username as resolved_by_username,
           iu.username as ignored_by_username
         FROM alerts a
-        LEFT JOIN users ru ON a.resolved_by = ru.id
         LEFT JOIN users iu ON a.ignored_by = iu.id
         WHERE a.id = ANY($1::integer[])
       `;
@@ -936,7 +956,7 @@ async function updateAlertStatus(
           websocketService.emitAlertUpdated(
             enrichedAlert,
             oldStatus,
-            newStatus
+            newStatus,
           );
         }
 
@@ -959,25 +979,23 @@ async function updateAlertStatus(
 }
 
 /**
- * 標記警示為已解決（支持多系統來源）
+ * 標記警示為已解決（支持多系統來源，一律為系統自動解決）
  * @param {number} sourceId - 來源 ID（設備 ID、位置 ID 等）
  * @param {string} alertType - 警報類型
- * @param {number} resolvedBy - 解決者用戶 ID
  * @param {string} source - 系統來源（可選，默認為 device）
  * @returns {Promise<number>} 更新的警示數量
  */
 async function resolveAlert(
   sourceId,
   alertType,
-  resolvedBy,
-  source = ALERT_SOURCES.DEVICE
+  source = ALERT_SOURCES.DEVICE,
 ) {
   return await updateAlertStatus(
     sourceId,
     source,
     alertType,
     ALERT_STATUS.RESOLVED,
-    resolvedBy
+    null,
   );
 }
 
@@ -993,14 +1011,14 @@ async function ignoreAlerts(
   sourceId,
   alertType,
   ignoredBy,
-  source = ALERT_SOURCES.DEVICE
+  source = ALERT_SOURCES.DEVICE,
 ) {
   return await updateAlertStatus(
     sourceId,
     source,
     alertType,
     ALERT_STATUS.IGNORED,
-    ignoredBy
+    ignoredBy,
   );
 }
 
@@ -1014,7 +1032,7 @@ async function ignoreAlerts(
 async function unignoreAlerts(
   sourceId,
   alertType,
-  source = ALERT_SOURCES.DEVICE
+  source = ALERT_SOURCES.DEVICE,
 ) {
   // 更新警報狀態為 ACTIVE
   const result = await updateAlertStatus(
@@ -1022,7 +1040,7 @@ async function unignoreAlerts(
     source,
     alertType,
     ALERT_STATUS.ACTIVE,
-    null // 不需要用戶 ID，因為是取消忽視
+    null, // 不需要用戶 ID，因為是取消忽視
   );
 
   // 確保 error_tracking 中的 alert_created 標記正確設置，並檢查是否需要立即解決警報
@@ -1035,7 +1053,7 @@ async function unignoreAlerts(
       `UPDATE error_tracking 
       SET alert_created = TRUE, updated_at = CURRENT_TIMESTAMP
       WHERE source = ? AND source_id = ? AND alert_created = FALSE`,
-      [source, sourceId]
+      [source, sourceId],
     );
 
     // 檢查設備是否已經恢復正常（error_count = 0）
@@ -1047,7 +1065,7 @@ async function unignoreAlerts(
   } catch (error) {
     // 如果更新 error_tracking 失敗，不影響取消忽視操作（警報已成功恢復為 ACTIVE）
     devLog.warn(
-      `[alertService] 更新 error_tracking 失敗（不影響取消忽視）: ${error.message}`
+      `[alertService] 更新 error_tracking 失敗（不影響取消忽視）: ${error.message}`,
     );
   }
 
@@ -1076,7 +1094,7 @@ async function isSourceIgnored(source, sourceId, alertType, message = null) {
           AND status = ?
           AND message LIKE ?
         LIMIT 1`,
-        [source, sourceId, alertType, ALERT_STATUS.IGNORED, `%${parameter}%`]
+        [source, sourceId, alertType, ALERT_STATUS.IGNORED, `%${parameter}%`],
       );
       if (result && result.length > 0) {
         return true;
@@ -1091,7 +1109,7 @@ async function isSourceIgnored(source, sourceId, alertType, message = null) {
 				AND alert_type = ? 
 				AND status = ?
 			LIMIT 1`,
-      [source, sourceId, alertType, ALERT_STATUS.IGNORED]
+      [source, sourceId, alertType, ALERT_STATUS.IGNORED],
     );
 
     return result && result.length > 0;
@@ -1187,7 +1205,7 @@ function emitUnresolvedAlertCount() {
       devLog.log(`[alertService] 📢 已推送未解決警報數量: ${count}`);
     } catch (error) {
       devLog.error(
-        "[alertService] ❌ 推送未解決警報數量失敗: " + error.message
+        "[alertService] ❌ 推送未解決警報數量失敗: " + error.message,
       );
       // 不拋出錯誤，避免影響主要流程
     } finally {
@@ -1207,7 +1225,6 @@ async function getAlertById(id) {
     const query = `
       SELECT 
         a.*,
-        ru.username as resolved_by_username,
         iu.username as ignored_by_username,
         -- 設備類型資訊（適用於設備來源和系統的關聯設備）
         CASE 
@@ -1232,9 +1249,13 @@ async function getAlertById(id) {
         CASE 
           WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN z.name 
           ELSE NULL 
-        END as zone_name
+        END as zone_name,
+        CASE 
+          WHEN a.source = 'device' THEN d.config
+          WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN d_system.config
+          ELSE NULL
+        END as device_config
       FROM alerts a
-      LEFT JOIN users ru ON a.resolved_by = ru.id
       LEFT JOIN users iu ON a.ignored_by = iu.id
       LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
       LEFT JOIN device_types dt ON d.type_id = dt.id
@@ -1259,13 +1280,69 @@ async function getAlertById(id) {
   }
 }
 
+/**
+ * 取得已解決的過期警報（含關聯資訊）供備份使用
+ * 與 getAlertById 使用相同的 JOIN 結構，用於 CSV 報表格式與前端一致
+ * @param {Date} beforeDate - 備份此日期之前的已解決警報
+ * @returns {Promise<Array>}  enriched 警報列表
+ */
+async function getResolvedAlertsForBackup(beforeDate) {
+  const query = `
+    SELECT 
+      a.id,
+      a.source,
+      a.source_id,
+      a.alert_type,
+      a.severity,
+      a.message,
+      a.status,
+      a.ignored_at,
+      a.created_at,
+      a.updated_at,
+      iu.username as ignored_by_username,
+      CASE 
+        WHEN a.source = 'device' THEN dt.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN dt_system.name
+        ELSE NULL
+      END as device_type_name,
+      CASE 
+        WHEN a.source = 'device' THEN d.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN l.name
+        ELSE NULL
+      END as source_name,
+      CASE 
+        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN z.name 
+        ELSE NULL 
+      END as zone_name,
+      CASE 
+        WHEN a.source = 'device' THEN d.config
+        WHEN a.source IN ('environment', 'lighting', 'people_counting') THEN d_system.config
+        ELSE NULL
+      END as device_config
+    FROM alerts a
+    LEFT JOIN users iu ON a.ignored_by = iu.id
+    LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
+    LEFT JOIN device_types dt ON d.type_id = dt.id
+    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting') AND a.source_id = ls.id
+    LEFT JOIN locations l ON ls.location_id = l.id
+    LEFT JOIN zones z ON l.zone_id = z.id
+    LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
+    LEFT JOIN device_types dt_system ON d_system.type_id = dt_system.id
+    WHERE a.status = 'resolved' AND a.updated_at < ?
+    ORDER BY a.updated_at ASC
+  `;
+  const result = await db.query(query, [beforeDate]);
+  return result || [];
+}
 
 module.exports = {
   getAlerts,
   getAlertById, // 取得單一警報
+  getResolvedAlertsForBackup,
   createAlert,
   updateAlertStatus,
   resolveAlert,
+  resolveStaleActiveAlerts,
   ignoreAlerts,
   unignoreAlerts,
   unresolveAlert,

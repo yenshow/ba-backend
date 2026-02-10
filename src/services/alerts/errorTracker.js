@@ -182,7 +182,6 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
         type,
         alertService.ALERT_STATUS.RESOLVED,
         null,
-        "系統檢測到問題已恢復"
       );
       resolvedAny = true;
     } catch (resolveError) {

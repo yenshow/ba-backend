@@ -38,11 +38,13 @@
 | plate_license_image_url             | 車牌圖片 URL（由 DB 欄位 license_plate_image_url 對應輸出）               |
 | vehicle_list_id                     | 群組 ID（DB 直接欄位；**-1 或 0 = 沒有群組**）                            |
 | vehicle_list_name                   | 群組名稱（DB 直接欄位）                                                   |
-| vehicle_category                    | 車輛類別（由 vehicle_type 對應；**5 = 黑名單**，後處理加 `is_blacklist`） |
+| vehicle_category                    | 車輛類別（由 vehicle_type 對應；**5 = 黑名單**，後處理加 `is_blacklist`；僅供警報／篩選） |
+| **allow_result**                    | **放行結果：1=放行、0=未放行**；進/出/在場數量僅計放行                     |
+| **lane_type**                       | **1 進 2 出**（由 vehiclebiz.lane_info 依 lane_id JOIN 帶入）              |
 | passageway_id / lane_id             | 地點綁定、篩選                                                            |
 
 - **YSCP event_veh**：只觸發 WebSocket `yscp:event:vehicle`，不寫入主庫；列表與詳情一律由查詢 `vehiclebiz.passageway_log_data` 取得。
-  19
+- **車輛群組（固定清單）**：改為使用 **platform.vehicle_list** 作為固定名單、顯示名稱與頭像（person_id → standard_head_portrait），詳見 [VEHICLE_ACCESS_VEHICLE_LIST_ARCHITECTURE.md](./VEHICLE_ACCESS_VEHICLE_LIST_ARCHITECTURE.md)。
 
 ---
 
@@ -167,8 +169,10 @@
 
 ### 6.4 顯示與標示
 
+- **放行結果**：依 `allow_result`（0=拒絕、1=放行）與 `lane_type`（1 進、2 出）顯示「拒絕／進入／離開」；進/出/在場數量僅計 `allow_result=1`。
 - **顯示欄位**：lane_name、trigger_time、owner_id/owner_name、license_plate、plate_license_image_url、vehicle_list_id/vehicle_list_name、vehicle_category。
-- **黑名單**：以 `is_blacklist` 或 `vehicle_category === 5` 標示黑名單（例如徽章或顏色）；可提供篩選「僅顯示黑名單」對應 API `vehicle_category=5`。車主大頭照可參考人流統計，依 `owner_id` 向 platform 取得人員頭像。
+- **黑名單**：以 `is_blacklist` 或 `vehicle_category === 5` 標示黑名單（僅供警報／篩選）；可提供篩選「僅顯示黑名單」對應 API `vehicle_category=5`。車主大頭照可參考人流統計，依 `owner_id` 向 platform 取得人員頭像。
+- **車輛群組**：改為固定清單（platform.vehicle_list），顯示名稱、頭像、是否入場等，見 [VEHICLE_ACCESS_VEHICLE_LIST_ARCHITECTURE.md](./VEHICLE_ACCESS_VEHICLE_LIST_ARCHITECTURE.md)。
 
 ### 6.5 錯誤與權限
 

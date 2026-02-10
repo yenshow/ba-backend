@@ -101,7 +101,25 @@ src/
 - `name` - 人員群組名稱
 - `is_deleted` - 是否刪除（0: 未刪除, 1: 已刪除）
 
-### 3. Platform Person Head Pic Handler
+### 3. Platform Vehicle List Handler（車輛進出固定名單）
+
+**資料表**：`platform.vehicle_list`
+
+**功能**：
+
+- 固定車輛名單，供車輛進出系統「車輛名單」使用（對齊人流之人員群組）
+- 可搜尋欄位：`plate_license`、`owner_name`
+
+**關鍵欄位**：
+
+- `id` - 主鍵
+- `plate_license` - 車牌（對應 vehiclebiz.passageway_log_data.license_plate）
+- `owner_name` - 顯示名稱
+- `person_id` - 人員 ID（用於查詢 standard_head_portrait）
+
+詳見 [VEHICLE_ACCESS_VEHICLE_LIST_ARCHITECTURE.md](./VEHICLE_ACCESS_VEHICLE_LIST_ARCHITECTURE.md)。
+
+### 4. Platform Person Head Pic Handler（人員頭像）
 
 **資料表**：`platform.person_head_pic`
 
@@ -126,7 +144,7 @@ src/
   ```
 - 如需解碼為二進位資料，應在前端使用 `atob()` 或 `Buffer.from()`
 
-### 4. Baseacs Slot Card Records Handler
+### 5. Baseacs Slot Card Records Handler
 
 **資料表**：`baseacs.slot_card_records`
 
@@ -166,7 +184,7 @@ src/
 GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&endTime=2025-01-31T23:59:59Z
 ```
 
-### 5. Deviceaccess Door Handler
+### 6. Deviceaccess Door Handler
 
 **資料表**：`deviceaccess.door`
 
@@ -198,7 +216,7 @@ GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&
 GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&endTime=2025-01-31T23:59:59Z
 ```
 
-### 6. Passageway Log Data Handler（車輛進出）
+### 7. Passageway Log Data Handler（車輛進出）
 
 **資料表**：`vehiclebiz.passageway_log_data`
 
@@ -223,7 +241,7 @@ GET /api/external-data/baseacs/slot_card_records?startTime=2025-01-01T00:00:00Z&
 
 **篩選**：支援 `passageway_id`、`lane_id`（可多筆，逗號分隔或陣列，會轉為 IN 條件）、`vehicle_list_id`、`vehicle_category`（如 `5` 僅黑名單）。
 
-### 7. Lane Info Handler（車道配置，供地點設定）
+### 8. Lane Info Handler（車道配置，供地點設定）
 
 **資料表**：`vehiclebiz.lane_info`
 

@@ -5,6 +5,23 @@
 
 const db = require("../../database/db");
 const backupConfig = require("./backupConfig");
+
+async function getPeopleCountingForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT 
+       p.*,
+       l.name as location_name,
+       z.name as zone_name
+     FROM people_counting_logs p
+     LEFT JOIN locations l ON p.location_id = l.id
+     LEFT JOIN zones z ON l.zone_id = z.id
+     WHERE p.swip_card_rev_time < $1
+     ORDER BY p.swip_card_rev_time ASC`,
+    [beforeDate]
+  );
+  return rows || [];
+}
+
 const { exportData } = require("./backupFormats");
 const fs = require("fs");
 const path = require("path");
@@ -24,33 +41,16 @@ function ensureDirectory(dirPath) {
 }
 
 /**
- * 取得表的備份目錄
- * @param {string} tableName - 表名稱
- * @param {string} category - 備份類別 ('alerts', 'deviceLogs', 'cleanup', 'default')
- * @param {Array<string>} formats - 備份格式
- * @returns {Object} 備份目錄物件 {base, json?, csv?}
+ * 取得表的備份目錄（僅 CSV，依 category 分資料夾）
  */
-function getBackupDirectory(tableName, category = "default", formats = null) {
+function getBackupDirectory(category = "default") {
   const dirMap = {
     alerts: backupConfig.directories.alerts,
-    deviceLogs: backupConfig.directories.deviceLogs,
-    cleanup: backupConfig.directories.cleanup,
+    environmentReadings: backupConfig.directories.environmentReadings,
+    peopleCounting: backupConfig.directories.peopleCounting,
     default: backupConfig.directories.root,
   };
-
-  const baseDir = dirMap[category] || dirMap.default;
-  const backupFormats = formats || backupConfig.formats[tableName] || backupConfig.formats.default;
-
-  // 多種格式時，建立格式子目錄
-  if (backupFormats.length > 1) {
-    return {
-      json: path.join(baseDir, "json"),
-      csv: path.join(baseDir, "csv"),
-      base: baseDir,
-    };
-  }
-
-  return { base: baseDir };
+  return dirMap[category] || dirMap.default;
 }
 
 /**
@@ -61,34 +61,26 @@ function getBackupDirectory(tableName, category = "default", formats = null) {
 async function backupTable(options) {
   const {
     tableName,
-    query,
+    query = null,
     params = [],
-    deleteQuery = null, // 可選的刪除查詢（如果與備份查詢不同）
-    deleteParams = null, // 可選的刪除參數
+    data: providedData = null,
+    deleteQuery = null,
+    deleteParams = null,
     category = "default",
-    formats = null,
     deleteAfterBackup = false,
-    mergeStrategy = "timestamp", // 'timestamp' | 'daily'
+    mergeStrategy = "date",
     compress = backupConfig.compression.enabled,
+    csvTransform = null,
   } = options;
 
   try {
-    // 取得備份格式
-    const backupFormats = formats || backupConfig.formats[tableName] || backupConfig.formats.default;
-
-    // 取得備份目錄
-    const dirs = getBackupDirectory(tableName, category, backupFormats);
-    const outputDir = dirs.base;
-
-    // 確保目錄存在
+    const outputDir = getBackupDirectory(category);
     ensureDirectory(outputDir);
-    if (dirs.json) {
-      ensureDirectory(dirs.json);
-      ensureDirectory(dirs.csv);
-    }
 
-    // 查詢資料
-    const data = await db.query(query, params);
+    // 取得資料：使用提供的 data 或執行查詢
+    const data = providedData !== null
+      ? providedData
+      : await db.query(query, params);
 
     if (!data || data.length === 0) {
       return {
@@ -99,30 +91,39 @@ async function backupTable(options) {
       };
     }
 
-    // 匯出資料
+    // 匯出資料：檔名使用資料日期（非執行日期）
     const exportResults = {};
     const namingStrategy = mergeStrategy;
-
-    // 根據格式匯出
-    for (const format of backupFormats) {
-      const formatDir = dirs[format] || outputDir;
-      ensureDirectory(formatDir);
-
-      const formatResults = await exportData(
-        tableName,
-        data,
-        [format],
-        formatDir,
-        {
-          namingStrategy,
-          compress,
-          mergeDaily: mergeStrategy === "daily" && format === "json",
-        }
-      );
-
-      if (formatResults[format] && !formatResults[format].error) {
-        exportResults[format] = formatResults[format].filepath;
+    const dateFieldMap = {
+      environment_readings: "recorded_at",
+      alerts: "created_at",
+      people_counting_logs: "swip_card_rev_time",
+    };
+    const dateField = dateFieldMap[tableName];
+    let dateForFilename = null;
+    if (dateField && data.length > 0) {
+      const dates = data.map((r) => r[dateField]).filter(Boolean);
+      if (dates.length > 0) {
+        dateForFilename = new Date(Math.min(...dates.map((d) => new Date(d).getTime())));
       }
+    }
+
+    // 僅 CSV
+    const formatResults = await exportData(
+      tableName,
+      data,
+      ["csv"],
+      outputDir,
+      {
+        namingStrategy,
+        compress,
+        csvTransform,
+        dateForFilename,
+      }
+    );
+
+    if (formatResults.csv && !formatResults.csv.error) {
+      exportResults.csv = formatResults.csv.filepath;
     }
 
     // 如果設定為備份後刪除
@@ -215,13 +216,13 @@ async function deleteOldBackups(category = "default", retentionDays = null) {
   try {
     const dirMap = {
       alerts: backupConfig.directories.alerts,
-      deviceLogs: backupConfig.directories.deviceLogs,
-      cleanup: backupConfig.directories.cleanup,
+      environmentReadings: backupConfig.directories.environmentReadings,
+      peopleCounting: backupConfig.directories.peopleCounting,
       default: backupConfig.directories.root,
     };
 
     const baseDir = dirMap[category] || dirMap.default;
-    const retention = retentionDays || backupConfig.retention.backup[category] || backupConfig.retention.backup.alerts;
+    const retention = retentionDays ?? backupConfig.retention.backupFileDays;
 
     if (!fs.existsSync(baseDir)) {
       return 0;
@@ -323,5 +324,6 @@ module.exports = {
   validateBackup,
   getBackupDirectory,
   ensureDirectory,
+  getPeopleCountingForBackup,
 };
 

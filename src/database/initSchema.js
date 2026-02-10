@@ -1,15 +1,23 @@
 const { Pool } = require("pg");
 const config = require("../config");
 
-// 建立 updated_at 觸發器的輔助函數
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
-		DROP TRIGGER IF EXISTS update_${tableName}_updated_at ON ${tableName};
-		CREATE TRIGGER update_${tableName}_updated_at
-			BEFORE UPDATE ON ${tableName}
-			FOR EACH ROW
-			EXECUTE FUNCTION update_updated_at_column();
-	`);
+    DROP TRIGGER IF EXISTS update_${tableName}_updated_at ON ${tableName};
+    CREATE TRIGGER update_${tableName}_updated_at
+      BEFORE UPDATE ON ${tableName} FOR EACH ROW
+      EXECUTE FUNCTION update_updated_at_column();
+  `);
+}
+
+async function createEnum(pool, name, values) {
+  const vals = values.map((v) => `'${v}'`).join(", ");
+  await pool.query(`
+    DO $$ BEGIN
+      CREATE TYPE ${name} AS ENUM (${vals});
+    EXCEPTION WHEN duplicate_object THEN null;
+    END $$;
+  `);
 }
 
 async function initSchema() {
@@ -48,88 +56,29 @@ async function initSchema() {
       database: config.database.database,
     });
 
-    // 建立 ENUM 類型
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE user_role AS ENUM ('admin', 'operator', 'viewer');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE user_status AS ENUM ('active', 'inactive', 'suspended');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE device_status AS ENUM ('active', 'inactive', 'error');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE register_type AS ENUM ('coil', 'discrete', 'holding', 'input');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    // 建立警報相關 ENUM 類型
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE alert_type AS ENUM ('offline', 'error', 'threshold');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE alert_severity AS ENUM ('warning', 'error', 'critical');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    // 建立警報系統來源 ENUM
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE alert_source AS ENUM ('device', 'environment', 'lighting', 'people_counting', 'hvac', 'fire', 'security');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
-
-    // 如果 ENUM 已存在但缺少 'people_counting'，嘗試添加
-    // 注意：ALTER TYPE ... ADD VALUE 不能在事務中執行，所以需要單獨執行
-    try {
-      await targetPool.query(`
-        ALTER TYPE alert_source ADD VALUE 'people_counting'
-      `);
-      console.log("✅ 已添加 'people_counting' 到 alert_source ENUM");
-    } catch (error) {
-      // 如果值已存在或其他錯誤，忽略（ENUM 可能已包含此值）
-      if (error.code !== "42710") {
-        // 42710 = duplicate_object，表示值已存在，這是正常的
-        console.log("ℹ️  'people_counting' 可能已存在於 alert_source ENUM 中");
-      }
-    }
-
-    // 建立警報狀態 ENUM（狀態機，移除 pending）
-    await targetPool.query(`
-			DO $$ BEGIN
-				CREATE TYPE alert_status AS ENUM ('active', 'resolved', 'ignored');
-			EXCEPTION
-				WHEN duplicate_object THEN null;
-			END $$;
-		`);
+    const enums = [
+      ["user_role", ["admin", "operator", "viewer"]],
+      ["user_status", ["active", "inactive", "suspended"]],
+      ["device_status", ["active", "inactive", "error"]],
+      ["register_type", ["coil", "discrete", "holding", "input"]],
+      ["alert_type", ["offline", "error", "threshold"]],
+      ["alert_severity", ["warning", "error", "critical"]],
+      [
+        "alert_source",
+        [
+          "device",
+          "environment",
+          "lighting",
+          "people_counting",
+          "hvac",
+          "fire",
+          "security",
+        ],
+      ],
+      ["alert_status", ["active", "resolved", "ignored"]],
+    ];
+    for (const [name, values] of enums)
+      await createEnum(targetPool, name, values);
 
     // 建立 users 表
     await targetPool.query(`
@@ -267,11 +216,10 @@ async function initSchema() {
       },
       { name: "感測器", code: "sensor", description: "感測器設備" },
       { name: "控制器", code: "controller", description: "modbus" },
-      { name: "平板", code: "tablet", description: "平板電腦設備" },
       {
-        name: "網路裝置",
-        code: "network",
-        description: "路由器、交換器、無線基地台等網路設備",
+        name: "門禁設備",
+        code: "access_control",
+        description: "ISAPI 門禁／人臉設備",
       },
     ];
 
@@ -298,25 +246,32 @@ async function initSchema() {
     }
     console.log("✅ 預設設備類型資料已插入到 device_types");
 
-    // 建立 device_data_logs 表
+    // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS device_data_logs (
-				id BIGSERIAL PRIMARY KEY,
-				device_id INTEGER NOT NULL,
-				register_type register_type NOT NULL,
-				address INTEGER NOT NULL,
-				value JSONB NOT NULL,
-				recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				CONSTRAINT fk_logs_device FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
-			)
-		`);
-
+      CREATE TABLE IF NOT EXISTS people_counting_logs (
+        id BIGSERIAL PRIMARY KEY,
+        external_id BIGINT,
+        person_id INTEGER NOT NULL,
+        swip_card_rev_time TIMESTAMPTZ NOT NULL,
+        physical_id INTEGER,
+        person_name VARCHAR(255),
+        unit_id INTEGER,
+        unit_name VARCHAR(255),
+        snap_pic_url TEXT,
+        location_id INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(person_id, swip_card_rev_time)
+      )
+    `);
     await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_device_data_logs_device_recorded ON device_data_logs(device_id, recorded_at);
-			CREATE INDEX IF NOT EXISTS idx_device_data_logs_recorded_at ON device_data_logs(recorded_at);
-		`);
-
-    console.log("✅ device_data_logs 表已建立");
+      CREATE INDEX IF NOT EXISTS idx_people_counting_logs_swip_time 
+      ON people_counting_logs(swip_card_rev_time);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_people_counting_logs_location 
+      ON people_counting_logs(location_id);
+    `);
+    console.log("✅ people_counting_logs 表已建立");
 
     // 建立統一警報表（支持多系統來源，精簡版）
     await targetPool.query(`
@@ -328,23 +283,21 @@ async function initSchema() {
 				severity alert_severity NOT NULL DEFAULT 'warning',
 				message TEXT NOT NULL,
 				status alert_status NOT NULL DEFAULT 'active',
-				resolved_at TIMESTAMP,
-				resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				ignored_at TIMESTAMP,
 				ignored_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)
 		`);
+    await targetPool.query(
+      `ALTER TABLE alerts DROP COLUMN IF EXISTS resolved_by;`,
+    );
+    await targetPool.query(
+      `ALTER TABLE alerts DROP COLUMN IF EXISTS resolved_at;`,
+    );
 
-    // 精簡後的索引（只保留核心索引）
-    // 注意：移除了 unique_active_alert 唯一索引，因為按天限制邏輯允許跨天創建新警報
-    // 應用層已實現按天限制邏輯，確保同一天只會有一個 active 警報
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_alerts_source_composite ON alerts(source, source_id, alert_type, status);
-			-- 移除唯一索引：unique_active_alert（與按天限制邏輯衝突）
-			-- CREATE UNIQUE INDEX IF NOT EXISTS unique_active_alert ON alerts(source, source_id, alert_type) WHERE status = 'active';
-			-- 優化索引：支持按天限制查詢（包含 created_at 以優化日期範圍查詢）
 			CREATE INDEX IF NOT EXISTS idx_alerts_active_daily ON alerts(source, source_id, alert_type, status, created_at) WHERE status = 'active';
 			CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC) WHERE status = 'active';
 			CREATE INDEX IF NOT EXISTS idx_alerts_updated_at ON alerts(updated_at DESC);
@@ -403,10 +356,7 @@ async function initSchema() {
 
     console.log("✅ alert_rules 表已建立（警報規則參照表）");
 
-    // 注意：alert_history 表已不再使用，已移除相關邏輯
-    // 警報狀態變更資訊已直接記錄在 alerts 表中（resolved_at, resolved_by, ignored_at, ignored_by）
-
-    // 建立 lighting_categories 表（照明系統分類點）
+    // 建立 lighting_categories 表
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS lighting_categories (
 				id SERIAL PRIMARY KEY,
@@ -563,6 +513,26 @@ async function initSchema() {
 
     console.log("✅ location_systems 表已建立（地點系統關聯表）");
 
+    // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS environment_readings (
+        id BIGSERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        source_id INTEGER NOT NULL,
+        recorded_at TIMESTAMP NOT NULL,
+        data JSONB NOT NULL,
+        device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_environment_readings_location_recorded ON environment_readings(location_id, recorded_at);
+      CREATE INDEX IF NOT EXISTS idx_environment_readings_recorded_at ON environment_readings(recorded_at);
+    `);
+    console.log("✅ environment_readings 表已建立");
+
+    await targetPool.query("DROP TABLE IF EXISTS device_data_logs CASCADE");
+
     // 建立 system_settings 表（系統設定表）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS system_settings (
@@ -581,9 +551,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(key);
 		`);
 
-    console.log("✅ system_settings 表已建立（系統設定表）");
-
-    // 注意：sensor_readings 表已移除，統一使用 device_data_logs 表記錄設備數值
+    console.log("✅ system_settings 表已建立");
 
     await targetPool.end();
 

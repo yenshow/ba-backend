@@ -112,39 +112,16 @@ async function deleteZone(id) {
 
 // ========== 感測器讀數管理函數 ==========
 
-/** 取得地點的 device_id（環境監測系統） */
-async function getLocationDeviceId(locationId) {
-  const rows = await db.query(
-    `SELECT ls.system_config->>'device_id' as device_id
-		 FROM locations l
-		 INNER JOIN location_systems ls ON l.id = ls.location_id
-		 WHERE l.id = $1 AND ls.system_type = 'environment'`,
-    [parseInt(locationId)],
-  );
-  return rows[0]?.device_id ? parseInt(rows[0].device_id) : null;
-}
-
 async function getReadings(locationId, options = {}) {
   try {
     const { startTime, endTime, limit = 1000 } = options;
-    const deviceId = await getLocationDeviceId(locationId);
-    if (!deviceId) {
-      const err = new Error("位置不存在或未配置環境監測系統");
-      err.statusCode = 404;
-      throw err;
-    }
 
     let query = `
-			SELECT 
-				date_trunc('second', recorded_at) as timestamp,
-				jsonb_object_agg(
-					value->>'name',
-					(value->>'value')::numeric
-				) as data
-			FROM device_data_logs
-			WHERE device_id = $1
-		`;
-    const params = [deviceId];
+      SELECT recorded_at as timestamp, data
+      FROM environment_readings
+      WHERE location_id = $1
+    `;
+    const params = [parseInt(locationId, 10)];
     let paramIndex = 2;
 
     if (startTime) {
@@ -157,22 +134,23 @@ async function getReadings(locationId, options = {}) {
       params.push(new Date(endTime));
     }
 
-    query += ` 
-			GROUP BY date_trunc('second', recorded_at)
-			ORDER BY timestamp ASC 
-			LIMIT $${paramIndex}`;
+    query += ` ORDER BY recorded_at ASC LIMIT $${paramIndex}`;
     params.push(limit);
 
-    const readings = await db.query(query, params);
+    const rows = await db.query(query, params);
 
     return {
-      readings: readings.map((r) => ({
-        id: `device_log_${deviceId}_${r.timestamp.getTime()}`,
-        locationId: String(locationId),
-        timestamp: r.timestamp.toISOString(),
-        data: r.data || {},
-        createdAt: r.timestamp.toISOString(),
-      })),
+      readings: rows.map((r) => {
+        const data = typeof r.data === "object" ? r.data : (r.data ? JSON.parse(r.data) : {});
+        const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+        return {
+          id: `env_${locationId}_${ts.getTime()}`,
+          locationId: String(locationId),
+          timestamp: ts.toISOString(),
+          data,
+          createdAt: ts.toISOString(),
+        };
+      }),
     };
   } catch (error) {
     if (error.statusCode) {
