@@ -98,20 +98,24 @@ router.get("/sites/:id/stats", noCache, authenticate, validateIntegers("id"), as
 
 /**
  * 取得工地進出場記錄（含資料關聯和事件類型判斷）
- * GET /api/people-counting/sites/:id/logs?limit=50&unitId=34
+ * GET /api/people-counting/sites/:id/logs?limit=50&offset=0&unitId=34&startTime=...&endTime=...
+ * startTime / endTime 為 ISO 字串，未傳則預設為今日範圍；offset 用於分頁
  */
 router.get(
   "/sites/:id/logs",
   noCache,
   authenticate,
   validateIntegers("id"),
-  validateNumbers("limit", "unitId"),
+  validateNumbers("limit", "offset", "unitId"),
   asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { limit, unitId } = req.query;
+  const { limit, offset, unitId, startTime, endTime } = req.query;
   const options = {
     limit: limit ? parseInt(limit) : 50,
+    offset: offset ? parseInt(offset) : 0,
     unitId: unitId ? parseInt(unitId) : undefined,
+    startTime: startTime || undefined,
+    endTime: endTime || undefined,
   };
   const result = await peopleCountingService.getSiteLogs(parseInt(id), options);
   res.sendSuccess(result);

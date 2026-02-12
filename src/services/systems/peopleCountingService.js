@@ -9,6 +9,7 @@ const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
 const yscpPersonService = require("../yscp/yscpPersonService");
 const { getTodayTimeRange } = require("../../utils/dateRangeUtils");
+const peopleCountingSyncService = require("./peopleCountingSyncService");
 
 // ========== 統一錯誤處理和驗證工具 ==========
 
@@ -82,48 +83,61 @@ async function handleNonCriticalError(
  * @throws {Error} 驗證失敗時拋出錯誤
  */
 function validateLocationData(locationData, isUpdate = false) {
-  const { name, zoneId, personGroupIds, entryDoorId, exitDoorId } =
-    locationData;
+  const {
+    name,
+    zoneId,
+    personGroupIds,
+    entryDoorId,
+    exitDoorId,
+    dataSource = "yscp",
+    entryDeviceId,
+    exitDeviceId,
+  } = locationData;
 
-  // 建立時驗證必填欄位
-  if (!isUpdate) {
-    if (!name?.trim()) {
-      throw createValidationError("地點名稱不能為空");
-    }
-    if (!zoneId) {
-      throw createValidationError("區域 ID 不能為空");
-    }
-    if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
-      throw createValidationError("至少需要選擇一個進場單位");
-    }
-    if (!entryDoorId) {
-      throw createValidationError("入口設備 ID 不能為空");
-    }
-    if (!exitDoorId) {
-      throw createValidationError("出口設備 ID 不能為空");
-    }
+  if (!name?.trim()) {
+    throw createValidationError("地點名稱不能為空");
+  }
+  if (!isUpdate && !zoneId) {
+    throw createValidationError("區域 ID 不能為空");
   }
 
-  // 更新時驗證提供的欄位
-  if (isUpdate) {
-    if (name !== undefined && !name?.trim()) {
-      throw createValidationError("地點名稱不能為空");
-    }
-    if (
-      personGroupIds !== undefined &&
-      (!Array.isArray(personGroupIds) || personGroupIds.length === 0)
-    ) {
-      throw createValidationError("至少需要選擇一個進場單位");
-    }
-  }
+  const effectiveDataSource =
+    dataSource === "access_control" ? "access_control" : "yscp";
 
-  // 驗證入口和出口不能相同
-  const finalEntry =
-    entryDoorId !== undefined ? entryDoorId : locationData.currentEntry || null;
-  const finalExit =
-    exitDoorId !== undefined ? exitDoorId : locationData.currentExit || null;
-  if (finalEntry && finalExit && finalEntry === finalExit) {
-    throw createValidationError("入口和出口不能是同一個設備");
+  if (effectiveDataSource === "yscp") {
+    if (!isUpdate) {
+      if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
+        throw createValidationError("至少需要選擇一個進場單位");
+      }
+      if (!entryDoorId) {
+        throw createValidationError("入口設備 ID 不能為空");
+      }
+      if (!exitDoorId) {
+        throw createValidationError("出口設備 ID 不能為空");
+      }
+    }
+    if (isUpdate && personGroupIds !== undefined) {
+      if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
+        throw createValidationError("至少需要選擇一個進場單位");
+      }
+    }
+    const finalEntry =
+      entryDoorId !== undefined ? entryDoorId : locationData.currentEntry || null;
+    const finalExit =
+      exitDoorId !== undefined ? exitDoorId : locationData.currentExit || null;
+    if (finalEntry && finalExit && finalEntry === finalExit) {
+      throw createValidationError("入口和出口不能是同一個設備");
+    }
+  } else {
+    if (!isUpdate && !entryDeviceId) {
+      throw createValidationError("門禁入口設備 ID 不能為空");
+    }
+    if (isUpdate && entryDeviceId !== undefined && !entryDeviceId) {
+      throw createValidationError("門禁入口設備 ID 不能為空");
+    }
+    if (entryDeviceId && exitDeviceId && entryDeviceId === exitDeviceId) {
+      throw createValidationError("入口和出口不能是同一個設備");
+    }
   }
 }
 
@@ -212,12 +226,14 @@ async function createPeopleCountingLocation(locationData, userId) {
         personGroupIds = [],
         entryDoorId,
         exitDoorId,
+        dataSource = "yscp",
+        entryDeviceId,
+        exitDeviceId,
+        accessControlGroups = [],
       } = locationData;
 
-      // 使用統一驗證函數
       validateLocationData(locationData, false);
 
-      // 使用統一服務建立地點（傳入正確的配置格式）
       const result = await locationService.createLocation(
         {
           zoneId: parseInt(zoneId),
@@ -227,6 +243,10 @@ async function createPeopleCountingLocation(locationData, userId) {
             personGroupIds,
             entryDoorId,
             exitDoorId,
+            dataSource,
+            entryDeviceId,
+            exitDeviceId,
+            accessControlGroups,
           },
         },
         userId,
@@ -248,32 +268,45 @@ async function createPeopleCountingLocation(locationData, userId) {
 async function updatePeopleCountingLocation(id, locationData, userId) {
   return handleServiceError(
     async () => {
-      const { name, personGroupIds, entryDoorId, exitDoorId } = locationData;
+      const {
+        name,
+        personGroupIds,
+        entryDoorId,
+        exitDoorId,
+        dataSource,
+        entryDeviceId,
+        exitDeviceId,
+        accessControlGroups,
+      } = locationData;
 
-      // 驗證地點是否存在且類型正確
       const existing = await getPeopleCountingLocationById(id);
-
-      // 準備驗證資料（包含現有值）
+      const pcForValidation = ensureArray(existing.location.systems).find(
+        (s) => s.systemType === "people_counting",
+      );
       const validationData = {
         ...locationData,
-        currentEntry: existing.location.entryDoorId,
-        currentExit: existing.location.exitDoorId,
+        currentEntry: pcForValidation?.config?.entryDoorId,
+        currentExit: pcForValidation?.config?.exitDoorId,
       };
-
-      // 使用統一驗證函數
       validateLocationData(validationData, true);
 
-      // 建立更新配置
       const updates = {};
       if (name !== undefined) {
         updates.name = name.trim();
       }
 
-      // 建立配置物件（合併現有配置）
+      const pcSystem = ensureArray(existing.location.systems).find(
+        (s) => s.systemType === "people_counting",
+      );
+      const existingConfig = pcSystem?.config || {};
       const currentConfig = {
-        person_group_ids: existing.location.personGroupIds || [],
-        entry_door_id: existing.location.entryDoorId || null,
-        exit_door_id: existing.location.exitDoorId || null,
+        person_group_ids: existingConfig.personGroupIds || [],
+        entry_door_id: existingConfig.entryDoorId ?? null,
+        exit_door_id: existingConfig.exitDoorId ?? null,
+        data_source: existingConfig.dataSource || "yscp",
+        entry_device_id: existingConfig.entryDeviceId ?? null,
+        exit_device_id: existingConfig.exitDeviceId ?? null,
+        access_control_groups: existingConfig.accessControlGroups || [],
       };
 
       const config = {
@@ -283,16 +316,37 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         }),
         ...(entryDoorId !== undefined && { entry_door_id: entryDoorId }),
         ...(exitDoorId !== undefined && { exit_door_id: exitDoorId }),
+        ...(dataSource !== undefined && { data_source: dataSource }),
+        ...(entryDeviceId !== undefined && {
+          entry_device_id: entryDeviceId,
+        }),
+        ...(exitDeviceId !== undefined && {
+          exit_device_id: exitDeviceId,
+        }),
+        ...(accessControlGroups !== undefined && {
+          access_control_groups: accessControlGroups,
+        }),
       };
 
-      // 使用統一服務更新地點（傳入正確的格式）
+      const systemId = pcSystem?.id ? String(pcSystem.id) : null;
+
       const updateData = {
         ...(updates.name && { name: updates.name }),
-        config: {
-          personGroupIds: config.person_group_ids,
-          entryDoorId: config.entry_door_id,
-          exitDoorId: config.exit_door_id,
-        },
+        systems: [
+          {
+            ...(systemId && { id: systemId }),
+            systemType: "people_counting",
+            config: {
+              personGroupIds: config.person_group_ids,
+              entryDoorId: config.entry_door_id,
+              exitDoorId: config.exit_door_id,
+              dataSource: config.data_source,
+              entryDeviceId: config.entry_device_id,
+              exitDeviceId: config.exit_device_id,
+              accessControlGroups: config.access_control_groups,
+            },
+          },
+        ],
       };
 
       const result = await locationService.updateLocation(
@@ -393,17 +447,41 @@ async function getSites() {
     const siteDataMap = await batchGetSitesData(allLocations);
 
     // 3. 為每個地點計算統計
-    // 注意：batchGetSitesData 已經使用 getTodayRecordsOnly 取得今日記錄，無需再次過濾
+    // 注意：batchGetSitesData 僅處理 YSCP 群組；門禁地點 (dataSource === 'access_control') 仍納入列表，統計暫為 0
     for (const location of allLocations) {
-      const { personGroupIds, entryDoorId, exitDoorId } =
-        getPeopleCountingConfig(location);
+      const {
+        personGroupIds,
+        entryDoorId,
+        exitDoorId,
+        dataSource = "yscp",
+        accessControlGroups = [],
+      } = getPeopleCountingConfig(location);
 
+      const locationId = normalizeId(location.id);
+
+      // 門禁地點：納入總覽，進場單位由 accessControlGroups 組成（統計先以 0 顯示）
+      if (dataSource === "access_control") {
+        const units = accessControlGroups.map((grp, idx) => ({
+          id: idx + 1,
+          name: grp.name || `群組 ${idx + 1}`,
+          currentCount: 0,
+          totalCount: Array.isArray(grp.employeeNos) ? grp.employeeNos.length : 0,
+        }));
+        sites.push({
+          id: locationId,
+          name: location.name,
+          entryCount: 0,
+          exitCount: 0,
+          units,
+        });
+        continue;
+      }
+
+      // YSCP 地點：需有進場單位且能取得工地資料
       if (personGroupIds.length === 0) {
         continue;
       }
 
-      // 確保 ID 類型一致
-      const locationId = normalizeId(location.id);
       const siteData = siteDataMap.get(locationId);
       if (!siteData) {
         continue;
@@ -499,12 +577,14 @@ async function getSiteStats(siteId) {
  * @param {Object} options - 選項
  * @param {number} options.limit - 限制筆數
  * @param {number} options.unitId - 單位 ID（可選）
+ * @param {string} options.startTime - 開始時間 ISO 字串（可選，未傳則預設今日）
+ * @param {string} options.endTime - 結束時間 ISO 字串（可選，未傳則預設今日）
  * @returns {Promise<Object>} 記錄列表
  */
 async function getSiteLogs(siteId, options = {}) {
   return handleServiceError(
     async () => {
-      const { limit = 50, unitId } = options;
+      const { limit = 50, offset = 0, unitId, startTime, endTime } = options;
 
       // 取得工地配置（統一處理）
       const { entryDoorId, exitDoorId } = await getSiteConfig(siteId);
@@ -520,10 +600,15 @@ async function getSiteLogs(siteId, options = {}) {
 
       // 取得刷卡記錄（用 physical_id 查，才能包含未註冊人員 person_id = -1）
       // - 若有 unitId，仍可在 SQL 中篩選對應單位（person_group_id），未註冊人員會自然被排除
-      const records = await getRecordsByPhysicalIdsWithJoin(
-        allowedPhysicalIds,
-        { limit, unitId: unitId || null },
-      );
+      // - startTime / endTime 未傳時，getRecordsByPhysicalIdsWithJoin 內建使用今日範圍
+      // - offset 用於分頁
+      const records = await getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, {
+        limit,
+        offset: Math.max(0, Number(offset) || 0),
+        unitId: unitId || null,
+        ...(startTime && { startTime }),
+        ...(endTime && { endTime }),
+      });
 
       // 判斷事件類型
       // 按時間降序排序（最新的在最上方）
@@ -533,8 +618,22 @@ async function getSiteLogs(siteId, options = {}) {
           new Date(a.swip_card_rev_time).getTime(),
       );
 
+      const physicalIds = [
+        ...new Set(
+          sortedRecords
+            .map((r) => r.physical_id)
+            .filter((id) => id != null && id !== ""),
+        ),
+      ];
+      const doorNameMap = await peopleCountingSyncService.getDoorNamesByPhysicalIds(
+        physicalIds,
+      );
+
       const logs = sortedRecords.map((record) => {
         const eventType = parseEventType(record, entryDoorId, exitDoorId);
+        const physicalId = record.physical_id != null ? Number(record.physical_id) : null;
+        const deviceName =
+          physicalId != null ? (doorNameMap.get(physicalId) ?? "") : "";
 
         return {
           id: generateRecordId(record.person_id, record.swip_card_rev_time),
@@ -545,6 +644,7 @@ async function getSiteLogs(siteId, options = {}) {
           eventType: eventType || "failed", // 未註冊人員標記為 "failed"
           timestamp: record.swip_card_rev_time,
           deviceScreenshotUrl: record.snap_pic_url || "",
+          deviceName,
         };
       });
 
@@ -556,25 +656,29 @@ async function getSiteLogs(siteId, options = {}) {
 }
 
 /**
- * 依 physical_id 取得今日刷卡記錄（含關聯資料）
+ * 依 physical_id 取得刷卡記錄（含關聯資料）
  * - 可包含未註冊人員（person_id = -1）
  * - 可選擇以 unitId（person_group_id）做篩選
+ * - 可傳入 startTime / endTime（ISO 字串）指定時間範圍；未傳則預設為今日
  */
 async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
   if (!Array.isArray(physicalIds) || physicalIds.length === 0) {
     return [];
   }
 
-  const { limit = 50, unitId = null } = options;
-  const { start, end } = getTodayTimeRange();
+  const { limit = 50, offset = 0, unitId = null, startTime: optStart, endTime: optEnd } = options;
+  const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
+  const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
 
   const placeholders = generatePlaceholders(physicalIds);
   const baseParamIndex = physicalIds.length + 1;
-
   const unitFilterSql = unitId
     ? `AND p.person_group_id = $${baseParamIndex + 2}`
     : "";
-  const limitSql = limit ? `LIMIT $${baseParamIndex + (unitId ? 3 : 2)}` : "";
+  const offsetParamIndex = baseParamIndex + (unitId ? 3 : 2);
+  const limitParamIndex = offsetParamIndex + 1;
+  const rangeSql =
+    limit > 0 ? `OFFSET $${offsetParamIndex} LIMIT $${limitParamIndex}` : "";
 
   const sql = `
     SELECT 
@@ -594,12 +698,15 @@ async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
       AND r.swip_card_rev_time <= $${baseParamIndex + 1}
       ${unitFilterSql}
     ORDER BY r.swip_card_rev_time DESC
-    ${limitSql}
+    ${rangeSql}
   `;
 
   const params = [...physicalIds, start.toISOString(), end.toISOString()];
   if (unitId) params.push(unitId);
-  if (limit) params.push(limit);
+  if (limit > 0) {
+    params.push(Math.max(0, Number(offset) || 0));
+    params.push(limit);
+  }
 
   return await externalDb.query(sql, params);
 }
@@ -640,61 +747,39 @@ async function getTodayRecordsOnly(personIds) {
 }
 
 /**
- * 當天第一筆為出場時是否應跳過（不計入、不更新狀態）
- * 人員當日須先有進場，出場才計數；當日首筆為出場時不計入（避免跨日留場造成出場被重複計入）
- * @param {string|undefined} previousEventType - 該人上一筆已計數的事件類型
- * @param {string} eventType - 當前事件類型
- * @returns {boolean}
+ * 進出場計數核心（與備份、前端一致）：同人連續同向只計一次，首筆為出場不計。
+ * @param {Array} sortedRecords - 已依時間升序的記錄，須含 person_id
+ * @param {Function} getDirection - (record) => "entry" | "exit" | null
+ * @returns {{ entryCount: number, exitCount: number }}
  */
-function isFirstEventOfDayExit(previousEventType, eventType) {
-  return previousEventType === undefined && eventType === "exit";
+function countEntryExitFromSorted(sortedRecords, getDirection) {
+  const lastByPerson = new Map();
+  let entryCount = 0;
+  let exitCount = 0;
+  for (const record of sortedRecords) {
+    const dir = getDirection(record);
+    if (dir !== "entry" && dir !== "exit") continue;
+    const personId = record.person_id;
+    const prev = lastByPerson.get(personId);
+    if (prev === undefined && dir === "exit") continue;
+    if (prev !== dir) {
+      if (dir === "entry") entryCount++;
+      else exitCount++;
+      lastByPerson.set(personId, dir);
+    }
+  }
+  return { entryCount, exitCount };
 }
 
 /**
  * 計算今日統計（進場/出場人數，基於 physical_id）
- * - 使用事件序列去重：同一人的連續相同事件類型只計算一次
- * - 當天第一筆為出場不計入：人員當日須先有進場，出場才計數；當日首筆為出場時不計入（避免跨日留場造成出場被重複計入）
- * @param {Array} records - 記錄列表（應該只包含今日記錄）
- * @param {number} entryDoorId - 入口設備 ID
- * @param {number} exitDoorId - 出口設備 ID
- * @returns {Object} 統計資料
+ * 複用 countEntryExitFromSorted，邏輯與備份 CSV、前端一致。
  */
 function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId) {
-  if (records.length === 0) {
-    return { entryCount: 0, exitCount: 0 };
-  }
-
+  if (records.length === 0) return { entryCount: 0, exitCount: 0 };
   const sortedRecords = sortRecordsByTime(records);
-  const lastEventType = new Map();
-  let entryCount = 0;
-  let exitCount = 0;
-
-  sortedRecords.forEach((record) => {
-    const personId = record.person_id;
-    const eventType = parseEventType(record, entryDoorId, exitDoorId);
-
-    if (eventType === null) {
-      return;
-    }
-
-    const previousEventType = lastEventType.get(personId);
-
-    if (isFirstEventOfDayExit(previousEventType, eventType)) {
-      return;
-    }
-
-    // 事件類型與上一筆不同才計數（進→出、出→進、或首筆為進場）
-    if (previousEventType === undefined || previousEventType !== eventType) {
-      if (eventType === "entry") {
-        entryCount++;
-      } else {
-        exitCount++;
-      }
-      lastEventType.set(personId, eventType);
-    }
-  });
-
-  return { entryCount, exitCount };
+  const getDirection = (r) => parseEventType(r, entryDoorId, exitDoorId);
+  return countEntryExitFromSorted(sortedRecords, getDirection);
 }
 
 /**
@@ -997,7 +1082,7 @@ function formatTime(date) {
 /**
  * 從地點取得人流統計系統配置
  * @param {Object} location - 地點物件
- * @returns {Object} { peopleCountingSystem, entryDoorId, exitDoorId, personGroupIds }
+ * @returns {Object} { peopleCountingSystem, entryDoorId, exitDoorId, personGroupIds, dataSource, entryDeviceId, exitDeviceId, accessControlGroups }
  */
 function getPeopleCountingConfig(location) {
   const peopleCountingSystem = ensureArray(location.systems).find(
@@ -1008,13 +1093,17 @@ function getPeopleCountingConfig(location) {
     entryDoorId: peopleCountingSystem?.config?.entryDoorId || null,
     exitDoorId: peopleCountingSystem?.config?.exitDoorId || null,
     personGroupIds: ensureArray(peopleCountingSystem?.config?.personGroupIds),
+    dataSource: peopleCountingSystem?.config?.dataSource || "yscp",
+    entryDeviceId: peopleCountingSystem?.config?.entryDeviceId ?? null,
+    exitDeviceId: peopleCountingSystem?.config?.exitDeviceId ?? null,
+    accessControlGroups: ensureArray(peopleCountingSystem?.config?.accessControlGroups),
   };
 }
 
 /**
  * 取得工地配置（統一處理地點取得和配置解析）
  * @param {number} siteId - 工地 ID
- * @returns {Promise<Object>} { location, personGroupIds, entryDoorId, exitDoorId }
+ * @returns {Promise<Object>} { location, personGroupIds, entryDoorId, exitDoorId, dataSource, entryDeviceId, exitDeviceId, accessControlGroups }
  */
 async function getSiteConfig(siteId) {
   const locationResult = await getPeopleCountingLocationById(siteId);
@@ -1025,6 +1114,10 @@ async function getSiteConfig(siteId) {
     personGroupIds: config.personGroupIds,
     entryDoorId: config.entryDoorId,
     exitDoorId: config.exitDoorId,
+    dataSource: config.dataSource,
+    entryDeviceId: config.entryDeviceId,
+    exitDeviceId: config.exitDeviceId,
+    accessControlGroups: config.accessControlGroups,
   };
 }
 
@@ -1500,7 +1593,8 @@ module.exports = {
   getPeopleCountingConfig,
   generateRecordId,
   parseEventType,
-  // 新增的業務邏輯 API
+  countEntryExitFromSorted,
+  // 業務邏輯 API
   getSites,
   getSiteStats,
   getSiteLogs,

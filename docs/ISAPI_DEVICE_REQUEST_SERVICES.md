@@ -4,13 +4,20 @@
 
 本文件描述後端與 ISAPI 設備通訊的 API 規格，所有請求皆使用 **Digest Auth** 進行認證。適用於門禁／人臉設備（如 Hikvision 等支援 ISAPI 的裝置）。
 
-**設備與型號差異**：不同門禁型號（如 AC-02、AC-07）在部分 API 的請求參數上可能略有差異（例如 CaptureFaceData 的 `dataType`：binary vs url）。此類「依型號而異」的參數應由設備系統的**設備型號 (device_models)** 與其 `config` 定義，實作時依設備的 `model_id` 讀取。整體設計請見 [門禁設備與設備系統設計文檔](./ACCESS_CONTROL_DEVICE_ARCHITECTURE.md)。
-
 ## 認證方式
 
 - **類型**：Digest Auth（摘要認證）
 - **說明**：發送請求時由客戶端依伺服器回傳的 challenge 自動計算並帶上 `Authorization` 標頭，無需在文檔中寫死帳密。
 - **實作注意**：需使用支援 Digest 的 HTTP 客戶端（如 `axios` 搭配 `http-digest-client` 或內建 digest 的庫），並設定 `username`、`password`。
+
+### 依設備型號之差異
+
+不同型號的 ISAPI 設備（例如 AC-02、AC-07）在**同一支 API** 上可能會有參數差異。例如「呼叫設備截圖」的 Request Body 中：
+
+- **AC-02**：`dataType` 需為 `binary`
+- **AC-07**：`dataType` 需為 `url`
+
+後端應依**設備型號**（device_models）的 config 組裝對應參數，而非寫死單一值。設備類型、型號與新增設備的設計說明見 **[ACCESS_CONTROL_DEVICE_DESIGN.md](./ACCESS_CONTROL_DEVICE_DESIGN.md)**。
 
 ---
 
@@ -216,10 +223,6 @@
 
 ### 請求 Body（XML，對應圖六）
 
-**依設備型號不同，`dataType` 可能為 `url` 或 `binary`**，實作時應從設備型號的 `config.isapi.captureFaceData` 讀取（見 [門禁設備與設備系統設計文檔](./ACCESS_CONTROL_DEVICE_ARCHITECTURE.md)）。
-
-**範例一（AC-07，回傳 URL）：**
-
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <CaptureFaceDataCond xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
@@ -229,19 +232,8 @@
 </CaptureFaceDataCond>
 ```
 
-**範例二（AC-02，回傳二進位）：**
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<CaptureFaceDataCond xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
-  <captureInfrared>true</captureInfrared>
-  <dataType>binary</dataType>
-  <readerID>1</readerID>
-</CaptureFaceDataCond>
-```
-
 - `captureInfrared`：是否啟用紅外捕獲（true/false）。
-- `dataType`：**依型號**—`url`（回傳圖片 URL）或 `binary`（回傳二進位資料），需依設備型號設定。
+- `dataType`：回傳資料類型，**依設備型號而異**（如 AC-02 為 `binary`、AC-07 為 `url`），需由設備型號 config 決定，見 [ACCESS_CONTROL_DEVICE_DESIGN.md](./ACCESS_CONTROL_DEVICE_DESIGN.md)。
 - `readerID`：讀取器 ID（依設備設定）。
 
 ---
@@ -257,13 +249,3 @@
 | 呼叫設備截圖 | POST | `/ISAPI/AccessControl/CaptureFaceData` | XML |
 
 **Base URL**：依實際設備設定，例如 `http://192.168.2.31:80` 或 `http://192.168.2.34:80`。
-
----
-
-## 附錄 B：依設備型號的參數差異（摘要）
-
-| API | 參數 | AC-02 | AC-07 | 說明 |
-|-----|------|-------|-------|------|
-| CaptureFaceData | `dataType` | `binary` | `url` | 回傳格式不同，需依型號組裝 XML。 |
-
-其餘 ISAPI 若也有型號差異，應在 [門禁設備與設備系統設計文檔](./ACCESS_CONTROL_DEVICE_ARCHITECTURE.md) 與本表同步補充，並在實作時從 `device_models.config.isapi` 讀取。

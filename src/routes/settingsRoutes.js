@@ -30,22 +30,34 @@ const storage = multer.diskStorage({
 	}
 });
 
-// 檔案過濾器：只允許圖片
+// 檔案過濾器：允許圖片與影片
 const fileFilter = (req, file, cb) => {
-	const allowedMimes = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
+	const allowedMimes = [
+		"image/jpeg",
+		"image/jpg",
+		"image/png",
+		"image/gif",
+		"image/webp",
+		"video/mp4",
+		"video/webm",
+		"video/ogg"
+	];
 	if (allowedMimes.includes(file.mimetype)) {
 		cb(null, true);
 	} else {
-		cb(new Error("不支援的檔案格式，僅允許上傳圖片（JPEG, PNG, GIF, WEBP）"), false);
+		cb(
+			new Error("不支援的檔案格式，僅允許上傳圖片（JPEG, PNG, GIF, WEBP）或影片（MP4, WEBM, OGG）"),
+			false
+		);
 	}
 };
 
-// 配置 multer（限制 10MB）
+// 配置 multer（圖片 10MB、影片 100MB）
 const upload = multer({
 	storage,
 	fileFilter,
 	limits: {
-		fileSize: 10 * 1024 * 1024 // 10MB
+		fileSize: 100 * 1024 * 1024 // 100MB（影片通常較大）
 	}
 });
 
@@ -122,6 +134,20 @@ router.post("/upload", authenticate, requireAdmin, upload.single("file"), asyncH
 		// 如果上傳成功但沒有 key，刪除已上傳的檔案
 		fs.unlinkSync(req.file.path);
 		return res.status(400).json({ error: "設定鍵名 (key) 為必填" });
+	}
+	
+	// 先刪除該 key 的舊有上傳檔案，避免孤兒檔案累積
+	const existingSetting = await settingsService.getSettingByKey(key);
+	if (existingSetting?.value?.startsWith?.("/uploads/settings/")) {
+		const oldFilePath = path.join(process.cwd(), existingSetting.value);
+		if (fs.existsSync(oldFilePath)) {
+			try {
+				fs.unlinkSync(oldFilePath);
+			} catch (err) {
+				console.error(`[settingsRoutes] 刪除舊檔案失敗: ${oldFilePath}`, err);
+				// 不中斷流程，繼續儲存新檔
+			}
+		}
 	}
 	
 	// 生成檔案 URL（相對於伺服器根目錄）

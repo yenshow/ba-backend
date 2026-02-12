@@ -103,6 +103,10 @@ function formatSystem(system) {
           personGroupIds: config.person_group_ids || [],
           entryDoorId: config.entry_door_id || undefined,
           exitDoorId: config.exit_door_id || undefined,
+          dataSource: config.data_source || "yscp",
+          entryDeviceId: config.entry_device_id ?? undefined,
+          exitDeviceId: config.exit_device_id ?? undefined,
+          accessControlGroups: config.access_control_groups || [],
         },
       };
 
@@ -921,8 +925,12 @@ function buildSystemConfig(systemType, config) {
     case "people_counting":
       return {
         person_group_ids: config.personGroupIds || [],
-        entry_door_id: config.entryDoorId || null,
-        exit_door_id: config.exitDoorId || null,
+        entry_door_id: config.entryDoorId ?? null,
+        exit_door_id: config.exitDoorId ?? null,
+        data_source: config.dataSource || "yscp",
+        entry_device_id: config.entryDeviceId ?? null,
+        exit_device_id: config.exitDeviceId ?? null,
+        access_control_groups: config.accessControlGroups || [],
       };
 
     case "vehicle_access":
@@ -1017,6 +1025,10 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       personGroupIds,
       entryDoorId,
       exitDoorId,
+      dataSource,
+      entryDeviceId,
+      exitDeviceId,
+      accessControlGroups,
       entryLaneId,
       exitLaneId,
       config,
@@ -1043,6 +1055,13 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
             systemConfig.personGroupIds = personGroupIds;
           if (entryDoorId !== undefined) systemConfig.entryDoorId = entryDoorId;
           if (exitDoorId !== undefined) systemConfig.exitDoorId = exitDoorId;
+          if (dataSource !== undefined) systemConfig.dataSource = dataSource;
+          if (entryDeviceId !== undefined)
+            systemConfig.entryDeviceId = entryDeviceId;
+          if (exitDeviceId !== undefined)
+            systemConfig.exitDeviceId = exitDeviceId;
+          if (accessControlGroups !== undefined)
+            systemConfig.accessControlGroups = accessControlGroups;
           break;
         case "vehicle_access":
           if (entryLaneId !== undefined) systemConfig.entryLaneId = entryLaneId;

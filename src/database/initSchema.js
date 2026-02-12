@@ -513,6 +513,61 @@ async function initSchema() {
 
     console.log("✅ location_systems 表已建立（地點系統關聯表）");
 
+    // ========== 人員主檔與門禁權限（本系統） ==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_groups (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "person_groups");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_groups_name ON person_groups(name);
+    `);
+    console.log("✅ person_groups 表已建立");
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS persons (
+        id SERIAL PRIMARY KEY,
+        employee_no VARCHAR(64) NOT NULL UNIQUE,
+        full_name VARCHAR(255),
+        person_group_id INTEGER REFERENCES person_groups(id) ON DELETE SET NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        face_url TEXT,
+        config JSONB,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "persons");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_persons_person_group_id ON persons(person_group_id);
+      CREATE INDEX IF NOT EXISTS idx_persons_status ON persons(status);
+      CREATE INDEX IF NOT EXISTS idx_persons_employee_no ON persons(employee_no);
+    `);
+    console.log("✅ persons 表已建立");
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_location_access (
+        id SERIAL PRIMARY KEY,
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(person_id, location_id)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_location_access_location_id ON person_location_access(location_id);
+      CREATE INDEX IF NOT EXISTS idx_person_location_access_person_id ON person_location_access(person_id);
+    `);
+    console.log("✅ person_location_access 表已建立");
+
     // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS environment_readings (

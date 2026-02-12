@@ -80,25 +80,21 @@ const validateDeviceConfig = (config, typeCode) => {
       }
       break;
 
-    case "tablet":
-      if (!config.mac_address || typeof config.mac_address !== "string") {
-        throw new Error("tablet 類型需要 mac_address (string)");
+    case "access_control":
+      if (!config.host || typeof config.host !== "string") {
+        throw new Error("access_control 類型需要 host (string)");
       }
-      break;
-
-    case "network":
-      if (!config.ip_address || typeof config.ip_address !== "string") {
-        throw new Error("network 類型需要 ip_address (string)");
+      if (!config.username || typeof config.username !== "string") {
+        throw new Error("access_control 類型需要 username (string)");
       }
-      if (
-        !config.device_type ||
-        !["router", "switch", "access_point", "other"].includes(
-          config.device_type,
-        )
-      ) {
-        throw new Error(
-          "network 類型需要 device_type (router, switch, access_point, 或 other)",
-        );
+      if (!config.password || typeof config.password !== "string") {
+        throw new Error("access_control 類型需要 password (string)");
+      }
+      if (config.port !== undefined && config.port !== null) {
+        const p = Number(config.port);
+        if (Number.isNaN(p) || p < 1 || p > 65535) {
+          throw new Error("access_control 類型的 port 必須為 1–65535 的數字");
+        }
       }
       break;
 

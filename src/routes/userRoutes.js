@@ -1,11 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const userService = require("../services/userService");
-const {
-  authenticate,
-  requireAdmin,
-  requireAdminOrOperator,
-} = require("../middleware/authMiddleware");
+const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   validateRequired,

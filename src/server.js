@@ -30,6 +30,8 @@ const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
+const accessControlRoutes = require("./routes/accessControlRoutes");
+const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 
@@ -47,7 +49,6 @@ const lightingMonitor = require("./services/monitoring/lightingMonitor");
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
-
 
 // 監聽 MediaMTX 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
 // 注意：WebSocket 事件推送已整合到 mediaMTXService 中
@@ -126,6 +127,8 @@ app.use("/api/locations", locationRoutes); // 統一地點管理 API
 app.use("/api/people-counting", peopleCountingRoutes); // 人流統計地點管理 API
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes);
+app.use("/api/access-control", accessControlRoutes);
+app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限、同步任務
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 
@@ -201,7 +204,6 @@ async function startServer() {
     backupScheduler.startScheduler();
     serverLogger.info("備份排程已啟用");
 
-
     const localIP = getLocalIPAddress();
 
     // 創建 HTTP 伺服器
@@ -245,7 +247,6 @@ async function gracefulShutdown(signal) {
     // 停止背景監控服務
     backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
-
 
     // 停止所有 RTSP 串流（包括 FFmpeg 進程）
     await mediaMTXService.stopAllStreams();

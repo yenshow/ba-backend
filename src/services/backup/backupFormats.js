@@ -63,6 +63,15 @@ function formatDateForFilename(date, strategy = "date") {
   return `${year}${month}${day}_${hours}${minutes}${seconds}`;
 }
 
+/** 備份風格：每格加引號、逗號改分號（與前端 backupStyle 一致） */
+function escapeCsvCell(value) {
+  if (value === null || value === undefined) return '""';
+  if (typeof value === "object") {
+    return `"${JSON.stringify(value).replace(/"/g, '""')}"`;
+  }
+  return `"${String(value).replace(/"/g, '""').replace(/,/g, ";")}"`;
+}
+
 /**
  * 匯出資料為 CSV 格式
  * @param {string} tableName - 表名稱
@@ -92,28 +101,55 @@ async function exportToCSV(
       : `${tableName}_${timestamp}.csv`;
   const filepath = path.join(outputDir, filename);
 
-  // 取得欄位名稱
   const headers = Object.keys(data[0]);
-
-  // 建立 CSV 內容（加上 UTF-8 BOM 以便 Excel 正確辨識編碼，與前端一致）
   const BOM = "\uFEFF";
   let csvContent = BOM + headers.join(",") + "\n";
 
   data.forEach((row) => {
-    const values = headers.map((header) => {
-      const value = row[header];
-      // 處理 JSON 欄位和特殊字符
-      if (value === null || value === undefined) {
-        return "";
-      }
-      if (typeof value === "object") {
-        return JSON.stringify(value).replace(/"/g, '""');
-      }
-      return String(value).replace(/"/g, '""').replace(/,/g, ";");
-    });
-    csvContent += values.map((v) => `"${v}"`).join(",") + "\n";
+    const values = headers.map((header) => escapeCsvCell(row[header]));
+    csvContent += values.join(",") + "\n";
   });
 
+  const content = Buffer.from(csvContent, "utf8");
+  return await writeFile(filepath, content, compress);
+}
+
+/**
+ * 匯出多段 CSV（用於人流統計：進出統計 + 進出紀錄）
+ * @param {string} tableName - 表名稱
+ * @param {Array<{ title: string, headers: string[], rows: Object[] }>} sections - 各段標題、欄位、資料列
+ * @param {string} outputDir - 輸出目錄
+ * @param {string} namingStrategy - 命名策略
+ * @param {boolean} compress - 是否壓縮
+ * @param {Date} dateForFilename - 檔名用日期
+ */
+async function exportSectionsToCSV(
+  tableName,
+  sections,
+  outputDir,
+  namingStrategy = "date",
+  compress = false,
+  dateForFilename = null,
+) {
+  const dateToUse = dateForFilename || new Date();
+  const timestamp = formatDateForFilename(dateToUse, namingStrategy);
+  const filename =
+    namingStrategy === "daily"
+      ? `${tableName}_archive_${timestamp}.csv`
+      : `${tableName}_${timestamp}.csv`;
+  const filepath = path.join(outputDir, filename);
+
+  const BOM = "\uFEFF";
+  const parts = [];
+  for (const { title, headers, rows } of sections) {
+    parts.push(title);
+    parts.push(headers.join(","));
+    for (const row of rows) {
+      const values = headers.map((h) => escapeCsvCell(row[h]));
+      parts.push(values.join(","));
+    }
+  }
+  const csvContent = BOM + parts.join("\n");
   const content = Buffer.from(csvContent, "utf8");
   return await writeFile(filepath, content, compress);
 }
@@ -146,14 +182,25 @@ async function exportData(
     if (format !== "csv") continue;
     try {
       const csvData = csvTransform ? csvTransform(data) : data;
-      results.csv = await exportToCSV(
-        tableName,
-        csvData,
-        outputDir,
-        namingStrategy,
-        compress,
-        dateForFilename,
-      );
+      if (csvData && Array.isArray(csvData.sections)) {
+        results.csv = await exportSectionsToCSV(
+          tableName,
+          csvData.sections,
+          outputDir,
+          namingStrategy,
+          compress,
+          dateForFilename,
+        );
+      } else {
+        results.csv = await exportToCSV(
+          tableName,
+          csvData,
+          outputDir,
+          namingStrategy,
+          compress,
+          dateForFilename,
+        );
+      }
     } catch (error) {
       console.error(`[backupFormats] 匯出 CSV 失敗:`, error);
       results.csv = { error: error.message };
