@@ -473,6 +473,11 @@ function emitPeopleCountingRecord(data) {
   );
 }
 
+/** 門禁事件寫入後推送，前端人流統計頁監聽 people-counting:access-control:event 並重新載入 */
+function emitIsapiAccessEvent() {
+  safeEmit("people-counting:access-control:event", { source: "isapi", timestamp: new Date().toISOString() }, { logMessage: "門禁事件已寫入" });
+}
+
 module.exports = {
   initializeWebSocket,
   getIO,
@@ -492,4 +497,5 @@ module.exports = {
   emitRTSPStreamError,
   emitRTSPStreamStatusChanged,
   emitPeopleCountingRecord,
+  emitIsapiAccessEvent,
 };

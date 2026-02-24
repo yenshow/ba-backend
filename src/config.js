@@ -140,6 +140,15 @@ const logging = {
 };
 
 /**
+ * 功能旗標（分版本：YSCP 人流 / 門禁人員）
+ * 預設皆 true（兩流程並存）；設為 false 可關閉對應路由或行為。
+ */
+const features = {
+	enableYscpPeopleCounting: toBoolean(getEnv("ENABLE_YSCP_PEOPLE_COUNTING"), true),
+	enableAccessControlPersonnel: toBoolean(getEnv("ENABLE_ACCESS_CONTROL_PERSONNEL"), true),
+};
+
+/**
  * YSCP API 配置
  */
 const yscp = {
@@ -158,6 +167,7 @@ module.exports = {
 	mediaMTX,
 	monitoring,
 	externalDatabase,
+	features,
 	yscp,
 	cors,
 	logging,

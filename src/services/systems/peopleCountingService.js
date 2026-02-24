@@ -1,15 +1,20 @@
 /**
  * 人流統計地點管理服務
  *
- * 使用統一地點管理架構，location_type = 'people_counting'
+ * 使用統一地點管理架構，location_type = 'people_counting'。
+ * 兩大流程：data_source = 'yscp'（YSCP 資料庫，人員/統計來自外部）；data_source = 'access_control'（門禁設備本系統，人員與權限由人員管理 API 處理）。
  */
 
+const config = require("../../config");
+const db = require("../../database/db");
+const deviceService = require("../devices/deviceService");
 const locationService = require("./locationService");
 const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
 const yscpPersonService = require("../yscp/yscpPersonService");
 const { getTodayTimeRange } = require("../../utils/dateRangeUtils");
 const peopleCountingSyncService = require("./peopleCountingSyncService");
+const personnelService = require("../personnel/personnelService");
 
 // ========== 統一錯誤處理和驗證工具 ==========
 
@@ -229,7 +234,7 @@ async function createPeopleCountingLocation(locationData, userId) {
         dataSource = "yscp",
         entryDeviceId,
         exitDeviceId,
-        accessControlGroups = [],
+        accessControlGroups = [], // 相容保留；門禁人員改由人員管理 person_location_access 處理
       } = locationData;
 
       validateLocationData(locationData, false);
@@ -396,6 +401,172 @@ function generateRecordId(personId, timestamp) {
 }
 
 /**
+ * 從設備 config.host 取出可與 isapi_access_events.device_ip 比對的 IP（去除協議與埠）
+ */
+function normalizeDeviceHost(host) {
+  if (!host || typeof host !== "string") return "";
+  const trimmed = host.trim();
+  const m = trimmed.match(/^(?:https?:\/\/)?([^:/]+)/);
+  return m ? m[1] : trimmed;
+}
+
+/**
+ * 門禁地點進出紀錄：從 isapi_access_events 查詢，格式與 getSiteLogs 一致（同一進出紀錄區塊）
+ * @param {number} siteId - 工地 ID（未用於查詢，保留介面一致）
+ * @param {Object} options - entryDeviceId, exitDeviceId, limit, offset, startTime, endTime
+ * @returns {Promise<Array>} logs 陣列
+ */
+async function getAccessControlSiteLogs(siteId, options = {}) {
+  const {
+    entryDeviceId,
+    exitDeviceId,
+    limit = 50,
+    offset = 0,
+    startTime: optStart,
+    endTime: optEnd,
+  } = options;
+
+  const entryId = entryDeviceId != null && !Number.isNaN(Number(entryDeviceId)) ? Number(entryDeviceId) : null;
+  const exitId = exitDeviceId != null && !Number.isNaN(Number(exitDeviceId)) ? Number(exitDeviceId) : null;
+  if (entryId == null && exitId == null) return [];
+
+  const ipToDeviceName = new Map();
+  const entryIps = new Set();
+  const exitIps = new Set();
+  const allIps = [];
+
+  const addDevice = async (deviceId, isEntry) => {
+    try {
+      const { device } = await deviceService.getDeviceById(deviceId);
+      const host = device?.config?.host;
+      const ip = normalizeDeviceHost(host);
+      if (ip) {
+        allIps.push(ip);
+        ipToDeviceName.set(ip, device?.name || ip);
+        if (isEntry) entryIps.add(ip);
+        else exitIps.add(ip);
+      }
+    } catch (err) {
+      logger.warn("取得門禁設備 IP 失敗，略過", { deviceId, error: err.message });
+    }
+  };
+
+  if (entryId != null) await addDevice(entryId, true);
+  if (exitId != null && exitId !== entryId) await addDevice(exitId, false);
+  if (allIps.length === 0) return [];
+
+  const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
+  const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
+  const limitNum = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const offsetNum = Math.max(Number(offset) || 0, 0);
+
+  const placeholders = allIps.map(() => "?").join(",");
+  const params = [...allIps, start.toISOString(), end.toISOString(), limitNum, offsetNum];
+  const rows = await db.query(
+    `SELECT id, device_ip, event_time, event_type, payload, picture_path
+     FROM isapi_access_events
+     WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?
+     ORDER BY event_time DESC
+     LIMIT ? OFFSET ?`,
+    params,
+  );
+
+  const getEmployeeNo = (payload) => {
+    const v = payload.employeeNoString ?? payload.employeeNo;
+    return v != null ? String(v).trim() : "";
+  };
+  const employeeNos = [...new Set((rows || []).map((r) => getEmployeeNo(typeof r.payload === "object" ? r.payload : {})).filter(Boolean))];
+
+  const personByEmployeeNo = new Map();
+  if (employeeNos.length > 0) {
+    const placeholdersPerson = employeeNos.map(() => "?").join(",");
+    const personRows = await db.query(
+      `SELECT p.id, p.employee_no, p.full_name, p.person_group_id, pg.name AS unit_name
+       FROM persons p
+       LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+       WHERE p.employee_no IN (${placeholdersPerson})`,
+      employeeNos,
+    );
+    for (const r of personRows || []) {
+      const no = r.employee_no != null ? String(r.employee_no).trim() : "";
+      if (no) {
+        personByEmployeeNo.set(no, {
+          personId: r.id,
+          personName: r.full_name != null ? String(r.full_name).trim() : "",
+          unitId: r.person_group_id != null ? Number(r.person_group_id) : null,
+          unitName: r.unit_name != null ? String(r.unit_name).trim() : "",
+        });
+      }
+    }
+  }
+
+  return (rows || []).map((row) => {
+    const payload = typeof row.payload === "object" ? row.payload : {};
+    const sub = payload.subEventType != null ? Number(payload.subEventType) : null;
+    const eventType =
+      sub === 76
+        ? "failed"
+        : entryIps.has(row.device_ip)
+          ? "entry"
+          : exitIps.has(row.device_ip)
+            ? "exit"
+            : "entry";
+    const employeeId = getEmployeeNo(payload);
+    const personInfo = employeeId ? personByEmployeeNo.get(employeeId) : null;
+
+    return {
+      id: `isapi-${row.id}`,
+      personId: personInfo?.personId ?? null,
+      personName: personInfo?.personName || "—",
+      unitId: personInfo?.unitId ?? null,
+      unitName: personInfo?.unitName ?? "",
+      employeeId: employeeId || null,
+      eventType,
+      timestamp: row.event_time,
+      deviceScreenshotUrl: row.picture_path || "",
+      deviceName: ipToDeviceName.get(row.device_ip) || row.device_ip,
+    };
+  });
+}
+
+/**
+ * 從門禁進出紀錄計算今日進場/出場/在場人數（與 YSCP countEntryExitFromSorted + calculateCurrentCount 語意一致）
+ * @param {Array<{ employeeId?: string|null, eventType: string, timestamp: string }>} logs - 今日紀錄，需含 employeeId、eventType（entry/exit/failed）、timestamp
+ * @returns {{ entryCount: number, exitCount: number, currentCount: number }}
+ */
+function calculateEntryExitCurrentFromAccessControlLogs(logs) {
+  if (!logs || logs.length === 0) {
+    return { entryCount: 0, exitCount: 0, currentCount: 0 };
+  }
+  const sorted = [...logs].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+  const lastByPerson = new Map();
+  let entryCount = 0;
+  let exitCount = 0;
+  for (const log of sorted) {
+    const key = log.employeeId || "";
+    if (!key || log.eventType === "failed") continue;
+    const dir = log.eventType === "entry" || log.eventType === "exit" ? log.eventType : null;
+    if (!dir) continue;
+    const prev = lastByPerson.get(key);
+    if (prev === undefined && dir === "exit") continue;
+    if (prev !== dir) {
+      if (dir === "entry") entryCount++;
+      else exitCount++;
+    }
+    lastByPerson.set(key, dir);
+  }
+  const currentCount = [...lastByPerson.values()].filter((d) => d === "entry").length;
+  return { entryCount, exitCount, currentCount };
+}
+
+/** 僅計算在場人數（供單位維度使用，避免重算 entry/exit） */
+function currentCountFromAccessControlLogs(logs) {
+  return calculateEntryExitCurrentFromAccessControlLogs(logs).currentCount;
+}
+
+/**
  * 判斷事件類型（entry/exit）
  * 基於設備 physical_id（entryDoorId/exitDoorId）
  * @param {Object} record - 當前記錄
@@ -447,31 +618,77 @@ async function getSites() {
     const siteDataMap = await batchGetSitesData(allLocations);
 
     // 3. 為每個地點計算統計
-    // 注意：batchGetSitesData 僅處理 YSCP 群組；門禁地點 (dataSource === 'access_control') 仍納入列表，統計暫為 0
+    // 注意：batchGetSitesData 僅處理 YSCP 群組；門禁地點 (dataSource === 'access_control') 改由人員管理 API 取得可進出人員並分組
     for (const location of allLocations) {
       const {
         personGroupIds,
         entryDoorId,
         exitDoorId,
         dataSource = "yscp",
-        accessControlGroups = [],
+        entryDeviceId: configEntryDeviceId,
+        exitDeviceId: configExitDeviceId,
       } = getPeopleCountingConfig(location);
 
       const locationId = normalizeId(location.id);
 
-      // 門禁地點：納入總覽，進場單位由 accessControlGroups 組成（統計先以 0 顯示）
+      // 功能旗標：YSCP 關閉時不列入 yscp 地點
+      if (
+        dataSource === "yscp" &&
+        config.features &&
+        config.features.enableYscpPeopleCounting === false
+      ) {
+        continue;
+      }
+
+      // 門禁地點：可進出人員與單位由人員管理取得，進出/在場從今日 isapi_access_events 計算
       if (dataSource === "access_control") {
-        const units = accessControlGroups.map((grp, idx) => ({
-          id: idx + 1,
-          name: grp.name || `群組 ${idx + 1}`,
-          currentCount: 0,
-          totalCount: Array.isArray(grp.employeeNos) ? grp.employeeNos.length : 0,
-        }));
+        const entryDeviceId = configEntryDeviceId ?? null;
+        const exitDeviceId = configExitDeviceId ?? null;
+        let units = [];
+        let entryCount = 0;
+        let exitCount = 0;
+        try {
+          const persons = await personnelService.getPersonsWithAccessByLocationId(locationId);
+          const byGroup = new Map();
+          for (const p of persons) {
+            const gname = p.group_name || "未分組";
+            if (!byGroup.has(gname)) byGroup.set(gname, []);
+            byGroup.get(gname).push(p);
+          }
+          const { start, end } = getTodayTimeRange();
+          const todayLogs =
+            entryDeviceId != null || exitDeviceId != null
+              ? await getAccessControlSiteLogs(locationId, {
+                  entryDeviceId,
+                  exitDeviceId,
+                  startTime: start.toISOString(),
+                  endTime: end.toISOString(),
+                  limit: 2000,
+                  offset: 0,
+                })
+              : [];
+          const siteStats = calculateEntryExitCurrentFromAccessControlLogs(todayLogs);
+          entryCount = siteStats.entryCount;
+          exitCount = siteStats.exitCount;
+          let idx = 0;
+          units = [...byGroup.entries()].map(([name, list]) => {
+            const employeeNos = new Set(list.map((p) => String(p.employee_no)));
+            const unitLogs = todayLogs.filter((log) => employeeNos.has(log.employeeId || ""));
+            return {
+              id: ++idx,
+              name,
+              currentCount: currentCountFromAccessControlLogs(unitLogs),
+              totalCount: list.length,
+            };
+          });
+        } catch (err) {
+          logger.warn("取得門禁地點可進出人員失敗，顯示空單位", { locationId, error: err.message });
+        }
         sites.push({
           id: locationId,
           name: location.name,
-          entryCount: 0,
-          exitCount: 0,
+          entryCount,
+          exitCount,
           units,
         });
         continue;
@@ -524,17 +741,25 @@ async function getSites() {
 async function getSiteStats(siteId) {
   return handleServiceError(
     async () => {
-      // 取得工地配置（統一處理）
-      const { personGroupIds, entryDoorId, exitDoorId } =
+      const { personGroupIds, entryDoorId, exitDoorId, dataSource, entryDeviceId, exitDeviceId } =
         await getSiteConfig(siteId);
 
-      // 統一空值處理：返回預設統計值
+      // 門禁地點：從今日 isapi_access_events 計算進場/出場/在場（與 YSCP 語意一致）
+      if (dataSource === "access_control") {
+        const { start, end } = getTodayTimeRange();
+        const todayLogs = await getAccessControlSiteLogs(siteId, {
+          entryDeviceId,
+          exitDeviceId,
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          limit: 2000,
+          offset: 0,
+        });
+        return calculateEntryExitCurrentFromAccessControlLogs(todayLogs);
+      }
+
       if (personGroupIds.length === 0) {
-        return {
-          entryCount: 0,
-          exitCount: 0,
-          currentCount: 0,
-        };
+        return { entryCount: 0, exitCount: 0, currentCount: 0 };
       }
 
       // 取得該工地所有人員的 person_id
@@ -586,8 +811,25 @@ async function getSiteLogs(siteId, options = {}) {
     async () => {
       const { limit = 50, offset = 0, unitId, startTime, endTime } = options;
 
-      // 取得工地配置（統一處理）
-      const { entryDoorId, exitDoorId } = await getSiteConfig(siteId);
+      const { entryDoorId, exitDoorId, dataSource, entryDeviceId, exitDeviceId } =
+        await getSiteConfig(siteId);
+
+      // 門禁地點：進出記錄來自 isapi_access_events（與 YSCP 同一進出紀錄區塊）
+      if (dataSource === "access_control") {
+        const accessControlLogs = await getAccessControlSiteLogs(siteId, {
+          entryDeviceId,
+          exitDeviceId,
+          limit,
+          offset,
+          startTime,
+          endTime,
+        });
+        return { logs: accessControlLogs };
+      }
+      // 功能旗標：YSCP 關閉時回傳空
+      if (config.features && config.features.enableYscpPeopleCounting === false) {
+        return { logs: [] };
+      }
 
       const allowedPhysicalIds = [entryDoorId, exitDoorId]
         .filter((v) => v !== null && v !== undefined)
@@ -641,6 +883,10 @@ async function getSiteLogs(siteId, options = {}) {
           personName: record.person_name || "陌生人員",
           unitId: record.unit_id || null,
           unitName: record.unit_name || "",
+          employeeId:
+            record.employee_no != null && String(record.employee_no).trim() !== ""
+              ? String(record.employee_no).trim()
+              : null,
           eventType: eventType || "failed", // 未註冊人員標記為 "failed"
           timestamp: record.swip_card_rev_time,
           deviceScreenshotUrl: record.snap_pic_url || "",
@@ -688,7 +934,8 @@ async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
       r.physical_id,
       p.full_name AS person_name,
       p.person_group_id AS unit_id,
-      pg.name AS unit_name
+      pg.name AS unit_name,
+      p.person_code AS employee_no
     FROM baseacs.slot_card_records r
     LEFT JOIN platform.person p ON r.person_id = p.id
     LEFT JOIN platform.person_group pg ON p.person_group_id = pg.id
@@ -867,8 +1114,8 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
 
 /**
  * 取得單位人員列表（含狀態計算和今日統計）
- * @param {number} unitId - 單位 ID
- * @param {number} siteId - 工地 ID（可選，用於取得入口/出口設備 ID）
+ * @param {number} unitId - 單位 ID（YSCP 為 person_group_id；門禁地點為「可進出人員分組」的序號 1-based）
+ * @param {number} siteId - 工地 ID（可選，用於取得入口/出口設備 ID；門禁地點時必填，且人員來自人員管理 API）
  * @returns {Promise<Object>} 人員列表
  */
 async function getUnitPersonnel(unitId, siteId = null) {
@@ -877,7 +1124,7 @@ async function getUnitPersonnel(unitId, siteId = null) {
       let entryDoorId = null;
       let exitDoorId = null;
 
-      // 如果提供了 siteId，從地點取得設備 ID（非關鍵錯誤，使用降級處理）
+      // 如果提供了 siteId，從地點取得配置（含是否為門禁地點）
       if (siteId) {
         const config = await handleNonCriticalError(
           async () => await getSiteConfig(siteId),
@@ -888,11 +1135,85 @@ async function getUnitPersonnel(unitId, siteId = null) {
         if (config) {
           entryDoorId = config.entryDoorId;
           exitDoorId = config.exitDoorId;
+          // 門禁地點：可進出人員改由人員管理 API 取得，依群組名稱分組後依序對應 unitId；並從 isapi_access_events 填今日進出紀錄
+          if (config.dataSource === "access_control") {
+            const persons = await personnelService.getPersonsWithAccessByLocationId(siteId);
+            const byGroup = new Map();
+            for (const p of persons) {
+              const gname = p.group_name || "未分組";
+              if (!byGroup.has(gname)) byGroup.set(gname, []);
+              byGroup.get(gname).push(p);
+            }
+            const groupList = [...byGroup.entries()];
+            const idx = Math.max(0, Number(unitId) - 1);
+            const group = groupList[idx];
+            if (!group) {
+              return { personnel: [], entryCount: 0, exitCount: 0 };
+            }
+            const [, list] = group;
+            const employeeNosInUnit = new Set(list.map((p) => String(p.employee_no)));
+
+            // 今日門禁事件，用於填寫每人進出時間與單位統計
+            const { start: todayStart, end: todayEnd } = getTodayTimeRange();
+            const todayLogs = await getAccessControlSiteLogs(siteId, {
+              entryDeviceId: config.entryDeviceId,
+              exitDeviceId: config.exitDeviceId,
+              startTime: todayStart.toISOString(),
+              endTime: todayEnd.toISOString(),
+              limit: 500,
+              offset: 0,
+            });
+            const entryCount = todayLogs.filter(
+              (log) => log.eventType === "entry" && employeeNosInUnit.has(log.employeeId || ""),
+            ).length;
+            const exitCount = todayLogs.filter(
+              (log) => log.eventType === "exit" && employeeNosInUnit.has(log.employeeId || ""),
+            ).length;
+            // 每人最近進場/出場（今日事件依時間降序，第一次遇到即為最近）
+            const lastEntryByNo = new Map();
+            const lastExitByNo = new Map();
+            for (const log of todayLogs) {
+              const no = log.employeeId || "";
+              if (!employeeNosInUnit.has(no)) continue;
+              const ts = log.timestamp;
+              if (log.eventType === "entry" && !lastEntryByNo.has(no)) lastEntryByNo.set(no, ts);
+              if (log.eventType === "exit" && !lastExitByNo.has(no)) lastExitByNo.set(no, ts);
+            }
+
+            const personnel = list.map((p) => {
+              const no = String(p.employee_no);
+              const lastEntry = lastEntryByNo.get(no);
+              const lastExit = lastExitByNo.get(no);
+              const entryDate = lastEntry ? new Date(lastEntry) : null;
+              const exitDate = lastExit ? new Date(lastExit) : null;
+              const isPresent =
+                lastEntry && (!lastExit || new Date(lastExit) < new Date(lastEntry));
+              const isTodayEntry = entryDate && entryDate >= todayStart && entryDate <= todayEnd;
+              const faceUrl = p.face_url != null ? String(p.face_url).trim() : "";
+              const photoUrl =
+                faceUrl !== "" ? (faceUrl.startsWith("/") ? faceUrl : `/${faceUrl}`) : undefined;
+              return {
+                id: p.id,
+                unitId: p.person_group_id || 0,
+                employeeId: no,
+                name: p.full_name || p.employee_no || "",
+                photoUrl,
+                isPresent: !!isPresent,
+                lastEntryTime: lastEntry || null,
+                lastExitTime: lastExit || null,
+                lastEntryDate: entryDate ? entryDate.toISOString().slice(0, 10) : null,
+                entryTime: entryDate ? entryDate.toTimeString().slice(0, 8) : null,
+                exitTime: exitDate ? exitDate.toTimeString().slice(0, 8) : null,
+                isTodayEntry: !!isTodayEntry,
+              };
+            });
+            return { personnel, entryCount, exitCount };
+          }
         }
       }
-      // 取得該單位的人員（優化：直接使用 SQL 查詢）
+      // YSCP：取得該單位的人員（直接使用 SQL 查詢，含 person_code 作為員工編號）
       const sql = `
-      SELECT id, person_group_id, person_type, full_name
+      SELECT id, person_group_id, person_type, full_name, person_code
       FROM platform.person
       WHERE person_group_id = $1
         AND person_type = 0
@@ -1024,7 +1345,10 @@ async function getUnitPersonnel(unitId, siteId = null) {
 
         return {
           id: person.id,
-          employeeId: String(person.id),
+          employeeId:
+            person.person_code != null && String(person.person_code).trim() !== ""
+              ? String(person.person_code).trim()
+              : "",
           name: person.full_name || "",
           photoUrl: photoUrl,
           isInside: isPresent, // 與 isPresent 保持一致（向後兼容）
@@ -1083,6 +1407,7 @@ function formatTime(date) {
  * 從地點取得人流統計系統配置
  * @param {Object} location - 地點物件
  * @returns {Object} { peopleCountingSystem, entryDoorId, exitDoorId, personGroupIds, dataSource, entryDeviceId, exitDeviceId, accessControlGroups }
+ * @deprecated accessControlGroups 僅相容保留；門禁流程之可進出人員改由 personnelService.getPersonsWithAccessByLocationId 取得
  */
 function getPeopleCountingConfig(location) {
   const peopleCountingSystem = ensureArray(location.systems).find(
@@ -1104,6 +1429,7 @@ function getPeopleCountingConfig(location) {
  * 取得工地配置（統一處理地點取得和配置解析）
  * @param {number} siteId - 工地 ID
  * @returns {Promise<Object>} { location, personGroupIds, entryDoorId, exitDoorId, dataSource, entryDeviceId, exitDeviceId, accessControlGroups }
+ * @deprecated accessControlGroups 僅相容保留
  */
 async function getSiteConfig(siteId) {
   const locationResult = await getPeopleCountingLocationById(siteId);

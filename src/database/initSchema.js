@@ -568,6 +568,26 @@ async function initSchema() {
     `);
     console.log("✅ person_location_access 表已建立");
 
+    // ISAPI 監聽主機收到之門禁事件（非 heartBeat），payload 存巢狀 AccessControllerEvent；附圖存 uploads/isapi-events，路徑存 picture_path
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS isapi_access_events (
+        id BIGSERIAL PRIMARY KEY,
+        device_ip VARCHAR(45) NOT NULL,
+        event_time TIMESTAMPTZ NOT NULL,
+        event_type VARCHAR(64) NOT NULL,
+        payload JSONB NOT NULL,
+        file_count INTEGER NOT NULL DEFAULT 0,
+        picture_path TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_access_events_event_time ON isapi_access_events(event_time DESC);
+      CREATE INDEX IF NOT EXISTS idx_isapi_access_events_device_ip ON isapi_access_events(device_ip);
+      CREATE INDEX IF NOT EXISTS idx_isapi_access_events_payload ON isapi_access_events USING GIN (payload);
+    `);
+    console.log("✅ isapi_access_events 表已建立");
+
     // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS environment_readings (

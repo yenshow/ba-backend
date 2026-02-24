@@ -1,5 +1,5 @@
 /**
- * 人員主檔服務：人員群組、人員、門禁權限（person_location_access）
+ * 人員主檔服務（門禁設備本系統）：人員群組、人員、門禁權限（person_location_access）。供人員管理 API 與門禁同步使用。
  */
 const db = require("../../database/db");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
@@ -262,7 +262,7 @@ async function getPersonIdsByLocationId(locationId) {
 
 async function getPersonsWithAccessByLocationId(locationId) {
   const rows = await db.query(
-    `SELECT p.id, p.employee_no, p.full_name, p.status, pg.name AS group_name
+    `SELECT p.id, p.employee_no, p.full_name, p.status, p.face_url, pg.name AS group_name
      FROM person_location_access pla
      INNER JOIN persons p ON pla.person_id = p.id
      LEFT JOIN person_groups pg ON p.person_group_id = pg.id

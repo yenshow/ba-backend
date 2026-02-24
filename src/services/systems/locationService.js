@@ -106,7 +106,7 @@ function formatSystem(system) {
           dataSource: config.data_source || "yscp",
           entryDeviceId: config.entry_device_id ?? undefined,
           exitDeviceId: config.exit_device_id ?? undefined,
-          accessControlGroups: config.access_control_groups || [],
+          accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
         },
       };
 
@@ -930,7 +930,7 @@ function buildSystemConfig(systemType, config) {
         data_source: config.dataSource || "yscp",
         entry_device_id: config.entryDeviceId ?? null,
         exit_device_id: config.exitDeviceId ?? null,
-        access_control_groups: config.accessControlGroups || [],
+        access_control_groups: config.accessControlGroups || [], // 相容保留
       };
 
     case "vehicle_access":

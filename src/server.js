@@ -2,6 +2,7 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const morgan = require("morgan");
+const multer = require("multer");
 const os = require("os");
 const path = require("path");
 const config = require("./config");
@@ -98,8 +99,7 @@ app.use(cors(corsOptions));
 // 安全標頭
 app.use(securityHeaders);
 
-// 請求體解析（增加大小限制用於上傳圖片等大文件，例如 base64 編碼的圖片）
-// 10MB 限制應該足夠應對大多數情況
+// 請求體解析（10MB 限制）
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -128,7 +128,14 @@ app.use("/api/people-counting", peopleCountingRoutes); // 人流統計地點管�
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes);
 app.use("/api/access-control", accessControlRoutes);
-app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限、同步任務
+// 功能旗標：ENABLE_ACCESS_CONTROL_PERSONNEL=false 時不掛載人員/門禁 API（含 isapi-events 寫入端）
+if (config.features && config.features.enableAccessControlPersonnel !== false) {
+  app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限、同步、ISAPI 事件查詢與接收
+} else {
+  app.use("/api/personnel", (_req, res) =>
+    res.status(403).json({ success: false, error: "門禁人員功能已關閉（ENABLE_ACCESS_CONTROL_PERSONNEL）" })
+  );
+}
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 
