@@ -12,11 +12,13 @@ const SYSTEM_TABLE_MAPPING = {
     { schema: "deviceaccess", table: "door" },
   ],
 
-  // 車輛進出系統（過車日誌 + 地點設定用車道列表 + 固定車輛名單）
+  // 車輛進出系統（過車日誌 + 地點設定用車道列表 + 車輛群組 anpr + platform.vehicle_list；不含人員大頭照）
   vehicle_access: [
     { schema: "vehiclebiz", table: "passageway_log_data" },
     { schema: "vehiclebiz", table: "lane_info" },
     { schema: "platform", table: "vehicle_list" },
+    { schema: "anpr", table: "vehicle_custom_list" },
+    { schema: "anpr", table: "vehicle_and_list_relation" },
   ],
 };
 

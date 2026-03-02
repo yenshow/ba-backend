@@ -43,62 +43,33 @@ async function getDeviceIdFromConfig(deviceConfig) {
 }
 
 /**
- * 獲取環境位置資訊（使用新架構 location_systems）
+ * 依系統類型獲取地點/區域資訊（共用查詢，減少重複）
  * @param {number} systemId - 地點系統 ID (location_systems.id)
- * @returns {Promise<Object|null>} 位置資訊
+ * @param {string} systemType - 'environment' | 'lighting'
+ * @returns {Promise<Object|null>}
  */
-async function getLocationInfo(systemId) {
+async function getSourceInfoByType(systemId, systemType) {
   try {
     const result = await db.query(
-      `SELECT 
-        ls.id,
-        ls.system_type,
-        ls.system_config->>'device_id' as device_id,
-        l.name,
-        l.zone_id,
-        z.name as zone_name
-      FROM location_systems ls
-      INNER JOIN locations l ON ls.location_id = l.id
-      INNER JOIN zones z ON l.zone_id = z.id
-      WHERE ls.id = $1
-        AND ls.system_type = 'environment'`,
-      [systemId]
+      `SELECT ls.id, ls.system_type, ls.system_config->>'device_id' as device_id,
+              l.name, l.zone_id, z.name as zone_name
+       FROM location_systems ls
+       INNER JOIN locations l ON ls.location_id = l.id
+       INNER JOIN zones z ON l.zone_id = z.id
+       WHERE ls.id = ? AND ls.system_type = ?`,
+      [systemId, systemType]
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
-    console.error(`[systemAlertHelper] 獲取環境位置資訊失敗:`, error);
+    console.error(`[systemAlertHelper] 獲取 ${systemType} 來源資訊失敗:`, error);
     return null;
   }
 }
 
-/**
- * 獲取照明區域資訊（使用新架構 location_systems）
- * @param {number} systemId - 地點系統 ID (location_systems.id)
- * @returns {Promise<Object|null>} 區域資訊
- */
-async function getAreaInfo(systemId) {
-  try {
-    const result = await db.query(
-      `SELECT 
-        ls.id,
-        ls.system_type,
-        ls.system_config->>'device_id' as device_id,
-        l.name,
-        l.zone_id,
-        z.name as zone_name
-      FROM location_systems ls
-      INNER JOIN locations l ON ls.location_id = l.id
-      INNER JOIN zones z ON l.zone_id = z.id
-      WHERE ls.id = $1
-        AND ls.system_type = 'lighting'`,
-      [systemId]
-    );
-    return result && result.length > 0 ? result[0] : null;
-  } catch (error) {
-    console.error(`[systemAlertHelper] 獲取照明區域資訊失敗:`, error);
-    return null;
-  }
-}
+const getLocationInfo = (systemId) =>
+  getSourceInfoByType(systemId, "environment");
+const getAreaInfo = (systemId) =>
+  getSourceInfoByType(systemId, "lighting");
 
 
 /**
@@ -127,66 +98,78 @@ async function getDeviceInfo(deviceId) {
  * @param {string} errorMessage - 錯誤訊息
  * @returns {boolean} 是否為設備連接錯誤
  */
-function isDeviceConnectionError(errorMessage) {
-  const connectionErrorKeywords = [
-    "連接超時",
-    "連接被拒絕",
-    "無法到達設備",
-    "連接已斷開",
-    "無法連接",
-    "無法讀取",
-    "timeout",
-    "connection refused",
-    "ECONNREFUSED",
-    "ETIMEDOUT",
-  ];
+const CONNECTION_ERROR_KEYWORDS = [
+  "連接超時",
+  "連接被拒絕",
+  "無法到達設備",
+  "連接已斷開",
+  "無法連接",
+  "無法讀取",
+  "timeout",
+  "connection refused",
+  "econnrefused",
+  "etimedout",
+];
 
-  const lowerMessage = errorMessage.toLowerCase();
-  return connectionErrorKeywords.some((keyword) =>
-    lowerMessage.includes(keyword.toLowerCase())
-  );
+function isDeviceConnectionError(errorMessage) {
+  if (!errorMessage) return false;
+  const lower = errorMessage.toLowerCase();
+  return CONNECTION_ERROR_KEYWORDS.some((k) => lower.includes(k));
 }
 
 /**
- * 從環境位置獲取設備 ID（使用新架構 location_systems）
- * @param {number} systemId - 地點系統 ID (location_systems.id)
- * @returns {Promise<number|null>} 設備 ID
+ * 依系統類型從 location_systems 獲取設備 ID（共用查詢）
+ * @param {number} systemId - location_systems.id
+ * @param {string} systemType - 'environment' | 'lighting'
+ * @returns {Promise<number|null>}
  */
-async function getDeviceIdFromLocation(systemId) {
+async function getDeviceIdFromLocationSystem(systemId, systemType) {
   try {
     const result = await db.query(
-      `SELECT (system_config->>'device_id')::integer as device_id 
-       FROM location_systems 
-       WHERE id = $1
-         AND system_type = 'environment'`,
-      [systemId]
+      `SELECT (system_config->>'device_id')::integer as device_id
+       FROM location_systems
+       WHERE id = ? AND system_type = ?
+         AND system_config->>'device_id' IS NOT NULL`,
+      [systemId, systemType]
     );
     return result && result.length > 0 ? result[0].device_id : null;
   } catch (error) {
-    console.error(`[systemAlertHelper] 從環境位置獲取設備 ID 失敗:`, error);
+    console.error(
+      `[systemAlertHelper] 從 ${systemType} 取得設備 ID 失敗:`,
+      error
+    );
     return null;
   }
 }
 
+const getDeviceIdFromLocation = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "environment");
+const getDeviceIdFromArea = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "lighting");
+
 /**
- * 從照明區域獲取設備 ID（使用新架構 location_systems）
- * @param {number} systemId - 地點系統 ID (location_systems.id)
- * @returns {Promise<number|null>} 設備 ID
+ * 依設備 ID 與系統類型取得所有對應的 location_systems.id
+ * 用於恢復時一併清除同一實體設備在其它地點的警報（避免雙重警報只解一筆）
+ * @param {number} deviceId - 設備 ID
+ * @param {string} systemType - 系統類型 ('environment' | 'lighting')
+ * @returns {Promise<number[]>} location_systems.id 陣列
  */
-async function getDeviceIdFromArea(systemId) {
+async function getLocationSystemIdsByDeviceId(deviceId, systemType) {
   try {
     const result = await db.query(
-      `SELECT (system_config->>'device_id')::integer as device_id 
-       FROM location_systems 
-       WHERE id = $1
-         AND system_type = 'lighting'
-         AND system_config->>'device_id' IS NOT NULL`,
-      [systemId]
+      `SELECT id FROM location_systems
+       WHERE system_type = $1
+         AND system_config->>'device_id' IS NOT NULL
+         AND (system_config->>'device_id')::integer = $2`,
+      [systemType, deviceId]
     );
-    return result && result.length > 0 ? result[0].device_id : null;
+    return (result || []).map((r) => r.id);
   } catch (error) {
-    console.error(`[systemAlertHelper] 從照明區域獲取設備 ID 失敗:`, error);
-    return null;
+    console.error(
+      `[systemAlertHelper] 依設備取得 location_systems 失敗 (deviceId: ${deviceId}, systemType: ${systemType}):`,
+      error
+    );
+    return [];
   }
 }
 
@@ -285,19 +268,13 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
     // 推送 WebSocket 事件：系統設備離線（僅當創建了 offline 類型的警報時，批次模式可跳過）
     // 注意：這裡的設備狀態推送與警報創建是分離的，確保即使警報未創建也能推送狀態
     if (alertCreated && alertType === "offline" && !options.skipWebSocket) {
-      // 獲取 deviceId（如果有的話）
-      let deviceId = null;
-      try {
-        deviceId = await config.getDeviceId(sourceId);
-      } catch (error) {
-        // 忽略錯誤，deviceId 為 null
-      }
-      websocketService.emitDeviceStatus(config.source, sourceId, "offline", deviceId);
-      if (process.env.NODE_ENV === "development") {
-        console.log(
-          `[systemAlertHelper] 📢 已推送設備狀態 | ${config.source}:${sourceId} | offline`
-        );
-      }
+      const deviceIdForWs = await config.getDeviceId(sourceId);
+      websocketService.emitDeviceStatus(
+        config.source,
+        sourceId,
+        "offline",
+        deviceIdForWs
+      );
     }
 
     return alertCreated;
@@ -325,37 +302,46 @@ async function clearError(system, sourceId, options = {}) {
       throw new Error(`未知的系統: ${system}`);
     }
 
-    // 清除設備錯誤狀態（如果適用）
-    // 注意：只有在非 device 系統時才需要清除設備錯誤
-    // 因為 recordError 可能會創建設備警報（如果找到 deviceId）
-    if (system !== "device") {
-      const deviceId = await config.getDeviceId(sourceId);
-      if (deviceId) {
-        // 判斷錯誤類型：如果是連接錯誤，則解決 offline 類型警報
-        const deviceCleared = await errorTracker.clearError(
-          alertService.ALERT_SOURCES.DEVICE,
-          deviceId,
-          "offline" // 設備恢復連接時，解決 offline 類型警報
-        );
-        // 只有在實際清除了錯誤時才推送事件（批次模式可跳過）
-        if (deviceCleared && !options.skipWebSocket) {
-          websocketService.emitDeviceStatus("device", deviceId, "online");
-        }
+    const deviceId =
+      system !== "device" ? await config.getDeviceId(sourceId) : null;
+
+    if (deviceId) {
+      const deviceCleared = await errorTracker.clearError(
+        alertService.ALERT_SOURCES.DEVICE,
+        deviceId,
+        "offline"
+      );
+      if (deviceCleared && !options.skipWebSocket) {
+        websocketService.emitDeviceStatus("device", deviceId, "online");
       }
     }
 
-    // 清除系統錯誤狀態（自動解決 offline 和 error 類型警報）
-    const systemCleared = await errorTracker.clearError(config.source, sourceId);
-    // 只有在實際清除了錯誤時才推送事件（批次模式可跳過）
-    if (systemCleared && !options.skipWebSocket) {
-      // 獲取 deviceId（如果有的話）
-      let deviceId = null;
-      try {
-        deviceId = await config.getDeviceId(sourceId);
-      } catch (error) {
-        // 忽略錯誤，deviceId 為 null
+    const systemCleared = await errorTracker.clearError(
+      config.source,
+      sourceId
+    );
+
+    if (
+      (system === "environment" || system === "lighting") &&
+      deviceId
+    ) {
+      const allSystemIds = await getLocationSystemIdsByDeviceId(
+        deviceId,
+        system
+      );
+      for (const otherId of allSystemIds) {
+        if (Number(otherId) === Number(sourceId)) continue;
+        await errorTracker.clearError(config.source, otherId);
       }
-      websocketService.emitDeviceStatus(config.source, sourceId, "online", deviceId);
+    }
+
+    if (systemCleared && !options.skipWebSocket) {
+      websocketService.emitDeviceStatus(
+        config.source,
+        sourceId,
+        "online",
+        deviceId
+      );
     }
   } catch (error) {
     console.error(

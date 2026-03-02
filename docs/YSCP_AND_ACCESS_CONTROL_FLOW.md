@@ -1,14 +1,12 @@
-# YSCP 與 access_control 前後端流程：共通與分流
+# YSCP 與 access_control 人流統計：流程與後端架構
 
-本文件以 **data_source** 為軸，說明人流統計與人員／門禁的**前後端共通邏輯**與 **YSCP / access_control 分流**，並將 access_control 收斂為三步：**① 設備資料建立 → ② 人員資料建立 → ③ ISAPI 設定**。
-
-**擇一使用與優化規劃**：實務上專案可能只採用其中一種方式（僅 YSCP 或僅 access_control）。後端如何做到妥善擴充與分離、優化步驟與檔案歸類，請見 [PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md](./PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md)。
+本文件為**單一流程說明**，涵蓋前後端共通與分流、access_control 三步驟、**後端整合結果**（職權分離與模組化分流），以及相關文檔索引。
 
 ---
 
 ## 1. 概述：雙資料來源與共用邊界
 
-人流統計使用**同一套**區域／地點與 API，差別在「人員與單位從哪來」以及「入口／出口綁定什麼」。兩流程**並存於同一套 API 與 DB**，以 `location_systems.system_config.data_source`（`yscp` | `access_control`）區分，不混合。
+人流統計使用**同一套**區域／地點與 API，差別在「人員與單位從哪來」以及「入口／出口綁定什麼」。兩流程**並存於同一套 API 與 DB**，以 `location_systems.system_config.data_source`（`yscp` | `access_control`）區分。
 
 | 項目 | 共用 | yscp | access_control |
 |------|------|------|----------------|
@@ -16,7 +14,7 @@
 | **人流 API** | GET /people-counting/sites、getSiteStats、getSiteLogs 等 | ✓ | ✓ |
 | **人員／單位來源** | — | 外部 YSCP（platform.person、person_group） | 本系統（persons、person_groups、person_location_access） |
 | **入口／出口綁定** | — | person_group_ids、entry_door_id、exit_door_id（YSCP 門） | entry_device_id、exit_device_id（本系統門禁設備） |
-| **統計／在場人數** | — | 依外部刷卡記錄 | 依今日 isapi_access_events 計算（進場/出場/在場與 YSCP 語意一致） |
+| **統計／在場人數** | — | 依外部刷卡記錄 | 依今日 isapi_access_events 計算（語意與 YSCP 一致） |
 
 **結論**：建立區域與地點、為地點掛載 people_counting、呼叫 getSites／getSiteStats 為共用；`data_source` 決定驗證欄位與單位／進出紀錄的查詢來源。
 
@@ -28,7 +26,7 @@
 
 - **區域與地點**：zones、locations、location_systems 共用；people_counting 的 system_config 依 data_source 存不同欄位（見 §1）。
 - **地點寫入**：統一地點 API；`locationService.buildSystemConfig` 依 system_type=people_counting 寫入 data_source、person_group_ids、entry_door_id/exit_door_id（yscp）或 entry_device_id/exit_device_id（access_control）。
-- **人流 getSites / getSiteStats / getSiteLogs**：同一 API；後端依 `data_source` 決定單位列表、統計與進出紀錄來源。
+- **人流 getSites / getSiteStats / getSiteLogs / getUnitPersonnel**：同一 API；後端依 `data_source` 委派 Provider，回傳格式一致。
 
 ### 2.2 前端
 
@@ -47,7 +45,7 @@
 | **可同步地點** | 不參與 | people_counting 且 entry_device_id 不為空 |
 | **設備同步 API** | 不使用 | sync-location、sync-all-locations |
 | **ISAPI 事件** | 不涉及 | 門禁設備 POST → isapi-events；寫入後推送 WebSocket |
-| **進出紀錄（getSiteLogs）** | 外部刷卡記錄（physical_id） | isapi_access_events（依入口／出口設備 IP），並以工號查 persons/person_groups 回傳 unitName、employeeId、personName |
+| **進出紀錄（getSiteLogs）** | 外部刷卡記錄（physical_id） | isapi_access_events（依入口／出口設備 IP），以工號查 persons/person_groups 回傳 unitName、employeeId、personName |
 | **人員名單（getUnitPersonnel）** | 外部人員 + 今日刷卡 | 本系統有權限人員 + isapi_access_events 今日進出時間與統計 |
 
 ---
@@ -77,14 +75,42 @@
 
 ---
 
-## 5. 後端架構與檔案（依流程歸類）
+## 5. 後端整合結果：職權分離與模組化分流
 
-| 類型 | 說明 |
+### 5.1 整合狀態
+
+- **已完成**：協調層 + 雙 Provider（yscp / access_control）、共用 helper（進出統計）、依 data_source 委派、功能旗標過濾。
+- **統一區分**：僅以 `data_source` 決定該地點的人員／單位／進出紀錄來源；共同邏輯（地點 CRUD、config 讀取、驗證、錯誤與旗標）集中於協調層。
+- **模組化分流**：getSites、getSiteStats、getSiteLogs、getUnitPersonnel 皆為「取 config → getProvider(dataSource) → 呼叫 provider → 回傳」；YSCP 與門禁邏輯分屬兩支 Provider，不混在協調層。
+
+### 5.2 後端檔案與職責
+
+| 類型 | 檔案／模組 | 職責 |
+|------|------------|------|
+| **共同層** | `locationService.js` | 地點與 system_config 的 CRUD、buildSystemConfig、formatSystem；people_counting config 含 data_source、entry/exit 欄位 |
+| **共同層** | `peopleCountingRoutes.js` | 人流統計 API 路由（locations、sites、stats、logs、unit-personnel） |
+| **共同層** | `peopleCountingService.js` | 協調層：直接 require 兩支 provider，內建 getProvider(dataSource)；地點 CRUD、getSiteConfig、getPeopleCountingConfig、validateLocationData、錯誤與旗標；getSites/getSiteStats/getSiteLogs/getUnitPersonnel 委派 provider |
+| **共用 helper** | `peopleCounting/helpers/entryExitStats.js` | 進出統計純函數（parseEventType、sortRecordsByTime、countEntryExitFromSorted、calculateTodayStatsByPhysicalId、calculateCurrentCount）；供 yscpProvider、備份報表、監控使用 |
+| **分流層** | `peopleCounting/providers/yscpProvider.js` | getSiteData、getSitesData、getSiteLogs、getUnitPersonnel；僅使用 externalDb、yscpPersonService、peopleCountingSyncService、entryExitStats |
+| **分流層** | `peopleCounting/providers/accessControlProvider.js` | getSiteData、getSiteLogs、getUnitPersonnel；僅使用 db、personnelService、deviceService、isapi_access_events |
+| **資料來源** | externalDb、yscpPersonService、YSCP 相關 | 僅被 yscpProvider 使用 |
+| **資料來源** | personnelService、personSyncJobService、accessControlService、isapi 相關 | 僅被 accessControlProvider 使用 |
+| **設定／路由** | `config.js`（features）、`server.js` | enableYscpPeopleCounting、enableAccessControlPersonnel；personnel 路由依旗標掛載或回傳 403 |
+
+### 5.3 Provider 介面（實作現況）
+
+| 介面 | 說明 |
 |------|------|
-| **共用** | locationService（buildSystemConfig/formatSystem）、locationRoutes；people_counting config 含 data_source、entry_device_id、exit_device_id。 |
-| **YSCP** | peopleCountingService（getSites 之 yscp 分支、getRecordsByPhysicalIdsWithJoin、validateLocationData yscp）、externalDb、platform/baseacs；必填 personGroupIds、entryDoorId、exitDoorId。 |
-| **access_control** | personnelService、personSyncJobService、personnelRoutes（POST isapi-events、personnel CRUD、sync）、accessControlService、peopleCountingService（getAccessControlSiteLogs、getUnitPersonnel 門禁分支、getSites 分流）。 |
-| **人流 API** | peopleCountingRoutes、peopleCountingService（getSites、getSiteStats、getSiteLogs 依 data_source 分流）。 |
+| **getSiteData(siteId, config)** | 回傳該地點 entryCount、exitCount、currentCount、units；getSiteStats 取此結果之統計欄位，getSites 取此結果組裝 site 列 |
+| **getSitesData(locations, getPeopleCountingConfig)** | 僅 yscpProvider 實作；批次回傳 Map&lt;siteId, { entryCount, exitCount, currentCount, units }&gt;，供 getSites 優化 |
+| **getSiteLogs(siteId, config, options[, context])** | 進出紀錄；YSCP 可傳 context.generateRecordId |
+| **getUnitPersonnel(unitId, siteId, config)** | 該單位人員名單與 entryCount、exitCount |
+
+### 5.4 功能旗標
+
+- **ENABLE_YSCP_PEOPLE_COUNTING**（預設 true）：false 時 getSites 不列 data_source=yscp 地點，getSiteLogs 對 yscp 回傳空。
+- **ENABLE_ACCESS_CONTROL_PERSONNEL**（預設 true）：false 時不掛載 /api/personnel（回傳 403），getSites 不列 data_source=access_control 地點。
+- 單一地點的資料來源一律依 **data_source**，旗標僅控制「是否列入列表／是否提供該類 API」。
 
 ---
 
@@ -97,7 +123,8 @@
 | **access_control ② 人員** | 人員管理頁：群組、人員、門禁權限；地點綁定入口/出口在「地點管理」。 |
 | **access_control ③ ISAPI** | 設備端設定監聽主機（前端不參與）；人員管理「設備同步」呼叫 sync-location / sync-all-locations。WebSocket 監聽 `people-counting:access-control:event` 與 `yscp:event:acs`，觸發重新載入。 |
 
-典型檔案：personnel.vue、usePersonnelApi.ts、PeopleCountingLocationFields.vue、usePeopleCountingApi.ts、useAccessControlApi.ts、usePeopleCountingWebSocket.ts（YSCP + 門禁事件）。
+典型檔案：personnel.vue、usePersonnelApi.ts、PeopleCountingLocationFields.vue、usePeopleCountingApi.ts、useAccessControlApi.ts、usePeopleCountingWebSocket.ts。  
+**前端對齊**：ba-frontend-central 與 ba-frontend-construction 共用同一套 people-counting API 與 `data_source`（yscp / access_control）；進出紀錄以 `convertApiLogToFrontend` 統一轉換，含 `employeeId`（工號）；無需依 data_source 分支顯示。
 
 ---
 
@@ -108,39 +135,21 @@
 
 ---
 
-## 8. 功能旗標與分版本
-
-- **已實踐**：`config.features.enableYscpPeopleCounting`、`enableAccessControlPersonnel`（環境變數 `ENABLE_YSCP_PEOPLE_COUNTING`、`ENABLE_ACCESS_CONTROL_PERSONNEL`，預設 true）。關閉時：personnel 路由可回傳 403；getSites 不列入 yscp 地點、getSiteLogs 對 yscp 回傳空。
-- **分版本**：同一程式碼庫依旗標切換；可選延伸為 API 版本前綴或分離部署，見原規劃（已收斂至本文件）。
-
----
-
-## 9. 尚未實踐與可選擴充
+## 8. 尚未實踐與可選擴充
 
 | 項目 | 狀態 |
 |------|------|
 | people_counting_logs.internal_person_id | 不實作 |
 | 同步佇列（person_sync_jobs） | 後續擴充 |
 | 錯誤碼／錯誤訊息 | 可加強 |
+| Provider 單元測試、協調層測試 | 可選 |
 
 ---
 
-## 10. 擇一使用與分離策略（摘要）
-
-兩套流程**可並存**於同一 API 與 DB，但實務上專案常**擇一使用**（只接 YSCP 或只接本系統門禁）。做法要點：
-
-- **功能旗標**：`ENABLE_YSCP_PEOPLE_COUNTING`、`ENABLE_ACCESS_CONTROL_PERSONNEL`；關閉時可不列對應地點、不掛載對應路由。
-- **擴充與分離**：以「依 data_source 委派實作」（provider）、條件載入與路由掛載、資料層邊界區分，讓同一程式碼庫支援僅 YSCP、僅 access_control、或並存，並利於未來新增第三種資料來源。
-
-完整現況整理、擇一情境、四項策略與短中長期優化規劃見 **[PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md](./PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md)**。
-
----
-
-## 11. 相關文檔
+## 9. 相關文檔
 
 | 文檔 | 說明 |
 |------|------|
-| [PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md](./PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md) | 後端人流統計整理、擇一使用、擴充與分離策略、優化規劃 |
 | [ISAPI_EVENT_LISTENER.md](./ISAPI_EVENT_LISTENER.md) | 門禁事件 POST 接收、寫入、即時推送 |
 | [ISAPI_DEVICE_REQUEST_SERVICES.md](./ISAPI_DEVICE_REQUEST_SERVICES.md) | 後端對門禁設備 ISAPI 請求與代理 API |
 | [PERSONNEL_DATABASE_AND_PEOPLE_COUNTING_PLAN.md](./PERSONNEL_DATABASE_AND_PEOPLE_COUNTING_PLAN.md) | 人員與人流資料表與規劃 |
@@ -148,4 +157,4 @@
 
 ---
 
-**總結**：YSCP 與 access_control 共用區域／地點與人流 API 與前端頁面；差異由 `data_source` 與對應欄位、單位與進出紀錄來源決定。access_control 需三步：**① 設備資料建立 → ② 人員資料建立（含地點綁定與門禁權限）→ ③ ISAPI 設定（事件監聽 + 設備同步）**。若專案僅擇一使用，可依功能旗標與 [PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md](./PEOPLE_COUNTING_BACKEND_ORGANIZATION_AND_OPTIMIZATION.md) 進行擴充與分離。
+**總結**：YSCP 與 access_control 並存，共用區域／地點與人流 API 與前端頁面；差異由 `data_source` 與對應欄位、單位與進出紀錄來源決定。access_control 需三步：**① 設備資料建立 → ② 人員資料建立（含地點綁定與門禁權限）→ ③ ISAPI 設定（事件監聽 + 設備同步）**。後端已完成職權分離與模組化分流（協調層 + yscpProvider + accessControlProvider + entryExitStats），單一流程說明以本文件為準。

@@ -1,6 +1,6 @@
 # 警報系統實作指南
 
-**更新日期**：2026-02-10  
+**更新日期**：2026-03-02  
 **狀態**：統一規範 + 重構 Phase 1～3 已實作（一列一事件、只解決當前、每日結案、列表一列一筆）
 
 ---
@@ -12,13 +12,13 @@
 1. **規則配置**：從 `alert_rules` 讀取，不硬編碼 severity / message
 2. **訊息模板**：使用 `alertRuleService.formatMessage()` 格式化
 3. **創建接口**：一律使用 `alertService.createAlert()`
-4. **自動解決**：問題恢復時呼叫 `alertService.updateAlertStatus(..., RESOLVED, null)` 或 `resolveAlert()`
+4. **自動解決**：問題恢復時呼叫 `alertService.updateAlertStatus(..., RESOLVED, null)` 或 `alertService.resolveAlert(sourceId, alertType, source)`；實際僅更新「最新一筆」active（`resolveLatestActiveAlert`）
 
 ### 架構原則（重構後）
 
 - **一列一事件**：每筆 `alerts` 對應一個事件；解決時間 = 該筆變為 resolved 時的 `updated_at`
-- **當天有效**：同一天同 (source, source_id, alert_type) 僅一筆 active；隔天再發生為新一筆
-- **只解決當前**：問題恢復時只更新「最新一筆」active；其餘由每日排程 `resolveStaleActiveAlerts()` 結案
+- **當天有效**：同一天同 (source, source_id, alert_type) 僅一筆 active（`findExistingActiveAlert` 依當日區間查詢）；閾值類另以 message 參數區分；隔天再發生為新一筆
+- **只解決當前**：問題恢復時只更新「最新一筆」active（`resolveLatestActiveAlert` 依 `created_at DESC LIMIT 1`）；其餘由每日排程 `resolveStaleActiveAlerts()` 結案（`created_at < 當日 00:00 UTC`）
 - **列表一列一筆**：API 不 GROUP BY，每列一筆警報，與 DB / 報表一致
 
 ---
@@ -64,7 +64,7 @@ await alertService.createAlert({
   message,
 });
 
-// 問題恢復時：只解最新一筆 active
+// 問題恢復時：只解該 (source, source_id, alert_type) 下「最新一筆」active
 if (problemResolved) {
   await alertService.updateAlertStatus(
     sourceId, source, alertType,
@@ -74,6 +74,9 @@ if (problemResolved) {
   // 或：alertService.resolveAlert(sourceId, alertType, source);
 }
 ```
+
+- **RESOLVED** 僅更新一筆：內部呼叫 `resolveLatestActiveAlert(source, sourceId, alertType)`，依 `created_at DESC LIMIT 1` 只解最新一筆 active。
+- 閾值類警報會依 `message` 萃取參數（如 PM2.5）做「同來源同類型同參數」的當日唯一 active 判斷；offline/error 類無參數。
 
 ### 2.4 錯誤示範（勿用）
 
@@ -128,8 +131,8 @@ await alertService.createAlert({
 | **ignored_at** | 僅在 status=ignored 時有值 |
 | **ignored_by** | 忽視者 user id（FK → users）；解決無「解決者」欄位 |
 
-- 創建：同天同來源同類型僅一筆 active；隔天另創新筆。
-- 解決：只解最新一筆 active；昨日及更早的 active 由 `resolveStaleActiveAlerts()` 在備份前結案。
+- 創建：同天同來源同類型僅一筆 active（閾值類另依 message 參數區分）；隔天另創新筆。
+- 解決：只解最新一筆 active（`resolveLatestActiveAlert`）；昨日及更早的 active 由 `resolveStaleActiveAlerts()` 在備份前結案（`backupScheduler.runBackup` 內呼叫）。
 - 限天：只刪除「已解決且 `updated_at` 超過保留天數」的列；active / ignored 不刪。
 
 ---
@@ -180,7 +183,7 @@ async function createSystemAlert(
 用 `Number(r.condition_config.source_id) === Number(sourceId)` 確保型別一致。
 
 **Q: 創建/解決/限天語意？**  
-創建＝當天有效；解決＝只解最新一筆，解決時間＝該筆 `updated_at`；限天＝只刪已解決且 `updated_at` 逾保留天數。
+見 §3.3（創建＝當天有效；解決＝只解最新一筆；限天＝只刪已解決且逾保留天數）。
 
 ---
 
@@ -194,9 +197,16 @@ async function createSystemAlert(
 
 ---
 
-## 7. 參考
+## 7. 同一實體雙重警報（device + environment/lighting）
+
+環境/照明監控呼叫 `recordError("environment"|"lighting", location_systems.id, ...)` 時，若為設備連接錯誤且能取得設備 ID，會先創建 **device** 警報再創建 **environment**/**lighting** 警報，故同一實體可能出現兩筆（前端顯示相同設備名）。**自動解決**：`clearError(system, sourceId)` 會依序清除 device、當前 sourceId，並一併清除同設備的其它 location_systems 警報（見 `systemAlertHelper.clearError`）。
+
+---
+
+## 8. 參考
 
 - `src/services/alerts/alertService.js`、`alertRuleService.js`
 - `src/services/alerts/errorTracker.js`、`systemAlertHelper.js`
 - `src/services/backup/backupScheduler.js`（每日結案）、`alertsReportFormat.js`（報表）
+- 列表/單筆查詢之 JOIN 支援來源：`device`、`environment`、`lighting`、`people_counting`（見 `buildAlertSelectQuery`）
 - 前端：`ba-frontend-central/docs/ALERT_SYSTEM_REFACTORING.md`

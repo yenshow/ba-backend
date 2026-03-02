@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const handlerFactory = require("../services/externalData/handlerFactory");
 const systemMapping = require("../services/externalData/systemMapping");
+const vehicleGroupAggregateService = require("../services/externalData/vehicleGroupAggregateService");
 const { authenticate } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -13,11 +14,14 @@ const {
 const ALLOWED_TABLES = [
   { schema: "platform", table: "person" },
   { schema: "platform", table: "person_group" },
+  { schema: "platform", table: "person_head_pic" },
   { schema: "platform", table: "vehicle_list" },
   { schema: "baseacs", table: "slot_card_records" },
   { schema: "deviceaccess", table: "door" },
   { schema: "vehiclebiz", table: "passageway_log_data" },
   { schema: "vehiclebiz", table: "lane_info" },
+  { schema: "anpr", table: "vehicle_custom_list" },
+  { schema: "anpr", table: "vehicle_and_list_relation" },
 ];
 
 /**
@@ -133,6 +137,21 @@ router.get(
       systems,
       systemCount: systems.length,
     });
+  }),
+);
+
+/**
+ * 車輛進出：取得車輛群組彙總（anpr.vehicle_custom_list + vehicle_and_list_relation + platform.vehicle_list）
+ * GET /api/external-data/vehicle-access/vehicle-groups
+ * 回傳 { groups: [{ id, list_name, list_sequence, vehicles: [{ vehicle_id, plate_license, owner_name }] }] }
+ * 不含人員大頭照／platform.person
+ */
+router.get(
+  "/vehicle-access/vehicle-groups",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const result = await vehicleGroupAggregateService.getVehicleGroups();
+    res.sendSuccess(result);
   }),
 );
 

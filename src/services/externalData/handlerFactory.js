@@ -1,10 +1,13 @@
 const PlatformPersonHandler = require("./handlers/platformPersonHandler");
 const PlatformPersonGroupHandler = require("./handlers/platformPersonGroupHandler");
+const PlatformPersonHeadPicHandler = require("./handlers/platformPersonHeadPicHandler");
 const PlatformVehicleListHandler = require("./handlers/platformVehicleListHandler");
 const BaseacsSlotCardRecordsHandler = require("./handlers/baseacsSlotCardRecordsHandler");
 const DeviceaccessDoorHandler = require("./handlers/deviceaccessDoorHandler");
 const PassagewayLogDataHandler = require("./handlers/passagewayLogDataHandler");
 const LaneInfoHandler = require("./handlers/laneInfoHandler");
+const VehicleCustomListHandler = require("./handlers/vehicleCustomListHandler");
+const VehicleAndListRelationHandler = require("./handlers/vehicleAndListRelationHandler");
 const systemMapping = require("./systemMapping");
 
 /**
@@ -19,6 +22,7 @@ class HandlerFactory {
     // 註冊 platform schema 的處理器
     this.register("platform", "person", new PlatformPersonHandler());
     this.register("platform", "person_group", new PlatformPersonGroupHandler());
+    this.register("platform", "person_head_pic", new PlatformPersonHeadPicHandler());
     this.register("platform", "vehicle_list", new PlatformVehicleListHandler());
 
     // 註冊 baseacs schema 的處理器
@@ -38,6 +42,14 @@ class HandlerFactory {
       new PassagewayLogDataHandler(),
     );
     this.register("vehiclebiz", "lane_info", new LaneInfoHandler());
+
+    // 註冊 anpr schema 的處理器（車輛群組：名單 + 名單與車輛關聯）
+    this.register("anpr", "vehicle_custom_list", new VehicleCustomListHandler());
+    this.register(
+      "anpr",
+      "vehicle_and_list_relation",
+      new VehicleAndListRelationHandler(),
+    );
   }
 
   /**

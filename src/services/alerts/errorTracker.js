@@ -156,19 +156,11 @@ async function recordError(
 }
 
 /**
- * 清除錯誤狀態（當來源恢復正常時）
- * 如果之前創建了警報，會自動解決對應的 offline 或 error 類型警報
+ * 嘗試解決指定類型的 ACTIVE 警報（內部輔助）
  * @param {string} source - 系統來源
  * @param {number} sourceId - 來源實體 ID
- * @param {string} alertType - 警報類型（可選，如果未提供則嘗試解決所有相關警報）
- * @returns {Promise<boolean>} 是否實際清除了錯誤（有錯誤記錄且已清除）
- */
-/**
- * 嘗試解決指定類型的 ACTIVE 警報（內部輔助函數）
- * @param {string} source - 系統來源
- * @param {number} sourceId - 來源實體 ID
- * @param {string|Array<string>} alertTypes - 警報類型（單一類型或類型陣列）
- * @returns {Promise<boolean>} 是否成功解決了至少一個警報
+ * @param {string|Array<string>} alertTypes - 警報類型（單一或陣列）
+ * @returns {Promise<boolean>} 是否成功解決至少一筆
  */
 async function resolveActiveAlerts(source, sourceId, alertTypes) {
   const types = Array.isArray(alertTypes) ? alertTypes : [alertTypes];
@@ -198,6 +190,13 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
   return resolvedAny;
 }
 
+/**
+ * 清除錯誤狀態（來源恢復時呼叫）；若有警報則自動解決 offline/error 類型
+ * @param {string} source - 系統來源
+ * @param {number} sourceId - 來源實體 ID
+ * @param {string} [alertType] - 警報類型，未提供則解決 offline、error
+ * @returns {Promise<boolean>} 是否實際清除
+ */
 async function clearError(source, sourceId, alertType = null) {
   try {
     const tracking = await getErrorTracking(source, sourceId);

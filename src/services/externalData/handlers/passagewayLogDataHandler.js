@@ -7,6 +7,7 @@ const externalDb = require("../../../database/externalDb");
  * 對應欄位：lane_name、trigger_time、owner 車主資訊、license_plate、
  * plate_license_image_url、vehicle_list_id、vehicle_list_name（DB 直接欄位）、vehicle_category（5=黑名單）、allow_result（1=放行 0=未放行）
  * lane_type（1 進 2 出）由 vehiclebiz.lane_info 依 lane_id 查詢帶入
+ * organization_id 由 DB 直接欄位透傳（右側群組名稱改由 vehicle_list.person_group_id + platform.person_group 取得，此處不查）
  * 時間：timeRange=today 或 startTime/endTime；未指定時預設今天
  */
 class PassagewayLogDataHandler extends BaseExternalDataService {
@@ -89,7 +90,7 @@ class PassagewayLogDataHandler extends BaseExternalDataService {
       .filter((n) => !isNaN(n));
   }
 
-  /** 單筆轉 API 輸出：plate_license_image_url、vehicle_list、vehicle_category/is_blacklist、allow_result、lane_type */
+  /** 單筆轉 API 輸出：plate_license_image_url、vehicle_list、vehicle_category/is_blacklist、allow_result、lane_type、organization_id */
   mapItemToOutput(item) {
     const vehicleListId =
       item.vehicle_list_id != null ? item.vehicle_list_id : -1;
@@ -108,6 +109,10 @@ class PassagewayLogDataHandler extends BaseExternalDataService {
     const isBlacklist = Array.isArray(vehicleCategory)
       ? vehicleCategory.includes(5)
       : vehicleCategory === 5;
+    const orgId =
+      item.organization_id != null && item.organization_id !== ""
+        ? Number(item.organization_id)
+        : null;
     return {
       ...item,
       plate_license_image_url: item.license_plate_image_url ?? null,
@@ -117,6 +122,7 @@ class PassagewayLogDataHandler extends BaseExternalDataService {
       is_blacklist: isBlacklist,
       allow_result: item.allow_result ?? null,
       lane_type: item.lane_type ?? null,
+      organization_id: orgId,
     };
   }
 
@@ -157,11 +163,13 @@ class PassagewayLogDataHandler extends BaseExternalDataService {
   async getById(id) {
     const result = await super.getById(id);
     if (result.success && result.data) {
-      if (result.data.lane_id != null) {
-        const laneTypeMap = await this.getLaneTypeMap([result.data.lane_id]);
-        result.data.lane_type = laneTypeMap[result.data.lane_id] ?? null;
-      }
-      result.data = this.mapItemToOutput(result.data);
+      const item = result.data;
+      const laneTypeMap =
+        item.lane_id != null ? await this.getLaneTypeMap([item.lane_id]) : {};
+      result.data = this.mapItemToOutput({
+        ...item,
+        lane_type: item.lane_id != null ? laneTypeMap[item.lane_id] ?? null : null,
+      });
     }
     return result;
   }
