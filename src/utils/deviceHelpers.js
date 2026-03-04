@@ -59,12 +59,13 @@ const validateDeviceConfig = (config, typeCode) => {
         if (!config.host || typeof config.host !== "string") {
           throw new Error("sensor (modbus) 需要 host (string)");
         }
-        if (!config.port || typeof config.port !== "number") {
-          throw new Error("sensor (modbus) 需要 port (number)");
+        // port 可選（可由型號或設備填寫，未填時由 service 層補上或拋錯）
+        if (config.port !== undefined && config.port !== null && (typeof config.port !== "number" || config.port < 1 || config.port > 65535)) {
+          throw new Error("sensor (modbus) 的 port 須為 1-65535 的數字");
         }
-        // unitId 可選，如果提供則必須是數字（將由系統自動生成）
-        if (config.unitId !== undefined && typeof config.unitId !== "number") {
-          throw new Error("sensor (modbus) 類型的 unitId 必須是數字");
+        // unitId 可選，如果提供則必須是數字（可由型號帶入或由系統自動生成）
+        if (config.unitId !== undefined && config.unitId !== null && (typeof config.unitId !== "number" || config.unitId < 1 || config.unitId > 255)) {
+          throw new Error("sensor (modbus) 類型的 unitId 必須是 1-255 的數字");
         }
       } else if (config.protocol === "http") {
         if (!config.api_endpoint || typeof config.api_endpoint !== "string") {

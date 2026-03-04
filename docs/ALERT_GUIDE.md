@@ -205,6 +205,7 @@ async function createSystemAlert(
 
 ## 8. 參考
 
+- **架構釐清與完整解決方案**：`docs/ALERT_ARCHITECTURE_AND_RESOLUTION.md`（需求、現狀、問題根因、方案 A/B/C、device_ids 相容）
 - `src/services/alerts/alertService.js`、`alertRuleService.js`
 - `src/services/alerts/errorTracker.js`、`systemAlertHelper.js`
 - `src/services/backup/backupScheduler.js`（每日結案）、`alertsReportFormat.js`（報表）

@@ -30,6 +30,20 @@ if (!config) {
 	process.exit(1);
 }
 
+/** 可重試的錯誤（連線/設備不穩定導致） */
+const isRetryableError = (err) => {
+	const msg = err?.message || "";
+	return (
+		msg.includes("Data length error") ||
+		msg.includes("Timed out") ||
+		msg.includes("ECONNRESET") ||
+		msg.includes("ETIMEDOUT")
+	);
+};
+
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 300;
+
 async function testTCPConnection() {
 	return new Promise((resolve) => {
 		const socket = new net.Socket();
@@ -76,28 +90,40 @@ async function scan() {
 		console.log("✓ 已連接到設備\n");
 
 		const foundAddresses = [];
-		const batchSize = 10;
+		// 部分設備對 holding-registers 一次回傳過多會不穩定，改用較小批次
+		const batchSize = type === "holding-registers" ? 4 : 10;
 
 		for (let addr = start; addr <= end; addr += batchSize) {
 			const length = Math.min(batchSize, end - addr + 1);
+			let lastError = null;
+			let success = false;
 
-			try {
-				const data = await client[config.fc](addr, length);
+			for (let attempt = 1; attempt <= MAX_RETRIES && !success; attempt++) {
+				try {
+					const data = await client[config.fc](addr, length);
 
-				if (data?.data?.length > 0) {
-					for (let i = 0; i < length; i++) {
-						foundAddresses.push({
-							address: addr + i,
-							value: data.data[i]
-						});
+					if (data?.data?.length > 0) {
+						for (let i = 0; i < length; i++) {
+							foundAddresses.push({
+								address: addr + i,
+								value: data.data[i]
+							});
+						}
+						process.stdout.write(`✓ 地址 ${addr}-${addr + length - 1}: 可用\n`);
+						success = true;
 					}
-					process.stdout.write(`✓ 地址 ${addr}-${addr + length - 1}: 可用\n`);
-				}
-			} catch (error) {
-				if (error.message.includes("Illegal data address")) {
-					process.stdout.write(`✗ 地址 ${addr}-${addr + length - 1}: 不可用\n`);
-				} else {
+				} catch (error) {
+					lastError = error;
+					if (error.message.includes("Illegal data address")) {
+						process.stdout.write(`✗ 地址 ${addr}-${addr + length - 1}: 不可用\n`);
+						break;
+					}
+					if (isRetryableError(error) && attempt < MAX_RETRIES) {
+						await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+						continue;
+					}
 					process.stdout.write(`✗ 地址 ${addr}-${addr + length - 1}: 錯誤 - ${error.message}\n`);
+					break;
 				}
 			}
 

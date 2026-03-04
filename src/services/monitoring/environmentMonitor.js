@@ -16,32 +16,156 @@ const logger = require("../../utils/logger");
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
 
+// 每 5 分鐘才寫入一筆 raw 至 DB（設計：ENVIRONMENT_DATA_DESIGN.md）
+const RAW_WRITE_INTERVAL_MS = 5 * 60 * 1000;
+const lastRawWriteByLocation = new Map(); // key: location_id, value: timestamp
+
+/** 依 register_type 分組讀取 Modbus（FC01～FC04），合併為 deviceValues */
+async function readValuesByRegisterType(enabledValues, deviceConfig, modbusClient) {
+  const deviceValues = {};
+  const registerTypes = [
+    { type: "holding", read: modbusClient.readHoldingRegisters.bind(modbusClient) },
+    { type: "input", read: modbusClient.readInputRegisters.bind(modbusClient) },
+    { type: "coils", read: modbusClient.readCoils.bind(modbusClient) },
+    { type: "discrete", read: modbusClient.readDiscreteInputs.bind(modbusClient) },
+  ];
+
+  for (const { type: registerType, read } of registerTypes) {
+    const group = enabledValues.filter(
+      (v) => (v.register_type || "holding") === registerType,
+    );
+    if (group.length === 0) continue;
+
+    let minAddress = group[0].address;
+    let maxAddress = group[0].address + (group[0].length || 1);
+    for (const vc of group) {
+      const endAddr = vc.address + (vc.length || 1);
+      minAddress = Math.min(minAddress, vc.address);
+      maxAddress = Math.max(maxAddress, endAddr);
+    }
+    const readLength = maxAddress - minAddress;
+    if (readLength <= 0) continue;
+
+    let modbusData;
+    try {
+      modbusData = await read(minAddress, readLength, deviceConfig);
+    } catch (err) {
+      logger.warn(`environmentMonitor: 讀取 ${registerType} 失敗`, {
+        error: err.message,
+        minAddress,
+        readLength,
+      });
+      continue;
+    }
+
+    for (const valueConfig of group) {
+      const relativeAddress = valueConfig.address - minAddress;
+      const rawValue =
+        Array.isArray(modbusData) &&
+        relativeAddress >= 0 &&
+        relativeAddress < modbusData.length
+          ? valueConfig.length === 1
+            ? modbusData[relativeAddress]
+            : modbusData.slice(
+                relativeAddress,
+                relativeAddress + (valueConfig.length || 1),
+              )
+          : null;
+
+      if (rawValue !== null && rawValue !== undefined) {
+        const convertedValue = deviceLoggingConfig.applyConversion(
+          rawValue,
+          valueConfig.conversion,
+        );
+        deviceValues[valueConfig.name] = {
+          value: convertedValue,
+          unit: valueConfig.conversion?.unit || null,
+        };
+      }
+    }
+  }
+
+  return deviceValues;
+}
+
 /**
- * 檢查環境位置的感測器狀態
+ * 檢查環境位置的感測器狀態（支援一地點多台設備 device_ids）
  */
 async function checkEnvironmentLocations() {
   try {
-    // 取得所有環境監測地點
-    const locations = await db.query(`
+    // 取得所有環境監測地點（含 system_config，不 join devices）
+    const rows = await db.query(`
 			SELECT 
 				l.id as location_id,
 				l.name as location_name,
 				l.zone_id,
 				z.name as zone_name,
 				ls.id as system_id,
-				ls.system_config->>'device_id' as device_id,
-				d.config as device_config,
-				dt.code as device_type_code
+				ls.system_config
 			FROM locations l
 			INNER JOIN zones z ON l.zone_id = z.id
 			INNER JOIN location_systems ls ON l.id = ls.location_id
-			INNER JOIN devices d ON (ls.system_config->>'device_id')::integer = d.id
-			INNER JOIN device_types dt ON d.type_id = dt.id
 			WHERE ls.system_type = 'environment'
-				AND d.status = 'active'
-				AND dt.code = 'sensor'
-				AND d.config->>'protocol' = 'modbus'
 		`);
+
+    // 解析 system_config，展開為 (location, device_id) 清單
+    const locationDevicePairs = [];
+    const allDeviceIds = new Set();
+    for (const row of rows) {
+      const config =
+        typeof row.system_config === "string"
+          ? JSON.parse(row.system_config || "{}")
+          : row.system_config || {};
+      const deviceIds = Array.isArray(config.device_ids)
+        ? config.device_ids.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n))
+        : config.device_id != null && config.device_id !== ""
+          ? [parseInt(String(config.device_id), 10)]
+          : [];
+      for (const deviceId of deviceIds) {
+        if (Number.isNaN(deviceId)) continue;
+        allDeviceIds.add(deviceId);
+        locationDevicePairs.push({
+          location_id: row.location_id,
+          location_name: row.location_name,
+          zone_id: row.zone_id,
+          zone_name: row.zone_name,
+          system_id: row.system_id,
+          device_id: deviceId,
+        });
+      }
+    }
+
+    if (locationDevicePairs.length === 0) {
+      return;
+    }
+
+    // 一次查詢所有設備的 config 與 type
+    const deviceIdList = Array.from(allDeviceIds);
+    const devices =
+      deviceIdList.length === 0
+        ? []
+        : await db.query(
+            `SELECT d.id, d.config as device_config
+             FROM devices d
+             INNER JOIN device_types dt ON d.type_id = dt.id
+             WHERE d.id = ANY($1::int[])
+               AND d.status = 'active'
+               AND dt.code = 'sensor'
+               AND d.config->>'protocol' = 'modbus'`,
+            [deviceIdList],
+          );
+    const deviceConfigMap = new Map(devices.map((d) => [d.id, d.device_config]));
+
+    const locations = locationDevicePairs
+      .map((pair) => {
+        const deviceConfig = deviceConfigMap.get(pair.device_id);
+        if (!deviceConfig) return null;
+        return {
+          ...pair,
+          device_config: deviceConfig,
+        };
+      })
+      .filter(Boolean);
 
     if (locations.length === 0) {
       return;
@@ -50,7 +174,7 @@ async function checkEnvironmentLocations() {
     let successCount = 0;
     let failCount = 0;
 
-    // 並行檢查所有位置（提高效率）
+    // 並行檢查所有位置-設備對
     const checkPromises = locations.map(async (location) => {
       try {
         const deviceConfigRaw =
@@ -78,96 +202,76 @@ async function checkEnvironmentLocations() {
         await modbusClient.readHoldingRegisters(0, 1, deviceConfig);
 
         // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
-        await systemAlert.clearError("environment", location.system_id, { skipWebSocket: true });
+        await systemAlert.clearError("environment", location.system_id, {
+          skipWebSocket: true,
+        });
 
         // 記錄設備數值（如果設備配置了 logging）
-        const deviceId = location.device_id ? parseInt(location.device_id) : null;
+        const deviceId = location.device_id
+          ? parseInt(location.device_id)
+          : null;
         if (deviceId) {
           try {
-            const loggingConfig = await deviceLoggingConfig.getDeviceLoggingConfig(deviceId);
-            
-            if (loggingConfig.enabled && loggingConfig.values && loggingConfig.values.length > 0) {
-              // 找出所有需要讀取的 holding 寄存器
-              const holdingRegisters = loggingConfig.values.filter(
-                v => v.enabled && v.register_type === "holding"
+            const loggingConfig =
+              await deviceLoggingConfig.getDeviceLoggingConfig(deviceId);
+
+            if (
+              loggingConfig.enabled &&
+              loggingConfig.values &&
+              loggingConfig.values.length > 0
+            ) {
+              const enabledValues = loggingConfig.values.filter((v) => v.enabled);
+              const deviceValues = await readValuesByRegisterType(
+                enabledValues,
+                deviceConfig,
+                modbusClient,
               );
 
-              if (holdingRegisters.length > 0) {
-                // 計算需要讀取的寄存器範圍
-                let minAddress = holdingRegisters[0].address;
-                let maxAddress = holdingRegisters[0].address + (holdingRegisters[0].length || 1);
-                
-                for (const valueConfig of holdingRegisters) {
-                  const startAddr = valueConfig.address;
-                  const endAddr = valueConfig.address + (valueConfig.length || 1);
-                  minAddress = Math.min(minAddress, startAddr);
-                  maxAddress = Math.max(maxAddress, endAddr);
-                }
-
-                const readLength = maxAddress - minAddress;
-
-                // 讀取所有需要的寄存器
-                if (readLength > 0) {
-                  const modbusData = await modbusClient.readHoldingRegisters(
-                    minAddress,
-                    readLength,
-                    deviceConfig
-                  );
-
-                  // 轉換為實際數值（需要調整地址偏移，因為我們從 minAddress 開始讀取）
-                  const deviceValues = {};
-                  
-                  for (const valueConfig of holdingRegisters) {
-                    // 計算在讀取資料中的相對地址
-                    const relativeAddress = valueConfig.address - minAddress;
-                    const rawValue = Array.isArray(modbusData) && relativeAddress >= 0 && relativeAddress < modbusData.length
-                      ? (valueConfig.length === 1 ? modbusData[relativeAddress] : modbusData.slice(relativeAddress, relativeAddress + (valueConfig.length || 1)))
-                      : null;
-
-                    if (rawValue !== null && rawValue !== undefined) {
-                      // 套用轉換
-                      const convertedValue = deviceLoggingConfig.applyConversion(rawValue, valueConfig.conversion);
-                      
-                      deviceValues[valueConfig.name] = {
-                        value: convertedValue,
-                        unit: valueConfig.conversion?.unit || null,
-                      };
-                    }
-                  }
-
-                  // 記錄到 environment_readings 並推送 WebSocket
-                  if (Object.keys(deviceValues).length > 0) {
+              if (Object.keys(deviceValues).length > 0) {
                     const data = {};
                     for (const [name, obj] of Object.entries(deviceValues)) {
                       data[name] = obj?.value ?? null;
                     }
+                    const dataRounded =
+                      environmentReadingsService.roundDataToOneDecimal(data);
                     const ts = new Date().toISOString();
-                    environmentReadingsService
-                      .saveReading({
-                        locationId: location.location_id,
-                        sourceId: location.system_id,
-                        deviceId: deviceId,
-                        data,
-                      })
-                      .catch((error) => {
-                        logger.error(`記錄環境讀數失敗 (locationId: ${location.location_id})`, {
-                          error: error.message,
+                    const now = Date.now();
+                    const rawKey = `${location.location_id}:${deviceId}`;
+                    const lastWrite = lastRawWriteByLocation.get(rawKey);
+                    const shouldWriteRaw =
+                      lastWrite === undefined || now - lastWrite >= RAW_WRITE_INTERVAL_MS;
+                    if (shouldWriteRaw) {
+                      environmentReadingsService
+                        .saveReading({
                           locationId: location.location_id,
-                          module: "environmentMonitor",
+                          sourceId: location.system_id,
+                          deviceId: deviceId,
+                          data,
+                        })
+                        .then(() => {
+                          lastRawWriteByLocation.set(rawKey, now);
+                        })
+                        .catch((error) => {
+                          logger.error(
+                            `記錄環境讀數失敗 (locationId: ${location.location_id})`,
+                            {
+                              error: error.message,
+                              locationId: location.location_id,
+                              module: "environmentMonitor",
+                            },
+                          );
                         });
-                      });
+                    }
                     websocketService.emitEnvironmentReading({
                       locationId: location.location_id,
                       reading: {
                         id: `monitor_${location.location_id}_${Date.now()}`,
                         locationId: String(location.location_id),
                         timestamp: ts,
-                        data,
+                        data: dataRounded,
                         createdAt: ts,
                       },
                     });
-                  }
-                }
               }
             }
           } catch (logError) {
@@ -184,7 +288,11 @@ async function checkEnvironmentLocations() {
         // 從 environment_readings 獲取最新數據進行閾值檢查
         try {
           if (!deviceId) {
-            return { systemId: location.system_id, locationId: location.location_id, success: true };
+            return {
+              systemId: location.system_id,
+              locationId: location.location_id,
+              success: true,
+            };
           }
 
           const latestReading = await db.query(
@@ -194,23 +302,31 @@ async function checkEnvironmentLocations() {
                AND recorded_at >= NOW() - INTERVAL '1 minute'
              ORDER BY recorded_at DESC
              LIMIT 1`,
-            [location.location_id]
+            [location.location_id],
           );
 
-          if (latestReading && latestReading.length > 0 && latestReading[0].data) {
-            const sensorData = typeof latestReading[0].data === "object"
-              ? latestReading[0].data
-              : JSON.parse(latestReading[0].data || "{}");
+          if (
+            latestReading &&
+            latestReading.length > 0 &&
+            latestReading[0].data
+          ) {
+            const sensorData =
+              typeof latestReading[0].data === "object"
+                ? latestReading[0].data
+                : JSON.parse(latestReading[0].data || "{}");
 
             // 調試日誌：只在需要時輸出（可通過環境變數控制）
             // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
             if (process.env.ENABLE_DETAILED_LOGS === "true") {
-              logger.debug(`位置 ${location.location_id} (${location.location_name}) 感測器數據`, {
-                locationId: location.location_id,
-                locationName: location.location_name,
-                sensorData,
-                module: "environmentMonitor",
-              });
+              logger.debug(
+                `位置 ${location.location_id} (${location.location_name}) 感測器數據`,
+                {
+                  locationId: location.location_id,
+                  locationName: location.location_name,
+                  sensorData,
+                  module: "environmentMonitor",
+                },
+              );
             }
 
             // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
@@ -228,12 +344,21 @@ async function checkEnvironmentLocations() {
           });
         }
 
-        return { systemId: location.system_id, locationId: location.location_id, success: true };
+        return {
+          systemId: location.system_id,
+          locationId: location.location_id,
+          success: true,
+        };
       } catch (error) {
         // 讀取失敗，記錄錯誤（不檢查閾值）（批次模式：跳過即時推送）
         // 使用 location_systems.id 作為 source_id
         const errorMessage = error.message || "無法讀取感測器資料";
-        await systemAlert.recordError("environment", location.system_id, errorMessage, { skipWebSocket: true });
+        await systemAlert.recordError(
+          "environment",
+          location.system_id,
+          errorMessage,
+          { skipWebSocket: true },
+        );
 
         return {
           systemId: location.system_id,
@@ -246,74 +371,51 @@ async function checkEnvironmentLocations() {
 
     const results = await Promise.allSettled(checkPromises);
 
-    // 收集狀態更新，用於批次推送（只收集狀態改變的設備）
-    const statusUpdates = [];
-
+    // 計數：每個 (location, device) 的成敗
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
-        const systemId = result.value.systemId;
-        const locationId = result.value.locationId;
-        const key = `environment:${systemId}`;
-        const currentStatus = result.value.success ? "online" : "offline";
-        const lastStatus = lastDeviceStatus.get(key);
-
-        // 從原始 locations 陣列中獲取 device_id
-        const location = locations[index];
-        const deviceId = location?.device_id ? parseInt(location.device_id) : null;
-
-        // 只在狀態改變時才添加到更新列表
-        if (lastStatus !== currentStatus) {
-          lastDeviceStatus.set(key, currentStatus);
-          
-          if (result.value.success) {
-            successCount++;
-            statusUpdates.push({
-              system: "environment",
-              sourceId: systemId,
-              deviceId: deviceId,
-              status: "online",
-            });
-          } else {
-            failCount++;
-            statusUpdates.push({
-              system: "environment",
-              sourceId: systemId,
-              deviceId: deviceId,
-              status: "offline",
-            });
-          }
-        } else {
-          // 狀態沒有改變，只更新計數（不推送 WebSocket）
-          if (result.value.success) {
-            successCount++;
-          } else {
-            failCount++;
-          }
-        }
+        if (result.value.success) successCount++;
+        else failCount++;
       } else {
-        // Promise 被 reject，記錄錯誤並標記為離線
         failCount++;
         const location = locations[index];
         if (location) {
-          const key = `environment:${location.system_id}`;
-          const lastStatus = lastDeviceStatus.get(key);
-          
-          // 只在狀態改變時才推送
-          if (lastStatus !== "offline") {
-            lastDeviceStatus.set(key, "offline");
-            statusUpdates.push({
-              system: "environment",
-              sourceId: location.system_id,
-              deviceId: location.device_id ? parseInt(location.device_id) : null,
-              status: "offline",
-            });
-          }
-        }
           logger.error("檢查位置失敗 (Promise rejected)", {
             error: result.reason?.message || result.reason,
-            locationId: location?.location_id,
+            locationId: location.location_id,
+            deviceId: location.device_id,
             module: "environmentMonitor",
           });
+        }
+      }
+    });
+
+    // 依 system_id 彙總：該地點只要有一台設備成功即視為 online
+    const systemSuccess = new Map();
+    results.forEach((result, index) => {
+      if (result.status !== "fulfilled") return;
+      const loc = locations[index];
+      if (!loc) return;
+      const sid = loc.system_id;
+      const ok = result.value.success;
+      if (!systemSuccess.has(sid)) systemSuccess.set(sid, false);
+      if (ok) systemSuccess.set(sid, true);
+    });
+
+    const statusUpdates = [];
+    systemSuccess.forEach((anySuccess, systemId) => {
+      const currentStatus = anySuccess ? "online" : "offline";
+      const key = `environment:${systemId}`;
+      const lastStatus = lastDeviceStatus.get(key);
+      if (lastStatus !== currentStatus) {
+        lastDeviceStatus.set(key, currentStatus);
+        const loc = locations.find((l) => l.system_id === systemId);
+        statusUpdates.push({
+          system: "environment",
+          sourceId: systemId,
+          deviceId: loc?.device_id ?? null,
+          status: currentStatus,
+        });
       }
     });
 
@@ -346,7 +448,12 @@ async function checkEnvironmentLocations() {
  * @param {string} reason - 解決原因
  * @returns {Promise<void>}
  */
-async function resolveThresholdAlert(systemId, parameter, value, reason = "數值已恢復正常") {
+async function resolveThresholdAlert(
+  systemId,
+  parameter,
+  value,
+  reason = "數值已恢復正常",
+) {
   try {
     await alertService.updateAlertStatus(
       systemId,
@@ -358,23 +465,29 @@ async function resolveThresholdAlert(systemId, parameter, value, reason = "數�
 
     // 只在啟用詳細日誌時輸出
     if (process.env.ENABLE_DETAILED_LOGS === "true") {
-      logger.debug(`解決警報 | 系統 ${systemId} | 參數 ${parameter} | 數值: ${value} (${reason})`, {
-        systemId,
-        parameter,
-        value,
-        reason,
-        module: "environmentMonitor",
-      });
+      logger.debug(
+        `解決警報 | 系統 ${systemId} | 參數 ${parameter} | 數值: ${value} (${reason})`,
+        {
+          systemId,
+          parameter,
+          value,
+          reason,
+          module: "environmentMonitor",
+        },
+      );
     }
   } catch (error) {
     // 如果警報不存在或已經解決，靜默處理（這在自動解決中是正常的）
     if (process.env.NODE_ENV === "development") {
-      logger.warn(`解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}`, {
-        error: error.message,
-        systemId,
-        parameter,
-        module: "environmentMonitor",
-      });
+      logger.warn(
+        `解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}`,
+        {
+          error: error.message,
+          systemId,
+          parameter,
+          module: "environmentMonitor",
+        },
+      );
     }
   }
 }
@@ -405,7 +518,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
       alertService.ALERT_SOURCES.ENVIRONMENT,
       systemId,
       "threshold",
-      null // 參數匹配將在後續處理中進行
+      null, // 參數匹配將在後續處理中進行
     );
 
     // 按參數分組規則（每個參數只匹配最嚴重的規則）
@@ -454,14 +567,17 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         const status = thresholdExceeded
           ? `超過閾值 (${matchedRule.severity})`
           : "正常";
-        logger.debug(`位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`, {
-          locationName: locationInfo?.name,
-          systemId,
-          parameter,
-          value,
-          status,
-          module: "environmentMonitor",
-        });
+        logger.debug(
+          `位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`,
+          {
+            locationName: locationInfo?.name,
+            systemId,
+            parameter,
+            value,
+            status,
+            module: "environmentMonitor",
+          },
+        );
       }
     }
 
@@ -482,7 +598,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
             value: value,
             threshold: matchedRule.condition_config.value,
             unit: matchedRule.condition_config.unit || "",
-          }
+          },
         );
 
         await alertService.createAlert({
@@ -501,15 +617,15 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
           alertService.ALERT_SOURCES.ENVIRONMENT,
           systemId,
           "threshold",
-          parameterDisplayName // 傳遞參數名稱，精確匹配
+          parameterDisplayName, // 傳遞參數名稱，精確匹配
         );
-        
+
         if (parameterAlerts.length > 0) {
           await resolveThresholdAlert(
             systemId,
             parameter,
             value,
-            "數值已恢復正常"
+            "數值已恢復正常",
           );
         }
       }
@@ -536,7 +652,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         alertService.ALERT_SOURCES.ENVIRONMENT,
         systemId,
         "threshold",
-        parameterDisplayName
+        parameterDisplayName,
       );
 
       // 如果沒有該參數的警報，跳過
@@ -550,10 +666,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         let stillExceeded = false;
         for (const rule of paramRules) {
           if (
-            alertRuleService.evaluateThreshold(
-              rule.condition_config,
-              value
-            )
+            alertRuleService.evaluateThreshold(rule.condition_config, value)
           ) {
             stillExceeded = true;
             break;
@@ -566,7 +679,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
             systemId,
             parameter,
             value,
-            "數值已恢復正常"
+            "數值已恢復正常",
           );
         }
       }
@@ -592,26 +705,29 @@ async function resolveAllThresholdAlerts(systemId) {
       alertService.ALERT_SOURCES.ENVIRONMENT,
       systemId,
       "threshold",
-      null // 不限定參數，獲取所有閾值警報
+      null, // 不限定參數，獲取所有閾值警報
     );
 
     // 如果有多個警報，updateAlertStatus 會一次性解決所有匹配的警報
     // 所以不需要循環調用，直接調用一次即可
     if (activeAlerts.length > 0) {
-    await alertService.updateAlertStatus(
-      systemId,
-      alertService.ALERT_SOURCES.ENVIRONMENT,
-      "threshold",
-      alertService.ALERT_STATUS.RESOLVED,
-      null,
-    );
+      await alertService.updateAlertStatus(
+        systemId,
+        alertService.ALERT_SOURCES.ENVIRONMENT,
+        "threshold",
+        alertService.ALERT_STATUS.RESOLVED,
+        null,
+      );
 
       if (process.env.ENABLE_DETAILED_LOGS === "true") {
-        logger.debug(`解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`, {
-          systemId,
-          alertCount: activeAlerts.length,
-          module: "environmentMonitor",
-        });
+        logger.debug(
+          `解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`,
+          {
+            systemId,
+            alertCount: activeAlerts.length,
+            module: "environmentMonitor",
+          },
+        );
       }
     }
   } catch (error) {

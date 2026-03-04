@@ -11,7 +11,9 @@ const {
   formatDateZhTW,
   formatZoneLocation,
 } = require("./reportFormatUtils");
-const { countEntryExitFromSorted } = require("../systems/peopleCountingService");
+const {
+  countEntryExitFromSorted,
+} = require("../systems/peopleCountingService");
 
 const sep = "\x00";
 
@@ -45,7 +47,10 @@ function buildStatsSection(rows, directionMap) {
       (a, b) => new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
     );
     const getDirection = (r) => directionMap.get(Number(r.physical_id));
-    const { entryCount, exitCount } = countEntryExitFromSorted(sorted, getDirection);
+    const { entryCount, exitCount } = countEntryExitFromSorted(
+      sorted,
+      getDirection,
+    );
     const current = Math.max(0, entryCount - exitCount);
     sectionRows.push({
       日期: dateStr,
@@ -74,18 +79,23 @@ function buildUnitStatsSection(rows, directionMap) {
     const recs = groups.get(key);
     const byUnit = new Map();
     for (const r of recs) {
-      const unitName = (r.unit_name ?? "") || "(未指定單位)";
-      if (!byUnit.has(unitName)) byUnit.set(unitName, []);
-      byUnit.get(unitName).push(r);
+      const raw = (r.unit_name ?? "").trim();
+      if (!raw) continue;
+      if (!byUnit.has(raw)) byUnit.set(raw, []);
+      byUnit.get(raw).push(r);
     }
     const unitNames = [...byUnit.keys()].sort();
     for (const unitName of unitNames) {
       const unitRecs = byUnit.get(unitName);
       const sorted = [...unitRecs].sort(
-        (a, b) => new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
+        (a, b) =>
+          new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
       );
       const getDirection = (r) => directionMap.get(Number(r.physical_id));
-      const { entryCount, exitCount } = countEntryExitFromSorted(sorted, getDirection);
+      const { entryCount, exitCount } = countEntryExitFromSorted(
+        sorted,
+        getDirection,
+      );
       const current = Math.max(0, entryCount - exitCount);
       sectionRows.push({
         日期: dateStr,
@@ -149,10 +159,11 @@ function buildDetailSection(rows, doorNameMap, directionMap) {
           ? (doorNameMap.get(physicalId) ?? String(r.physical_id ?? ""))
           : "";
       const dir = directionMap.get(physicalId);
-      const directionLabel = dir === "entry" ? "進場" : dir === "exit" ? "出場" : "";
+      const directionLabel =
+        dir === "entry" ? "進場" : dir === "exit" ? "出場" : "";
       result.push({
         "區域-地點": zoneLoc,
-        單位名稱: (r.unit_name ?? "") || "(未指定單位)",
+        單位名稱: (r.unit_name ?? "").trim() || "- -",
         人員姓名: r.person_name ?? "",
         出入口名稱: doorName,
         刷卡時間: formatDateTimeZhTW(r.swip_card_rev_time),
@@ -160,7 +171,9 @@ function buildDetailSection(rows, doorNameMap, directionMap) {
       });
     }
   }
-  return result.sort((a, b) => (b.刷卡時間 || "").localeCompare(a.刷卡時間 || ""));
+  return result.sort((a, b) =>
+    (b.刷卡時間 || "").localeCompare(a.刷卡時間 || ""),
+  );
 }
 
 function transformPeopleCountingToReportFormat(
@@ -178,12 +191,26 @@ function transformPeopleCountingToReportFormat(
         },
         {
           title: "單位統計",
-          headers: ["日期", "區域-地點", "單位名稱", "進場人數", "出場人數", "在場人數"],
+          headers: [
+            "日期",
+            "區域-地點",
+            "單位名稱",
+            "進場人數",
+            "出場人數",
+            "在場人數",
+          ],
           rows: [],
         },
         {
           title: "進出紀錄",
-          headers: ["區域-地點", "單位名稱", "人員姓名", "出入口名稱", "刷卡時間", "方向"],
+          headers: [
+            "區域-地點",
+            "單位名稱",
+            "人員姓名",
+            "出入口名稱",
+            "刷卡時間",
+            "方向",
+          ],
           rows: [],
         },
       ],
@@ -199,12 +226,26 @@ function transformPeopleCountingToReportFormat(
       },
       {
         title: "單位統計",
-        headers: ["日期", "區域-地點", "單位名稱", "進場人數", "出場人數", "在場人數"],
+        headers: [
+          "日期",
+          "區域-地點",
+          "單位名稱",
+          "進場人數",
+          "出場人數",
+          "在場人數",
+        ],
         rows: buildUnitStatsSection(rows, directionMap),
       },
       {
         title: "進出紀錄",
-        headers: ["區域-地點", "單位名稱", "人員姓名", "出入口名稱", "刷卡時間", "方向"],
+        headers: [
+          "區域-地點",
+          "單位名稱",
+          "人員姓名",
+          "出入口名稱",
+          "刷卡時間",
+          "方向",
+        ],
         rows: buildDetailSection(rows, doorNameMap, directionMap),
       },
     ],

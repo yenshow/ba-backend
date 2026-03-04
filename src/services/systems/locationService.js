@@ -71,14 +71,21 @@ function formatSystem(system) {
 
   // 根據系統類型格式化配置
   switch (system.system_type) {
-    case "environment":
+    case "environment": {
+      const deviceIds = Array.isArray(config.device_ids)
+        ? config.device_ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n))
+        : config.device_id != null && config.device_id !== ""
+          ? [Number(config.device_id)]
+          : [];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: config.device_id ?? deviceIds[0] ?? undefined,
+          deviceIds: deviceIds.length ? deviceIds : undefined,
           parameters: config.parameters || [],
         },
       };
+    }
 
     case "lighting":
       return {
@@ -908,11 +915,16 @@ async function deleteLocation(id) {
  */
 function buildSystemConfig(systemType, config) {
   switch (systemType) {
-    case "environment":
+    case "environment": {
+      const ids = Array.isArray(config.deviceIds)
+        ? config.deviceIds.filter((id) => id != null && !Number.isNaN(Number(id)))
+        : config.deviceId != null ? [config.deviceId] : [];
       return {
-        device_id: config.deviceId || null,
+        device_id: ids[0] ?? null,
+        device_ids: ids,
         parameters: config.parameters || [],
       };
+    }
 
     case "lighting":
       return {
@@ -1019,6 +1031,7 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
   if (finalSystems.length === 0 && locationType) {
     const {
       deviceId,
+      deviceIds,
       parameters,
       location: locationXY,
       modbus,
@@ -1042,7 +1055,8 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       const systemConfig = {};
       switch (locationType) {
         case "environment":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          if (deviceIds !== undefined) systemConfig.deviceIds = deviceIds;
+          else if (deviceId !== undefined) systemConfig.deviceId = deviceId;
           if (parameters !== undefined) systemConfig.parameters = parameters;
           break;
         case "lighting":

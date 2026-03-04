@@ -1,6 +1,13 @@
 const db = require("../../database/db");
 const { parseConfig, stringifyConfig } = require("../../utils/deviceHelpers");
 
+/** 將表單值轉為整數或 null（undefined/null/空字串 → null） */
+function parseOptionalInt(val) {
+	if (val === undefined || val === null || val === "") return null;
+	const n = Number(val);
+	return Number.isInteger(n) ? n : null;
+}
+
 // 取得所有設備型號（支援按類型篩選）
 async function getAllDeviceModels(filters = {}) {
 	try {
@@ -105,7 +112,11 @@ function validateSensorParametersConfig(config) {
 			if (typeof param.modbusConfig.address !== "number" || param.modbusConfig.address < 0) {
 				throw new Error(`參數 ${param.type} 的 modbusConfig.address 必須為非負整數`);
 			}
-			// length 已移除：前端不再提供，後端統一使用預設值 1
+		}
+		// 型號層級 registerType（本型號統一使用的 Modbus API 方法）
+		const validRegisterTypes = ["coils", "discrete", "holding", "input"];
+		if (config.registerType != null && !validRegisterTypes.includes(config.registerType)) {
+			throw new Error(`config.registerType 須為 ${validRegisterTypes.join(", ")} 之一`);
 		}
 	}
 }
@@ -113,7 +124,7 @@ function validateSensorParametersConfig(config) {
 // 建立設備型號
 async function createDeviceModel(data, userId) {
 	try {
-		const { name, type_id, port, description, config } = data;
+		const { name, type_id, port, unit_id, description, config } = data;
 
 		// 驗證必填欄位
 		if (!name || name.trim().length === 0) {
@@ -124,10 +135,14 @@ async function createDeviceModel(data, userId) {
 			throw new Error("設備類型 ID 不能為空");
 		}
 
-		// 驗證端口（如果提供）
-		const finalPort = port !== undefined ? port : 502; // 預設 502
-		if (finalPort !== undefined && (!Number.isInteger(finalPort) || finalPort <= 0 || finalPort > 65535)) {
+		// 驗證端口與 unit_id（選填）
+		const finalPort = parseOptionalInt(port);
+		if (finalPort !== null && (finalPort < 1 || finalPort > 65535)) {
 			throw new Error("端口必須是 1-65535 之間的整數");
+		}
+		const finalUnitId = parseOptionalInt(unit_id);
+		if (finalUnitId !== null && (finalUnitId < 1 || finalUnitId > 255)) {
+			throw new Error("Unit ID 必須是 1-255 之間的整數");
 		}
 
 		// 驗證設備類型是否存在
@@ -152,8 +167,8 @@ async function createDeviceModel(data, userId) {
 
 		// 插入到 device_models
 		const result = await db.query(
-			"INSERT INTO device_models (name, type_id, port, description, config) VALUES (?, ?, ?, ?, ?) RETURNING id",
-			[name.trim(), type_id, finalPort, description || null, stringifyConfig(config)]
+			"INSERT INTO device_models (name, type_id, port, unit_id, description, config) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+			[name.trim(), type_id, finalPort, finalUnitId, description || null, stringifyConfig(config)]
 		);
 
 		const models = await db.query(
@@ -188,7 +203,7 @@ async function createDeviceModel(data, userId) {
 // 更新設備型號
 async function updateDeviceModel(id, data, userId) {
 	try {
-		const { name, type_id, port, description, config } = data;
+		const { name, type_id, port, unit_id, description, config } = data;
 
 		// 檢查設備型號是否存在
 		const existing = await db.query("SELECT * FROM device_models WHERE id = ?", [id]);
@@ -199,10 +214,17 @@ async function updateDeviceModel(id, data, userId) {
 			throw error;
 		}
 
-		// 驗證端口（如果提供）
+		// 驗證端口與 unit_id（選填）
 		if (port !== undefined) {
-			if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+			const p = parseOptionalInt(port);
+			if (p !== null && (p < 1 || p > 65535)) {
 				throw new Error("端口必須是 1-65535 之間的整數");
+			}
+		}
+		if (unit_id !== undefined) {
+			const u = parseOptionalInt(unit_id);
+			if (u !== null && (u < 1 || u > 255)) {
+				throw new Error("Unit ID 必須是 1-255 之間的整數");
 			}
 		}
 
@@ -260,7 +282,11 @@ async function updateDeviceModel(id, data, userId) {
 
 		if (port !== undefined) {
 			updates.push("port = ?");
-			params.push(port);
+			params.push(parseOptionalInt(port));
+		}
+		if (unit_id !== undefined) {
+			updates.push("unit_id = ?");
+			params.push(parseOptionalInt(unit_id));
 		}
 
 		if (description !== undefined) {

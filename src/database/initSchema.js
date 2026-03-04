@@ -151,7 +151,7 @@ async function initSchema() {
 			)
 		`);
 
-    // 如果表已存在但沒有 port 欄位，添加它
+    // 如果表已存在但沒有 port 欄位，添加它（可為 NULL，無預設值）
     await targetPool.query(`
 			DO $$ 
 			BEGIN
@@ -159,8 +159,28 @@ async function initSchema() {
 					SELECT 1 FROM information_schema.columns 
 					WHERE table_name = 'device_models' AND column_name = 'port'
 				) THEN
-					ALTER TABLE device_models ADD COLUMN port INTEGER NOT NULL DEFAULT 502;
+					ALTER TABLE device_models ADD COLUMN port INTEGER;
 					RAISE NOTICE '已添加 port 欄位到 device_models 表';
+				END IF;
+			END $$;
+		`);
+
+    // 若 port 為 NOT NULL DEFAULT 502，改為可為 NULL、移除預設（型號端口改為留空）
+    try {
+      await targetPool.query("ALTER TABLE device_models ALTER COLUMN port DROP DEFAULT");
+      await targetPool.query("ALTER TABLE device_models ALTER COLUMN port DROP NOT NULL");
+    } catch (_) {}
+
+    // 如果表已存在但沒有 unit_id 欄位，添加它（感測器/控制器等每設備可不同）
+    await targetPool.query(`
+			DO $$ 
+			BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM information_schema.columns 
+					WHERE table_name = 'device_models' AND column_name = 'unit_id'
+				) THEN
+					ALTER TABLE device_models ADD COLUMN unit_id INTEGER;
+					RAISE NOTICE '已添加 unit_id 欄位到 device_models 表';
 				END IF;
 			END $$;
 		`);
@@ -272,6 +292,36 @@ async function initSchema() {
       ON people_counting_logs(location_id);
     `);
     console.log("✅ people_counting_logs 表已建立");
+
+    // 車輛進出過車記錄快取表（同步自外部 vehiclebiz.passageway_log_data，供備份）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS vehicle_passageway_logs (
+        id BIGSERIAL PRIMARY KEY,
+        external_id BIGINT UNIQUE,
+        trigger_time TIMESTAMPTZ NOT NULL,
+        lane_id INTEGER,
+        lane_name VARCHAR(255),
+        license_plate VARCHAR(255),
+        owner_name VARCHAR(255),
+        allow_result SMALLINT,
+        lane_type SMALLINT,
+        vehicle_list_id INTEGER,
+        vehicle_list_name VARCHAR(255),
+        zone_name VARCHAR(255),
+        location_name VARCHAR(255),
+        location_id INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_trigger_time
+      ON vehicle_passageway_logs(trigger_time);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_location
+      ON vehicle_passageway_logs(location_id);
+    `);
+    console.log("✅ vehicle_passageway_logs 表已建立");
 
     // 建立統一警報表（支持多系統來源，精簡版）
     await targetPool.query(`
@@ -605,6 +655,23 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_environment_readings_recorded_at ON environment_readings(recorded_at);
     `);
     console.log("✅ environment_readings 表已建立");
+
+    // 環境讀數彙總表（時/日/月，供趨勢與報表）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS environment_readings_aggregated (
+        id BIGSERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        bucket_type VARCHAR(10) NOT NULL,
+        bucket_at TIMESTAMP NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(location_id, bucket_type, bucket_at)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_env_agg_location_bucket ON environment_readings_aggregated(location_id, bucket_type, bucket_at);
+    `);
+    console.log("✅ environment_readings_aggregated 表已建立");
 
     await targetPool.query("DROP TABLE IF EXISTS device_data_logs CASCADE");
 

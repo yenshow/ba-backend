@@ -50,6 +50,8 @@ const lightingMonitor = require("./services/monitoring/lightingMonitor");
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
+// 環境彙總排程（時／日／月）
+const environmentAggregationService = require("./services/systems/environmentAggregationService");
 
 // 監聽 MediaMTX 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
 // 注意：WebSocket 事件推送已整合到 mediaMTXService 中
@@ -210,6 +212,15 @@ async function startServer() {
     // 啟動備份排程
     backupScheduler.startScheduler();
     serverLogger.info("備份排程已啟用");
+
+    // 環境彙總：每小時寫入「上一小時」hour（日／月由備份日執行）
+    const runHourAgg = () =>
+      environmentAggregationService.computeAndSaveHour().catch((err) =>
+        serverLogger.warn("環境彙總 hour 執行失敗", { error: err.message })
+      );
+    setImmediate(runHourAgg);
+    setInterval(runHourAgg, 60 * 60 * 1000);
+    serverLogger.info("環境彙總排程已啟用（每小時）");
 
     const localIP = getLocalIPAddress();
 

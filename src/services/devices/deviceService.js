@@ -203,7 +203,7 @@ async function createDevice(deviceData, userId) {
 
     // 驗證設備型號是否存在且類型匹配
     const models = await db.query(
-      "SELECT id, type_id, port FROM device_models WHERE id = ?",
+      "SELECT id, type_id, port, unit_id FROM device_models WHERE id = ?",
       [model_id],
     );
     if (models.length === 0) {
@@ -214,7 +214,8 @@ async function createDevice(deviceData, userId) {
       throw new Error("設備型號的類型與設備類型不匹配");
     }
 
-    const modelPort = models[0].port;
+    const modelPort = models[0].port ?? null;
+    const modelUnitId = models[0].unit_id ?? null;
 
     // 驗證配置
     validateDeviceConfig(config, typeCode);
@@ -232,17 +233,20 @@ async function createDevice(deviceData, userId) {
       if (!config.host) {
         throw new Error("controller 類型需要 host (主機位址)");
       }
-      if (config.port === undefined && !modelPort) {
-        throw new Error("controller 類型需要 port (端口)");
+      if (config.port === undefined && modelPort === null) {
+        throw new Error("controller 類型需要 port (端口)，請在型號或設備中填寫");
       }
 
-      // 設定 port（優先使用 config.port，否則使用 model.port，最後預設 502）
+      // 設定 port（優先使用 config.port，否則使用 model.port；不再預設 502）
       const finalPort =
-        config.port !== undefined ? config.port : modelPort || 502;
+        config.port !== undefined ? config.port : modelPort;
       config.port = finalPort;
 
-      // 自動生成 unitId（如果未提供）
+      // 使用型號的 unit_id 或自動生成 unitId（如果未提供）
       if (config.unitId === undefined) {
+        if (modelUnitId !== null) {
+          config.unitId = modelUnitId;
+        } else {
         // 查詢相同 host + port 的設備，找出已使用的 unitId
         const existingDevices = await db.query(
           `SELECT config FROM devices 
@@ -272,6 +276,7 @@ async function createDevice(deviceData, userId) {
         }
 
         config.unitId = autoUnitId;
+        }
       }
 
       // 檢查是否已有相同連接配置的設備（host + port + unitId）
@@ -296,17 +301,20 @@ async function createDevice(deviceData, userId) {
       if (!config.host) {
         throw new Error("sensor (modbus) 類型需要 host (主機位址)");
       }
-      if (config.port === undefined && !modelPort) {
-        throw new Error("sensor (modbus) 類型需要 port (端口)");
+      if (config.port === undefined && modelPort === null) {
+        throw new Error("sensor (modbus) 類型需要 port (端口)，請在型號或設備中填寫");
       }
 
-      // 設定 port（優先使用 config.port，否則使用 model.port，最後預設 502）
+      // 設定 port（優先使用 config.port，否則使用 model.port；不再預設 502）
       const finalPort =
-        config.port !== undefined ? config.port : modelPort || 502;
+        config.port !== undefined ? config.port : modelPort;
       config.port = finalPort;
 
-      // 自動生成 unitId（如果未提供）
+      // 使用型號的 unit_id 或自動生成 unitId（如果未提供）
       if (config.unitId === undefined) {
+        if (modelUnitId !== null) {
+          config.unitId = modelUnitId;
+        } else {
         // 查詢相同 host + port 的設備，找出已使用的 unitId
         const existingDevices = await db.query(
           `SELECT config FROM devices 
@@ -341,6 +349,7 @@ async function createDevice(deviceData, userId) {
         }
 
         config.unitId = autoUnitId;
+        }
       }
 
       // 檢查是否已有相同連接配置的設備（host + port + unitId）
@@ -503,27 +512,32 @@ async function updateDevice(id, deviceData, userId) {
         const finalModelId =
           model_id !== undefined ? model_id : existingDevice.model_id;
 
-        // 獲取 model port
+        // 獲取 model port、unit_id
         let modelPort = null;
+        let modelUnitId = null;
         if (finalModelId) {
           const models = await db.query(
-            "SELECT port FROM device_models WHERE id = ?",
+            "SELECT port, unit_id FROM device_models WHERE id = ?",
             [finalModelId],
           );
           if (models.length > 0) {
-            modelPort = models[0].port;
+            modelPort = models[0].port ?? null;
+            modelUnitId = models[0].unit_id ?? null;
           }
         }
 
-        // 設定 port（優先使用 config.port，否則使用 model.port，最後使用現有 port，最後預設 502）
+        // 設定 port（優先 config → model → 現有；不再預設 502）
         const finalPort =
           config.port !== undefined
             ? config.port
-            : modelPort || existingConfig?.port || 502;
+            : modelPort ?? existingConfig?.port;
         config.port = finalPort;
 
-        // 自動生成 unitId（如果未提供且 host 或 port 有變更）
+        // 使用型號的 unit_id 或自動生成 unitId（如果未提供）
         if (config.unitId === undefined) {
+          if (modelUnitId !== null) {
+            config.unitId = modelUnitId;
+          } else {
           const finalHost = config.host || existingConfig?.host;
 
           if (finalHost && finalPort) {
@@ -573,6 +587,7 @@ async function updateDevice(id, deviceData, userId) {
               config.unitId = autoUnitId;
             }
           }
+          }
         }
 
         // 檢查是否已有相同連接配置的設備（host + port + unitId，排除當前設備）
@@ -605,27 +620,32 @@ async function updateDevice(id, deviceData, userId) {
         const finalModelId =
           model_id !== undefined ? model_id : existingDevice.model_id;
 
-        // 獲取 model port
+        // 獲取 model port、unit_id
         let modelPort = null;
+        let modelUnitId = null;
         if (finalModelId) {
           const models = await db.query(
-            "SELECT port FROM device_models WHERE id = ?",
+            "SELECT port, unit_id FROM device_models WHERE id = ?",
             [finalModelId],
           );
           if (models.length > 0) {
-            modelPort = models[0].port;
+            modelPort = models[0].port ?? null;
+            modelUnitId = models[0].unit_id ?? null;
           }
         }
 
-        // 設定 port（優先使用 config.port，否則使用 model.port，最後使用現有 port，最後預設 502）
+        // 設定 port（優先 config → model → 現有；不再預設 502）
         const finalPort =
           config.port !== undefined
             ? config.port
-            : modelPort || existingConfig?.port || 502;
+            : modelPort ?? existingConfig?.port;
         config.port = finalPort;
 
-        // 自動生成 unitId（如果未提供且 host 或 port 有變更）
+        // 使用型號的 unit_id 或自動生成 unitId（如果未提供）
         if (config.unitId === undefined) {
+          if (modelUnitId !== null) {
+            config.unitId = modelUnitId;
+          } else {
           const finalHost = config.host || existingConfig?.host;
 
           if (finalHost && finalPort) {
@@ -670,9 +690,9 @@ async function updateDevice(id, deviceData, userId) {
                 if (autoUnitId > 255) {
                   throw new Error("無法自動生成 unitId：已達到最大值 255");
                 }
-                config.unitId = autoUnitId;
-              }
-            } else {
+              config.unitId = autoUnitId;
+            }
+          } else {
               // 從 1 開始找第一個未使用的 unitId
               let autoUnitId = 1;
               while (usedUnitIds.has(autoUnitId) && autoUnitId <= 255) {
@@ -683,6 +703,7 @@ async function updateDevice(id, deviceData, userId) {
               }
               config.unitId = autoUnitId;
             }
+          }
           }
         }
 

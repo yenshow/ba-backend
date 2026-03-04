@@ -22,6 +22,20 @@ async function getPeopleCountingForBackup(beforeDate) {
   return rows || [];
 }
 
+async function getVehiclePassagewayForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT 
+       trigger_time, lane_id, lane_name, license_plate, owner_name,
+       allow_result, lane_type, vehicle_list_id, vehicle_list_name,
+       zone_name, location_name, location_id
+     FROM vehicle_passageway_logs
+     WHERE trigger_time < $1
+     ORDER BY trigger_time ASC`,
+    [beforeDate]
+  );
+  return rows || [];
+}
+
 const { exportData } = require("./backupFormats");
 const fs = require("fs");
 const path = require("path");
@@ -47,7 +61,9 @@ function getBackupDirectory(category = "default") {
   const dirMap = {
     alerts: backupConfig.directories.alerts,
     environmentReadings: backupConfig.directories.environmentReadings,
+    environmentReadingsAggregated: backupConfig.directories.environmentReadingsAggregated,
     peopleCounting: backupConfig.directories.peopleCounting,
+    vehicleAccess: backupConfig.directories.vehicleAccess,
     default: backupConfig.directories.root,
   };
   return dirMap[category] || dirMap.default;
@@ -96,8 +112,10 @@ async function backupTable(options) {
     const namingStrategy = mergeStrategy;
     const dateFieldMap = {
       environment_readings: "recorded_at",
+      environment_readings_aggregated: "bucket_at",
       alerts: "created_at",
       people_counting_logs: "swip_card_rev_time",
+      vehicle_passageway_logs: "trigger_time",
     };
     const dateField = dateFieldMap[tableName];
     let dateForFilename = null;
@@ -217,7 +235,9 @@ async function deleteOldBackups(category = "default", retentionDays = null) {
     const dirMap = {
       alerts: backupConfig.directories.alerts,
       environmentReadings: backupConfig.directories.environmentReadings,
+      environmentReadingsAggregated: backupConfig.directories.environmentReadingsAggregated,
       peopleCounting: backupConfig.directories.peopleCounting,
+      vehicleAccess: backupConfig.directories.vehicleAccess,
       default: backupConfig.directories.root,
     };
 
@@ -325,5 +345,6 @@ module.exports = {
   getBackupDirectory,
   ensureDirectory,
   getPeopleCountingForBackup,
+  getVehiclePassagewayForBackup,
 };
 

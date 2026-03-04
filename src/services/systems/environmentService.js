@@ -161,6 +161,55 @@ async function getReadings(locationId, options = {}) {
   }
 }
 
+/**
+ * 取得彙總讀數（時／日／月）
+ * @param {string|number} locationId
+ * @param {object} options - { bucket: 'hour'|'day'|'month', startTime, endTime }
+ */
+async function getReadingsAggregated(locationId, options = {}) {
+  try {
+    const { bucket, startTime, endTime } = options;
+    if (!bucket || !["hour", "day", "month"].includes(bucket)) {
+      throw new Error("bucket 必填且為 hour、day 或 month");
+    }
+    const locId = parseInt(locationId, 10);
+    let query = `
+      SELECT bucket_at as timestamp, data
+      FROM environment_readings_aggregated
+      WHERE location_id = $1 AND bucket_type = $2
+    `;
+    const params = [locId, bucket];
+    let paramIndex = 3;
+    if (startTime) {
+      query += ` AND bucket_at >= $${paramIndex++}`;
+      params.push(new Date(startTime));
+    }
+    if (endTime) {
+      query += ` AND bucket_at <= $${paramIndex++}`;
+      params.push(new Date(endTime));
+    }
+    query += ` ORDER BY bucket_at ASC`;
+    const rows = await db.query(query, params);
+    return {
+      readings: (rows || []).map((r) => {
+        const data = typeof r.data === "object" ? r.data : (r.data ? JSON.parse(r.data) : {});
+        const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+        return {
+          id: `agg_${locationId}_${bucket}_${ts.getTime()}`,
+          locationId: String(locationId),
+          timestamp: ts.toISOString(),
+          data,
+          createdAt: ts.toISOString(),
+        };
+      }),
+    };
+  } catch (error) {
+    if (error.statusCode) throw error;
+    console.error("取得彙總讀數失敗:", error);
+    throw new Error("取得彙總讀數失敗: " + error.message);
+  }
+}
+
 module.exports = {
   // 區域管理
   getZones,
@@ -169,4 +218,5 @@ module.exports = {
   updateZone,
   deleteZone,
   getReadings,
+  getReadingsAggregated,
 };

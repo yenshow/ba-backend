@@ -9,7 +9,9 @@ const backupConfig = {
     root: path.join(process.cwd(), "backups"),
     alerts: path.join(process.cwd(), "backups", "alerts"),
     environmentReadings: path.join(process.cwd(), "backups", "environment_readings"),
+    environmentReadingsAggregated: path.join(process.cwd(), "backups", "environment_readings_aggregated"),
     peopleCounting: path.join(process.cwd(), "backups", "people_counting"),
+    vehicleAccess: path.join(process.cwd(), "backups", "vehicle_access"),
   },
 
   retention: {

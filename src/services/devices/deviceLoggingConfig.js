@@ -9,8 +9,9 @@ const { parseConfig } = require("../../utils/deviceHelpers");
 const configCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-function _buildLoggingValuesFromSensorParameters(sensorParameters) {
+function _buildLoggingValuesFromSensorParameters(sensorParameters, defaultRegisterType) {
   if (!sensorParameters || !Array.isArray(sensorParameters)) return [];
+  const registerType = defaultRegisterType || "holding";
   const values = [];
   for (const param of sensorParameters) {
     const addr = param.modbusConfig?.address;
@@ -30,7 +31,7 @@ function _buildLoggingValuesFromSensorParameters(sensorParameters) {
     values.push({
       name: param.type,
       address: Number(addr),
-      register_type: "holding",
+      register_type: registerType,
       length: 1,
       enabled: true,
       conversion: formula ? { formula } : undefined,
@@ -69,7 +70,8 @@ async function getDeviceLoggingConfig(deviceId) {
       if (enabled === undefined || enabled === null) enabled = true;
       if (!values || values.length === 0) {
         const sensorParams = modelConfig?.sensorParameters ?? deviceConfig?.sensorParameters;
-        values = _buildLoggingValuesFromSensorParameters(sensorParams);
+        const defaultRegisterType = modelConfig?.registerType ?? deviceConfig?.registerType ?? "holding";
+        values = _buildLoggingValuesFromSensorParameters(sensorParams, defaultRegisterType);
       }
     } else if (enabled === undefined || enabled === null) {
       enabled = false;
