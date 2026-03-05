@@ -130,7 +130,7 @@ async function getReadings(locationId, options = {}) {
     }
 
     if (endTime) {
-      query += ` AND recorded_at <= $${paramIndex++}`;
+      query += ` AND recorded_at < $${paramIndex++}`;
       params.push(new Date(endTime));
     }
 
@@ -185,7 +185,7 @@ async function getReadingsAggregated(locationId, options = {}) {
       params.push(new Date(startTime));
     }
     if (endTime) {
-      query += ` AND bucket_at <= $${paramIndex++}`;
+      query += ` AND bucket_at < $${paramIndex++}`;
       params.push(new Date(endTime));
     }
     query += ` ORDER BY bucket_at ASC`;

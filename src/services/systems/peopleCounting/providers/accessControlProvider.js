@@ -158,10 +158,12 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
             : "entry";
     const employeeId = getEmployeeNo(payload);
     const personInfo = employeeId ? personByEmployeeNo.get(employeeId) : null;
+    const devicePersonName =
+      payload.personName != null ? String(payload.personName).trim() : "";
     return {
       id: `isapi-${row.id}`,
       personId: personInfo?.personId ?? null,
-      personName: personInfo?.personName || "—",
+      personName: personInfo?.personName || devicePersonName || "—",
       unitId: personInfo?.unitId ?? null,
       unitName: personInfo?.unitName ?? "",
       employeeId: employeeId || null,

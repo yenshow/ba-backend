@@ -90,16 +90,6 @@ const jwt = {
 };
 
 /**
- * MediaMTX 配置
- */
-const mediaMTX = {
-	apiUrl: getEnv("MEDIAMTX_API_URL", "http://localhost:9997"),
-	hlsUrl: getEnv("MEDIAMTX_HLS_URL", "http://localhost:8888"),
-	webrtcUrl: getEnv("MEDIAMTX_WEBRTC_URL", "http://localhost:8889"),
-	rtspUrl: getEnv("MEDIAMTX_RTSP_URL", "rtsp://localhost:8554"),
-};
-
-/**
  * 監控配置
  */
 const monitoring = {
@@ -164,7 +154,6 @@ module.exports = {
 	modbus,
 	database,
 	jwt,
-	mediaMTX,
 	monitoring,
 	externalDatabase,
 	features,

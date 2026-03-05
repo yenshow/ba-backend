@@ -11,9 +11,8 @@
 | 模組 | 路由前綴 | 功能摘要 | 操作類型 |
 |------|----------|----------|----------|
 | 用戶 | `/api/users` | 註冊、登入、個人資料、用戶管理 | 帳號/權限管理 |
-| 設備 | `/api/devices` | 設備類型、型號、設備 CRUD | 基礎設施 |
+| 設備 | `/api/devices` | 設備類型、型號、設備 CRUD、預覽 URL（MJPEG） | 基礎設施 |
 | Modbus | `/api/modbus` | 讀寫 Modbus 暫存器 | 設備控制 |
-| RTSP | `/api/rtsp` | 串流啟動/停止/狀態 | 設備控制 |
 | 地點 | `/api/locations` | 區域、地點 CRUD | 場域配置 |
 | 環境 | `/api/environment` | 環境區域、感測器讀數、錯誤追蹤 | 環境監控 |
 | 照明 | `/api/lighting` | 照明區域、錯誤追蹤 | 照明監控 |
@@ -29,7 +28,7 @@
 |------|------|
 | **operator 未區分** | `operator` 與 `viewer` 目前權限相同，`requireAdminOrOperator` 未使用 |
 | **viewer 可寫入** | 照目前設計，viewer 登入後可建立/更新/刪除 zones、locations、照明、環境、人流地點等，與「僅檢視」不符 |
-| **公開 API 過多** | 設備查詢、警報查詢、Modbus、RTSP 皆無認證，任何人可存取 |
+| **公開 API 過多** | 設備查詢、警報查詢、Modbus 皆無認證，任何人可存取 |
 | **寫入權限過於寬鬆** | 區域/地點/照明/環境 CRUD 僅需 `authenticate`，未區分 admin/operator/viewer |
 
 ---
@@ -41,7 +40,7 @@
 | 角色 | 定位 | 典型使用情境 |
 |------|------|--------------|
 | **admin** | 系統管理員 | 帳號管理、設備與類型維護、系統設定、警報處理決策 |
-| **operator** | 操作員 | 日常運維：區域/地點配置、Modbus 寫入、串流控制、警報日常處理 |
+| **operator** | 操作員 | 日常運維：區域/地點配置、Modbus 寫入、警報日常處理 |
 | **viewer** | 檢視者 | 監看儀表板、查詢報表、不可修改任何業務資料 |
 
 ### 2.2 權限矩陣（建議）
@@ -73,13 +72,13 @@
 
 \* 可依需求調整：設備 CRUD 僅 admin，或 operator 可建立/更新（不刪除）。
 
-#### RTSP 串流
+#### 設備預覽（MJPEG）
 
 | 功能 | admin | operator | viewer |
 |------|:-----:|:--------:|:------:|
-| 啟動串流 | ✓ | ✓ | ✗ |
-| 停止串流 | ✓ | ✓ | ✗ |
-| 查詢串流狀態 | ✓ | ✓ | ✓ |
+| 取得預覽 URL（GET /api/devices/:id/preview-url） | ✓ | ✓ | ✓ |
+
+與設備查詢權限一致：可查設備即可取得預覽 URL。
 
 #### 區域與地點
 
@@ -159,8 +158,6 @@ function requireOperator(req, res, next) {
 | 路由 | 建議 |
 |------|------|
 | `PUT /api/modbus/coils` | authenticate + requireOperator |
-| `POST /api/rtsp/start` | authenticate + requireOperator |
-| `POST /api/rtsp/stop/:streamId` | authenticate + requireOperator |
 
 #### 維持 admin only 的 API
 
@@ -190,9 +187,9 @@ function requireOperator(req, res, next) {
    - 為 zones/locations/環境/照明/人流 的寫入 API 加上 `requireOperator`  
    - viewer 將無法建立/更新/刪除，僅能讀取  
 
-2. **Phase 2**：Modbus、RTSP 加認證  
-   - Modbus 全部、RTSP 全部加上 `authenticate`  
-   - Modbus 寫入、RTSP 啟動/停止 加上 `requireOperator`  
+2. **Phase 2**：Modbus 加認證  
+   - Modbus 全部加上 `authenticate`  
+   - Modbus 寫入 加上 `requireOperator`  
 
 3. **Phase 3**：設備與警報  
    - 視需求決定設備 CRUD 是否開放給 operator  
@@ -223,7 +220,7 @@ function requireOperator(req, res, next) {
 | 項目 | 建議 |
 |------|------|
 | **viewer** | 純讀取，僅可修改自己的帳戶資料 |
-| **operator** | 讀取 + 日常運維寫入（區域/地點/設備/警報處理/Modbus/RTSP） |
+| **operator** | 讀取 + 日常運維寫入（區域/地點/設備/警報處理/Modbus） |
 | **admin** | 完整權限（含用戶管理、系統設定、設備類型型號） |
 | **公開 API** | 僅保留註冊、登入、YSCP webhook；其餘查詢與控制建議改為需認證 |
-| **實作** | 分階段進行，先完成 Phase 1 區分 viewer/operator，再逐步收緊公開 API 與 Modbus/RTSP |
+| **實作** | 分階段進行，先完成 Phase 1 區分 viewer/operator，再逐步收緊公開 API 與 Modbus |

@@ -43,8 +43,17 @@ const validateDeviceConfig = (config, typeCode) => {
       break;
 
     case "camera":
-      if (!config.ip_address || typeof config.ip_address !== "string") {
-        throw new Error("camera 類型需要 ip_address (string)");
+      // 設備 IP：host 或 ip_address 至少其一（與門禁一致優先用 host）
+      const hasHost = config.host && typeof config.host === "string" && config.host.trim() !== "";
+      const hasIp = config.ip_address && typeof config.ip_address === "string" && config.ip_address.trim() !== "";
+      if (!hasHost && !hasIp) {
+        throw new Error("camera 類型需要 host 或 ip_address (string)");
+      }
+      if (!config.isapi_preview_path || typeof config.isapi_preview_path !== "string") {
+        throw new Error("camera 類型需要 isapi_preview_path (string)");
+      }
+      if (!config.isapi_preview_path.trim().startsWith("/")) {
+        throw new Error("camera 的 isapi_preview_path 需以 / 開頭，例如 /ISAPI/Streaming/channels/102/httpPreview");
       }
       break;
 

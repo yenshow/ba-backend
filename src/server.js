@@ -23,7 +23,6 @@ const logger = require("./utils/logger");
 // 路由
 const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
-const rtspRoutes = require("./routes/rtspRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const lightingRoutes = require("./routes/lightingRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
@@ -37,7 +36,6 @@ const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 
 // 服務
-const mediaMTXService = require("./services/communication/mediaMTXService");
 const db = require("./database/db");
 const externalDb = require("./database/externalDb");
 const websocketService = require("./services/websocket/websocketService");
@@ -52,21 +50,8 @@ const lightingMonitor = require("./services/monitoring/lightingMonitor");
 const backupScheduler = require("./services/backup/backupScheduler");
 // 環境彙總排程（時／日／月）
 const environmentAggregationService = require("./services/systems/environmentAggregationService");
-
-// 監聽 MediaMTX 串流服務的錯誤事件，避免未處理的錯誤導致程序崩潰
-// 注意：WebSocket 事件推送已整合到 mediaMTXService 中
-const mediaMTXLogger = logger.createLogger("MediaMTX Service");
-
-mediaMTXService.on("error", (errorInfo) => {
-  // 只記錄簡潔的錯誤信息，不輸出完整堆疊跟踪
-  const errorMsg = errorInfo.error?.message || "未知錯誤";
-  mediaMTXLogger.error(`串流錯誤 (${errorInfo.streamId})`, { error: errorMsg });
-  // 不拋出錯誤，只記錄，避免程序崩潰
-});
-
-mediaMTXService.on("end", (streamInfo) => {
-  mediaMTXLogger.info(`串流正常結束`, { streamId: streamInfo.streamId });
-});
+// 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
+const isapiSubscribeService = require("./services/accessControl/isapiSubscribeService");
 
 const app = express();
 
@@ -121,7 +106,6 @@ app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 // 註冊路由
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
-app.use("/api/rtsp", rtspRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/lighting", lightingRoutes);
 app.use("/api/environment", environmentRoutes);
@@ -141,8 +125,7 @@ if (config.features && config.features.enableAccessControlPersonnel !== false) {
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 
-// 注意：HLS 串流現在由 MediaMTX 提供，不再需要本地靜態文件服務
-// MediaMTX 在 http://localhost:8888 提供 HLS 服務
+// 影像預覽改由設備 ISAPI MJPEG 提供，前端依 GET /api/devices/:id/preview-url 取得 URL
 
 // 移除舊的 /ws 端點，現在使用 Socket.IO
 // Socket.IO 會自動處理 WebSocket 連接
@@ -231,7 +214,7 @@ async function startServer() {
     websocketService.initializeWebSocket(httpServer, corsOptions);
 
     // 啟動 HTTP 伺服器（Socket.IO 會自動附加到 HTTP 伺服器）
-    httpServer.listen(serverConfig.serverPort, serverConfig.serverHost, () => {
+    httpServer.listen(serverConfig.serverPort, serverConfig.serverHost, async () => {
       serverLogger.info(
         `BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`,
       );
@@ -242,6 +225,13 @@ async function startServer() {
       if (localIP !== "localhost") {
         console.log(`\n💡 其他裝置可透過以下網址訪問:`);
         console.log(`   http://${localIP}:${config.serverPort}`);
+      }
+
+      // 門禁佈防訂閱：全面改為佈防模式，後端主動向門禁設備訂閱事件
+      if (config.features && config.features.enableAccessControlPersonnel !== false) {
+        isapiSubscribeService.start().catch((err) => {
+          serverLogger.warn("門禁佈防訂閱服務啟動時發生錯誤（將不影響其他功能）", { error: err.message });
+        });
       }
     });
   } catch (error) {
@@ -266,14 +256,9 @@ async function gracefulShutdown(signal) {
     backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
 
-    // 停止所有 RTSP 串流（包括 FFmpeg 進程）
-    await mediaMTXService.stopAllStreams();
-    shutdownLogger.info("所有 RTSP 串流已停止");
-
-    // 確保所有 FFmpeg 進程都已停止
-    const ffmpegService = require("./services/communication/ffmpegService");
-    await ffmpegService.stopAllProcesses();
-    shutdownLogger.info("所有 FFmpeg 進程已停止");
+    // 停止門禁佈防訂閱服務
+    isapiSubscribeService.stop();
+    shutdownLogger.info("門禁佈防訂閱服務已停止");
 
     // 關閉資料庫連線
     await db.close();

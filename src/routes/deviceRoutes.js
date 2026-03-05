@@ -3,6 +3,7 @@ const router = express.Router();
 const deviceService = require("../services/devices/deviceService");
 const deviceTypeService = require("../services/devices/deviceTypeService");
 const deviceModelService = require("../services/devices/deviceModelService");
+const devicePreviewService = require("../services/devices/devicePreviewService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -105,6 +106,13 @@ router.get("/", noCache, asyncHandler(async (req, res) => {
 		orderBy,
 		order
 	});
+	res.sendSuccess(result);
+}));
+
+// 取得設備 MJPEG 預覽 URL（須在 GET /:id 之前）
+router.get("/:id/preview-url", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
+	const { id } = req.params;
+	const result = await devicePreviewService.getPreviewUrl(parseInt(id));
 	res.sendSuccess(result);
 }));
 

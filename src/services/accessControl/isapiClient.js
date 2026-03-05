@@ -132,6 +132,7 @@ function createIsapiClient(deviceConfig) {
 
   /**
    * 發送請求，遇 401 時以 Digest 重試一次；FormData 改為預先取得 nonce 再送一次。
+   * 若傳入 data 為字串且 headers 含 Content-Type: application/xml，則以 XML 送出。
    */
   async function request(options) {
     const { method = "GET", path, data, headers = {}, responseType } = options;
@@ -142,10 +143,11 @@ function createIsapiClient(deviceConfig) {
       return requestWithPreemptiveDigest({ method, path, data, headers, responseType });
     }
 
+    const contentType = headers["Content-Type"] || headers["content-type"] || "application/json";
     const config = {
       method,
       url,
-      headers: { "Content-Type": "application/json", ...headers },
+      headers: { "Content-Type": contentType, ...headers },
       validateStatus: (status) => status < 500,
       maxRedirects: 0,
       timeout: 60000,
@@ -170,8 +172,53 @@ function createIsapiClient(deviceConfig) {
     return res;
   }
 
+  /**
+   * 訂閱事件長連線：POST subscribeEvent，回傳 response（含 res.data 為 stream）。
+   * 必須使用預先 Digest（無法在 stream 讀取後重試 401）。
+   * @param {string} xmlBody - SubscribeEvent XML 字串
+   * @returns {Promise<import('axios').AxiosResponse>} - res.data 為 Node stream
+   */
+  async function requestSubscribeStream(xmlBody) {
+    const path = "/ISAPI/Event/notification/subscribeEvent";
+    const url = `${baseURL}${path}`;
+    const method = "POST";
+    const uri = path;
+
+    const probeRes = await axios({
+      method: "GET",
+      url: baseURL + "/ISAPI/System/deviceInfo",
+      validateStatus: () => true,
+      timeout: 10000,
+    });
+    if (probeRes.status !== 401 || !probeRes.headers["www-authenticate"]) {
+      throw new Error("預期設備回傳 401 Digest 挑戰");
+    }
+    const authHeader = probeRes.headers["www-authenticate"];
+    if (!authHeader.toLowerCase().startsWith("digest ")) {
+      throw new Error(`不支援的認證方式: ${authHeader.split(" ")[0]}`);
+    }
+    const challenge = parseDigestChallenge(authHeader);
+    const digestAuth = buildAuthHeader(challenge, method, uri, username, password);
+
+    const res = await axios({
+      method,
+      url,
+      headers: {
+        "Content-Type": "application/xml",
+        Authorization: digestAuth,
+      },
+      data: xmlBody,
+      responseType: "stream",
+      validateStatus: (status) => status >= 200 && status < 400,
+      maxRedirects: 0,
+      timeout: 0,
+    });
+    return res;
+  }
+
   return {
     request,
+    requestSubscribeStream,
     baseURL,
   };
 }

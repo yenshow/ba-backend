@@ -35,13 +35,10 @@ function safeEmit(eventName, data, options = {}) {
   // 廣播給所有連接的客戶端
   ioInstance.emit(eventName, data);
 
-  // 在開發模式或未設置 NODE_ENV 時輸出日誌（方便調試）
-  const isDev = !process.env.NODE_ENV || process.env.NODE_ENV === "development";
-  if (isDev && logMessage) {
+  // 僅在明確開啟時輸出推送日誌，避免刷屏（LOG_WS_PUSH=true）
+  if (process.env.LOG_WS_PUSH === "true" && logMessage) {
     console.log(
-      `[WebSocket] 推送事件: ${eventName}${
-        logMessage ? ` - ${logMessage}` : ""
-      }`
+      `[WebSocket] 推送事件: ${eventName}${logMessage ? ` - ${logMessage}` : ""}`
     );
   }
 }
@@ -85,15 +82,13 @@ function initializeWebSocket(httpServer, corsOptions) {
     pingInterval: 25000,
   });
 
-  // 連接事件處理
+  // 連接事件處理（僅在 LOG_WS_CONNECTIONS=true 時輸出連線/斷線日誌）
+  const logConnections = process.env.LOG_WS_CONNECTIONS === "true";
   ioInstance.on("connection", (socket) => {
-    console.log(`[WebSocket] 客戶端已連接: ${socket.id}`);
+    if (logConnections) console.log(`[WebSocket] 客戶端已連接: ${socket.id}`);
 
-    // 客戶端斷開連接
     socket.on("disconnect", (reason) => {
-      console.log(
-        `[WebSocket] 客戶端已斷開連接: ${socket.id}, 原因: ${reason}`
-      );
+      if (logConnections) console.log(`[WebSocket] 客戶端已斷開: ${socket.id}, 原因: ${reason}`);
     });
 
     // 客戶端錯誤處理
@@ -353,98 +348,6 @@ function emitEnvironmentReading(data) {
 }
 
 /**
- * 推送 RTSP 串流啟動事件
- * @param {Object} data - 事件資料
- * @param {string} data.streamId - 串流 ID
- * @param {string} data.rtspUrl - RTSP URL
- * @param {string} data.hlsUrl - HLS URL
- * @param {string} data.status - 串流狀態
- * @param {boolean} data.useGpuEncoding - 是否使用 GPU 編碼（可選）
- * @param {Object} data.gpuOptions - GPU 編碼選項（可選）
- */
-function emitRTSPStreamStarted(data) {
-  safeEmit(
-    "rtsp:stream:started",
-    {
-      streamId: data.streamId,
-      rtspUrl: data.rtspUrl,
-      hlsUrl: data.hlsUrl,
-      webrtcUrl: data.webrtcUrl,
-      status: data.status,
-      useGpuEncoding: data.useGpuEncoding,
-      gpuOptions: data.gpuOptions,
-      timestamp: new Date().toISOString(),
-    },
-    {
-      logMessage: `串流 ID: ${data.streamId}`,
-    }
-  );
-}
-
-/**
- * 推送 RTSP 串流停止事件
- * @param {Object} data - 事件資料
- * @param {string} data.streamId - 串流 ID
- */
-function emitRTSPStreamStopped(data) {
-  safeEmit(
-    "rtsp:stream:stopped",
-    {
-      streamId: data.streamId,
-      timestamp: new Date().toISOString(),
-    },
-    {
-      logMessage: `串流 ID: ${data.streamId}`,
-    }
-  );
-}
-
-/**
- * 推送 RTSP 串流錯誤事件
- * @param {Object} data - 事件資料
- * @param {string} data.streamId - 串流 ID
- * @param {Error} data.error - 錯誤物件
- */
-function emitRTSPStreamError(data) {
-  safeEmit(
-    "rtsp:stream:error",
-    {
-      streamId: data.streamId,
-      error: {
-        message: data.error?.message || "未知錯誤",
-        code: data.error?.code,
-      },
-      timestamp: new Date().toISOString(),
-    },
-    {
-      logMessage: `串流 ID: ${data.streamId}`,
-    }
-  );
-}
-
-/**
- * 推送 RTSP 串流狀態變更事件
- * @param {Object} data - 事件資料
- * @param {string} data.streamId - 串流 ID
- * @param {string} data.oldStatus - 舊狀態
- * @param {string} data.newStatus - 新狀態
- */
-function emitRTSPStreamStatusChanged(data) {
-  safeEmit(
-    "rtsp:stream:status:changed",
-    {
-      streamId: data.streamId,
-      oldStatus: data.oldStatus,
-      newStatus: data.newStatus,
-      timestamp: new Date().toISOString(),
-    },
-    {
-      logMessage: `串流 ID: ${data.streamId}, ${data.oldStatus} -> ${data.newStatus}`,
-    }
-  );
-}
-
-/**
  * 推送人流統計新記錄事件
  * @param {Object} data - 事件資料
  * @param {string} data.id - 記錄 ID
@@ -492,10 +395,6 @@ module.exports = {
   emitDeviceDeleted,
   emitDeviceStatusChanged,
   emitEnvironmentReading,
-  emitRTSPStreamStarted,
-  emitRTSPStreamStopped,
-  emitRTSPStreamError,
-  emitRTSPStreamStatusChanged,
   emitPeopleCountingRecord,
   emitIsapiAccessEvent,
 };
