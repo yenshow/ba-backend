@@ -9,23 +9,26 @@ const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
+// 以下路由皆需登入
+router.use(authenticate);
+
 // ========== 設備類型 API ==========
 // 注意：必須放在 /:id 之前，避免路由衝突
 
-// 取得所有設備類型（公開）
+// 取得所有設備類型
 router.get("/types", noCache, asyncHandler(async (req, res) => {
 	const result = await deviceTypeService.getAllDeviceTypes();
 	res.sendSuccess(result);
 }));
 
-// 根據代碼取得設備類型（公開）
+// 根據代碼取得設備類型
 router.get("/types/code/:code", noCache, asyncHandler(async (req, res) => {
 	const { code } = req.params;
 	const result = await deviceTypeService.getDeviceTypeByCode(code);
 	res.sendSuccess(result);
 }));
 
-// 取得單一設備類型（公開）
+// 取得單一設備類型
 router.get("/types/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceTypeService.getDeviceTypeById(parseInt(id));
@@ -33,20 +36,20 @@ router.get("/types/:id", noCache, validateIntegers("id"), asyncHandler(async (re
 }));
 
 // 建立設備類型（需要管理員權限）
-router.post("/types", authenticate, requireAdmin, asyncHandler(async (req, res) => {
+router.post("/types", requireAdmin, asyncHandler(async (req, res) => {
 	const result = await deviceTypeService.createDeviceType(req.body);
 	res.sendSuccess(result, 201);
 }));
 
 // 更新設備類型（需要管理員權限）
-router.put("/types/:id", authenticate, requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.put("/types/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceTypeService.updateDeviceType(parseInt(id), req.body);
 	res.sendSuccess(result);
 }));
 
 // 刪除設備類型（需要管理員權限）
-router.delete("/types/:id", authenticate, requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.delete("/types/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceTypeService.deleteDeviceType(parseInt(id));
 	res.sendSuccess(result);
@@ -73,20 +76,20 @@ router.get("/models/:id", noCache, validateIntegers("id"), asyncHandler(async (r
 }));
 
 // 建立設備型號（需要管理員權限）
-router.post("/models", authenticate, requireAdmin, asyncHandler(async (req, res) => {
+router.post("/models", requireAdmin, asyncHandler(async (req, res) => {
 	const result = await deviceModelService.createDeviceModel(req.body, req.user.id);
 	res.sendSuccess(result, 201);
 }));
 
 // 更新設備型號（需要管理員權限）
-router.put("/models/:id", authenticate, requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.put("/models/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceModelService.updateDeviceModel(parseInt(id), req.body, req.user.id);
 	res.sendSuccess(result);
 }));
 
 // 刪除設備型號（需要管理員權限）
-router.delete("/models/:id", authenticate, requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.delete("/models/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceModelService.deleteDeviceModel(parseInt(id));
 	res.sendSuccess(result);
@@ -123,21 +126,21 @@ router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res
 	res.sendSuccess(result);
 }));
 
-// 創建設備（需要認證和管理員權限）
-router.post("/", authenticate, requireAdmin, asyncHandler(async (req, res) => {
+// 創建設備（需要管理員權限）
+router.post("/", requireAdmin, asyncHandler(async (req, res) => {
 	const result = await deviceService.createDevice(req.body, req.user.id);
 	res.sendSuccess(result, 201);
 }));
 
-// 更新設備（需要認證和管理員權限）
-router.put("/:id", authenticate, requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新設備（需要管理員權限）
+router.put("/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceService.updateDevice(parseInt(id), req.body, req.user.id);
 	res.sendSuccess(result);
 }));
 
-// 刪除設備（需要認證和管理員權限）
-router.delete("/:id", authenticate, requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除設備（需要管理員權限）
+router.delete("/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const userId = req.user?.id;
 	const result = await deviceService.deleteDevice(parseInt(id), userId);

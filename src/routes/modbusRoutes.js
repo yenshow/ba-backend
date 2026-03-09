@@ -1,6 +1,7 @@
 const express = require("express");
 const modbusClient = require("../services/devices/modbusClient");
 const systemAlert = require("../services/alerts/systemAlertHelper");
+const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -61,6 +62,9 @@ const parseDeviceParams = (req) => {
 
   return { host, port, unitId };
 };
+
+// 以下路由皆需登入
+router.use(authenticate);
 
 const routeFactory = (reader) =>
   asyncHandler(async (req, res) => {

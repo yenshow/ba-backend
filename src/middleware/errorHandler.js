@@ -81,12 +81,14 @@ function getErrorStatusCode(err) {
     return 404; // Not Found
   }
 
-  // 服務不可用（如 Modbus 連接錯誤、設備離線）
+  // 服務不可用（如 Modbus 連接錯誤、設備離線、讀寫逾時）
   if (
     message.includes("連接超時") ||
     message.includes("連接被拒絕") ||
     message.includes("無法到達設備") ||
     message.includes("連接已斷開") ||
+    message.includes("超時") ||
+    /timed?\s*out/i.test(message) ||
     err.statusCode === 503
   ) {
     return 503; // Service Unavailable

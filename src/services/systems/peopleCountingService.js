@@ -17,7 +17,8 @@ const {
 
 const PROVIDERS = { yscp: yscpProvider, access_control: accessControlProvider };
 const getProvider = (dataSource) =>
-  PROVIDERS[dataSource === "access_control" ? "access_control" : "yscp"] || yscpProvider;
+  PROVIDERS[dataSource === "access_control" ? "access_control" : "yscp"] ||
+  yscpProvider;
 
 // ========== 統一錯誤處理和驗證工具 ==========
 
@@ -415,7 +416,7 @@ async function getSites() {
       locationType: "people_counting",
     });
     const allLocations = ensureArray(locationsResult.zones).flatMap((zone) =>
-      ensureArray(zone.locations)
+      ensureArray(zone.locations),
     );
     if (allLocations.length === 0) return { sites: [] };
 
@@ -423,27 +424,50 @@ async function getSites() {
     const accessControlList = [];
     for (const loc of allLocations) {
       const ds = getPeopleCountingConfig(loc).dataSource || "yscp";
-      if (ds === "yscp" && config.features?.enableYscpPeopleCounting === false) continue;
-      if (ds === "access_control" && config.features?.enableAccessControlPersonnel === false) continue;
+      if (ds === "yscp" && config.features?.enableYscpPeopleCounting === false)
+        continue;
+      if (
+        ds === "access_control" &&
+        config.features?.enableAccessControlPersonnel === false
+      )
+        continue;
       if (ds === "access_control") accessControlList.push(loc);
       else yscpList.push(loc);
     }
 
     const sites = [];
     if (yscpList.length > 0) {
-      const yscpDataMap = await yscpProvider.getSitesData(yscpList, getPeopleCountingConfig);
+      const yscpDataMap = await yscpProvider.getSitesData(
+        yscpList,
+        getPeopleCountingConfig,
+      );
       for (const location of yscpList) {
         const locationId = normalizeId(location.id);
         const data = yscpDataMap.get(locationId);
         if (!data) continue;
-        sites.push({ id: locationId, name: location.name, entryCount: data.entryCount, exitCount: data.exitCount, units: data.units });
+        sites.push({
+          id: locationId,
+          name: location.name,
+          entryCount: data.entryCount,
+          exitCount: data.exitCount,
+          units: data.units,
+        });
       }
     }
     for (const location of accessControlList) {
       const locationId = normalizeId(location.id);
       const siteConfig = getPeopleCountingConfig(location);
-      const data = await accessControlProvider.getSiteData(locationId, siteConfig);
-      sites.push({ id: locationId, name: location.name, entryCount: data.entryCount, exitCount: data.exitCount, units: data.units });
+      const data = await accessControlProvider.getSiteData(
+        locationId,
+        siteConfig,
+      );
+      sites.push({
+        id: locationId,
+        name: location.name,
+        entryCount: data.entryCount,
+        exitCount: data.exitCount,
+        units: data.units,
+      });
     }
     return { sites };
   }, "取得工地列表失敗");
@@ -466,7 +490,7 @@ async function getSiteStats(siteId) {
       };
     },
     "取得工地統計失敗",
-    { siteId }
+    { siteId },
   );
 }
 
@@ -478,7 +502,10 @@ async function getSiteLogs(siteId, options = {}) {
   return handleServiceError(
     async () => {
       const { dataSource, ...siteConfig } = await getSiteConfig(siteId);
-      if (dataSource === "yscp" && config.features?.enableYscpPeopleCounting === false) {
+      if (
+        dataSource === "yscp" &&
+        config.features?.enableYscpPeopleCounting === false
+      ) {
         return { logs: [] };
       }
       const provider = getProvider(dataSource);
@@ -486,7 +513,7 @@ async function getSiteLogs(siteId, options = {}) {
       return await provider.getSiteLogs(siteId, siteConfig, options, context);
     },
     "取得工地進出場記錄失敗",
-    { siteId, options }
+    { siteId, options },
   );
 }
 
@@ -494,24 +521,42 @@ async function getSiteLogs(siteId, options = {}) {
  * 取得單位人員列表
  * 協調層：依 data_source 委派 provider.getUnitPersonnel
  */
-const YSCP_FALLBACK_CONFIG = { entryDoorId: null, exitDoorId: null, personGroupIds: [] };
+const YSCP_FALLBACK_CONFIG = {
+  entryDoorId: null,
+  exitDoorId: null,
+  personGroupIds: [],
+};
 
 async function getUnitPersonnel(unitId, siteId = null) {
   return handleServiceError(
     async () => {
-      if (!siteId) return await yscpProvider.getUnitPersonnel(unitId, null, YSCP_FALLBACK_CONFIG);
+      if (!siteId)
+        return await yscpProvider.getUnitPersonnel(
+          unitId,
+          null,
+          YSCP_FALLBACK_CONFIG,
+        );
       const siteConfig = await handleNonCriticalError(
         async () => await getSiteConfig(siteId),
         "無法取得工地配置，使用預設值",
         null,
-        { siteId, unitId }
+        { siteId, unitId },
       );
-      if (!siteConfig) return await yscpProvider.getUnitPersonnel(unitId, null, YSCP_FALLBACK_CONFIG);
+      if (!siteConfig)
+        return await yscpProvider.getUnitPersonnel(
+          unitId,
+          null,
+          YSCP_FALLBACK_CONFIG,
+        );
       const { dataSource, ...cfg } = siteConfig;
-      return await getProvider(dataSource).getUnitPersonnel(unitId, siteId, cfg);
+      return await getProvider(dataSource).getUnitPersonnel(
+        unitId,
+        siteId,
+        cfg,
+      );
     },
     "取得單位人員列表失敗",
-    { unitId, siteId }
+    { unitId, siteId },
   );
 }
 

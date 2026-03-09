@@ -10,6 +10,9 @@ const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers, validateNumbers } = require("../middleware/validation");
 
+// 以下路由皆需登入
+router.use(authenticate);
+
 // ========== 地點管理路由 ==========
 
 // 取得人流統計地點列表
@@ -27,8 +30,8 @@ router.get("/locations/:id", noCache, validateIntegers("id"), asyncHandler(async
   res.sendSuccess(result);
 }));
 
-// 建立地點（需要認證）
-router.post("/locations", authenticate, asyncHandler(async (req, res) => {
+// 建立地點
+router.post("/locations", asyncHandler(async (req, res) => {
   const result = await peopleCountingService.createPeopleCountingLocation(
     req.body,
     req.user.id
@@ -36,8 +39,8 @@ router.post("/locations", authenticate, asyncHandler(async (req, res) => {
   res.sendSuccess(result, 201);
 }));
 
-// 更新地點（需要認證）
-router.put("/locations/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新地點
+router.put("/locations/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await peopleCountingService.updatePeopleCountingLocation(
     parseInt(id),
@@ -47,8 +50,8 @@ router.put("/locations/:id", authenticate, validateIntegers("id"), asyncHandler(
   res.sendSuccess(result);
 }));
 
-// 刪除地點（需要認證）
-router.delete("/locations/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除地點
+router.delete("/locations/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await peopleCountingService.deletePeopleCountingLocation(parseInt(id));
   res.sendSuccess(result);
@@ -60,7 +63,7 @@ router.delete("/locations/:id", authenticate, validateIntegers("id"), asyncHandl
  * 取得所有工地列表（含統計）
  * GET /api/people-counting/sites
  */
-router.get("/sites", noCache, authenticate, asyncHandler(async (req, res) => {
+router.get("/sites", noCache, asyncHandler(async (req, res) => {
   const result = await peopleCountingService.getSites();
   res.sendSuccess(result);
 }));
@@ -70,7 +73,7 @@ router.get("/sites", noCache, authenticate, asyncHandler(async (req, res) => {
  * GET /api/people-counting/sites/:id
  * 注意：前端主要使用統計數據，此路由返回地點詳情和統計
  */
-router.get("/sites/:id", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.get("/sites/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const siteId = parseInt(id);
   
@@ -90,7 +93,7 @@ router.get("/sites/:id", noCache, authenticate, validateIntegers("id"), asyncHan
  * 取得工地統計
  * GET /api/people-counting/sites/:id/stats
  */
-router.get("/sites/:id/stats", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.get("/sites/:id/stats", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await peopleCountingService.getSiteStats(parseInt(id));
   res.sendSuccess(result);
@@ -104,7 +107,6 @@ router.get("/sites/:id/stats", noCache, authenticate, validateIntegers("id"), as
 router.get(
   "/sites/:id/logs",
   noCache,
-  authenticate,
   validateIntegers("id"),
   validateNumbers("limit", "offset", "unitId"),
   asyncHandler(async (req, res) => {
@@ -129,7 +131,6 @@ router.get(
 router.get(
   "/units/:id/personnel",
   noCache,
-  authenticate,
   validateIntegers("id"),
   validateNumbers("siteId"),
   asyncHandler(async (req, res) => {

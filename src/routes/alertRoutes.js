@@ -7,9 +7,12 @@ const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
+// 以下路由皆需登入
+router.use(authenticate);
+
 // ========== 警示 API ==========
 
-// 取得警示列表（公開）
+// 取得警示列表
 router.get("/", noCache, asyncHandler(async (req, res) => {
   const {
     source,
@@ -50,7 +53,7 @@ router.get("/", noCache, asyncHandler(async (req, res) => {
   res.sendSuccess(result);
 }));
 
-// 取得未解決的警示數量（公開，支持時間範圍篩選）
+// 取得未解決的警示數量（支持時間範圍篩選）
 router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
   const {
     source,
@@ -75,7 +78,7 @@ router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
   res.sendSuccess({ count });
 }));
 
-// 取得警報規則（公開，用於前端顯示狀態）
+// 取得警報規則（用於前端顯示狀態）
 router.get("/rules", noCache, asyncHandler(async (req, res) => {
   const { source, alert_type, parameter } = req.query;
 
@@ -98,7 +101,7 @@ router.get("/rules", noCache, asyncHandler(async (req, res) => {
   res.sendSuccess({ rules });
 }));
 
-// 取得單一警示（公開）
+// 取得單一警示
 router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const alert = await alertService.getAlertById(parseInt(id));
@@ -108,10 +111,9 @@ router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res
 // 注意：警報由系統自動解決，不提供手動解決的端點
 // 系統會在檢測到問題恢復時自動將警報標記為已解決
 
-// 標記警示為未解決（需要認證，管理員）
+// 標記警示為未解決（需要管理員權限）
 router.put(
   "/:id/unresolve",
-  authenticate,
   requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
@@ -128,7 +130,6 @@ router.put(
 // 忽視警示（需要管理員權限，支持多系統來源）
 router.post(
   "/:deviceId/:alertType/ignore",
-  authenticate,
   requireAdmin,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
@@ -152,7 +153,6 @@ router.post(
 // 取消忽視警示（需要管理員權限，支持多系統來源）
 router.post(
   "/:deviceId/:alertType/unignore",
-  authenticate,
   requireAdmin,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {

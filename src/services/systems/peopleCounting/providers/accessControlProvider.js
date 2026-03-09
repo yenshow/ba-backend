@@ -24,7 +24,7 @@ function calculateEntryExitCurrentFromAccessControlLogs(logs) {
     return { entryCount: 0, exitCount: 0, currentCount: 0 };
   }
   const sorted = [...logs].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
   const lastByPerson = new Map();
   let entryCount = 0;
@@ -32,7 +32,10 @@ function calculateEntryExitCurrentFromAccessControlLogs(logs) {
   for (const log of sorted) {
     const key = log.employeeId || "";
     if (!key || log.eventType === "failed") continue;
-    const dir = log.eventType === "entry" || log.eventType === "exit" ? log.eventType : null;
+    const dir =
+      log.eventType === "entry" || log.eventType === "exit"
+        ? log.eventType
+        : null;
     if (!dir) continue;
     const prev = lastByPerson.get(key);
     if (prev === undefined && dir === "exit") continue;
@@ -42,7 +45,9 @@ function calculateEntryExitCurrentFromAccessControlLogs(logs) {
     }
     lastByPerson.set(key, dir);
   }
-  const currentCount = [...lastByPerson.values()].filter((d) => d === "entry").length;
+  const currentCount = [...lastByPerson.values()].filter(
+    (d) => d === "entry",
+  ).length;
   return { entryCount, exitCount, currentCount };
 }
 
@@ -64,9 +69,13 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
   } = options;
 
   const entryId =
-    entryDeviceId != null && !Number.isNaN(Number(entryDeviceId)) ? Number(entryDeviceId) : null;
+    entryDeviceId != null && !Number.isNaN(Number(entryDeviceId))
+      ? Number(entryDeviceId)
+      : null;
   const exitId =
-    exitDeviceId != null && !Number.isNaN(Number(exitDeviceId)) ? Number(exitDeviceId) : null;
+    exitDeviceId != null && !Number.isNaN(Number(exitDeviceId))
+      ? Number(exitDeviceId)
+      : null;
   if (entryId == null && exitId == null) return [];
 
   const entryIps = new Set();
@@ -86,7 +95,10 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
         else exitIps.add(ip);
       }
     } catch (err) {
-      logger.warn("取得門禁設備 IP 失敗，略過", { deviceId, error: err.message });
+      logger.warn("取得門禁設備 IP 失敗，略過", {
+        deviceId,
+        error: err.message,
+      });
     }
   };
 
@@ -100,14 +112,20 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
   const offsetNum = Math.max(Number(offset) || 0, 0);
 
   const placeholders = allIps.map(() => "?").join(",");
-  const params = [...allIps, start.toISOString(), end.toISOString(), limitNum, offsetNum];
+  const params = [
+    ...allIps,
+    start.toISOString(),
+    end.toISOString(),
+    limitNum,
+    offsetNum,
+  ];
   const rows = await db.query(
     `SELECT id, device_ip, event_time, event_type, payload, picture_path
      FROM isapi_access_events
      WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?
      ORDER BY event_time DESC
      LIMIT ? OFFSET ?`,
-    params
+    params,
   );
 
   const getEmployeeNo = (payload) => {
@@ -117,8 +135,10 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
   const employeeNos = [
     ...new Set(
       (rows || [])
-        .map((r) => getEmployeeNo(typeof r.payload === "object" ? r.payload : {}))
-        .filter(Boolean)
+        .map((r) =>
+          getEmployeeNo(typeof r.payload === "object" ? r.payload : {}),
+        )
+        .filter(Boolean),
     ),
   ];
 
@@ -130,7 +150,7 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
        FROM persons p
        LEFT JOIN person_groups pg ON p.person_group_id = pg.id
        WHERE p.employee_no IN (${placeholdersPerson})`,
-      employeeNos
+      employeeNos,
     );
     for (const r of personRows || []) {
       const no = r.employee_no != null ? String(r.employee_no).trim() : "";
@@ -147,7 +167,8 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
 
   return (rows || []).map((row) => {
     const payload = typeof row.payload === "object" ? row.payload : {};
-    const sub = payload.subEventType != null ? Number(payload.subEventType) : null;
+    const sub =
+      payload.subEventType != null ? Number(payload.subEventType) : null;
     const eventType =
       sub === 76
         ? "failed"
@@ -186,7 +207,8 @@ async function getSiteData(siteId, config) {
   let exitCount = 0;
   let currentCount = 0;
   try {
-    const persons = await personnelService.getPersonsWithAccessByLocationId(siteId);
+    const persons =
+      await personnelService.getPersonsWithAccessByLocationId(siteId);
     const byGroup = new Map();
     for (const p of persons) {
       const gname = p.group_name || "未分組";
@@ -212,7 +234,9 @@ async function getSiteData(siteId, config) {
     let idx = 0;
     units = [...byGroup.entries()].map(([name, list]) => {
       const employeeNos = new Set(list.map((p) => String(p.employee_no)));
-      const unitLogs = todayLogs.filter((log) => employeeNos.has(log.employeeId || ""));
+      const unitLogs = todayLogs.filter((log) =>
+        employeeNos.has(log.employeeId || ""),
+      );
       return {
         id: ++idx,
         name,
@@ -221,7 +245,10 @@ async function getSiteData(siteId, config) {
       };
     });
   } catch (err) {
-    logger.warn("取得門禁地點可進出人員失敗，顯示空單位", { locationId: siteId, error: err.message });
+    logger.warn("取得門禁地點可進出人員失敗，顯示空單位", {
+      locationId: siteId,
+      error: err.message,
+    });
   }
   return { entryCount, exitCount, currentCount, units };
 }
@@ -245,7 +272,8 @@ async function getSiteLogs(siteId, config, options = {}) {
  * 單位人員列表（門禁：unitId 為群組序號 1-based）
  */
 async function getUnitPersonnel(unitId, siteId, config) {
-  const persons = await personnelService.getPersonsWithAccessByLocationId(siteId);
+  const persons =
+    await personnelService.getPersonsWithAccessByLocationId(siteId);
   const byGroup = new Map();
   for (const p of persons) {
     const gname = p.group_name || "未分組";
@@ -269,10 +297,12 @@ async function getUnitPersonnel(unitId, siteId, config) {
     offset: 0,
   });
   const entryCount = todayLogs.filter(
-    (log) => log.eventType === "entry" && employeeNosInUnit.has(log.employeeId || "")
+    (log) =>
+      log.eventType === "entry" && employeeNosInUnit.has(log.employeeId || ""),
   ).length;
   const exitCount = todayLogs.filter(
-    (log) => log.eventType === "exit" && employeeNosInUnit.has(log.employeeId || "")
+    (log) =>
+      log.eventType === "exit" && employeeNosInUnit.has(log.employeeId || ""),
   ).length;
 
   const lastEntryByNo = new Map();
@@ -281,8 +311,10 @@ async function getUnitPersonnel(unitId, siteId, config) {
     const no = log.employeeId || "";
     if (!employeeNosInUnit.has(no)) continue;
     const ts = log.timestamp;
-    if (log.eventType === "entry" && !lastEntryByNo.has(no)) lastEntryByNo.set(no, ts);
-    if (log.eventType === "exit" && !lastExitByNo.has(no)) lastExitByNo.set(no, ts);
+    if (log.eventType === "entry" && !lastEntryByNo.has(no))
+      lastEntryByNo.set(no, ts);
+    if (log.eventType === "exit" && !lastExitByNo.has(no))
+      lastExitByNo.set(no, ts);
   }
 
   const personnel = list.map((p) => {
@@ -291,10 +323,17 @@ async function getUnitPersonnel(unitId, siteId, config) {
     const lastExit = lastExitByNo.get(no);
     const entryDate = lastEntry ? new Date(lastEntry) : null;
     const exitDate = lastExit ? new Date(lastExit) : null;
-    const isPresent = lastEntry && (!lastExit || new Date(lastExit) < new Date(lastEntry));
-    const isTodayEntry = entryDate && entryDate >= todayStart && entryDate <= todayEnd;
+    const isPresent =
+      lastEntry && (!lastExit || new Date(lastExit) < new Date(lastEntry));
+    const isTodayEntry =
+      entryDate && entryDate >= todayStart && entryDate <= todayEnd;
     const faceUrl = p.face_url != null ? String(p.face_url).trim() : "";
-    const photoUrl = faceUrl !== "" ? (faceUrl.startsWith("/") ? faceUrl : `/${faceUrl}`) : undefined;
+    const photoUrl =
+      faceUrl !== ""
+        ? faceUrl.startsWith("/")
+          ? faceUrl
+          : `/${faceUrl}`
+        : undefined;
     return {
       id: p.id,
       unitId: p.person_group_id || 0,

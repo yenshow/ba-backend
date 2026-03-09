@@ -81,6 +81,11 @@ class ModbusClient extends EventEmitter {
     );
   }
 
+  /** 是否為 library 拋出的逾時錯誤（如 "Timed out"） */
+  isTimeoutError(err) {
+    return err?.message && /timed?\s*out/i.test(err.message);
+  }
+
   // 為 Promise 添加超時處理
   async withTimeout(promise, timeout, errorMessage) {
     let timeoutId;
@@ -192,14 +197,16 @@ class ModbusClient extends EventEmitter {
   async readHoldingRegisters(address, length, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
+    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取保持暫存器。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.readHoldingRegisters(address, length),
         this.timeout,
-        `讀取超時: 無法在 ${this.timeout}ms 內讀取保持暫存器。設備可能無回應或連接已斷開。`,
+        timeoutMsg,
       );
       return response.data;
     } catch (error) {
+      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
       this.handleOperationError(error, client, deviceConfig, "read");
     }
   }
@@ -207,14 +214,16 @@ class ModbusClient extends EventEmitter {
   async readInputRegisters(address, length, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
+    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取輸入暫存器。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.readInputRegisters(address, length),
         this.timeout,
-        `讀取超時: 無法在 ${this.timeout}ms 內讀取輸入暫存器。設備可能無回應或連接已斷開。`,
+        timeoutMsg,
       );
       return response.data;
     } catch (error) {
+      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
       this.handleOperationError(error, client, deviceConfig, "read");
     }
   }
@@ -222,14 +231,16 @@ class ModbusClient extends EventEmitter {
   async readCoils(address, length, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
+    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取線圈。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.readCoils(address, length),
         this.timeout,
-        `讀取超時: 無法在 ${this.timeout}ms 內讀取線圈。設備可能無回應或連接已斷開。`,
+        timeoutMsg,
       );
       return response.data;
     } catch (error) {
+      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
       this.handleOperationError(error, client, deviceConfig, "read");
     }
   }
@@ -237,14 +248,16 @@ class ModbusClient extends EventEmitter {
   async readDiscreteInputs(address, length, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
+    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取離散輸入。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.readDiscreteInputs(address, length),
         this.timeout,
-        `讀取超時: 無法在 ${this.timeout}ms 內讀取離散輸入。設備可能無回應或連接已斷開。`,
+        timeoutMsg,
       );
       return response.data;
     } catch (error) {
+      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
       this.handleOperationError(error, client, deviceConfig, "read");
     }
   }
@@ -252,14 +265,16 @@ class ModbusClient extends EventEmitter {
   async writeCoil(address, value, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
+    const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入線圈。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.writeCoil(address, value),
         this.timeout,
-        `寫入超時: 無法在 ${this.timeout}ms 內寫入線圈。設備可能無回應或連接已斷開。`,
+        timeoutMsg,
       );
       return response.value === value;
     } catch (error) {
+      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
       this.handleOperationError(error, client, deviceConfig, "write");
     }
   }
@@ -267,14 +282,16 @@ class ModbusClient extends EventEmitter {
   async writeCoils(address, values, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
+    const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入多個線圈。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.writeCoils(address, values),
         this.timeout,
-        `寫入超時: 無法在 ${this.timeout}ms 內寫入多個線圈。設備可能無回應或連接已斷開。`,
+        timeoutMsg,
       );
       return response.address === address && response.length === values.length;
     } catch (error) {
+      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
       this.handleOperationError(error, client, deviceConfig, "write");
     }
   }

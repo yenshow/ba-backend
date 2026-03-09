@@ -10,13 +10,13 @@ const { validateIntegers } = require("../middleware/validation");
 // ========== 區域管理路由 ==========
 
 // 取得區域列表
-router.get("/zones", noCache, asyncHandler(async (req, res) => {
+router.get("/zones", noCache, authenticate, asyncHandler(async (req, res) => {
 	const result = await lightingService.getZones();
 	res.sendSuccess(result);
 }));
 
 // 取得單一區域
-router.get("/zones/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
+router.get("/zones/:id", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await lightingService.getZoneById(parseInt(id));
 	res.sendSuccess(result);

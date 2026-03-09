@@ -93,7 +93,7 @@ DB_NAME=ba_system
 
 | 表                | 說明     | 關鍵欄位                                                                                                                                                                                                                            |
 | ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **device_types**  | 設備類型 | `id`, `name`, `code` (唯一), `description`。預設：camera, sensor, controller, access_control                                                                                                                                       |
+| **device_types**  | 設備類型 | `id`, `name`, `code` (唯一), `description`。預設：camera, sensor, controller, access_control                                                                                                                                        |
 | **device_models** | 設備型號 | `id`, `name`, `type_id`→device_types, `port` (預設 502), `config` JSONB, `created_at`/`updated_at`                                                                                                                                  |
 | **devices**       | 設備實例 | `id`, `name`, `model_id`(必填)→device_models, `type_id`→device_types, `location`, `description`, `status` (device_status), `config` JSONB, `last_seen_at`, `created_by`→users, 時間戳。索引：status, type_id, model_id, GIN(config) |
 
@@ -128,11 +128,11 @@ WHERE config->>'host' = '192.168.2.205' AND (config->>'port')::integer = 502;
 
 ### 人員主檔與門禁權限（本系統）
 
-| 表                       | 說明                         | 關鍵欄位                                                                                                                                 |
-| ------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **person_groups**        | 人員群組                     | `id`, `name`, `description`, `created_by`→users, `created_at`/`updated_at`                                                               |
-| **persons**              | 人員主檔                     | `id`, `employee_no`(唯一), `full_name`, `person_group_id`→person_groups, `status`, `face_url`, `config` JSONB, `created_by`/`user_id`→users, 時間戳 |
-| **person_location_access** | 門禁權限（人員可進出地點）   | `id`, `person_id`→persons, `location_id`→locations, `created_at`。UNIQUE(person_id, location_id) |
+| 表                         | 說明                       | 關鍵欄位                                                                                                                                            |
+| -------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **person_groups**          | 人員群組                   | `id`, `name`, `description`, `created_by`→users, `created_at`/`updated_at`                                                                          |
+| **persons**                | 人員主檔                   | `id`, `employee_no`(唯一), `full_name`, `person_group_id`→person_groups, `status`, `face_url`, `config` JSONB, `created_by`/`user_id`→users, 時間戳 |
+| **person_location_access** | 門禁權限（人員可進出地點） | `id`, `person_id`→persons, `location_id`→locations, `created_at`。UNIQUE(person_id, location_id)                                                    |
 
 人員與門禁設備同步由 API 觸發、同步執行 ISAPI；詳見 [PERSONNEL_DATABASE_AND_PEOPLE_COUNTING_PLAN.md](./PERSONNEL_DATABASE_AND_PEOPLE_COUNTING_PLAN.md)。
 

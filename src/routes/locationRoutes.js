@@ -6,6 +6,9 @@ const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
+// 以下路由皆需登入
+router.use(authenticate);
+
 // ========== 區域管理路由 ==========
 
 // 取得區域列表
@@ -24,21 +27,21 @@ router.get("/zones/:id", noCache, validateIntegers("id"), asyncHandler(async (re
   res.sendSuccess(result);
 }));
 
-// 建立區域（需要認證）
-router.post("/zones", authenticate, asyncHandler(async (req, res) => {
+// 建立區域
+router.post("/zones", asyncHandler(async (req, res) => {
   const result = await locationService.createZone(req.body, req.user.id);
   res.sendSuccess(result, 201);
 }));
 
-// 更新區域（需要認證）
-router.put("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新區域
+router.put("/zones/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await locationService.updateZone(parseInt(id), req.body, req.user.id);
   res.sendSuccess(result);
 }));
 
-// 刪除區域（需要認證）
-router.delete("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除區域
+router.delete("/zones/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await locationService.deleteZone(parseInt(id));
   res.sendSuccess(result);
@@ -53,21 +56,21 @@ router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res
   res.sendSuccess(result);
 }));
 
-// 建立地點（需要認證）
-router.post("/", authenticate, asyncHandler(async (req, res) => {
+// 建立地點
+router.post("/", asyncHandler(async (req, res) => {
   const result = await locationService.createLocation(req.body, req.user.id);
   res.sendSuccess(result, 201);
 }));
 
-// 更新地點（需要認證）
-router.put("/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新地點
+router.put("/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await locationService.updateLocation(parseInt(id), req.body, req.user.id);
   res.sendSuccess(result);
 }));
 
-// 刪除地點（需要認證）
-router.delete("/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除地點
+router.delete("/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const result = await locationService.deleteLocation(parseInt(id));
   res.sendSuccess(result);

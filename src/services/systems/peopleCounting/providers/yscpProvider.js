@@ -23,7 +23,12 @@ function generatePlaceholders(ids, startIndex = 1) {
   return ids.map((_, i) => `$${startIndex + i}`).join(", ");
 }
 
-async function handleNonCriticalError(fn, warnMessage, defaultValue, context = {}) {
+async function handleNonCriticalError(
+  fn,
+  warnMessage,
+  defaultValue,
+  context = {},
+) {
   try {
     return await fn();
   } catch (error) {
@@ -43,7 +48,7 @@ async function getPersonIdsByGroupIds(groupIds) {
     },
     "無法取得群組的人員",
     [],
-    { groupIds }
+    { groupIds },
   );
 }
 
@@ -63,21 +68,30 @@ async function getTodayRecordsOnly(personIds) {
     },
     "無法取得今日刷卡記錄",
     [],
-    { personIds }
+    { personIds },
   );
 }
 
 async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
   if (!Array.isArray(physicalIds) || physicalIds.length === 0) return [];
-  const { limit = 50, offset = 0, unitId = null, startTime: optStart, endTime: optEnd } = options;
+  const {
+    limit = 50,
+    offset = 0,
+    unitId = null,
+    startTime: optStart,
+    endTime: optEnd,
+  } = options;
   const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
   const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
   const placeholders = generatePlaceholders(physicalIds);
   const baseParamIndex = physicalIds.length + 1;
-  const unitFilterSql = unitId ? `AND p.person_group_id = $${baseParamIndex + 2}` : "";
+  const unitFilterSql = unitId
+    ? `AND p.person_group_id = $${baseParamIndex + 2}`
+    : "";
   const offsetParamIndex = baseParamIndex + (unitId ? 3 : 2);
   const limitParamIndex = offsetParamIndex + 1;
-  const rangeSql = limit > 0 ? `OFFSET $${offsetParamIndex} LIMIT $${limitParamIndex}` : "";
+  const rangeSql =
+    limit > 0 ? `OFFSET $${offsetParamIndex} LIMIT $${limitParamIndex}` : "";
   const sql = `
     SELECT r.person_id, r.swip_card_rev_time, r.snap_pic_url, r.physical_id,
            p.full_name AS person_name, p.person_group_id AS unit_id, pg.name AS unit_name, p.person_code AS employee_no
@@ -110,7 +124,7 @@ async function batchGetGroups(groupIds) {
     },
     "無法取得群組資訊",
     new Map(),
-    { groupIds }
+    { groupIds },
   );
 }
 
@@ -132,7 +146,7 @@ async function batchGetGroupPersonIds(groupIds) {
     },
     "無法取得群組的人員 ID",
     new Map(),
-    { groupIds }
+    { groupIds },
   );
 }
 
@@ -146,10 +160,19 @@ async function getUnitsByGroupIds(groupIds, records, entryDoorId, exitDoorId) {
     if (!group) return;
     const unitPersonIds = groupPersonMap.get(groupId) || [];
     const unitRecords = records.filter(
-      (r) => r.person_id !== -1 && unitPersonIds.includes(r.person_id)
+      (r) => r.person_id !== -1 && unitPersonIds.includes(r.person_id),
     );
-    const currentCount = calculateCurrentCount(unitRecords, entryDoorId, exitDoorId);
-    units.push({ id: group.id, name: group.name, currentCount, totalCount: unitPersonIds.length });
+    const currentCount = calculateCurrentCount(
+      unitRecords,
+      entryDoorId,
+      exitDoorId,
+    );
+    units.push({
+      id: group.id,
+      name: group.name,
+      currentCount,
+      totalCount: unitPersonIds.length,
+    });
   });
   return units;
 }
@@ -161,7 +184,8 @@ async function batchGetSitesData(locations, getPeopleCountingConfig) {
   locations.forEach((location) => {
     const { personGroupIds } = getPeopleCountingConfig(location);
     if (personGroupIds.length > 0) {
-      const locationId = typeof location.id === "string" ? Number(location.id) : location.id;
+      const locationId =
+        typeof location.id === "string" ? Number(location.id) : location.id;
       siteGroupMap.set(locationId, personGroupIds);
       personGroupIds.forEach((id) => allGroupIds.add(id));
     }
@@ -169,18 +193,25 @@ async function batchGetSitesData(locations, getPeopleCountingConfig) {
   if (allGroupIds.size === 0) return siteDataMap;
   const groupPersonMap = await batchGetGroupPersonIds(Array.from(allGroupIds));
   const allPersonIds = new Set();
-  groupPersonMap.forEach((personIds) => personIds.forEach((id) => allPersonIds.add(id)));
+  groupPersonMap.forEach((personIds) =>
+    personIds.forEach((id) => allPersonIds.add(id)),
+  );
   if (allPersonIds.size === 0) return siteDataMap;
   const todayRecords = await getTodayRecordsOnly(Array.from(allPersonIds));
   siteGroupMap.forEach((groupIds, siteId) => {
     const sitePersonIds = new Set();
     groupIds.forEach((groupId) => {
-      (groupPersonMap.get(groupId) || []).forEach((id) => sitePersonIds.add(id));
+      (groupPersonMap.get(groupId) || []).forEach((id) =>
+        sitePersonIds.add(id),
+      );
     });
     const siteRecords = todayRecords.filter(
-      (r) => r.person_id !== -1 && sitePersonIds.has(r.person_id)
+      (r) => r.person_id !== -1 && sitePersonIds.has(r.person_id),
     );
-    siteDataMap.set(siteId, { personIds: Array.from(sitePersonIds), records: siteRecords });
+    siteDataMap.set(siteId, {
+      personIds: Array.from(sitePersonIds),
+      records: siteRecords,
+    });
   });
   return siteDataMap;
 }
@@ -195,7 +226,9 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
     ORDER BY r.swip_card_rev_time DESC`;
   const allRecords = await externalDb.query(sql, personIds);
   const personRecords = new Map();
-  personIds.forEach((id) => personRecords.set(id, { lastEntry: null, lastExit: null }));
+  personIds.forEach((id) =>
+    personRecords.set(id, { lastEntry: null, lastExit: null }),
+  );
   allRecords.forEach((record) => {
     const personId = record.person_id;
     if (personId === -1) return;
@@ -212,20 +245,28 @@ async function batchGetHeadPics(personIds) {
   if (personIds.length === 0) return new Map();
   return handleNonCriticalError(
     async () => {
-      const results = await yscpPersonService.getBatchPersonInfo(personIds, { includePicture: true });
+      const results = await yscpPersonService.getBatchPersonInfo(personIds, {
+        includePicture: true,
+      });
       const m = new Map();
       results.forEach((result) => {
         if (result.success && result.personInfo) {
           const personId = parseInt(result.personId, 10);
-          const pictureUrl = result.picture ? `data:image/jpeg;base64,${result.picture}` : null;
-          m.set(personId, { person_id: personId, standard_head_portrait: pictureUrl, thumbnail_head_portrait: pictureUrl });
+          const pictureUrl = result.picture
+            ? `data:image/jpeg;base64,${result.picture}`
+            : null;
+          m.set(personId, {
+            person_id: personId,
+            standard_head_portrait: pictureUrl,
+            thumbnail_head_portrait: pictureUrl,
+          });
         }
       });
       return m;
     },
     "無法批次取得人員照片",
     new Map(),
-    { personIds }
+    { personIds },
   );
 }
 
@@ -259,9 +300,22 @@ async function getSiteData(siteId, config) {
     return { entryCount: 0, exitCount: 0, currentCount: 0, units: [] };
   }
   const todayRecords = await getTodayRecordsOnly(personIds);
-  const stats = calculateTodayStatsByPhysicalId(todayRecords, entryDoorId, exitDoorId);
-  const currentCount = calculateCurrentCount(todayRecords, entryDoorId, exitDoorId);
-  const units = await getUnitsByGroupIds(personGroupIds, todayRecords, entryDoorId, exitDoorId);
+  const stats = calculateTodayStatsByPhysicalId(
+    todayRecords,
+    entryDoorId,
+    exitDoorId,
+  );
+  const currentCount = calculateCurrentCount(
+    todayRecords,
+    entryDoorId,
+    exitDoorId,
+  );
+  const units = await getUnitsByGroupIds(
+    personGroupIds,
+    todayRecords,
+    entryDoorId,
+    exitDoorId,
+  );
   return {
     entryCount: stats.entryCount,
     exitCount: stats.exitCount,
@@ -275,27 +329,39 @@ async function getSiteData(siteId, config) {
  */
 async function getSitesData(locations, getPeopleCountingConfig) {
   const yscpLocations = locations.filter(
-    (loc) => (getPeopleCountingConfig(loc).dataSource || "yscp") === "yscp"
+    (loc) => (getPeopleCountingConfig(loc).dataSource || "yscp") === "yscp",
   );
   if (yscpLocations.length === 0) return new Map();
-  const siteDataMap = await batchGetSitesData(yscpLocations, getPeopleCountingConfig);
+  const siteDataMap = await batchGetSitesData(
+    yscpLocations,
+    getPeopleCountingConfig,
+  );
   const result = new Map();
   for (const location of yscpLocations) {
-    const locationId = typeof location.id === "string" ? Number(location.id) : location.id;
+    const locationId =
+      typeof location.id === "string" ? Number(location.id) : location.id;
     const cfg = getPeopleCountingConfig(location);
     const data = siteDataMap.get(locationId);
     if (!data || cfg.personGroupIds.length === 0) continue;
-    const stats = calculateTodayStatsByPhysicalId(data.records, cfg.entryDoorId, cfg.exitDoorId);
+    const stats = calculateTodayStatsByPhysicalId(
+      data.records,
+      cfg.entryDoorId,
+      cfg.exitDoorId,
+    );
     const units = await getUnitsByGroupIds(
       cfg.personGroupIds,
       data.records,
       cfg.entryDoorId,
-      cfg.exitDoorId
+      cfg.exitDoorId,
     );
     result.set(locationId, {
       entryCount: stats.entryCount,
       exitCount: stats.exitCount,
-      currentCount: calculateCurrentCount(data.records, cfg.entryDoorId, cfg.exitDoorId),
+      currentCount: calculateCurrentCount(
+        data.records,
+        cfg.entryDoorId,
+        cfg.exitDoorId,
+      ),
       units,
     });
   }
@@ -321,14 +387,25 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
     endTime: options.endTime,
   });
   const sortedRecords = [...records].sort(
-    (a, b) => new Date(b.swip_card_rev_time).getTime() - new Date(a.swip_card_rev_time).getTime()
+    (a, b) =>
+      new Date(b.swip_card_rev_time).getTime() -
+      new Date(a.swip_card_rev_time).getTime(),
   );
-  const physicalIds = [...new Set(sortedRecords.map((r) => r.physical_id).filter((id) => id != null && id !== ""))];
-  const doorNameMap = await peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds);
+  const physicalIds = [
+    ...new Set(
+      sortedRecords
+        .map((r) => r.physical_id)
+        .filter((id) => id != null && id !== ""),
+    ),
+  ];
+  const doorNameMap =
+    await peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds);
   const logs = sortedRecords.map((record) => {
     const eventType = parseEventType(record, entryDoorId, exitDoorId);
-    const physicalId = record.physical_id != null ? Number(record.physical_id) : null;
-    const deviceName = physicalId != null ? (doorNameMap.get(physicalId) ?? "") : "";
+    const physicalId =
+      record.physical_id != null ? Number(record.physical_id) : null;
+    const deviceName =
+      physicalId != null ? (doorNameMap.get(physicalId) ?? "") : "";
     return {
       id: generateRecordIdFn(record.person_id, record.swip_card_rev_time),
       personId: record.person_id,
@@ -365,23 +442,34 @@ async function getUnitPersonnel(unitId, siteId, config) {
   const personIds = persons.map((p) => p.id);
   const headPicMap = await batchGetHeadPics(personIds);
   const todayRecords = await getTodayRecordsOnly(personIds);
-  const todayStats = calculateTodayStatsByPhysicalId(todayRecords, entryDoorId, exitDoorId);
+  const todayStats = calculateTodayStatsByPhysicalId(
+    todayRecords,
+    entryDoorId,
+    exitDoorId,
+  );
   const { start: todayStart, end: todayEnd } = getTodayTimeRange();
   const personTodayRecordsMap = new Map();
   todayRecords.forEach((record) => {
     if (record.person_id !== -1) {
-      if (!personTodayRecordsMap.has(record.person_id)) personTodayRecordsMap.set(record.person_id, []);
+      if (!personTodayRecordsMap.has(record.person_id))
+        personTodayRecordsMap.set(record.person_id, []);
       personTodayRecordsMap.get(record.person_id).push(record);
     }
   });
-  const latestRecords = await getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId);
+  const latestRecords = await getLatestEntryExitRecords(
+    personIds,
+    entryDoorId,
+    exitDoorId,
+  );
   const personnel = persons.map((person) => {
     const headPic = headPicMap.get(person.id);
     const personTodayRecords = personTodayRecordsMap.get(person.id) || [];
     const latestRecord = latestRecords.get(person.id);
     let photoUrl;
-    if (headPic?.standard_head_portrait) photoUrl = headPic.standard_head_portrait;
-    else if (headPic?.thumbnail_head_portrait) photoUrl = headPic.thumbnail_head_portrait;
+    if (headPic?.standard_head_portrait)
+      photoUrl = headPic.standard_head_portrait;
+    else if (headPic?.thumbnail_head_portrait)
+      photoUrl = headPic.thumbnail_head_portrait;
     else photoUrl = undefined;
     const lastEntryRecord = latestRecord?.lastEntry;
     const lastExitRecord = latestRecord?.lastExit;
@@ -396,13 +484,16 @@ async function getUnitPersonnel(unitId, siteId, config) {
       entryTimeStr = formatTime(entryTime);
     }
     if (isTodayEntry) {
-      const entryTime = lastEntryRecord ? new Date(lastEntryRecord.swip_card_rev_time) : null;
+      const entryTime = lastEntryRecord
+        ? new Date(lastEntryRecord.swip_card_rev_time)
+        : null;
       const todayExitRecord = personTodayRecords.find((r) => {
         const recordTime = new Date(r.swip_card_rev_time);
         const et = parseEventType(r, entryDoorId, exitDoorId);
         return et === "exit" && recordTime > entryTime;
       });
-      if (todayExitRecord) exitTimeStr = formatTime(new Date(todayExitRecord.swip_card_rev_time));
+      if (todayExitRecord)
+        exitTimeStr = formatTime(new Date(todayExitRecord.swip_card_rev_time));
     } else if (lastExitRecord) {
       exitTimeStr = formatTime(new Date(lastExitRecord.swip_card_rev_time));
     }
@@ -420,7 +511,9 @@ async function getUnitPersonnel(unitId, siteId, config) {
       photoUrl,
       isInside: isPresent,
       isPresent,
-      lastEntryTime: lastEntryRecord ? lastEntryRecord.swip_card_rev_time : null,
+      lastEntryTime: lastEntryRecord
+        ? lastEntryRecord.swip_card_rev_time
+        : null,
       lastExitTime: lastExitRecord ? lastExitRecord.swip_card_rev_time : null,
       lastEntryDate,
       entryTime: entryTimeStr,
