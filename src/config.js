@@ -139,6 +139,14 @@ const features = {
 };
 
 /**
+ * 授權配置
+ * LICENSE_OPEN_ALL_FEATURES=true 時暫時開放所有功能（不檢查 system_settings 授權）
+ */
+const license = {
+	openAllFeatures: toBoolean(getEnv("LICENSE_OPEN_ALL_FEATURES"), false),
+};
+
+/**
  * YSCP API 配置
  */
 const yscp = {
@@ -149,6 +157,19 @@ const yscp = {
 	rejectUnauthorized: toBoolean(getEnv("YSCP_REJECT_UNAUTHORIZED"), false), // 是否拒絕自簽名證書（預設為 false，允許自簽名證書）
 };
 
+/**
+ * MediaMTX 配置（RTSP ingest + WebRTC 分發）
+ * 用於攝影機串流：後端依 deviceId 呼叫 API 增刪 path，回傳 webrtcUrl 給前端
+ */
+const mediaMTX = {
+	// Control API 位址（例：http://127.0.0.1:9997）
+	apiBaseUrl: getEnv("MEDIAMTX_API_BASE_URL", "http://127.0.0.1:9997"),
+	// WebRTC WHEP 基礎 URL（瀏覽器連線用，例：http://192.168.2.8:8889）
+	webrtcBaseUrl: getEnv("MEDIAMTX_WEBRTC_BASE_URL", "http://127.0.0.1:8889"),
+	// API 逾時（毫秒）
+	timeoutMs: toNumber(getEnv("MEDIAMTX_TIMEOUT_MS"), 10000),
+};
+
 module.exports = {
 	server,
 	modbus,
@@ -157,7 +178,9 @@ module.exports = {
 	monitoring,
 	externalDatabase,
 	features,
+	license,
 	yscp,
+	mediaMTX,
 	cors,
 	logging,
 	// 向後兼容：保留舊的配置結構

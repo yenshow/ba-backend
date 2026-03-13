@@ -4,11 +4,25 @@ const handlerFactory = require("../services/externalData/handlerFactory");
 const systemMapping = require("../services/externalData/systemMapping");
 const vehicleGroupAggregateService = require("../services/externalData/vehicleGroupAggregateService");
 const { authenticate } = require("../middleware/authMiddleware");
+const { requireFeature } = require("../middleware/licenseMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   validateRequired,
   validateIntegers,
 } = require("../middleware/validation");
+
+/** 車輛進出系統使用的表：需授權 vehicle_access 才能存取 */
+const VEHICLE_TABLES = [
+  { schema: "platform", table: "vehicle_list" },
+  { schema: "vehiclebiz", table: "passageway_log_data" },
+  { schema: "vehiclebiz", table: "lane_info" },
+  { schema: "anpr", table: "vehicle_custom_list" },
+  { schema: "anpr", table: "vehicle_and_list_relation" },
+];
+
+function isVehicleTable(schema, table) {
+  return VEHICLE_TABLES.some((t) => t.schema === schema && t.table === table);
+}
 
 // 白名單：允許存取的 schema 和 table
 const ALLOWED_TABLES = [
@@ -33,9 +47,7 @@ function validateTableAccess(schema, table) {
   );
 }
 
-/**
- * 驗證中間件：檢查表存取權限和處理器是否存在
- */
+/** 檢查表在白名單且處理器存在；車輛表授權由 requireVehicleAccessIfVehicleTable 處理 */
 function validateTableAndHandler(req, res, next) {
   const { schema, table } = req.params;
 
@@ -56,6 +68,14 @@ function validateTableAndHandler(req, res, next) {
   }
 
   next();
+}
+
+/** 車輛相關表需授權 vehicle_access */
+function requireVehicleAccessIfVehicleTable(req, res, next) {
+  const { schema, table } = req.params || {};
+  if (!schema || !table) return next();
+  if (!isVehicleTable(schema, table)) return next();
+  return requireFeature("vehicle_access")(req, res, next);
 }
 
 /**
@@ -141,14 +161,13 @@ router.get(
 );
 
 /**
- * 車輛進出：取得車輛群組彙總（anpr.vehicle_custom_list + vehicle_and_list_relation + platform.vehicle_list）
+ * 車輛進出：取得車輛群組彙總（需授權 vehicle_access）
  * GET /api/external-data/vehicle-access/vehicle-groups
- * 回傳 { groups: [{ id, list_name, list_sequence, vehicles: [{ vehicle_id, plate_license, owner_name }] }] }
- * 不含人員大頭照／platform.person
  */
 router.get(
   "/vehicle-access/vehicle-groups",
   authenticate,
+  requireFeature("vehicle_access"),
   asyncHandler(async (req, res) => {
     const result = await vehicleGroupAggregateService.getVehicleGroups();
     res.sendSuccess(result);
@@ -165,6 +184,7 @@ router.get(
   authenticate,
   validateRequired("schema", "table"),
   validateTableAndHandler,
+  requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;
     const handler = handlerFactory.getHandler(schema, table);
@@ -183,6 +203,7 @@ router.get(
   validateRequired("schema", "table"),
   validateIntegers("id"),
   validateTableAndHandler,
+  requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table, id } = req.params;
     const handler = handlerFactory.getHandler(schema, table);
@@ -283,6 +304,7 @@ router.get(
   authenticate,
   validateRequired("schema", "table"),
   validateTableAndHandler,
+  requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;
     const handler = handlerFactory.getHandler(schema, table);

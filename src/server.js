@@ -34,6 +34,10 @@ const accessControlRoutes = require("./routes/accessControlRoutes");
 const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const licenseRoutes = require("./routes/licenseRoutes");
+
+// 授權（Feature Gate）
+const { requireFeature } = require("./middleware/licenseMiddleware");
 
 // 服務
 const db = require("./database/db");
@@ -103,20 +107,21 @@ app.use(responseHandler);
 // 靜態檔案服務（用於提供上傳的檔案）
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-// 註冊路由
+// 註冊路由（授權僅控：人流、照明、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/license", licenseRoutes);
 app.use("/api/devices", deviceRoutes);
-app.use("/api/lighting", lightingRoutes);
-app.use("/api/environment", environmentRoutes);
+app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
+app.use("/api/environment", requireFeature("environment"), environmentRoutes);
 app.use("/api/locations", locationRoutes); // 統一地點管理 API
-app.use("/api/people-counting", peopleCountingRoutes); // 人流統計地點管理 API
+app.use("/api/people-counting", requireFeature("people_counting"), peopleCountingRoutes); // 人流統計
 app.use("/api/alerts", alertRoutes);
-app.use("/api/external-data", externalDataRoutes);
+app.use("/api/external-data", externalDataRoutes); // 車輛相關路由在 externalDataRoutes 內依 requireFeature(vehicle_access) 控管
 app.use("/api/access-control", accessControlRoutes);
-// 功能旗標：ENABLE_ACCESS_CONTROL_PERSONNEL=false 時不掛載人員/門禁 API（含 isapi-events 寫入端）
+// 功能旗標：ENABLE_ACCESS_CONTROL_PERSONNEL=false 時不掛載人員/門禁 API
 if (config.features && config.features.enableAccessControlPersonnel !== false) {
-  app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限、同步、ISAPI 事件查詢與接收
+  app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
 } else {
   app.use("/api/personnel", (_req, res) =>
     res.status(403).json({ success: false, error: "門禁人員功能已關閉（ENABLE_ACCESS_CONTROL_PERSONNEL）" })
@@ -125,7 +130,7 @@ if (config.features && config.features.enableAccessControlPersonnel !== false) {
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 
-// 影像預覽改由設備 ISAPI MJPEG 提供，前端依 GET /api/devices/:id/preview-url 取得 URL
+// 影像監控：前端依 POST /api/devices/:id/stream/start 取得 webrtcUrl，以 WebRTC 播放
 
 // 移除舊的 /ws 端點，現在使用 Socket.IO
 // Socket.IO 會自動處理 WebSocket 連接

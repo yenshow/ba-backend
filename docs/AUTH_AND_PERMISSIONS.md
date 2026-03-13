@@ -4,6 +4,48 @@
 
 ---
 
+## 目前授權狀況（實作摘要）
+
+### 授權控管 vs 基本功能
+
+| 類型 | 說明 | 控管方式 |
+|------|------|----------|
+| **授權控管（5 個模組）** | 人流統計、照明、環境品質、影像監控、車輛進出 | 依 **授權 feature**：未授權時前端顯示鎖頭、不載入資料（首頁顯示「尚無資料」）、後端 API 回傳 403。 |
+| **基本功能** | 警示紀錄、人員管理、設備管理、全區點位圖、權限管理、首頁、系統設定等 | 僅依 **角色**（admin/operator/viewer）控管，不做授權檢查。 |
+
+### 授權 Feature Key（僅此 5 項）
+
+| Feature Key | 模組 | 後端 API 控管 | 前端路由 |
+|-------------|------|---------------|----------|
+| `people_counting` | 人流統計管理 | `/api/people-counting` 整段 | `/construction-monitoring/people-counting` |
+| `lighting` | 照明系統 | `/api/lighting` 整段 | `/infrastructure/lighting` |
+| `environment` | 環境品質系統 | `/api/environment` 整段 | `/construction-monitoring/environment` |
+| `surveillance` | 影像監視系統 | `/api/devices` 下 `/:id/stream/*`（start/stop/status） | `/construction-monitoring/surveillance` |
+| `vehicle_access` | 車輛進出管理 | `/api/external-data/vehicle-access/vehicle-groups` 及車輛相關表讀取 | `/construction-monitoring/vehicle-access` |
+
+### 後端實作狀態
+
+- **儲存**：`system_settings` 表，key `license_features`（JSON 陣列）、`license_expires_at`（ISO 字串）。
+- **API**：`GET /api/license`（需認證）、`POST /api/license/activate`（需 admin，body `{ features: string[], expiresAt? }`，僅儲存合法 key）。
+- **中介層**：`requireFeature(featureKey)`，未授權或過期回傳 403、`code: "FEATURE_NOT_LICENSED"`。
+- **環境變數**：`LICENSE_OPEN_ALL_FEATURES=true` 時後端視為全部授權，不讀 DB。
+
+### 前端實作狀態
+
+- **授權狀態**：登入後呼叫 `GET /api/license`，存於 `useLicense()` 的 `license` 狀態（一律依後端回傳，不因 openAll 跳過 API）。
+- **hasFeature(key)**：用於**鎖頭、路由守衛**。當 `NUXT_PUBLIC_LICENSE_OPEN_ALL_FEATURES=true` 時恆為 true（不顯示鎖、不擋路由）；否則依 `license.features`。
+- **canLoadFeature(key)**：用於**是否載入資料**（如首頁環境／人流區塊）。一律依後端 `license.features`，不套用 openAll，確保前後端一致。
+- **首頁**：環境區塊、人流區塊依 `canLoadFeature("environment")` / `canLoadFeature("people_counting")` 決定是否打 API 與顯示；未授權顯示「尚無資料」。
+- **導航**：未授權模組顯示鎖頭 SVG，點擊 toast 提示「此功能尚未授權」；路由守衛未授權時導回首頁並提示。
+- **環境變數**：`NUXT_PUBLIC_LICENSE_OPEN_ALL_FEATURES=true` 時僅影響「不顯示鎖頭、不擋路由」，不影響「是否載入資料」。
+
+### 授權碼驗證（尚未接上）
+
+- **POST /api/license/activate** 目前為 MVP：admin 直接傳入 `{ features, expiresAt }` 寫入 `system_settings`。
+- 後續可改為 body `{ code }`，由後端依 [LICENSE_OFFLINE_AND_ONLINE.md](./LICENSE_OFFLINE_AND_ONLINE.md) 做離線簽章或線上授權伺服器驗證後再寫入。
+
+---
+
 ## 1. 登入
 
 ### 設計原則
@@ -62,93 +104,90 @@
 
 ### 目的
 
-客戶可能只購買部分模組；以**授權碼**解鎖，未授權模組前端不顯示或不可用，後端回傳 403（如 `FEATURE_NOT_LICENSED`）。
+客戶可能只購買部分模組；以**授權**解鎖，未授權模組前端顯示鎖頭、不載入資料，後端回傳 403（`code: "FEATURE_NOT_LICENSED"`）。僅 **5 個模組**做授權控管，其餘為基本功能（僅角色控管）。
 
-### 設計要點（尚未實作）
+### 設計要點（已實作）
 
 | 項目 | 說明 |
 |------|------|
-| 授權維度 | 以 **Feature Key** 對應系統（與前端 `system-modules` 對齊），如 `core`、`environment`、`people_counting`、`lighting`、`access_control` 等。 |
-| 後端 | 儲存已啟用 features、到期日；**GET /api/license**（回傳狀態）、**POST /api/license/activate**（admin 輸入授權碼）；路由加 **requireFeature("key")**（在 authenticate／角色之後）。 |
-| 前端 | 登入後取 GET /api/license，以 `features` 過濾導航與頁面；僅 admin 可輸入授權碼；403 且為未授權時提示並導向授權頁。 |
-| 檢查順序 | authenticate → 角色（requireAdmin/requireOperator）→ requireFeature。 |
+| 授權維度 | 僅 5 個 Feature Key：`people_counting`、`lighting`、`environment`、`surveillance`、`vehicle_access`。 |
+| 後端 | 儲存於 `system_settings`（`license_features`、`license_expires_at`）；**GET /api/license**、**POST /api/license/activate**（admin 傳入 features 陣列）；對應路由加 **requireFeature("key")**。 |
+| 前端 | 登入後取 GET /api/license；**hasFeature** 用於鎖頭與路由守衛，**canLoadFeature** 用於是否載入資料（首頁等），確保與後端一致。 |
+| 檢查順序 | authenticate → 角色（若有）→ requireFeature。 |
 
-授權碼驗證（離線簽章或線上授權伺服器）於實作階段再訂。
+授權碼驗證的**離線版**與**線上版**設計與流程，請見 [LICENSE_OFFLINE_AND_ONLINE.md](./LICENSE_OFFLINE_AND_ONLINE.md)。
 
-### Feature Key 與前端對照（建議）
+### Feature Key 與前端對照（目前實作）
 
-與前端的 `app/config/system-modules.ts` 及路由對齊，一個 feature 可對應一個或多個模組：
+目前僅下列 5 個 key 做授權控管；其餘功能（`/core/*`、首頁等）為基本功能，僅由角色管理。
 
-| Feature Key | 說明 | 前端路由／模組 | 後端 API 前綴 |
-|-------------|------|----------------|---------------|
-| `core` | 核心（設備、使用者、警示、全區點位圖、人員管理） | `/core/*` | `/api/devices`、`/api/users`、`/api/alerts`、`/api/locations`（zones）、`/api/personnel` |
-| `environment` | 環境品質 | `/construction-monitoring/environment` | `/api/environment` |
-| `people_counting` | 人流統計 | `/construction-monitoring/people-counting` | `/api/people-counting` |
-| `vehicle_access` | 車輛進出 | `/construction-monitoring/vehicle-access` | （若獨立 API 則對應；目前可能走 external-data／yscp） |
-| `surveillance` | 影像監視 | `/construction-monitoring/surveillance` | 設備預覽等 |
-| `lighting` | 照明 | `/infrastructure/lighting` | `/api/lighting` |
-| `hvac` | 空調 | `/infrastructure/hvac` | （待實作） |
-| `power` | 電力 | `/infrastructure/power` | （待實作） |
-| `elevator` | 電梯 | `/infrastructure/elevator` | （待實作） |
-| `drainage` | 衛生排水 | `/infrastructure/drainage` | （待實作） |
-| `fire` | 消防 | `/security/fire` | （待實作） |
-| `access_control` | 門禁保全 | `/security/access-control` | `/api/access-control` |
-| `emergency` | 緊急求救 | `/security/emergency` | （待實作） |
-| `maintenance` | 設備維護 | `/maintenance/equipment` | （待實作） |
-| `visitor` | 訪客 | `/business/visitor` | （待實作） |
-| `locker` | 寄物 | `/business/locker-management` | （待實作） |
-| `multimedia` | 多媒體資訊 | `/multimedia/info` | （待實作） |
+| Feature Key | 說明 | 前端路由 | 後端 API 控管 |
+|-------------|------|----------|---------------|
+| `people_counting` | 人流統計管理 | `/construction-monitoring/people-counting` | `/api/people-counting` 整段 |
+| `lighting` | 照明系統 | `/infrastructure/lighting` | `/api/lighting` 整段 |
+| `environment` | 環境品質系統 | `/construction-monitoring/environment` | `/api/environment` 整段 |
+| `surveillance` | 影像監視系統 | `/construction-monitoring/surveillance` | `/api/devices/:id/stream/*`（start/stop/status） |
+| `vehicle_access` | 車輛進出管理 | `/construction-monitoring/vehicle-access` | `/api/external-data/vehicle-access/vehicle-groups` 及車輛相關表 |
 
-可選策略：**粗粒度**（如只做 `core`、`construction-monitoring`、`infrastructure`、`security` 等大類）或**細粒度**（上表每個 key 獨立授權）。實作時再定。
-
-### 授權 API 規格（草案）
+### 授權 API 規格（已實作）
 
 - **GET /api/license**  
   - 需 `authenticate`。  
-  - 回傳：`{ features: string[], expiresAt: string | null, canActivate: boolean }`  
-  - `features`：已啟用 feature key 陣列。  
-  - `expiresAt`：整體或最早日到期時間，無則 `null`。  
-  - `canActivate`：是否允許當前用戶執行啟用（僅 admin 為 true）。
+  - 回傳：`{ features: string[], expiresAt: string | null, expired: boolean, canActivate: boolean }`  
+  - `features`：已啟用 feature key 陣列（僅上述 5 個 key）。  
+  - `expiresAt`：到期時間（ISO），無則 `null`。  
+  - `canActivate`：僅 admin 為 true。
 
-- **POST /api/license/activate**  
+- **POST /api/license/activate**（MVP）  
   - 需 `authenticate` + `requireAdmin`。  
-  - Body：`{ code: string }`（授權碼）。  
-  - 成功：200，可一併回傳更新後的 license 狀態。  
-  - 失敗：400（格式錯誤）或 403（無效／過期／已使用），body 可含 `code: "INVALID_LICENSE"` 或 `"FEATURE_NOT_LICENSED"` 等。
+  - Body：`{ features: string[], expiresAt?: string | null }`（直接寫入，僅儲存合法 key）。  
+  - 後續可改為 body `{ code: string }`，由離線／線上授權驗證後寫入。
 
 ### 後端儲存與中介層
 
-- **儲存**：可存於 DB（例如 `license` 表：id, feature_key, expires_at, activated_at）或系統設定表（settings key 如 `license_features`、`license_expires_at`）。依現有架構擇一。
-- **requireFeature(featureKey)**：中介層在 `authenticate`、角色檢查之後執行；若當前 request 所需 feature 不在已啟用列表或已過期，回傳 `403` 且 `code: "FEATURE_NOT_LICENSED"`。
-- **檢查順序**：`authenticate` → 角色（requireAdmin／requireAdminOrOperator）→ **requireFeature("key")**。
+- **儲存**：已採用 `system_settings` 表，key `license_features`（JSON 陣列）、`license_expires_at`、`license_updated_at`。
+- **requireFeature(featureKey)**：在 `authenticate`、角色之後執行；未授權或過期回傳 403、`code: "FEATURE_NOT_LICENSED"`。
+- **檢查順序**：`authenticate` → 角色（若有）→ **requireFeature("key")**。
 
-### 前端行為（待實作）
+### 暫時開放所有功能（環境變數）
 
-- 登入成功後呼叫 **GET /api/license**，將回傳的 `features` 存到全域狀態（如 Pinia 或 composable）。
-- **導航／選單**：只顯示 `features` 內有對應 feature key 的模組（可寫成 `system-modules` 的 filter，依 route 或 id 對應到 feature key）。
-- **路由守衛**：進入某頁前檢查該頁所需 feature 是否在 `features` 內；若否，導向「未授權」說明頁或首頁，並可提示聯絡管理員。
-- **僅 admin**：授權碼輸入 UI（啟用按鈕、輸入框）僅在 `user.role === "admin"` 時顯示。
-- **API 403**：若 response 為 403 且 `code === "FEATURE_NOT_LICENSED"`，前端可 toast 提示並導向授權說明或首頁，避免卡在空白頁。
+開發或展示時可透過環境變數略過授權檢查，預設為關閉。
 
-### 授權碼驗證策略（實作時擇一或組合）
+| 端 | 變數 | 說明 |
+|----|------|------|
+| 後端 | `LICENSE_OPEN_ALL_FEATURES=true` | 後端視為已授權所有 feature，不讀 system_settings，API 正常放行。 |
+| 前端 | `NUXT_PUBLIC_LICENSE_OPEN_ALL_FEATURES=true` | 前端**不顯示鎖頭、不擋路由**（`hasFeature` 恆為 true）；**是否載入資料**仍依 GET /api/license（`canLoadFeature`），故僅開前端時首頁未授權區塊仍為「尚無資料」。 |
+
+建議開發時兩端都設；正式環境勿設。
+
+### 前端行為（已實作）
+
+- 登入後 **GET /api/license** 存於 `useLicense()`，一律依後端回傳（不因 openAll 跳過 API）。
+- **hasFeature(key)**：鎖頭、路由守衛；openAll 時恆為 true。
+- **canLoadFeature(key)**：是否載入資料（如首頁環境／人流）；僅依後端 `license.features`，確保前後端一致。
+- **導航**：未授權模組顯示鎖頭，點擊 toast「此功能尚未授權」；路由守衛未授權導回首頁。
+- **首頁**：環境／人流區塊依 canLoadFeature 決定是否打 API，未授權顯示「尚無資料」。
+
+### 授權碼驗證策略（離線／線上）
 
 | 方式 | 說明 |
 |------|------|
-| 離線簽章 | 授權碼為簽過名的 JWT 或自訂格式，後端用固定公鑰驗簽；內含 features、expires_at 等。無需外網。 |
-| 線上授權伺服器 | 後端拿 code 向授權伺服器查詢，回傳可啟用 features 與到期日。需網路與授權服務。 |
-| 混合 | 離線驗簽為主，可選線上「心跳」回報使用狀況或延長。 |
+| 離線版 | 授權碼為簽過名的 JWT 或自訂格式，後端用固定公鑰驗簽；內含 features、expires_at 等。無需外網。詳見 [LICENSE_OFFLINE_AND_ONLINE.md](./LICENSE_OFFLINE_AND_ONLINE.md#一離線版offline-license)。 |
+| 線上版 | 後端拿 code 向授權伺服器查詢，回傳可啟用 features 與到期日。需網路與授權服務。詳見 [LICENSE_OFFLINE_AND_ONLINE.md](./LICENSE_OFFLINE_AND_ONLINE.md#二線上版online-license)。 |
+| 混合 | 離線驗簽為主，可選線上「心跳」回報使用狀況或延長。見 [LICENSE_OFFLINE_AND_ONLINE.md](./LICENSE_OFFLINE_AND_ONLINE.md#三比較與選擇)。 |
 
 ### 實作檢查清單（授權）
 
-- [ ] 後端：license 儲存（DB 或 settings）、讀寫 helper
-- [ ] 後端：GET /api/license、POST /api/license/activate 實作
-- [ ] 後端：requireFeature(featureKey) 中介層，並掛到各 feature 對應路由
-- [ ] 後端：授權碼驗證邏輯（離線／線上）
-- [ ] 前端：登入後取 GET /api/license 並寫入狀態
-- [ ] 前端：依 features 過濾導航／system-modules
-- [ ] 前端：路由守衛檢查 feature
-- [ ] 前端：僅 admin 顯示授權碼輸入與啟用
-- [ ] 前端：403 + FEATURE_NOT_LICENSED 的提示與導向
+- [x] 後端：license 儲存（system_settings）、讀寫（licenseService）
+- [x] 後端：GET /api/license、POST /api/license/activate（MVP：直接寫入 features）
+- [x] 後端：requireFeature(featureKey)，並掛到 5 個模組對應路由
+- [ ] 後端：授權碼驗證邏輯（離線／線上，接 POST /api/license/activate）
+- [x] 前端：登入後取 GET /api/license 並寫入狀態（一律呼叫，不因 openAll 跳過）
+- [x] 前端：導航未授權顯示鎖頭、點擊提示
+- [x] 前端：路由守衛檢查 feature，未授權導回首頁
+- [x] 前端：首頁依 canLoadFeature 決定是否載入環境／人流資料，未授權顯示「尚無資料」
+- [ ] 前端：僅 admin 顯示授權碼輸入與啟用 UI（可接 POST /api/license/activate）
+- [ ] 前端：403 + FEATURE_NOT_LICENSED 的統一提示與導向（可選）
 
 ---
 
@@ -158,4 +197,4 @@
 |------|------|
 | **1. 登入** | 前端公開路由僅 `/login`、帶 Token、401 導回登入；後端公開僅登入/註冊/YSCP，其餘已加 authenticate。 |
 | **2. 用戶權限** | 後端以 requireAdmin/requireOperator 區分；前端 viewer 已隱藏所有寫入入口（含導覽列「更多功能」、首頁編輯、各地點管理、照明控制等）。 |
-| **3. 授權** | 設計已定（Feature Key、GET/POST 授權 API、requireFeature）；尚未實作。 |
+| **3. 授權** | 5 個模組（人流、照明、環境、影像監控、車輛進出）依授權控管；儲存於 system_settings；GET/POST /api/license 已實作；前端 hasFeature／canLoadFeature、鎖頭、路由守衛、首頁「尚無資料」已實作。授權碼驗證（離線／線上）尚未接上。 |

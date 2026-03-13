@@ -3,8 +3,9 @@ const router = express.Router();
 const deviceService = require("../services/devices/deviceService");
 const deviceTypeService = require("../services/devices/deviceTypeService");
 const deviceModelService = require("../services/devices/deviceModelService");
-const devicePreviewService = require("../services/devices/devicePreviewService");
+const deviceStreamService = require("../services/devices/deviceStreamService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -112,10 +113,22 @@ router.get("/", noCache, asyncHandler(async (req, res) => {
 	res.sendSuccess(result);
 }));
 
-// 取得設備 MJPEG 預覽 URL（須在 GET /:id 之前）
-router.get("/:id/preview-url", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
-	const { id } = req.params;
-	const result = await devicePreviewService.getPreviewUrl(parseInt(id));
+// ========== 攝影機串流 API（影像監控系統，需授權 surveillance）==========
+router.post("/:id/stream/start", noCache, requireFeature("surveillance"), validateIntegers("id"), asyncHandler(async (req, res) => {
+	const id = parseInt(req.params.id);
+	const result = await deviceStreamService.startStream(id);
+	res.sendSuccess(result);
+}));
+
+router.post("/:id/stream/stop", noCache, requireFeature("surveillance"), validateIntegers("id"), asyncHandler(async (req, res) => {
+	const id = parseInt(req.params.id);
+	await deviceStreamService.stopStream(id);
+	res.sendSuccess({ message: "串流已停止" });
+}));
+
+router.get("/:id/stream/status", noCache, requireFeature("surveillance"), validateIntegers("id"), asyncHandler(async (req, res) => {
+	const id = parseInt(req.params.id);
+	const result = await deviceStreamService.getStreamStatus(id);
 	res.sendSuccess(result);
 }));
 
