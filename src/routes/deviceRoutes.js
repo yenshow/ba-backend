@@ -4,7 +4,7 @@ const deviceService = require("../services/devices/deviceService");
 const deviceTypeService = require("../services/devices/deviceTypeService");
 const deviceModelService = require("../services/devices/deviceModelService");
 const deviceStreamService = require("../services/devices/deviceStreamService");
-const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const { authenticate, requireAdmin, requireAdminOrOperator } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -36,21 +36,21 @@ router.get("/types/:id", noCache, validateIntegers("id"), asyncHandler(async (re
 	res.sendSuccess(result);
 }));
 
-// 建立設備類型（需要管理員權限）
-router.post("/types", requireAdmin, asyncHandler(async (req, res) => {
+// 建立設備類型（管理員或操作員）
+router.post("/types", requireAdminOrOperator, asyncHandler(async (req, res) => {
 	const result = await deviceTypeService.createDeviceType(req.body);
 	res.sendSuccess(result, 201);
 }));
 
-// 更新設備類型（需要管理員權限）
-router.put("/types/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新設備類型（管理員或操作員）
+router.put("/types/:id", requireAdminOrOperator, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceTypeService.updateDeviceType(parseInt(id), req.body);
 	res.sendSuccess(result);
 }));
 
-// 刪除設備類型（需要管理員權限）
-router.delete("/types/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除設備類型（管理員或操作員）
+router.delete("/types/:id", requireAdminOrOperator, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceTypeService.deleteDeviceType(parseInt(id));
 	res.sendSuccess(result);
@@ -76,21 +76,21 @@ router.get("/models/:id", noCache, validateIntegers("id"), asyncHandler(async (r
 	res.sendSuccess(result);
 }));
 
-// 建立設備型號（需要管理員權限）
-router.post("/models", requireAdmin, asyncHandler(async (req, res) => {
+// 建立設備型號（管理員或操作員）
+router.post("/models", requireAdminOrOperator, asyncHandler(async (req, res) => {
 	const result = await deviceModelService.createDeviceModel(req.body, req.user.id);
 	res.sendSuccess(result, 201);
 }));
 
-// 更新設備型號（需要管理員權限）
-router.put("/models/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新設備型號（管理員或操作員）
+router.put("/models/:id", requireAdminOrOperator, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceModelService.updateDeviceModel(parseInt(id), req.body, req.user.id);
 	res.sendSuccess(result);
 }));
 
-// 刪除設備型號（需要管理員權限）
-router.delete("/models/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除設備型號（管理員或操作員）
+router.delete("/models/:id", requireAdminOrOperator, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceModelService.deleteDeviceModel(parseInt(id));
 	res.sendSuccess(result);
@@ -100,17 +100,28 @@ router.delete("/models/:id", requireAdmin, validateIntegers("id"), asyncHandler(
 
 // 取得設備列表（支援篩選）
 router.get("/", noCache, asyncHandler(async (req, res) => {
-	const { type_id, type_code, status, limit, offset, orderBy, order } = req.query;
+	const { type_id, type_code, status, group, limit, offset, orderBy, order } = req.query;
 	const result = await deviceService.getDevices({
 		type_id: type_id ? parseInt(type_id) : undefined,
 		type_code,
 		status,
+		group: group && String(group).trim() ? String(group).trim() : undefined,
 		limit: limit ? parseInt(limit) : undefined,
 		offset: offset ? parseInt(offset) : undefined,
 		orderBy,
 		order
 	});
 	res.sendSuccess(result);
+}));
+
+// 取得攝影機群組列表（供篩選下拉，須在 /:id 之前）
+router.get("/groups", noCache, asyncHandler(async (req, res) => {
+	const { type_code } = req.query;
+	if (type_code !== "camera") {
+		return res.sendSuccess({ groups: [] });
+	}
+	const groups = await deviceService.getCameraGroups();
+	res.sendSuccess({ groups });
 }));
 
 // ========== 攝影機串流 API（影像監控系統，需授權 surveillance）==========
@@ -139,21 +150,21 @@ router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res
 	res.sendSuccess(result);
 }));
 
-// 創建設備（需要管理員權限）
-router.post("/", requireAdmin, asyncHandler(async (req, res) => {
+// 創建設備（管理員或操作員）
+router.post("/", requireAdminOrOperator, asyncHandler(async (req, res) => {
 	const result = await deviceService.createDevice(req.body, req.user.id);
 	res.sendSuccess(result, 201);
 }));
 
-// 更新設備（需要管理員權限）
-router.put("/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 更新設備（管理員或操作員）
+router.put("/:id", requireAdminOrOperator, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const result = await deviceService.updateDevice(parseInt(id), req.body, req.user.id);
 	res.sendSuccess(result);
 }));
 
-// 刪除設備（需要管理員權限）
-router.delete("/:id", requireAdmin, validateIntegers("id"), asyncHandler(async (req, res) => {
+// 刪除設備（管理員或操作員）
+router.delete("/:id", requireAdminOrOperator, validateIntegers("id"), asyncHandler(async (req, res) => {
 	const { id } = req.params;
 	const userId = req.user?.id;
 	const result = await deviceService.deleteDevice(parseInt(id), userId);

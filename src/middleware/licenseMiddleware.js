@@ -16,8 +16,7 @@ function requireFeature(featureKey) {
     try {
       const license = await licenseService.getLicenseState();
       const enabled = Array.isArray(license.features)
-        && license.features.includes(featureKey)
-        && !license.expired;
+        && license.features.includes(featureKey);
 
       if (enabled) return next();
 

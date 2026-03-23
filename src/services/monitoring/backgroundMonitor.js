@@ -17,6 +17,8 @@ const monitoringTasks = [];
 
 let monitoringTimer = null;
 let isRunning = false;
+let stopRequested = false;
+let resolveStopped = null;
 
 /**
  * 是否啟用背景監控詳細日誌
@@ -96,6 +98,10 @@ async function runAllTasks() {
     return;
   }
 
+  if (stopRequested) {
+    return;
+  }
+
   isRunning = true;
   const startTime = Date.now();
 
@@ -136,6 +142,13 @@ async function runAllTasks() {
     console.error("[backgroundMonitor] 執行監控任務時發生未預期的錯誤:", error);
   } finally {
     isRunning = false;
+
+    if (stopRequested && !monitoringTimer && resolveStopped) {
+      const resolve = resolveStopped;
+      resolveStopped = null;
+      stopRequested = false;
+      resolve();
+    }
   }
 }
 
@@ -147,6 +160,8 @@ function startMonitoring() {
     console.warn("[backgroundMonitor] 監控服務已在運行中");
     return;
   }
+
+  stopRequested = false;
 
   if (monitoringTasks.length === 0) {
     console.warn("[backgroundMonitor] 沒有註冊任何監控任務，跳過啟動");
@@ -180,9 +195,29 @@ function stopMonitoring() {
   if (monitoringTimer) {
     clearInterval(monitoringTimer);
     monitoringTimer = null;
-    isRunning = false;
     console.log("[backgroundMonitor] 背景監控服務已停止");
   }
+
+  stopRequested = true;
+
+  if (!isRunning) {
+    stopRequested = false;
+    return Promise.resolve();
+  }
+
+  if (resolveStopped) {
+    return new Promise((resolve) => {
+      const previousResolve = resolveStopped;
+      resolveStopped = () => {
+        previousResolve();
+        resolve();
+      };
+    });
+  }
+
+  return new Promise((resolve) => {
+    resolveStopped = resolve;
+  });
 }
 
 /**

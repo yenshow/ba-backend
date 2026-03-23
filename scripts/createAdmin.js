@@ -21,11 +21,11 @@ async function createAdmin() {
 		console.log();
 
 		// 檢查是否已有管理員
-		const admins = await db.query("SELECT id, username, email FROM users WHERE role = 'admin'");
+		const admins = await db.query("SELECT id, username FROM users WHERE role = 'admin'");
 		if (admins.length > 0) {
 			console.log("⚠️  系統中已有管理員：");
 			admins.forEach((admin) => {
-				console.log(`   - ${admin.username} (${admin.email})`);
+				console.log(`   - ${admin.username}`);
 			});
 			console.log();
 			const continueAnswer = await question("是否仍要建立新的管理員？(y/N): ");
@@ -35,21 +35,10 @@ async function createAdmin() {
 			}
 		}
 
-		// 取得用戶資訊
+		// 取得用戶資訊（無 email；登入僅以用戶名辨識）
 		const username = await question("用戶名: ");
 		if (!username || username.trim() === "") {
 			throw new Error("用戶名不能為空");
-		}
-
-		const email = await question("Email: ");
-		if (!email || email.trim() === "") {
-			throw new Error("Email 不能為空");
-		}
-
-		// 驗證 email 格式
-		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-		if (!emailRegex.test(email)) {
-			throw new Error("Email 格式不正確");
 		}
 
 		const password = await question("密碼: ");
@@ -65,10 +54,8 @@ async function createAdmin() {
 		console.log();
 		console.log("正在建立管理員...");
 
-		// 建立管理員
 		const user = await userService.registerUser({
 			username: username.trim(),
-			email: email.trim(),
 			password,
 			role: "admin"
 		});
@@ -77,7 +64,6 @@ async function createAdmin() {
 		console.log("✅ 管理員建立成功！");
 		console.log("=".repeat(60));
 		console.log(`用戶名: ${user.username}`);
-		console.log(`Email: ${user.email}`);
 		console.log(`角色: ${user.role}`);
 		console.log(`狀態: ${user.status}`);
 		console.log("=".repeat(60));

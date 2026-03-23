@@ -144,6 +144,12 @@ const features = {
  */
 const license = {
 	openAllFeatures: toBoolean(getEnv("LICENSE_OPEN_ALL_FEATURES"), false),
+	// 授權平台 API（線上啟用）Base URL，例如 https://api.yenshow.com/api/license
+	platformApiBaseUrl: getEnv("LICENSE_PLATFORM_API_BASE_URL", ""),
+	// 授權平台 API 逾時（毫秒）
+	platformTimeoutMs: toNumber(getEnv("LICENSE_PLATFORM_TIMEOUT_MS"), 8000),
+	// 離線授權回應檔驗簽用（HMAC-SHA256）
+	signSecret: getEnv("LICENSE_SIGN_SECRET", ""),
 };
 
 /**

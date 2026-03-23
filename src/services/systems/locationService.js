@@ -103,6 +103,30 @@ function formatSystem(system) {
         },
       };
 
+    case "drainage": {
+      const sp = config.status_points;
+      return {
+        ...baseSystem,
+        config: {
+          deviceId: config.device_id || undefined,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus:
+            config.modbus_config && Object.keys(config.modbus_config).length > 0
+              ? config.modbus_config
+              : undefined,
+          equipmentKind: config.equipment_kind || "pump",
+          viewCategory: config.view_category || "drainage",
+          statusPoints:
+            sp && typeof sp === "object" && Object.keys(sp).length > 0
+              ? sp
+              : undefined,
+        },
+      };
+    }
+
     case "people_counting":
       return {
         ...baseSystem,
@@ -934,6 +958,17 @@ function buildSystemConfig(systemType, config) {
         modbus_config: config.modbus || {},
       };
 
+    case "drainage":
+      return {
+        device_id: config.deviceId || null,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: config.modbus || {},
+        equipment_kind: config.equipmentKind || "pump",
+        view_category: config.viewCategory || "drainage",
+        status_points: config.statusPoints || {},
+      };
+
     case "people_counting":
       return {
         person_group_ids: config.personGroupIds || [],
@@ -964,9 +999,13 @@ async function createSystem(query, locationId, system) {
 
   if (
     !systemType ||
-    !["environment", "lighting", "people_counting", "vehicle_access"].includes(
-      systemType,
-    )
+    ![
+      "environment",
+      "lighting",
+      "people_counting",
+      "vehicle_access",
+      "drainage",
+    ].includes(systemType)
   ) {
     throw new Error(`無效的系統類型: ${systemType}`);
   }
@@ -1002,9 +1041,13 @@ async function updateSystem(query, systemId, system) {
   const targetSystemType = systemType || currentSystemType;
 
   if (
-    !["environment", "lighting", "people_counting", "vehicle_access"].includes(
-      targetSystemType,
-    )
+    ![
+      "environment",
+      "lighting",
+      "people_counting",
+      "vehicle_access",
+      "drainage",
+    ].includes(targetSystemType)
   ) {
     throw new Error(`無效的系統類型: ${targetSystemType}`);
   }
@@ -1045,6 +1088,9 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       entryLaneId,
       exitLaneId,
       config,
+      equipmentKind,
+      viewCategory,
+      statusPoints,
     } = location;
 
     // 如果有現成的 config，直接使用
@@ -1063,6 +1109,17 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           if (deviceId !== undefined) systemConfig.deviceId = deviceId;
           if (locationXY !== undefined) systemConfig.location = locationXY;
           if (modbus !== undefined) systemConfig.modbus = modbus;
+          break;
+        case "drainage":
+          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          if (locationXY !== undefined) systemConfig.location = locationXY;
+          if (modbus !== undefined) systemConfig.modbus = modbus;
+          if (equipmentKind !== undefined)
+            systemConfig.equipmentKind = equipmentKind;
+          if (viewCategory !== undefined)
+            systemConfig.viewCategory = viewCategory;
+          if (statusPoints !== undefined)
+            systemConfig.statusPoints = statusPoints;
           break;
         case "people_counting":
           if (personGroupIds !== undefined)

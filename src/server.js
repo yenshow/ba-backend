@@ -25,6 +25,7 @@ const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const lightingRoutes = require("./routes/lightingRoutes");
+const drainageRoutes = require("./routes/drainageRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
@@ -35,6 +36,7 @@ const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
+const permissionRoutes = require("./routes/permissionRoutes");
 
 // 授權（Feature Gate）
 const { requireFeature } = require("./middleware/licenseMiddleware");
@@ -107,15 +109,21 @@ app.use(responseHandler);
 // 靜態檔案服務（用於提供上傳的檔案）
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-// 註冊路由（授權僅控：人流、照明、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
+// 註冊路由（授權僅控：人流、照明、排水、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/permissions", permissionRoutes);
 app.use("/api/license", licenseRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
+app.use("/api/drainage", requireFeature("drainage"), drainageRoutes);
 app.use("/api/environment", requireFeature("environment"), environmentRoutes);
 app.use("/api/locations", locationRoutes); // 統一地點管理 API
-app.use("/api/people-counting", requireFeature("people_counting"), peopleCountingRoutes); // 人流統計
+app.use(
+  "/api/people-counting",
+  requireFeature("people_counting"),
+  peopleCountingRoutes,
+); // 人流統計
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes); // 車輛相關路由在 externalDataRoutes 內依 requireFeature(vehicle_access) 控管
 app.use("/api/access-control", accessControlRoutes);
@@ -124,7 +132,10 @@ if (config.features && config.features.enableAccessControlPersonnel !== false) {
   app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
 } else {
   app.use("/api/personnel", (_req, res) =>
-    res.status(403).json({ success: false, error: "門禁人員功能已關閉（ENABLE_ACCESS_CONTROL_PERSONNEL）" })
+    res.status(403).json({
+      success: false,
+      error: "門禁人員功能已關閉（ENABLE_ACCESS_CONTROL_PERSONNEL）",
+    }),
   );
 }
 app.use("/api/yscp", yscpEventRoutes);
@@ -162,7 +173,36 @@ async function startServer() {
   const serverLogger = logger.createLogger("Server");
 
   try {
-    // 測試資料庫連線
+    const localIP = getLocalIPAddress();
+
+    // 創建 HTTP 伺服器
+    const httpServer = http.createServer(app);
+
+    // 初始化 WebSocket 服務
+    websocketService.initializeWebSocket(httpServer, corsOptions);
+
+    await new Promise((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(
+        serverConfig.serverPort,
+        serverConfig.serverHost,
+        resolve,
+      );
+    });
+
+    serverLogger.info(
+      `BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`,
+    );
+    serverLogger.info(`本機連線: http://localhost:${config.serverPort}`);
+    serverLogger.info(`區域網路連線: http://${localIP}:${config.serverPort}`);
+    serverLogger.info(`WebSocket 服務已啟用 (Socket.IO)`);
+
+    if (localIP !== "localhost") {
+      console.log(`\n💡 其他裝置可透過以下網址訪問:`);
+      console.log(`   http://${localIP}:${config.serverPort}`);
+    }
+
+    // 測試資料庫連線（listen 成功後再做，避免啟動失敗時觸發一堆背景任務）
     const dbConnected = await db.testConnection();
     if (!dbConnected) {
       serverLogger.warn("資料庫連線失敗，但伺服器仍會啟動");
@@ -190,7 +230,6 @@ async function startServer() {
       );
       // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
-      // 啟動背景監控服務
       backgroundMonitor.startMonitoring();
       serverLogger.info("背景監控服務已啟用");
     } else {
@@ -203,47 +242,48 @@ async function startServer() {
 
     // 環境彙總：每小時寫入「上一小時」hour（日／月由備份日執行）
     const runHourAgg = () =>
-      environmentAggregationService.computeAndSaveHour().catch((err) =>
-        serverLogger.warn("環境彙總 hour 執行失敗", { error: err.message })
-      );
+      environmentAggregationService
+        .computeAndSaveHour()
+        .catch((err) =>
+          serverLogger.warn("環境彙總 hour 執行失敗", { error: err.message }),
+        );
     setImmediate(runHourAgg);
-    setInterval(runHourAgg, 60 * 60 * 1000);
+    global.__envHourAggIntervalId = setInterval(runHourAgg, 60 * 60 * 1000);
     serverLogger.info("環境彙總排程已啟用（每小時）");
 
-    const localIP = getLocalIPAddress();
+    global.__httpServer = httpServer;
 
-    // 創建 HTTP 伺服器
-    const httpServer = http.createServer(app);
-
-    // 初始化 WebSocket 服務
-    websocketService.initializeWebSocket(httpServer, corsOptions);
-
-    // 啟動 HTTP 伺服器（Socket.IO 會自動附加到 HTTP 伺服器）
-    httpServer.listen(serverConfig.serverPort, serverConfig.serverHost, async () => {
-      serverLogger.info(
-        `BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`,
-      );
-      serverLogger.info(`本機連線: http://localhost:${config.serverPort}`);
-      serverLogger.info(`區域網路連線: http://${localIP}:${config.serverPort}`);
-      serverLogger.info(`WebSocket 服務已啟用 (Socket.IO)`);
-
-      if (localIP !== "localhost") {
-        console.log(`\n💡 其他裝置可透過以下網址訪問:`);
-        console.log(`   http://${localIP}:${config.serverPort}`);
-      }
-
-      // 門禁佈防訂閱：全面改為佈防模式，後端主動向門禁設備訂閱事件
-      if (config.features && config.features.enableAccessControlPersonnel !== false) {
-        isapiSubscribeService.start().catch((err) => {
-          serverLogger.warn("門禁佈防訂閱服務啟動時發生錯誤（將不影響其他功能）", { error: err.message });
-        });
-      }
-    });
+    // 門禁佈防訂閱：全面改為佈防模式，後端主動向門禁設備訂閱事件
+    if (
+      config.features &&
+      config.features.enableAccessControlPersonnel !== false
+    ) {
+      isapiSubscribeService.start().catch((err) => {
+        serverLogger.warn(
+          "門禁佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
+          { error: err.message },
+        );
+      });
+    }
   } catch (error) {
-    serverLogger.error("啟動伺服器失敗", {
-      error: error.message,
-      stack: error.stack,
-    });
+    if (error && error.code === "EADDRINUSE") {
+      serverLogger.error(
+        `啟動失敗：${serverConfig.serverHost}:${serverConfig.serverPort} 已被佔用（EADDRINUSE）`,
+      );
+    } else {
+      serverLogger.error("啟動伺服器失敗", {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+
+    try {
+      await db.close();
+    } catch (_e) {}
+    try {
+      await externalDb.close();
+    } catch (_e) {}
+
     process.exit(1);
   }
 }
@@ -252,18 +292,36 @@ async function startServer() {
  * 優雅關閉伺服器
  */
 const shutdownLogger = logger.createLogger("Shutdown");
+let isShuttingDown = false;
 
 async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+
   shutdownLogger.info(`收到 ${signal}，正在關閉伺服器...`);
 
   try {
     // 停止背景監控服務
-    backgroundMonitor.stopMonitoring();
+    await backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
 
     // 停止門禁佈防訂閱服務
     isapiSubscribeService.stop();
     shutdownLogger.info("門禁佈防訂閱服務已停止");
+
+    if (global.__envHourAggIntervalId) {
+      clearInterval(global.__envHourAggIntervalId);
+      global.__envHourAggIntervalId = null;
+    }
+
+    if (global.__httpServer) {
+      await new Promise((resolve) => {
+        global.__httpServer.close(() => resolve());
+      });
+      global.__httpServer = null;
+    }
 
     // 關閉資料庫連線
     await db.close();

@@ -1,17 +1,18 @@
 const express = require("express");
 const router = express.Router();
 const userService = require("../services/userService");
-const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const permissionService = require("../services/permissionService");
+const { authenticate, requireAdmin, requireAdminOrOperator } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   validateRequired,
   validateIntegers,
 } = require("../middleware/validation");
 
-// 公開路由：註冊
+// 公開路由：註冊（無 email；登入僅以用戶名辨識）
 router.post(
   "/register",
-  validateRequired("username", "email", "password"),
+  validateRequired("username", "password"),
   asyncHandler(async (req, res) => {
     const user = await userService.registerUser(req.body);
     res.sendSuccess({ user }, 201);
@@ -28,41 +29,61 @@ router.post(
   }),
 );
 
-// 需要認證：取得當前用戶資訊
+// 需要認證：取得當前用戶資訊（含有效權限 permissions）
 router.get(
   "/me",
   authenticate,
   asyncHandler(async (req, res) => {
     const user = await userService.getUserById(req.user.id);
-    res.sendSuccess({ user });
+    const { codes: permissions } = await permissionService.getEffectivePermissionsForUser(req.user.id, user.role);
+    res.sendSuccess({ user: { ...user, permissions } });
   }),
 );
 
-// 需要管理員權限：取得用戶列表
+// 管理員或操作員：取得用戶列表
 router.get(
   "/",
   authenticate,
-  requireAdmin,
+  requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { role, status, limit, offset, orderBy, order } = req.query;
-    // 所有參數驗證和轉換由 service 層統一處理
-    const result = await userService.getUsers({
-      role,
-      status,
-      limit,
-      offset,
-      orderBy,
-      order,
-    });
+    const result = await userService.getUsers({ role, status, limit, offset, orderBy, order });
     res.sendSuccess(result);
   }),
 );
 
-// 需要管理員權限：取得單一用戶
+// 管理員或操作員：取得／寫入某用戶的權限設定
+router.get(
+  "/:id/permissions",
+  authenticate,
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const userId = parseInt(req.params.id, 10);
+    const settings = await permissionService.getUserPermissionSettings(userId);
+    res.sendSuccess(settings);
+  }),
+);
+
+router.put(
+  "/:id/permissions",
+  authenticate,
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const userId = parseInt(req.params.id, 10);
+    const overrides = Array.isArray(req.body.overrides) ? req.body.overrides : [];
+    await permissionService.setUserPermissionOverrides(userId, overrides);
+    const settings = await permissionService.getUserPermissionSettings(userId);
+    res.sendSuccess(settings);
+  }),
+);
+
+// 管理員或操作員：取得單一用戶
 router.get(
   "/:id",
   authenticate,
-  requireAdmin,
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const user = await userService.getUserById(parseInt(req.params.id, 10));
@@ -70,7 +91,7 @@ router.get(
   }),
 );
 
-// 需要認證：更新用戶（用戶可以更新自己，管理員可以更新任何人）
+// 需要認證：更新用戶（用戶可更新自己；管理員或操作員可更新任何人）
 router.put(
   "/:id",
   authenticate,
@@ -101,11 +122,11 @@ router.put(
   }),
 );
 
-// 需要管理員權限：刪除用戶
+// 管理員或操作員：刪除用戶
 router.delete(
   "/:id",
   authenticate,
-  requireAdmin,
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);

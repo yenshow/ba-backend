@@ -70,6 +70,7 @@ async function initSchema() {
           "environment",
           "lighting",
           "people_counting",
+          "drainage",
           "hvac",
           "fire",
           "security",
@@ -80,18 +81,25 @@ async function initSchema() {
     for (const [name, values] of enums)
       await createEnum(targetPool, name, values);
 
-    // 建立 users 表
+    // 建立 users 表（不含 email；討論決策：email 已自系統移除）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS users (
 				id SERIAL PRIMARY KEY,
 				username VARCHAR(50) NOT NULL UNIQUE,
-				email VARCHAR(100) NOT NULL UNIQUE,
 				password_hash VARCHAR(255) NOT NULL,
 				role user_role NOT NULL DEFAULT 'viewer',
 				status user_status NOT NULL DEFAULT 'active',
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)
+		`);
+
+    // 遷移：若為舊版既有 DB（含 email 欄位），則移除 email 欄位與相關索引
+    await targetPool.query(`
+			ALTER TABLE users DROP COLUMN IF EXISTS email;
+		`);
+    await targetPool.query(`
+			DROP INDEX IF EXISTS idx_users_email;
 		`);
 
     // 建立 updated_at 自動更新觸發器函數
@@ -111,11 +119,107 @@ async function initSchema() {
     // 建立索引
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-			CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 			CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 		`);
 
     console.log("✅ users 表已建立");
+
+    // ========== 精細權限（角色 + 權限覆寫） ==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS permission_definitions (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(100) NOT NULL UNIQUE,
+        category VARCHAR(50) NOT NULL,
+        parent_id INTEGER REFERENCES permission_definitions(id) ON DELETE CASCADE,
+        name VARCHAR(255),
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "permission_definitions");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_permission_definitions_category ON permission_definitions(category);
+      CREATE INDEX IF NOT EXISTS idx_permission_definitions_parent ON permission_definitions(parent_id);
+    `);
+    console.log("✅ permission_definitions 表已建立");
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS role_default_permissions (
+        id SERIAL PRIMARY KEY,
+        role user_role NOT NULL,
+        permission_id INTEGER NOT NULL REFERENCES permission_definitions(id) ON DELETE CASCADE,
+        granted BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(role, permission_id)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_role_default_permissions_role ON role_default_permissions(role);
+    `);
+    console.log("✅ role_default_permissions 表已建立");
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS user_permission_overrides (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        permission_id INTEGER NOT NULL REFERENCES permission_definitions(id) ON DELETE CASCADE,
+        granted BOOLEAN NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, permission_id)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_user ON user_permission_overrides(user_id);
+    `);
+    console.log("✅ user_permission_overrides 表已建立");
+
+    // 種子：權限定義（system = 權限設定 UI「可使用的系統」四項；其餘供後端/既有邏輯用）
+    const permissionSeeds = [
+      { code: "system.people_counting", category: "system", parent_id: null, name: "人流統計", sort_order: 10 },
+      { code: "system.video_surveillance", category: "system", parent_id: null, name: "影像監控", sort_order: 20 },
+      { code: "system.environment", category: "system", parent_id: null, name: "環境品質", sort_order: 30 },
+      { code: "system.vehicle_access", category: "system", parent_id: null, name: "車輛進出", sort_order: 40 },
+      { code: "resource_monitoring.realtime_preview", category: "resource", parent_id: null, name: "即時預覽", sort_order: 10 },
+      { code: "resource_monitoring.playback", category: "resource", parent_id: null, name: "播放", sort_order: 20 },
+      { code: "resource_monitoring.export", category: "resource", parent_id: null, name: "錄影匯出", sort_order: 30 },
+      { code: "resource_monitoring.ptz_control", category: "resource", parent_id: null, name: "PTZ 控制", sort_order: 40 },
+      { code: "configuration.devices", category: "configuration", parent_id: null, name: "裝置和伺服器", sort_order: 10 },
+      { code: "configuration.access_control", category: "configuration", parent_id: null, name: "門禁裝置", sort_order: 20 },
+      { code: "operation.monitoring", category: "operation", parent_id: null, name: "資源監測（操作）", sort_order: 10 },
+      { code: "operation.parking", category: "operation", parent_id: null, name: "停車場", sort_order: 20 },
+      { code: "operation.alarm_center", category: "operation", parent_id: null, name: "警報中心", sort_order: 30 },
+      { code: "operation.location_management", category: "operation", parent_id: null, name: "地點管理", sort_order: 40 },
+    ];
+    for (const p of permissionSeeds) {
+      await targetPool.query(
+        `INSERT INTO permission_definitions (code, category, parent_id, name, sort_order)
+         SELECT $1, $2, $3, $4, $5
+         ON CONFLICT (code) DO NOTHING`,
+        [p.code, p.category, p.parent_id, p.name, p.sort_order]
+      );
+    }
+    console.log("✅ 權限定義種子已插入");
+
+    // 種子：角色預設權限（admin 全開由邏輯處理；此處為 operator/viewer 預設）
+    const defRows = await targetPool.query("SELECT id, code FROM permission_definitions");
+    const operatorGranted = ["system.people_counting", "system.video_surveillance", "system.environment", "system.vehicle_access", "resource_monitoring.realtime_preview", "resource_monitoring.playback", "operation.monitoring", "operation.parking", "operation.alarm_center", "operation.location_management", "configuration.access_control"];
+    const viewerGranted = ["system.people_counting", "system.video_surveillance", "resource_monitoring.realtime_preview", "resource_monitoring.playback", "operation.monitoring"];
+    for (const row of defRows.rows) {
+      await targetPool.query(
+        `INSERT INTO role_default_permissions (role, permission_id, granted)
+         VALUES ('operator', $1, $2)
+         ON CONFLICT (role, permission_id) DO NOTHING`,
+        [row.id, operatorGranted.includes(row.code)]
+      );
+      await targetPool.query(
+        `INSERT INTO role_default_permissions (role, permission_id, granted)
+         VALUES ('viewer', $1, $2)
+         ON CONFLICT (role, permission_id) DO NOTHING`,
+        [row.id, viewerGranted.includes(row.code)]
+      );
+    }
+    console.log("✅ 角色預設權限種子已插入");
 
     // 建立 device_types 表（通用設備類型表）
     await targetPool.query(`
@@ -538,7 +642,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -550,8 +654,18 @@ async function initSchema() {
     await targetPool.query(`
 			ALTER TABLE location_systems DROP CONSTRAINT IF EXISTS location_systems_system_type_check;
 			ALTER TABLE location_systems ADD CONSTRAINT location_systems_system_type_check
-				CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access'));
+				CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage'));
 		`);
+
+    // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
+    try {
+      await targetPool.query(`ALTER TYPE alert_source ADD VALUE 'drainage'`);
+    } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
+        throw e;
+      }
+    }
 
     await createUpdatedAtTrigger(targetPool, "location_systems");
 

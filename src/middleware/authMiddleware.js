@@ -1,4 +1,5 @@
 const userService = require("../services/userService");
+const permissionService = require("../services/permissionService");
 
 // 驗證 JWT Token 中間件
 function authenticate(req, res, next) {
@@ -51,10 +52,41 @@ function requireAdminOrOperator(req, res, next) {
 	return authorize("admin", "operator")(req, res, next);
 }
 
+/**
+ * 檢查是否具備指定權限（精細權限）
+ * 若 req.user 無 permissions 則自 DB 解析後掛上；admin 視為擁有全部權限
+ * @param {string} requiredCode - 權限代碼，如 'operation.location_management'
+ */
+function requirePermission(requiredCode) {
+	return async (req, res, next) => {
+		if (!req.user) {
+			return res.status(401).json({ error: "未認證" });
+		}
+		if (req.user.role === "admin") {
+			return next();
+		}
+		let codes = req.user.permissions;
+		if (!Array.isArray(codes)) {
+			try {
+				const result = await permissionService.getEffectivePermissionsForUser(req.user.id, req.user.role);
+				codes = result.codes;
+				req.user.permissions = codes;
+			} catch (err) {
+				return res.status(500).json({ error: "無法取得權限", details: err.message });
+			}
+		}
+		if (codes.includes(requiredCode)) {
+			return next();
+		}
+		return res.status(403).json({ error: "權限不足" });
+	};
+}
+
 module.exports = {
 	authenticate,
 	authorize,
 	requireAdmin,
-	requireAdminOrOperator
+	requireAdminOrOperator,
+	requirePermission
 };
 

@@ -14,6 +14,7 @@ async function getDevices(filters = {}) {
       type_id,
       type_code,
       status,
+      group,
       limit = 20,
       offset = 0,
       orderBy = "created_at",
@@ -46,6 +47,11 @@ async function getDevices(filters = {}) {
     if (status) {
       query += " AND d.status = ?";
       params.push(status);
+    }
+
+    if (group != null && group !== "") {
+      query += " AND d.config->>'group' = ?";
+      params.push(group);
     }
 
     // 排序
@@ -84,6 +90,11 @@ async function getDevices(filters = {}) {
     if (status) {
       countQuery += " AND d.status = ?";
       countParams.push(status);
+    }
+
+    if (group != null && group !== "") {
+      countQuery += " AND d.config->>'group' = ?";
+      countParams.push(group);
     }
 
     const countResult = await db.query(countQuery, countParams);
@@ -818,8 +829,29 @@ async function deleteDevice(id, userId = null) {
   }
 }
 
+// 取得攝影機群組列表（不重複，供篩選下拉使用）
+async function getCameraGroups() {
+  try {
+    const query = `
+      SELECT DISTINCT d.config->>'group' AS group_name
+      FROM devices d
+      INNER JOIN device_types dt ON d.type_id = dt.id
+      WHERE dt.code = ?
+        AND d.config->>'group' IS NOT NULL
+        AND TRIM(d.config->>'group') != ''
+      ORDER BY 1
+    `;
+    const rows = await db.query(query, ["camera"]);
+    return rows.map((r) => r.group_name).filter(Boolean);
+  } catch (error) {
+    console.error("取得攝影機群組失敗:", error);
+    throw new Error("取得攝影機群組失敗: " + error.message);
+  }
+}
+
 module.exports = {
   getDevices,
+  getCameraGroups,
   getDeviceById,
   createDevice,
   updateDevice,

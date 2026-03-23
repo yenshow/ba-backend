@@ -70,6 +70,8 @@ const getLocationInfo = (systemId) =>
   getSourceInfoByType(systemId, "environment");
 const getAreaInfo = (systemId) =>
   getSourceInfoByType(systemId, "lighting");
+const getDrainageInfo = (systemId) =>
+  getSourceInfoByType(systemId, "drainage");
 
 
 /**
@@ -146,12 +148,14 @@ const getDeviceIdFromLocation = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "environment");
 const getDeviceIdFromArea = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "lighting");
+const getDeviceIdFromDrainage = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "drainage");
 
 /**
  * 依設備 ID 與系統類型取得所有對應的 location_systems.id
  * 用於恢復時一併清除同一實體設備在其它地點的警報（避免雙重警報只解一筆）
  * @param {number} deviceId - 設備 ID
- * @param {string} systemType - 系統類型 ('environment' | 'lighting')
+ * @param {string} systemType - 系統類型 ('environment' | 'lighting' | 'drainage')
  * @returns {Promise<number[]>} location_systems.id 陣列
  */
 async function getLocationSystemIdsByDeviceId(deviceId, systemType) {
@@ -186,6 +190,11 @@ const SYSTEM_CONFIGS = {
     source: alertService.ALERT_SOURCES.LIGHTING,
     getSourceInfo: getAreaInfo,
     getDeviceId: getDeviceIdFromArea,
+  },
+  drainage: {
+    source: alertService.ALERT_SOURCES.DRAINAGE,
+    getSourceInfo: getDrainageInfo,
+    getDeviceId: getDeviceIdFromDrainage,
   },
   device: {
     source: alertService.ALERT_SOURCES.DEVICE,
@@ -322,7 +331,9 @@ async function clearError(system, sourceId, options = {}) {
     );
 
     if (
-      (system === "environment" || system === "lighting") &&
+      (system === "environment" ||
+        system === "lighting" ||
+        system === "drainage") &&
       deviceId
     ) {
       const allSystemIds = await getLocationSystemIdsByDeviceId(
