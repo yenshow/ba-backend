@@ -6,6 +6,7 @@ const {
   validateLoggingConfig,
 } = require("../../utils/deviceHelpers");
 const websocketService = require("../websocket/websocketService");
+const alertService = require("../alerts/alertService");
 
 // 取得設備列表
 async function getDevices(filters = {}) {
@@ -775,6 +776,48 @@ async function updateDevice(id, deviceData, userId) {
     // 檢測狀態變更並推送特定事件
     const newStatus = status !== undefined ? status : oldStatus;
     if (status !== undefined && oldStatus !== newStatus) {
+      // 「停用=全停」：設備被停用時，解決所有既有 active 警示（含 device 與各系統綁定的 location_systems）
+      if (newStatus === "inactive") {
+        try {
+          await alertService.updateAllAlertTypesStatus(
+            alertService.ALERT_SOURCES.DEVICE,
+            id,
+            alertService.ALERT_STATUS.RESOLVED,
+            null,
+          );
+
+          const linked = await db.query(
+            `SELECT id, system_type
+             FROM location_systems
+             WHERE (
+               (system_config->>'device_id' IS NOT NULL AND (system_config->>'device_id')::integer = ?)
+               OR (system_config->>'deviceId' IS NOT NULL AND (system_config->>'deviceId')::integer = ?)
+               OR (system_config->'device_ids' IS NOT NULL AND system_config->'device_ids' @> ?::jsonb)
+             )`,
+            [id, id, JSON.stringify([id])],
+          );
+
+          const sourceMap = {
+            environment: alertService.ALERT_SOURCES.ENVIRONMENT,
+            lighting: alertService.ALERT_SOURCES.LIGHTING,
+            drainage: alertService.ALERT_SOURCES.DRAINAGE,
+          };
+
+          for (const row of linked || []) {
+            const src = sourceMap[row.system_type];
+            if (!src) continue;
+            await alertService.updateAllAlertTypesStatus(
+              src,
+              Number(row.id),
+              alertService.ALERT_STATUS.RESOLVED,
+              null,
+            );
+          }
+        } catch (e) {
+          console.warn("[deviceService] 停用設備時解決警示失敗:", e?.message || e);
+        }
+      }
+
       websocketService.emitDeviceStatusChanged({
         deviceId: id,
         oldStatus,

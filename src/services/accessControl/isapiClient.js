@@ -23,7 +23,19 @@ function parseDigestChallenge(header) {
 /**
  * 計算 Digest Auth 的 response 值（RFC 2617）
  */
-function buildDigestResponse({ username, password, method, uri, realm, nonce, qop, nc, cnonce, opaque, algorithm }) {
+function buildDigestResponse({
+  username,
+  password,
+  method,
+  uri,
+  realm,
+  nonce,
+  qop,
+  nc,
+  cnonce,
+  opaque,
+  algorithm,
+}) {
   const md5 = (str) => crypto.createHash("md5").update(str).digest("hex");
   const ha1 = md5(`${username}:${realm}:${password}`);
   const ha2 = md5(`${method}:${uri}`);
@@ -54,7 +66,9 @@ function throwIfBadStatus(res) {
     const msg =
       res.data?.message ||
       res.data?.error ||
-      (fallbackBody ? `${res.statusText || `HTTP ${res.status}`}: ${fallbackBody}` : (res.statusText || `HTTP ${res.status}`));
+      (fallbackBody
+        ? `${res.statusText || `HTTP ${res.status}`}: ${fallbackBody}`
+        : res.statusText || `HTTP ${res.status}`);
     const err = new Error(msg);
     err.statusCode = res.status;
     err.response = res;
@@ -114,7 +128,13 @@ function createIsapiClient(deviceConfig) {
       throw new Error(`不支援的認證方式: ${authHeader.split(" ")[0]}`);
     }
     const challenge = parseDigestChallenge(authHeader);
-    const digestAuth = buildAuthHeader(challenge, method, uri, username, password);
+    const digestAuth = buildAuthHeader(
+      challenge,
+      method,
+      uri,
+      username,
+      password,
+    );
     const config = {
       method,
       url,
@@ -140,10 +160,17 @@ function createIsapiClient(deviceConfig) {
     const isFormData = data && typeof data.getHeaders === "function";
 
     if (isFormData) {
-      return requestWithPreemptiveDigest({ method, path, data, headers, responseType });
+      return requestWithPreemptiveDigest({
+        method,
+        path,
+        data,
+        headers,
+        responseType,
+      });
     }
 
-    const contentType = headers["Content-Type"] || headers["content-type"] || "application/json";
+    const contentType =
+      headers["Content-Type"] || headers["content-type"] || "application/json";
     const config = {
       method,
       url,
@@ -165,8 +192,17 @@ function createIsapiClient(deviceConfig) {
       }
       const challenge = parseDigestChallenge(authHeader);
       const uri = new URL(url).pathname + new URL(url).search;
-      const digestAuth = buildAuthHeader(challenge, method, uri, username, password);
-      res = await axios({ ...config, headers: { ...config.headers, Authorization: digestAuth } });
+      const digestAuth = buildAuthHeader(
+        challenge,
+        method,
+        uri,
+        username,
+        password,
+      );
+      res = await axios({
+        ...config,
+        headers: { ...config.headers, Authorization: digestAuth },
+      });
     }
     throwIfBadStatus(res);
     return res;
@@ -198,7 +234,13 @@ function createIsapiClient(deviceConfig) {
       throw new Error(`不支援的認證方式: ${authHeader.split(" ")[0]}`);
     }
     const challenge = parseDigestChallenge(authHeader);
-    const digestAuth = buildAuthHeader(challenge, method, uri, username, password);
+    const digestAuth = buildAuthHeader(
+      challenge,
+      method,
+      uri,
+      username,
+      password,
+    );
 
     const res = await axios({
       method,

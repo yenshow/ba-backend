@@ -147,6 +147,164 @@ async function getErrorCountRule(source, alertType) {
 }
 
 /**
+ * 建立警報規則
+ * @param {Object} payload
+ * @returns {Promise<Object>} 建立後的規則
+ */
+async function createAlertRule(payload) {
+  const {
+    source,
+    alert_type,
+    severity,
+    condition_type = null,
+    condition_config = null,
+    message_template = null,
+    enabled = true,
+  } = payload;
+
+  const query = `
+    INSERT INTO alert_rules (
+      source,
+      alert_type,
+      severity,
+      condition_type,
+      condition_config,
+      message_template,
+      enabled
+    )
+    VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)
+    RETURNING *
+  `;
+
+  const result = await db.query(query, [
+    source,
+    alert_type,
+    severity,
+    condition_type,
+    condition_config ? JSON.stringify(condition_config) : null,
+    message_template,
+    enabled,
+  ]);
+
+  const rule = result?.[0] || null;
+  if (!rule) {
+    throw new Error("建立警報規則失敗");
+  }
+
+  if (rule.alert_type === "threshold") {
+    clearThresholdRulesCache(rule.source);
+  }
+
+  return rule;
+}
+
+/**
+ * 更新警報規則
+ * @param {number} id
+ * @param {Object} updates
+ * @returns {Promise<Object>} 更新後規則
+ */
+async function updateAlertRule(id, updates) {
+  const existingResult = await db.query(
+    "SELECT * FROM alert_rules WHERE id = ? LIMIT 1",
+    [id]
+  );
+  const existingRule = existingResult?.[0] || null;
+  if (!existingRule) {
+    throw new Error("RULE_NOT_FOUND");
+  }
+
+  const fields = [];
+  const params = [];
+
+  if (updates.source !== undefined) {
+    fields.push("source = ?");
+    params.push(updates.source);
+  }
+  if (updates.alert_type !== undefined) {
+    fields.push("alert_type = ?");
+    params.push(updates.alert_type);
+  }
+  if (updates.severity !== undefined) {
+    fields.push("severity = ?");
+    params.push(updates.severity);
+  }
+  if (updates.condition_type !== undefined) {
+    fields.push("condition_type = ?");
+    params.push(updates.condition_type);
+  }
+  if (updates.condition_config !== undefined) {
+    fields.push("condition_config = ?::jsonb");
+    params.push(
+      updates.condition_config === null
+        ? null
+        : JSON.stringify(updates.condition_config)
+    );
+  }
+  if (updates.message_template !== undefined) {
+    fields.push("message_template = ?");
+    params.push(updates.message_template);
+  }
+  if (updates.enabled !== undefined) {
+    fields.push("enabled = ?");
+    params.push(updates.enabled);
+  }
+
+  if (fields.length === 0) {
+    return existingRule;
+  }
+
+  fields.push("updated_at = CURRENT_TIMESTAMP");
+  params.push(id);
+
+  const query = `
+    UPDATE alert_rules
+    SET ${fields.join(", ")}
+    WHERE id = ?
+    RETURNING *
+  `;
+  const result = await db.query(query, params);
+  const updatedRule = result?.[0] || null;
+  if (!updatedRule) {
+    throw new Error("更新警報規則失敗");
+  }
+
+  const shouldClearThresholdCache =
+    existingRule.alert_type === "threshold" ||
+    updatedRule.alert_type === "threshold";
+  if (shouldClearThresholdCache) {
+    clearThresholdRulesCache(existingRule.source);
+    if (updatedRule.source !== existingRule.source) {
+      clearThresholdRulesCache(updatedRule.source);
+    }
+  }
+
+  return updatedRule;
+}
+
+/**
+ * 刪除警報規則
+ * @param {number} id
+ * @returns {Promise<Object>} 刪除前的規則
+ */
+async function deleteAlertRule(id) {
+  const result = await db.query(
+    "DELETE FROM alert_rules WHERE id = ? RETURNING *",
+    [id]
+  );
+  const deletedRule = result?.[0] || null;
+  if (!deletedRule) {
+    throw new Error("RULE_NOT_FOUND");
+  }
+
+  if (deletedRule.alert_type === "threshold") {
+    clearThresholdRulesCache(deletedRule.source);
+  }
+
+  return deletedRule;
+}
+
+/**
  * 評估閾值條件
  * @param {Object} config - 條件配置 { parameter, operator, value, unit }
  * @param {number} value - 當前數值
@@ -302,6 +460,9 @@ module.exports = {
   getAlertRules,
   getThresholdRules,
   getErrorCountRule,
+  createAlertRule,
+  updateAlertRule,
+  deleteAlertRule,
   evaluateThreshold,
   formatMessage,
   getParameterDisplayName,

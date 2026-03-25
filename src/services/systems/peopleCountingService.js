@@ -10,15 +10,24 @@ const locationService = require("./locationService");
 const logger = require("../../utils/logger");
 const yscpProvider = require("./peopleCounting/providers/yscpProvider");
 const accessControlProvider = require("./peopleCounting/providers/accessControlProvider");
+const cameraIsapiProvider = require("./peopleCounting/providers/cameraIsapiProvider");
 const {
   parseEventType,
   countEntryExitFromSorted,
 } = require("./peopleCounting/helpers/entryExitStats");
 
-const PROVIDERS = { yscp: yscpProvider, access_control: accessControlProvider };
+const PROVIDERS = {
+  yscp: yscpProvider,
+  access_control: accessControlProvider,
+  camera_isapi: cameraIsapiProvider,
+};
+const normalizeDataSource = (dataSource) => {
+  if (dataSource === "access_control") return "access_control";
+  if (dataSource === "camera_isapi") return "camera_isapi";
+  return "yscp";
+};
 const getProvider = (dataSource) =>
-  PROVIDERS[dataSource === "access_control" ? "access_control" : "yscp"] ||
-  yscpProvider;
+  PROVIDERS[normalizeDataSource(dataSource)] || yscpProvider;
 
 // ========== 統一錯誤處理和驗證工具 ==========
 
@@ -101,6 +110,8 @@ function validateLocationData(locationData, isUpdate = false) {
     dataSource = "yscp",
     entryDeviceId,
     exitDeviceId,
+    cameraDeviceId,
+    cameraChannelId,
   } = locationData;
 
   if (!name?.trim()) {
@@ -110,8 +121,7 @@ function validateLocationData(locationData, isUpdate = false) {
     throw createValidationError("區域 ID 不能為空");
   }
 
-  const effectiveDataSource =
-    dataSource === "access_control" ? "access_control" : "yscp";
+  const effectiveDataSource = normalizeDataSource(dataSource);
 
   if (effectiveDataSource === "yscp") {
     if (!isUpdate) {
@@ -139,7 +149,7 @@ function validateLocationData(locationData, isUpdate = false) {
     if (finalEntry && finalExit && finalEntry === finalExit) {
       throw createValidationError("入口和出口不能是同一個設備");
     }
-  } else {
+  } else if (effectiveDataSource === "access_control") {
     if (!isUpdate && !entryDeviceId) {
       throw createValidationError("門禁入口設備 ID 不能為空");
     }
@@ -148,6 +158,22 @@ function validateLocationData(locationData, isUpdate = false) {
     }
     if (entryDeviceId && exitDeviceId && entryDeviceId === exitDeviceId) {
       throw createValidationError("入口和出口不能是同一個設備");
+    }
+  } else {
+    // camera_isapi
+    if (!isUpdate && !cameraDeviceId) {
+      throw createValidationError("攝影機設備 ID 不能為空");
+    }
+    if (isUpdate && cameraDeviceId !== undefined && !cameraDeviceId) {
+      throw createValidationError("攝影機設備 ID 不能為空");
+    }
+    if (
+      cameraChannelId !== undefined &&
+      cameraChannelId !== null &&
+      (!Number.isFinite(Number(cameraChannelId)) ||
+        Number(cameraChannelId) <= 0)
+    ) {
+      throw createValidationError("攝影機通道必須為正整數");
     }
   }
 }
@@ -240,6 +266,8 @@ async function createPeopleCountingLocation(locationData, userId) {
         dataSource = "yscp",
         entryDeviceId,
         exitDeviceId,
+        cameraDeviceId,
+        cameraChannelId,
         accessControlGroups = [], // 相容保留；門禁人員改由人員管理 person_location_access 處理
       } = locationData;
 
@@ -257,6 +285,8 @@ async function createPeopleCountingLocation(locationData, userId) {
             dataSource,
             entryDeviceId,
             exitDeviceId,
+            cameraDeviceId,
+            cameraChannelId,
             accessControlGroups,
           },
         },
@@ -287,6 +317,8 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         dataSource,
         entryDeviceId,
         exitDeviceId,
+        cameraDeviceId,
+        cameraChannelId,
         accessControlGroups,
       } = locationData;
 
@@ -317,6 +349,8 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         data_source: existingConfig.dataSource || "yscp",
         entry_device_id: existingConfig.entryDeviceId ?? null,
         exit_device_id: existingConfig.exitDeviceId ?? null,
+        camera_device_id: existingConfig.cameraDeviceId ?? null,
+        camera_channel_id: existingConfig.cameraChannelId ?? 1,
         access_control_groups: existingConfig.accessControlGroups || [],
       };
 
@@ -333,6 +367,12 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         }),
         ...(exitDeviceId !== undefined && {
           exit_device_id: exitDeviceId,
+        }),
+        ...(cameraDeviceId !== undefined && {
+          camera_device_id: cameraDeviceId,
+        }),
+        ...(cameraChannelId !== undefined && {
+          camera_channel_id: cameraChannelId,
         }),
         ...(accessControlGroups !== undefined && {
           access_control_groups: accessControlGroups,
@@ -354,6 +394,8 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               dataSource: config.data_source,
               entryDeviceId: config.entry_device_id,
               exitDeviceId: config.exit_device_id,
+              cameraDeviceId: config.camera_device_id,
+              cameraChannelId: config.camera_channel_id,
               accessControlGroups: config.access_control_groups,
             },
           },
@@ -422,6 +464,7 @@ async function getSites() {
 
     const yscpList = [];
     const accessControlList = [];
+    const cameraList = [];
     for (const loc of allLocations) {
       const ds = getPeopleCountingConfig(loc).dataSource || "yscp";
       if (ds === "yscp" && config.features?.enableYscpPeopleCounting === false)
@@ -431,8 +474,13 @@ async function getSites() {
         config.features?.enableAccessControlPersonnel === false
       )
         continue;
-      if (ds === "access_control") accessControlList.push(loc);
-      else yscpList.push(loc);
+      if (ds === "access_control") {
+        accessControlList.push(loc);
+      } else if (ds === "camera_isapi") {
+        cameraList.push(loc);
+      } else {
+        yscpList.push(loc);
+      }
     }
 
     const sites = [];
@@ -458,6 +506,21 @@ async function getSites() {
       const locationId = normalizeId(location.id);
       const siteConfig = getPeopleCountingConfig(location);
       const data = await accessControlProvider.getSiteData(
+        locationId,
+        siteConfig,
+      );
+      sites.push({
+        id: locationId,
+        name: location.name,
+        entryCount: data.entryCount,
+        exitCount: data.exitCount,
+        units: data.units,
+      });
+    }
+    for (const location of cameraList) {
+      const locationId = normalizeId(location.id);
+      const siteConfig = getPeopleCountingConfig(location);
+      const data = await cameraIsapiProvider.getSiteData(
         locationId,
         siteConfig,
       );
@@ -580,6 +643,8 @@ function getPeopleCountingConfig(location) {
     dataSource: peopleCountingSystem?.config?.dataSource || "yscp",
     entryDeviceId: peopleCountingSystem?.config?.entryDeviceId ?? null,
     exitDeviceId: peopleCountingSystem?.config?.exitDeviceId ?? null,
+    cameraDeviceId: peopleCountingSystem?.config?.cameraDeviceId ?? null,
+    cameraChannelId: peopleCountingSystem?.config?.cameraChannelId ?? 1,
     accessControlGroups: ensureArray(
       peopleCountingSystem?.config?.accessControlGroups,
     ),
@@ -604,6 +669,8 @@ async function getSiteConfig(siteId) {
     dataSource: config.dataSource,
     entryDeviceId: config.entryDeviceId,
     exitDeviceId: config.exitDeviceId,
+    cameraDeviceId: config.cameraDeviceId,
+    cameraChannelId: config.cameraChannelId,
     accessControlGroups: config.accessControlGroups,
   };
 }

@@ -27,15 +27,23 @@ const devLog = {
 };
 
 /**
- * 參數匹配正則表達式（用於從警報訊息中提取參數名稱）
+ * 參數匹配正則表達式（用於舊資料訊息推導維度）
  */
 const PARAMETER_PATTERN =
   /\b(PM2\.5|PM10|CO2|溫度|濕度|噪音值|TVOC|HCHO|風速)\b/;
 
 /**
- * 從警報訊息中提取參數名稱（用於閾值警報的參數匹配）
- * @param {string} message - 警報訊息
- * @returns {string|null} 參數名稱，如果未找到則返回 null
+ * 維度 key 正規化
+ * @param {string} value
+ * @returns {string}
+ */
+function normalizeDimensionValue(value) {
+  if (!value) return "default";
+  return String(value).trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+/**
+ * 從訊息提取參數名稱（fallback：僅在未提供 dimension_key 時使用）
  */
 function extractParameterFromMessage(message) {
   if (!message) return null;
@@ -44,9 +52,28 @@ function extractParameterFromMessage(message) {
 }
 
 /**
- * 獲取當天的開始和結束時間（UTC）
- * 用於按天限制警報查詢，確保同一天只會有一個 active 警報
- * @returns {Object} { todayStart, todayEnd } - 當天的開始和結束時間（ISO 字符串）
+ * 生成 Incident 維度鍵（dimension_key）
+ * @param {string} alertType
+ * @param {string} message
+ * @param {string|null} explicitDimensionKey
+ * @returns {string}
+ */
+function resolveDimensionKey(alertType, message, explicitDimensionKey = null) {
+  if (explicitDimensionKey) {
+    return normalizeDimensionValue(explicitDimensionKey);
+  }
+  if (alertType === ALERT_TYPES.THRESHOLD) {
+    const parameter = extractParameterFromMessage(message);
+    if (parameter) {
+      return `threshold:${normalizeDimensionValue(parameter)}`;
+    }
+    return "threshold:default";
+  }
+  return `${alertType}:default`;
+}
+
+/**
+ * 取得當天 UTC 起始區間（供每日結案使用）
  */
 function getTodayDateRange() {
   const now = new Date();
@@ -70,24 +97,12 @@ function getTodayDateRange() {
   };
 }
 
-/**
- * 構建警報查詢的通用邏輯（提取重複代碼）
- * @param {string} source - 來源類型
- * @param {number} sourceId - 來源 ID
- * @param {string} alertType - 警報類型
- * @param {string} status - 警報狀態
- * @param {string|null} parameter - 參數名稱（用於閾值警報匹配，可選）
- * @param {Object|null} dateRange - 日期範圍 { start, end }，可選
- * @param {string} orderBy - 排序方式，默認為 "created_at DESC"
- * @param {number|null} limit - 限制數量，可選
- * @returns {Promise<Array>} 查詢結果
- */
 async function queryAlerts(
   source,
   sourceId,
   alertType,
   status,
-  parameter = null,
+  dimensionKey = null,
   dateRange = null,
   orderBy = "created_at DESC",
   limit = null,
@@ -95,10 +110,10 @@ async function queryAlerts(
   let query = `SELECT * FROM alerts WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?`;
   const params = [source, sourceId, alertType, status];
 
-  // 添加參數匹配條件（閾值警報且提供了參數）
-  if (alertType === ALERT_TYPES.THRESHOLD && parameter) {
-    query += " AND message LIKE ?";
-    params.push(`%${parameter}%`);
+  // Incident 維度鍵精準匹配
+  if (dimensionKey) {
+    query += " AND dimension_key = ?";
+    params.push(normalizeDimensionValue(dimensionKey));
   }
 
   // 添加日期範圍條件
@@ -129,20 +144,15 @@ async function queryAlerts(
 }
 
 /**
- * 查詢被忽視的警報（支持參數匹配）
- * @param {string} source - 來源類型
- * @param {number} sourceId - 來源 ID
- * @param {string} alertType - 警報類型
- * @param {string|null} parameter - 參數名稱（用於閾值警報匹配，可選）
- * @returns {Promise<Object|null>} 被忽視的警報，如果不存在則返回 null
+ * 查詢被忽視的警報（Incident key）
  */
-async function findIgnoredAlert(source, sourceId, alertType, parameter = null) {
+async function findIgnoredAlert(source, sourceId, alertType, dimensionKey = null) {
   const alerts = await queryAlerts(
     source,
     sourceId,
     alertType,
     ALERT_STATUS.IGNORED,
-    parameter,
+    dimensionKey,
     null, // 不限日期
     null, // 不需要排序
     1, // 只取第一個
@@ -151,28 +161,26 @@ async function findIgnoredAlert(source, sourceId, alertType, parameter = null) {
 }
 
 /**
- * 查詢現有的 active 警報（支持按天限制和參數匹配）
- * 用於創建/更新警報時，確保同一天只有一個 active 警報
+ * 查詢現有的 active 警報（Incident key 精準匹配）
  * @param {string} source - 來源類型
  * @param {number} sourceId - 來源 ID
  * @param {string} alertType - 警報類型
- * @param {string|null} parameter - 參數名稱（用於閾值警報匹配，可選）
+ * @param {string|null} dimensionKey - 維度鍵（Incident key，可選）
  * @returns {Promise<Object|null>} 現有的 active 警報，如果不存在則返回 null
  */
 async function findExistingActiveAlert(
   source,
   sourceId,
   alertType,
-  parameter = null,
+  dimensionKey = null,
 ) {
-  const { todayStart, todayEnd } = getTodayDateRange();
   const alerts = await queryAlerts(
     source,
     sourceId,
     alertType,
     ALERT_STATUS.ACTIVE,
-    parameter,
-    { start: todayStart, end: todayEnd }, // 按天限制
+    dimensionKey,
+    null, // Incident 不限制日期
     null, // 不需要排序
     1, // 只取第一個
   );
@@ -184,21 +192,21 @@ async function findExistingActiveAlert(
  * @param {string} source - 來源類型
  * @param {number} sourceId - 來源 ID
  * @param {string} alertType - 警報類型
- * @param {string|null} parameter - 參數名稱（用於閾值警報匹配，可選）
+ * @param {string|null} dimensionKey - 維度鍵（Incident key，可選）
  * @returns {Promise<Array>} 所有現有的 active 警報列表
  */
 async function findAllActiveAlerts(
   source,
   sourceId,
   alertType,
-  parameter = null,
+  dimensionKey = null,
 ) {
   return await queryAlerts(
     source,
     sourceId,
     alertType,
     ALERT_STATUS.ACTIVE,
-    parameter,
+    dimensionKey,
     null, // 不限日期
     "created_at DESC", // 按創建時間倒序
   );
@@ -272,6 +280,18 @@ async function handleAlertUpdate(
   }
 
   const enrichedAlert = enrichAlert(updatedAlert);
+  await createAlertEvent(
+    updatedAlert.id,
+    "updated",
+    ALERT_STATUS.ACTIVE,
+    ALERT_STATUS.ACTIVE,
+    {
+      previous_severity: currentSeverity,
+      new_severity: severity,
+      message_changed: messageChanged,
+    },
+    null,
+  );
 
   // 推送 WebSocket 事件：警報更新（severity 升級或數值更新）
   websocketService.emitAlertUpdated(
@@ -307,6 +327,41 @@ async function updateAlertContent(alertId, severity, message) {
   return result && result.length > 0 ? result[0] : null;
 }
 
+/**
+ * 寫入警報事件流（失敗不阻斷主流程）
+ * @param {number} alertId
+ * @param {string} eventType
+ * @param {string|null} oldStatus
+ * @param {string|null} newStatus
+ * @param {Object|null} payload
+ * @param {number|null} actorUserId
+ */
+async function createAlertEvent(
+  alertId,
+  eventType,
+  oldStatus = null,
+  newStatus = null,
+  payload = null,
+  actorUserId = null,
+) {
+  try {
+    await db.query(
+      `INSERT INTO alert_events (alert_id, event_type, old_status, new_status, payload, actor_user_id)
+       VALUES (?, ?, ?, ?, ?::jsonb, ?)`,
+      [
+        alertId,
+        eventType,
+        oldStatus,
+        newStatus,
+        payload ? JSON.stringify(payload) : null,
+        actorUserId,
+      ],
+    );
+  } catch (error) {
+    devLog.warn(`[alertService] 寫入 alert_events 失敗: ${error.message}`);
+  }
+}
+
 // 警報系統來源
 const ALERT_SOURCES = {
   DEVICE: "device",
@@ -332,6 +387,36 @@ const ALERT_TYPES = {
   THRESHOLD: "threshold",
 };
 
+/**
+ * 依來源批次更新所有 alert_type 的狀態
+ * - 用於「設備停用」等情境：停用後不應持續出現 active 警示
+ * - 會沿用 updateAlertStatus，確保 event/WS/count 都一致
+ */
+async function updateAllAlertTypesStatus(source, sourceId, newStatus, userId = null) {
+  let total = 0;
+  const alertTypes = Object.values(ALERT_TYPES);
+
+  for (const alertType of alertTypes) {
+    try {
+      const n = await updateAlertStatus(
+        sourceId,
+        source,
+        alertType,
+        newStatus,
+        userId,
+      );
+      total += Number.isFinite(n) ? n : 0;
+    } catch (err) {
+      if (err?.message && err.message.includes("未找到可更新的警報")) {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return total;
+}
+
 // 嚴重程度
 const SEVERITIES = {
   WARNING: "warning",
@@ -340,18 +425,16 @@ const SEVERITIES = {
 };
 
 /**
- * 為警報添加向後兼容字段
- * @param {Object} alert - 警報對象
- * @returns {Object} 添加了向後兼容字段的警報對象
+ * 警報回傳欄位正規化（保留相容欄位）
  */
 function enrichAlert(alert) {
   const enriched = { ...alert };
 
-  // 向後兼容：添加 resolved 和 ignored 布爾值字段
+  // 相容欄位：布林狀態
   enriched.resolved = alert.status === ALERT_STATUS.RESOLVED;
   enriched.ignored = alert.status === ALERT_STATUS.IGNORED;
 
-  // 向後兼容：如果是設備來源，添加 device_id 字段
+  // 相容欄位：設備來源時提供 device_id
   if (alert.source === ALERT_SOURCES.DEVICE) {
     enriched.device_id = alert.source_id;
   }
@@ -370,6 +453,8 @@ function buildAlertSelectQuery() {
       a.source,
       a.source_id,
       a.alert_type,
+      a.dimension_key,
+      a.rule_id,
       a.severity,
       a.message,
       a.status,
@@ -424,12 +509,12 @@ async function getAlerts(filters = {}) {
     const {
       source,
       source_id,
-      device_id, // 向後兼容
+      device_id, // 相容欄位
       alert_type,
       severity,
       status,
-      resolved, // 向後兼容
-      ignored, // 向後兼容
+      resolved, // 相容欄位
+      ignored, // 相容欄位
       start_date,
       end_date,
       updated_after, // 增量查詢：只獲取更新時間在此之後的警報
@@ -439,12 +524,12 @@ async function getAlerts(filters = {}) {
       order = "desc",
     } = filters;
 
-    // 向後兼容：將 device_id 轉換為 source 和 source_id
+    // 相容：將 device_id 轉換為 source/source_id
     const actualSource =
       source || (device_id ? ALERT_SOURCES.DEVICE : undefined);
     const actualSourceId = source_id || device_id;
 
-    // 向後兼容：將 resolved/ignored 轉換為 status
+    // 相容：將 resolved/ignored 轉換為 status
     let actualStatus = status;
     if (!actualStatus) {
       if (resolved === true) {
@@ -529,7 +614,7 @@ async function getAlerts(filters = {}) {
     const countResult = await db.query(countQuery, countParams);
     const total = parseInt(countResult[0]?.total || 0);
 
-    // 為每個 alert 添加向後兼容的字段
+    // 正規化回傳（含相容欄位）
     const enrichedAlerts = (alerts || []).map(enrichAlert);
 
     return {
@@ -551,7 +636,7 @@ async function getAlerts(filters = {}) {
  */
 async function createAlert(alertData) {
   try {
-    // 向後兼容：支持 device_id
+    // 相容：支持 device_id
     const {
       device_id,
       source = ALERT_SOURCES.DEVICE, // 默認值，如果提供 device_id 則會被覆蓋
@@ -559,6 +644,8 @@ async function createAlert(alertData) {
       alert_type,
       severity = SEVERITIES.WARNING,
       message,
+      dimension_key = null,
+      rule_id = null,
     } = alertData;
 
     // 如果提供了 device_id，使用 device 作為 source
@@ -600,14 +687,18 @@ async function createAlert(alertData) {
       );
     }
 
-    // 優化：先檢查是否有被忽視的警報（優先級最高，使用索引優化查詢）
-    // 對於閾值警報（threshold），需要通過 message 匹配參數（因為同一個 source 可能有多個不同參數的警報）
-    const parameter = extractParameterFromMessage(message);
+    const resolvedDimensionKey = resolveDimensionKey(
+      alert_type,
+      message,
+      dimension_key,
+    );
+
+    // 優先檢查是否有被忽視的 Incident（同 key）
     const ignoredAlert = await findIgnoredAlert(
       actualSource,
       source_id,
       alert_type,
-      parameter,
+      resolvedDimensionKey,
     );
 
     if (ignoredAlert) {
@@ -619,14 +710,12 @@ async function createAlert(alertData) {
       return enrichAlert(ignoredAlert);
     }
 
-    // 先查詢現有的 active 警報，檢查 severity 是否需要更新
-    // 優化：使用提取的輔助函數，減少重複代碼
-    // 重要：添加按天限制，確保同一天只會有一個 active 警報（符合文檔說明）
+    // 先查詢現有 active Incident（同 key）
     const existingAlert = await findExistingActiveAlert(
       actualSource,
       source_id,
       alert_type,
-      parameter,
+      resolvedDimensionKey,
     );
 
     if (existingAlert) {
@@ -655,8 +744,8 @@ async function createAlert(alertData) {
     );
 
     const insertQuery = `
-			INSERT INTO alerts (source, source_id, alert_type, severity, message, status)
-			VALUES (?, ?, ?, ?, ?, ?)
+			INSERT INTO alerts (source, source_id, alert_type, dimension_key, rule_id, severity, message, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			RETURNING *
 		`;
 
@@ -665,6 +754,8 @@ async function createAlert(alertData) {
         actualSource,
         source_id,
         alert_type,
+        resolvedDimensionKey,
+        rule_id,
         severity,
         message,
         ALERT_STATUS.ACTIVE,
@@ -682,6 +773,21 @@ async function createAlert(alertData) {
 
       // 推送 WebSocket 事件：新警報創建（優先推送，確保即時性）
       websocketService.emitAlertNew(enrichedAlert);
+      await createAlertEvent(
+        alert.id,
+        "triggered",
+        null,
+        ALERT_STATUS.ACTIVE,
+        {
+          severity,
+          source: actualSource,
+          source_id,
+          alert_type,
+          dimension_key: resolvedDimensionKey,
+          rule_id,
+        },
+        null,
+      );
 
       // 更新並推送未解決警報數量（非阻塞執行）
       emitUnresolvedAlertCount();
@@ -691,17 +797,18 @@ async function createAlert(alertData) {
       // 如果唯一約束衝突（並發創建情況），再次嘗試查詢並更新
       if (
         error.code === "23505" ||
-        error.message.includes("unique_active_alert")
+        error.message.includes("unique_active_alert") ||
+        error.message.includes("idx_alerts_unique_active_key")
       ) {
         // 等待一小段時間，確保另一個事務已完成
         await new Promise((resolve) => setTimeout(resolve, 10));
 
-        // 重新查詢現有警報（使用相同的日期限制和參數匹配）
+        // 重新查詢現有警報（同 Incident key）
         const retryExistingAlert = await findExistingActiveAlert(
           actualSource,
           source_id,
           alert_type,
-          parameter,
+          resolvedDimensionKey,
         );
 
         if (retryExistingAlert) {
@@ -770,6 +877,14 @@ async function unresolveAlert(id, userId = null) {
 
     // 推送 WebSocket 事件：警報狀態更新（unresolve）
     if (oldStatus !== ALERT_STATUS.ACTIVE) {
+      await createAlertEvent(
+        alert.id,
+        "unresolved",
+        oldStatus,
+        ALERT_STATUS.ACTIVE,
+        { reason: "manual_unresolve" },
+        userId,
+      );
       websocketService.emitAlertUpdated(
         enrichedAlert,
         oldStatus,
@@ -787,49 +902,17 @@ async function unresolveAlert(id, userId = null) {
   }
 }
 
-/**
- * 只解決「最新一筆」active 警報（一列一事件，避免多筆同時間戳）
- * @param {string} source - 來源類型
- * @param {number} sourceId - 來源 ID
- * @param {string} alertType - 警報類型
- * @returns {Promise<number>} 0 或 1
- */
-async function resolveLatestActiveAlert(source, sourceId, alertType) {
-  const rows = await db.query(
-    `SELECT id FROM alerts
-     WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?
-     ORDER BY created_at DESC LIMIT 1`,
-    [source, sourceId, alertType, ALERT_STATUS.ACTIVE],
-  );
-  if (!rows || rows.length === 0) return 0;
-
-  const id = rows[0].id;
-  const updateQuery = `
-    UPDATE alerts
-    SET status = ?::alert_status, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    RETURNING id
-  `;
-  const result = await db.query(updateQuery, [ALERT_STATUS.RESOLVED, id]);
-  if (!result || result.length === 0) return 0;
-
-  const alertQuery = `
-    SELECT a.*, iu.username as ignored_by_username
-    FROM alerts a
-    LEFT JOIN users iu ON a.ignored_by = iu.id
-    WHERE a.id = ?
-  `;
-  const alertResults = await db.query(alertQuery, [id]);
-  if (alertResults && alertResults.length > 0) {
-    const enriched = enrichAlert(alertResults[0]);
-    websocketService.emitAlertUpdated(
-      enriched,
-      ALERT_STATUS.ACTIVE,
-      ALERT_STATUS.RESOLVED,
-    );
+function buildStatusScope(newStatus) {
+  if (newStatus === ALERT_STATUS.RESOLVED) {
+    return [ALERT_STATUS.ACTIVE];
   }
-  emitUnresolvedAlertCount();
-  return 1;
+  if (newStatus === ALERT_STATUS.IGNORED) {
+    return [ALERT_STATUS.ACTIVE];
+  }
+  if (newStatus === ALERT_STATUS.ACTIVE) {
+    return [ALERT_STATUS.IGNORED];
+  }
+  return [ALERT_STATUS.ACTIVE, ALERT_STATUS.IGNORED, ALERT_STATUS.RESOLVED];
 }
 
 /**
@@ -847,6 +930,16 @@ async function resolveStaleActiveAlerts() {
   );
   const count = result?.length ?? 0;
   if (count > 0) {
+    for (const row of result) {
+      await createAlertEvent(
+        row.id,
+        "resolved",
+        ALERT_STATUS.ACTIVE,
+        ALERT_STATUS.RESOLVED,
+        { reason: "daily_stale_resolve" },
+        null,
+      );
+    }
     devLog.log(`[alertService] 每日結案：${count} 筆歷史 active 已標記為已解決`);
     emitUnresolvedAlertCount();
   }
@@ -854,12 +947,14 @@ async function resolveStaleActiveAlerts() {
 }
 
 /**
- * 更新警報狀態（RESOLVED 僅更新最新一筆 active；IGNORED/ACTIVE 為批次）
+ * 更新警報狀態（Incident key 批次）
  * @param {number} sourceId - 來源 ID
  * @param {string} source - 來源類型
  * @param {string} alertType - 警報類型
  * @param {string} newStatus - 新狀態
  * @param {number} userId - 用戶 ID
+ * @param {Object} options - 額外條件
+ * @param {string|null} options.dimensionKey - 維度鍵（可選）
  * @returns {Promise<number>} 更新的警報數量
  */
 async function updateAlertStatus(
@@ -868,28 +963,31 @@ async function updateAlertStatus(
   alertType,
   newStatus,
   userId,
+  options = {},
 ) {
   try {
     if (!Object.values(ALERT_STATUS).includes(newStatus)) {
       throw new Error(`無效的狀態: ${newStatus}`);
     }
-
-    if (newStatus === ALERT_STATUS.RESOLVED) {
-      const updated = await resolveLatestActiveAlert(source, sourceId, alertType);
-      if (updated === 0) {
-        throw new Error(
-          `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
-        );
-      }
-      return updated;
-    }
-
-    // 先查詢所有匹配的警報（用於批量處理）
+    const normalizedDimensionKey = options.dimensionKey
+      ? normalizeDimensionValue(options.dimensionKey)
+      : null;
+    const statusScope = buildStatusScope(newStatus);
     const currentAlerts = await db.query(
-      `SELECT id, status FROM alerts 
-			WHERE source_id = ? AND source = ? AND alert_type = ? 
-			AND status != ?`,
-      [sourceId, source, alertType, newStatus],
+      `SELECT id, status FROM alerts
+       WHERE source_id = ?
+         AND source = ?
+         AND alert_type = ?
+         AND status = ANY(?::alert_status[])
+         AND (?::varchar IS NULL OR dimension_key = ?::varchar)`,
+      [
+        sourceId,
+        source,
+        alertType,
+        statusScope,
+        normalizedDimensionKey,
+        normalizedDimensionKey,
+      ],
     );
 
     if (!currentAlerts || currentAlerts.length === 0) {
@@ -898,9 +996,8 @@ async function updateAlertStatus(
       );
     }
 
-    // 記錄所有警報的舊狀態（用於歷史記錄和 WebSocket 事件）
     const alertIds = currentAlerts.map((a) => a.id);
-    const oldStatus = currentAlerts[0].status; // 所有警報應該有相同的狀態
+    const oldStatusMap = new Map(currentAlerts.map((a) => [a.id, a.status]));
 
     const updateFields = [];
     const params = [];
@@ -912,18 +1009,14 @@ async function updateAlertStatus(
       updateFields.push("ignored_at = NULL", "ignored_by = NULL");
     }
 
-    // 觸發器會自動更新 updated_at，但為了確保觸發，我們明確設置
     updateFields.push("status = ?", "updated_at = CURRENT_TIMESTAMP");
     params.push(newStatus);
-    params.push(sourceId, source, alertType, newStatus);
+    params.push(alertIds);
 
     const query = `
 			UPDATE alerts
 			SET ${updateFields.join(", ")}
-			WHERE source_id = ?
-				AND source = ?
-				AND alert_type = ?
-				AND status != ?
+			WHERE id = ANY(?::integer[])
 			RETURNING id
 		`;
 
@@ -937,23 +1030,41 @@ async function updateAlertStatus(
 
     const updatedCount = result.length;
 
-    // 推送 WebSocket 事件（只有在狀態真正改變時）
-    if (oldStatus !== newStatus && alertIds.length > 0) {
-      // 查詢所有更新後的警報資料（用於 WebSocket 事件）
+    if (alertIds.length > 0) {
       const alertQuery = `
         SELECT 
           a.*,
           iu.username as ignored_by_username
         FROM alerts a
         LEFT JOIN users iu ON a.ignored_by = iu.id
-        WHERE a.id = ANY($1::integer[])
+        WHERE a.id = ANY(?::integer[])
       `;
       const alertResults = await db.query(alertQuery, [alertIds]);
 
       if (alertResults && alertResults.length > 0) {
-        // 為每個更新的警報推送 WebSocket 事件
         for (const alert of alertResults) {
+          const oldStatus = oldStatusMap.get(alert.id) || newStatus;
+          if (oldStatus === newStatus) {
+            continue;
+          }
           const enrichedAlert = enrichAlert(alert);
+          await createAlertEvent(
+            alert.id,
+            newStatus === ALERT_STATUS.RESOLVED
+              ? "resolved"
+              : newStatus === ALERT_STATUS.IGNORED
+                ? "ignored"
+                : "unignored",
+            oldStatus,
+            newStatus,
+            {
+              source,
+              source_id: sourceId,
+              alert_type: alertType,
+              dimension_key: alert.dimension_key,
+            },
+            userId || null,
+          );
           websocketService.emitAlertUpdated(
             enrichedAlert,
             oldStatus,
@@ -961,7 +1072,6 @@ async function updateAlertStatus(
           );
         }
 
-        // 更新並推送未解決警報數量（僅在狀態真正改變時，只推送一次）
         void emitUnresolvedAlertCount();
       }
     }
@@ -990,6 +1100,7 @@ async function resolveAlert(
   sourceId,
   alertType,
   source = ALERT_SOURCES.DEVICE,
+  dimensionKey = null,
 ) {
   return await updateAlertStatus(
     sourceId,
@@ -997,6 +1108,7 @@ async function resolveAlert(
     alertType,
     ALERT_STATUS.RESOLVED,
     null,
+    { dimensionKey },
   );
 }
 
@@ -1013,6 +1125,7 @@ async function ignoreAlerts(
   alertType,
   ignoredBy,
   source = ALERT_SOURCES.DEVICE,
+  dimensionKey = null,
 ) {
   return await updateAlertStatus(
     sourceId,
@@ -1020,6 +1133,7 @@ async function ignoreAlerts(
     alertType,
     ALERT_STATUS.IGNORED,
     ignoredBy,
+    { dimensionKey },
   );
 }
 
@@ -1034,6 +1148,7 @@ async function unignoreAlerts(
   sourceId,
   alertType,
   source = ALERT_SOURCES.DEVICE,
+  dimensionKey = null,
 ) {
   // 更新警報狀態為 ACTIVE
   const result = await updateAlertStatus(
@@ -1042,6 +1157,7 @@ async function unignoreAlerts(
     alertType,
     ALERT_STATUS.ACTIVE,
     null, // 不需要用戶 ID，因為是取消忽視
+    { dimensionKey },
   );
 
   // 確保 error_tracking 中的 alert_created 標記正確設置，並檢查是否需要立即解決警報
@@ -1078,39 +1194,32 @@ async function unignoreAlerts(
  * @param {string} source - 來源類型
  * @param {number} sourceId - 來源 ID
  * @param {string} alertType - 警報類型
- * @param {string|null} message - 警報訊息（可選，用於閾值警報的參數匹配）
+ * @param {string|null} message - 警報訊息（可選，用於推導維度鍵）
+ * @param {string|null} explicitDimensionKey - 明確維度鍵（優先）
  * @returns {Promise<boolean>} 是否已被忽視
  */
-async function isSourceIgnored(source, sourceId, alertType, message = null) {
+async function isSourceIgnored(
+  source,
+  sourceId,
+  alertType,
+  message = null,
+  explicitDimensionKey = null,
+) {
   try {
-    // 對於閾值警報，如果提供了 message，嘗試參數匹配
-    const parameter = extractParameterFromMessage(message);
-
-    if (alertType === ALERT_TYPES.THRESHOLD && parameter) {
-      const result = await db.query(
-        `SELECT id FROM alerts 
-        WHERE source = ? 
-          AND source_id = ? 
-          AND alert_type = ? 
-          AND status = ?
-          AND message LIKE ?
-        LIMIT 1`,
-        [source, sourceId, alertType, ALERT_STATUS.IGNORED, `%${parameter}%`],
-      );
-      if (result && result.length > 0) {
-        return true;
-      }
-    }
-
-    // 標準查詢（非閾值警報或參數匹配失敗時使用）
+    const dimensionKey = resolveDimensionKey(
+      alertType,
+      message,
+      explicitDimensionKey,
+    );
     const result = await db.query(
       `SELECT id FROM alerts 
 			WHERE source = ? 
 				AND source_id = ? 
 				AND alert_type = ? 
 				AND status = ?
+        AND dimension_key = ?
 			LIMIT 1`,
-      [source, sourceId, alertType, ALERT_STATUS.IGNORED],
+      [source, sourceId, alertType, ALERT_STATUS.IGNORED, dimensionKey],
     );
 
     return result && result.length > 0;
@@ -1137,13 +1246,16 @@ async function getUnresolvedAlertCount(filters = {}) {
       end_date,
     } = filters;
 
-    // 向後兼容
+    // 相容：source/device_id 混用
     const actualSource =
       source || (device_id ? ALERT_SOURCES.DEVICE : undefined);
     const actualSourceId = source_id || device_id;
 
     let query = `
-			SELECT COUNT(DISTINCT (source::text || '-' || source_id::text || '-' || alert_type::text)) as count
+			SELECT
+        COUNT(DISTINCT (source::text || '-' || source_id::text || '-' || alert_type::text || '-' || COALESCE(dimension_key, 'default'))) as count,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT dimension_key), NULL) as dimension_keys,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT rule_id), NULL) as rule_ids
 			FROM alerts
 			WHERE status = ?
 		`;
@@ -1176,7 +1288,12 @@ async function getUnresolvedAlertCount(filters = {}) {
     }
 
     const result = await db.query(query, params);
-    return parseInt(result[0]?.count || 0);
+    const row = result[0] || {};
+    return {
+      count: parseInt(row.count || 0),
+      dimension_keys: row.dimension_keys || [],
+      rule_ids: row.rule_ids || [],
+    };
   } catch (error) {
     console.error("[alertService] 取得未解決警報數量失敗:", error);
     throw error;
@@ -1244,7 +1361,7 @@ async function getAlertById(id) {
           WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN l.name
           ELSE NULL
         END as source_name,
-        -- 向後兼容：device_name（與 source_name 相同，當 source = 'device' 時）
+        -- 相容欄位：device_name（當 source = 'device'）
         CASE WHEN a.source = 'device' THEN d.name END as device_name,
         -- 區域名稱（統一使用 zones 表）
         CASE 
@@ -1342,6 +1459,7 @@ module.exports = {
   getResolvedAlertsForBackup,
   createAlert,
   updateAlertStatus,
+  updateAllAlertTypesStatus,
   resolveAlert,
   resolveStaleActiveAlerts,
   ignoreAlerts,

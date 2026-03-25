@@ -1,6 +1,7 @@
 const locationService = require("./locationService");
 
-const toDrainageZone = (zone) => ({ ...zone, areas: zone.locations || [] });
+/** 回傳與統一 zone 一致，僅使用 locations（不再附加 areas） */
+const toDrainageZone = (zone) => ({ ...zone });
 
 async function getZones() {
   try {
@@ -40,8 +41,10 @@ function areaToUnifiedLocation(area) {
 
 async function createZone(zoneData, userId) {
   try {
-    const { name, imageUrl, areas = [] } = zoneData;
-    const unifiedLocations = areas.map(areaToUnifiedLocation);
+    const { name, imageUrl, locations = [] } = zoneData;
+    const unifiedLocations = (Array.isArray(locations) ? locations : []).map(
+      areaToUnifiedLocation,
+    );
 
     const result = await locationService.createZone(
       { name, imageUrl, locations: unifiedLocations },
@@ -63,9 +66,9 @@ async function createZone(zoneData, userId) {
 
 async function updateZone(id, zoneData, userId) {
   try {
-    const { name, imageUrl, areas } = zoneData;
-    const unifiedLocations = areas
-      ? areas.map(areaToUnifiedLocation)
+    const { name, imageUrl, locations } = zoneData;
+    const unifiedLocations = Array.isArray(locations)
+      ? locations.map(areaToUnifiedLocation)
       : undefined;
 
     const result = await locationService.updateZone(

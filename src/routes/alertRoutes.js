@@ -2,10 +2,61 @@ const express = require("express");
 const router = express.Router();
 const alertService = require("../services/alerts/alertService");
 const alertRuleService = require("../services/alerts/alertRuleService");
-const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
+
+const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold"];
+const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
+const ALLOWED_CONDITION_TYPES = ["threshold", "error_count"];
+
+function validateRulePayload(payload, { allowPartial = false } = {}) {
+  const {
+    source,
+    alert_type,
+    severity,
+    condition_type,
+    condition_config,
+    enabled,
+  } = payload;
+
+  if (!allowPartial || source !== undefined) {
+    if (!source || typeof source !== "string") {
+      return "source 為必填且需為字串";
+    }
+  }
+
+  if (!allowPartial || alert_type !== undefined) {
+    if (!ALLOWED_ALERT_TYPES.includes(alert_type)) {
+      return `alert_type 不合法，支援：${ALLOWED_ALERT_TYPES.join(", ")}`;
+    }
+  }
+
+  if (!allowPartial || severity !== undefined) {
+    if (!ALLOWED_SEVERITIES.includes(severity)) {
+      return `severity 不合法，支援：${ALLOWED_SEVERITIES.join(", ")}`;
+    }
+  }
+
+  if (condition_type !== undefined && condition_type !== null) {
+    if (!ALLOWED_CONDITION_TYPES.includes(condition_type)) {
+      return `condition_type 不合法，支援：${ALLOWED_CONDITION_TYPES.join(", ")}`;
+    }
+  }
+
+  if (condition_config !== undefined && condition_config !== null) {
+    if (typeof condition_config !== "object" || Array.isArray(condition_config)) {
+      return "condition_config 需為物件";
+    }
+  }
+
+  if (enabled !== undefined && typeof enabled !== "boolean") {
+    return "enabled 需為布林值";
+  }
+
+  return null;
+}
 
 // 以下路由皆需登入
 router.use(authenticate);
@@ -65,7 +116,7 @@ router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
     end_date,
   } = req.query;
 
-  const count = await alertService.getUnresolvedAlertCount({
+  const countResult = await alertService.getUnresolvedAlertCount({
     source,
     source_id: source_id ? parseInt(source_id) : undefined,
     device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
@@ -75,7 +126,7 @@ router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
     end_date, // 支持時間範圍篩選
   });
 
-  res.sendSuccess({ count });
+  res.sendSuccess(countResult);
 }));
 
 // 取得警報規則（用於前端顯示狀態）
@@ -101,6 +152,64 @@ router.get("/rules", noCache, asyncHandler(async (req, res) => {
   res.sendSuccess({ rules });
 }));
 
+// 建立警報規則（需要 admin/operator 權限）
+router.post(
+  "/rules",
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const validationError = validateRulePayload(req.body, { allowPartial: false });
+    if (validationError) {
+      return res.sendError(validationError, 400);
+    }
+
+    const rule = await alertRuleService.createAlertRule(req.body);
+    res.sendSuccess({ rule });
+  })
+);
+
+// 更新警報規則（需要 admin/operator 權限）
+router.put(
+  "/rules/:id",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const validationError = validateRulePayload(req.body, { allowPartial: true });
+    if (validationError) {
+      return res.sendError(validationError, 400);
+    }
+
+    try {
+      const rule = await alertRuleService.updateAlertRule(parseInt(id), req.body);
+      res.sendSuccess({ rule });
+    } catch (error) {
+      if (error.message === "RULE_NOT_FOUND") {
+        return res.sendError("找不到指定的規則", 404);
+      }
+      throw error;
+    }
+  })
+);
+
+// 刪除警報規則（需要 admin/operator 權限）
+router.delete(
+  "/rules/:id",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    try {
+      const rule = await alertRuleService.deleteAlertRule(parseInt(id));
+      res.sendSuccess({ rule });
+    } catch (error) {
+      if (error.message === "RULE_NOT_FOUND") {
+        return res.sendError("找不到指定的規則", 404);
+      }
+      throw error;
+    }
+  })
+);
+
 // 取得單一警示
 router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
   const { id } = req.params;
@@ -111,10 +220,10 @@ router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res
 // 注意：警報由系統自動解決，不提供手動解決的端點
 // 系統會在檢測到問題恢復時自動將警報標記為已解決
 
-// 標記警示為未解決（需要管理員權限）
+// 標記警示為未解決（需要 admin/operator 權限）
 router.put(
   "/:id/unresolve",
-  requireAdmin,
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -127,14 +236,14 @@ router.put(
   })
 );
 
-// 忽視警示（需要管理員權限，支持多系統來源）
+// 忽視警示（需要 admin/operator 權限，支持多系統來源）
 router.post(
   "/:deviceId/:alertType/ignore",
-  requireAdmin,
+  requireAdminOrOperator,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const { deviceId, alertType } = req.params;
-    const { source } = req.query; // 可選的系統來源參數
+    const { source, dimension_key } = req.query; // 可選的系統來源/維度參數
     const userId = req.user?.id;
     if (!userId) {
       return res.sendError("未提供認證資訊", 401);
@@ -144,25 +253,27 @@ router.post(
       parseInt(deviceId),
       alertType,
       userId,
-      source // 如果未提供，默認為 device（向後兼容）
+      source, // 如果未提供，默認為 device（向後兼容）
+      dimension_key || null,
     );
     res.sendSuccess({ message: `已忽視 ${count} 個警示`, count });
   })
 );
 
-// 取消忽視警示（需要管理員權限，支持多系統來源）
+// 取消忽視警示（需要 admin/operator 權限，支持多系統來源）
 router.post(
   "/:deviceId/:alertType/unignore",
-  requireAdmin,
+  requireAdminOrOperator,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const { deviceId, alertType } = req.params;
-    const { source } = req.query; // 可選的系統來源參數
+    const { source, dimension_key } = req.query; // 可選的系統來源/維度參數
 
     const count = await alertService.unignoreAlerts(
       parseInt(deviceId),
       alertType,
-      source // 如果未提供，默認為 device（向後兼容）
+      source, // 如果未提供，默認為 device（向後兼容）
+      dimension_key || null,
     );
     res.sendSuccess({ message: `已取消忽視 ${count} 個警示`, count });
   })

@@ -58,6 +58,8 @@ const backupScheduler = require("./services/backup/backupScheduler");
 const environmentAggregationService = require("./services/systems/environmentAggregationService");
 // 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
 const isapiSubscribeService = require("./services/accessControl/isapiSubscribeService");
+// 攝影機 ISAPI PeopleCounting 佈防訂閱服務
+const isapiCameraPeopleCountingSubscribeService = require("./services/accessControl/isapiCameraPeopleCountingSubscribeService");
 
 const app = express();
 
@@ -265,6 +267,14 @@ async function startServer() {
         );
       });
     }
+
+    // 攝影機 PeopleCounting 佈防訂閱：依 people_counting 地點 config(data_source=camera_isapi) 自動訂閱
+    isapiCameraPeopleCountingSubscribeService.start().catch((err) => {
+      serverLogger.warn(
+        "攝影機 PeopleCounting 佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
+        { error: err.message },
+      );
+    });
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
       serverLogger.error(
@@ -310,6 +320,10 @@ async function gracefulShutdown(signal) {
     // 停止門禁佈防訂閱服務
     isapiSubscribeService.stop();
     shutdownLogger.info("門禁佈防訂閱服務已停止");
+
+    // 停止攝影機 PeopleCounting 佈防訂閱服務
+    isapiCameraPeopleCountingSubscribeService.stop();
+    shutdownLogger.info("攝影機 PeopleCounting 佈防訂閱服務已停止");
 
     if (global.__envHourAggIntervalId) {
       clearInterval(global.__envHourAggIntervalId);

@@ -1,6 +1,7 @@
 const locationService = require("./locationService");
 
-const toLightingZone = (zone) => ({ ...zone, areas: zone.locations || [] });
+/** 回傳與統一 zone 一致，僅使用 locations（不再附加 areas） */
+const toLightingZone = (zone) => ({ ...zone });
 
 // ========== 區域管理函數 ==========
 
@@ -29,13 +30,14 @@ async function getZoneById(id) {
 
 async function createZone(zoneData, userId) {
   try {
-    const { name, imageUrl, areas = [] } = zoneData;
-    const unifiedLocations = areas.map((area) => ({
-      name: area.name,
+    const { name, imageUrl, locations = [] } = zoneData;
+    const list = Array.isArray(locations) ? locations : [];
+    const unifiedLocations = list.map((loc) => ({
+      name: loc.name,
       locationType: "lighting",
-      deviceId: area.deviceId,
-      location: area.location || { x: 50, y: 50 },
-      modbus: area.modbus,
+      deviceId: loc.deviceId,
+      location: loc.location || { x: 50, y: 50 },
+      modbus: loc.modbus,
     }));
 
     const result = await locationService.createZone(
@@ -58,14 +60,14 @@ async function createZone(zoneData, userId) {
 
 async function updateZone(id, zoneData, userId) {
   try {
-    const { name, imageUrl, areas } = zoneData;
-    const unifiedLocations = areas
-      ? areas.map((area) => ({
-          name: area.name,
+    const { name, imageUrl, locations } = zoneData;
+    const unifiedLocations = Array.isArray(locations)
+      ? locations.map((loc) => ({
+          name: loc.name,
           locationType: "lighting",
-          deviceId: area.deviceId,
-          location: area.location || { x: 50, y: 50 },
-          modbus: area.modbus,
+          deviceId: loc.deviceId,
+          location: loc.location || { x: 50, y: 50 },
+          modbus: loc.modbus,
         }))
       : undefined;
 

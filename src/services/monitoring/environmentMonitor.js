@@ -455,12 +455,14 @@ async function resolveThresholdAlert(
   reason = "數值已恢復正常",
 ) {
   try {
+    const dimensionKey = `threshold:${String(parameter).toLowerCase()}`;
     await alertService.updateAlertStatus(
       systemId,
       alertService.ALERT_SOURCES.ENVIRONMENT,
       "threshold",
       alertService.ALERT_STATUS.RESOLVED,
       null,
+      { dimensionKey },
     );
 
     // 只在啟用詳細日誌時輸出
@@ -518,7 +520,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
       alertService.ALERT_SOURCES.ENVIRONMENT,
       systemId,
       "threshold",
-      null, // 參數匹配將在後續處理中進行
+      null, // 不限定 dimension_key，先抓全部 active threshold
     );
 
     // 按參數分組規則（每個參數只匹配最嚴重的規則）
@@ -605,6 +607,8 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
           source: alertService.ALERT_SOURCES.ENVIRONMENT,
           source_id: systemId,
           alert_type: "threshold",
+          dimension_key: `threshold:${String(parameter).toLowerCase()}`,
+          rule_id: matchedRule.id,
           severity: matchedRule.severity,
           message,
         });
@@ -617,7 +621,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
           alertService.ALERT_SOURCES.ENVIRONMENT,
           systemId,
           "threshold",
-          parameterDisplayName, // 傳遞參數名稱，精確匹配
+          `threshold:${String(parameter).toLowerCase()}`,
         );
 
         if (parameterAlerts.length > 0) {
@@ -652,7 +656,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         alertService.ALERT_SOURCES.ENVIRONMENT,
         systemId,
         "threshold",
-        parameterDisplayName,
+        `threshold:${String(parameter).toLowerCase()}`,
       );
 
       // 如果沒有該參數的警報，跳過

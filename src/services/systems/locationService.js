@@ -118,7 +118,10 @@ function formatSystem(system) {
               ? config.modbus_config
               : undefined,
           equipmentKind: config.equipment_kind || "pump",
-          viewCategory: config.view_category || "drainage",
+          viewCategory:
+            config.view_category === null || config.view_category === undefined
+              ? "drainage"
+              : String(config.view_category),
           statusPoints:
             sp && typeof sp === "object" && Object.keys(sp).length > 0
               ? sp
@@ -137,6 +140,11 @@ function formatSystem(system) {
           dataSource: config.data_source || "yscp",
           entryDeviceId: config.entry_device_id ?? undefined,
           exitDeviceId: config.exit_device_id ?? undefined,
+          cameraDeviceId: config.camera_device_id ?? undefined,
+          cameraChannelId:
+            config.camera_channel_id != null && config.camera_channel_id !== ""
+              ? Number(config.camera_channel_id) || 1
+              : 1,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
         },
       };
@@ -162,11 +170,21 @@ function formatSystem(system) {
  * 格式化地點資料為前端格式（含所有系統）
  */
 function formatLocation(location, systems = []) {
+  const createdAt =
+    location.created_at != null
+      ? new Date(location.created_at).toISOString()
+      : undefined;
+  const sortOrder =
+    location.sort_order != null ? Number(location.sort_order) : undefined;
   return {
     id: String(location.id),
     zoneId: String(location.zone_id),
     name: location.name,
     description: location.description || undefined,
+    ...(createdAt ? { createdAt } : {}),
+    ...(sortOrder !== undefined && !Number.isNaN(sortOrder)
+      ? { sortOrder }
+      : {}),
     systems: systems.map(formatSystem),
   };
 }
@@ -175,12 +193,15 @@ function formatLocation(location, systems = []) {
  * 格式化區域資料為前端格式
  */
 function formatZone(zone, locations = []) {
+  const sortOrder =
+    zone.sort_order != null ? Number(zone.sort_order) : 0;
   return {
     id: String(zone.id),
     name: zone.name,
     buildingId: zone.building_id || undefined,
     imageUrl: zone.image_url || undefined,
     description: zone.description || undefined,
+    sortOrder: Number.isNaN(sortOrder) ? 0 : sortOrder,
     locations: locations,
   };
 }
@@ -214,6 +235,7 @@ function groupLocationRowsByLocation(rows) {
         zone_id: row.zone_id,
         name: row.name,
         description: row.description,
+        sort_order: row.sort_order,
         created_by: row.created_by,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -248,6 +270,7 @@ async function loadZoneLocations(zoneId, systemType = null) {
       l.zone_id,
       l.name,
       l.description,
+      l.sort_order,
       l.created_by,
       l.created_at,
       l.updated_at,
@@ -271,12 +294,12 @@ async function loadZoneLocations(zoneId, systemType = null) {
     params.push(systemType);
   }
 
-  sql += " ORDER BY l.created_at ASC, ls.created_at ASC";
+  sql += " ORDER BY l.sort_order ASC, l.id ASC, ls.created_at ASC";
 
   const rows = await db.query(sql, params);
   const locationMap = groupLocationRowsByLocation(rows);
 
-  // 格式化為前端格式
+  // 格式化為前端格式（維持 sort_order 順序：Map 依 rows 首次出現順序）
   const locationsWithSystems = Array.from(locationMap.values()).map(
     (location) => formatLocation(location, location.systems),
   );
@@ -311,7 +334,7 @@ async function getZones(filters = {}) {
       params.push(systemType);
     }
 
-    sql += " ORDER BY created_at DESC";
+    sql += " ORDER BY sort_order ASC, id ASC";
 
     const zones = await db.query(sql, params);
 
@@ -330,6 +353,7 @@ async function getZones(filters = {}) {
         l.zone_id,
         l.name,
         l.description,
+        l.sort_order,
         l.created_by,
         l.created_at,
         l.updated_at,
@@ -353,7 +377,8 @@ async function getZones(filters = {}) {
       locationsParams.push(systemType);
     }
 
-    locationsSql += " ORDER BY l.zone_id, l.created_at ASC, ls.created_at ASC";
+    locationsSql +=
+      " ORDER BY l.zone_id, l.sort_order ASC, l.id ASC, ls.created_at ASC";
 
     const locationRows = await db.query(locationsSql, locationsParams);
 
@@ -425,6 +450,7 @@ async function createZone(zoneData, userId) {
       description,
       imageUrl,
       locations = [],
+      sortOrder: zoneSortOrderBody,
     } = zoneData;
 
     // 驗證必填欄位
@@ -461,6 +487,13 @@ async function createZone(zoneData, userId) {
         updates.push(`description = $${paramIndex++}`);
         params.push(description || null);
       }
+      if (zoneSortOrderBody !== undefined && zoneSortOrderBody !== null) {
+        const n = parseInt(zoneSortOrderBody, 10);
+        if (!Number.isNaN(n) && n >= 0) {
+          updates.push(`sort_order = $${paramIndex++}`);
+          params.push(n);
+        }
+      }
 
       if (updates.length > 0) {
         params.push(zoneId);
@@ -473,9 +506,20 @@ async function createZone(zoneData, userId) {
       }
     } else {
       // 建立新區域
+      let zoneSortVal;
+      if (zoneSortOrderBody !== undefined && zoneSortOrderBody !== null) {
+        const n = parseInt(zoneSortOrderBody, 10);
+        if (!Number.isNaN(n) && n >= 0) zoneSortVal = n;
+      }
+      if (zoneSortVal === undefined) {
+        const r = await db.query(
+          `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM zones`,
+        );
+        zoneSortVal = r[0]?.n ?? 0;
+      }
       const zoneResult = await db.query(
-        `INSERT INTO zones (name, building_id, image_url, description, created_by)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO zones (name, building_id, image_url, description, created_by, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id`,
         [
           trimmedName,
@@ -483,6 +527,7 @@ async function createZone(zoneData, userId) {
           imageUrl || null,
           description || null,
           userId || null,
+          zoneSortVal,
         ],
       );
       zoneId = zoneResult[0].id;
@@ -492,8 +537,21 @@ async function createZone(zoneData, userId) {
     const validLocations = getValidLocations(locations);
     if (validLocations.length > 0) {
       await db.transaction(async (query) => {
+        const orderedLocationIds = [];
         for (const location of validLocations) {
-          await createLocationWithSystems(query, zoneId, location, userId);
+          const nid = await createLocationWithSystems(
+            query,
+            zoneId,
+            location,
+            userId,
+          );
+          orderedLocationIds.push(nid);
+        }
+        for (let i = 0; i < orderedLocationIds.length; i++) {
+          await query(
+            `UPDATE locations SET sort_order = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND zone_id = $3`,
+            [i, orderedLocationIds[i], zoneId],
+          );
         }
       });
     }
@@ -567,7 +625,8 @@ async function deleteEmptyZoneIfNeeded(query, zoneId) {
  */
 async function updateZone(id, zoneData, userId) {
   try {
-    const { name, buildingId, imageUrl, description, locations } = zoneData;
+    const { name, buildingId, imageUrl, description, locations, sortOrder } =
+      zoneData;
 
     // 檢查區域是否存在
     const existing = await db.query(
@@ -666,6 +725,14 @@ async function updateZone(id, zoneData, userId) {
         params.push(description || null);
       }
 
+      if (sortOrder !== undefined && sortOrder !== null) {
+        const so = parseInt(sortOrder, 10);
+        if (!Number.isNaN(so) && so >= 0) {
+          updates.push(`sort_order = $${paramIndex++}`);
+          params.push(so);
+        }
+      }
+
       if (updates.length > 0) {
         params.push(id);
         await query(
@@ -689,29 +756,37 @@ async function updateZone(id, zoneData, userId) {
         );
 
         const updatedLocationIds = new Set();
+        const orderedLocationIds = [];
         for (const location of validLocations) {
-          const locationId = location.id ? String(location.id) : null;
+          const locationIdStr = location.id ? String(location.id) : null;
 
-          if (locationId && existingLocationIds.has(locationId)) {
-            // 地點已存在，更新它
+          let resolvedId;
+          if (locationIdStr && existingLocationIds.has(locationIdStr)) {
             await updateLocationWithSystems(
               query,
-              parseInt(locationId),
+              parseInt(locationIdStr, 10),
               location,
               userId,
             );
-            updatedLocationIds.add(locationId);
+            resolvedId = parseInt(locationIdStr, 10);
+            updatedLocationIds.add(locationIdStr);
           } else {
-            // 地點不存在或沒有 id，使用 createLocationWithSystems
-            // 它會自動處理：如果地點名稱已存在，則使用現有地點並添加系統
-            const newLocationId = await createLocationWithSystems(
+            resolvedId = await createLocationWithSystems(
               query,
               id,
               location,
               userId,
             );
-            updatedLocationIds.add(String(newLocationId));
+            updatedLocationIds.add(String(resolvedId));
           }
+          orderedLocationIds.push(resolvedId);
+        }
+
+        for (let i = 0; i < orderedLocationIds.length; i++) {
+          await query(
+            `UPDATE locations SET sort_order = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND zone_id = $3`,
+            [i, orderedLocationIds[i], id],
+          );
         }
 
         // 刪除不在更新列表中的地點（只刪除完全沒有系統的地點）
@@ -965,7 +1040,10 @@ function buildSystemConfig(systemType, config) {
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
         equipment_kind: config.equipmentKind || "pump",
-        view_category: config.viewCategory || "drainage",
+        view_category:
+          config.viewCategory === undefined || config.viewCategory === null
+            ? "drainage"
+            : config.viewCategory,
         status_points: config.statusPoints || {},
       };
 
@@ -977,6 +1055,8 @@ function buildSystemConfig(systemType, config) {
         data_source: config.dataSource || "yscp",
         entry_device_id: config.entryDeviceId ?? null,
         exit_device_id: config.exitDeviceId ?? null,
+        camera_device_id: config.cameraDeviceId ?? null,
+        camera_channel_id: config.cameraChannelId ?? 1,
         access_control_groups: config.accessControlGroups || [], // 相容保留
       };
 
@@ -1171,12 +1251,28 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       );
     }
   } else {
-    // 建立新地點
+    let sortOrderToInsert = 0;
+    if (location.sortOrder !== undefined && location.sortOrder !== null) {
+      const so = parseInt(location.sortOrder, 10);
+      if (!Number.isNaN(so) && so >= 0) sortOrderToInsert = so;
+    } else {
+      const maxRow = await query(
+        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM locations WHERE zone_id = $1`,
+        [zoneId],
+      );
+      sortOrderToInsert = maxRow[0]?.n ?? 0;
+    }
     const locationResult = await query(
-      `INSERT INTO locations (zone_id, name, description, created_by)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO locations (zone_id, name, description, created_by, sort_order)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [zoneId, trimmedName, description || null, userId || null],
+      [
+        zoneId,
+        trimmedName,
+        description || null,
+        userId || null,
+        sortOrderToInsert,
+      ],
     );
     locationId = locationResult[0].id;
   }

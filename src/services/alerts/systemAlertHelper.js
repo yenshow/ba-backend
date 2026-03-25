@@ -51,7 +51,8 @@ async function getDeviceIdFromConfig(deviceConfig) {
 async function getSourceInfoByType(systemId, systemType) {
   try {
     const result = await db.query(
-      `SELECT ls.id, ls.system_type, ls.system_config->>'device_id' as device_id,
+      `SELECT ls.id, ls.system_type,
+              COALESCE(ls.system_config->>'device_id', ls.system_config->>'deviceId') as device_id,
               l.name, l.zone_id, z.name as zone_name
        FROM location_systems ls
        INNER JOIN locations l ON ls.location_id = l.id
@@ -82,7 +83,7 @@ const getDrainageInfo = (systemId) =>
 async function getDeviceInfo(deviceId) {
   try {
     const result = await db.query(
-      `SELECT d.id, d.name, dt.code as device_type_code, dt.name as device_type_name
+      `SELECT d.id, d.name, d.status, dt.code as device_type_code, dt.name as device_type_name
       FROM devices d
       INNER JOIN device_types dt ON d.type_id = dt.id
       WHERE d.id = ?`,
@@ -128,10 +129,16 @@ function isDeviceConnectionError(errorMessage) {
 async function getDeviceIdFromLocationSystem(systemId, systemType) {
   try {
     const result = await db.query(
-      `SELECT (system_config->>'device_id')::integer as device_id
+      `SELECT COALESCE(
+                (system_config->>'device_id')::integer,
+                (system_config->>'deviceId')::integer
+              ) as device_id
        FROM location_systems
        WHERE id = ? AND system_type = ?
-         AND system_config->>'device_id' IS NOT NULL`,
+         AND (
+           system_config->>'device_id' IS NOT NULL
+           OR system_config->>'deviceId' IS NOT NULL
+         )`,
       [systemId, systemType]
     );
     return result && result.length > 0 ? result[0].device_id : null;
@@ -219,6 +226,16 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
       throw new Error(`未知的系統: ${system}`);
     }
 
+    // 「停用=全停」：如果能映射到設備且設備非 active，直接跳過（不創建警示、不推送狀態）
+    // - 避免停用設備仍持續產生 alerts/WS，造成前端仍收到「設備訊息」
+    const mappedDeviceId = await config.getDeviceId(sourceId);
+    if (mappedDeviceId) {
+      const deviceInfoForGate = await getDeviceInfo(mappedDeviceId);
+      if (deviceInfoForGate && deviceInfoForGate.status && deviceInfoForGate.status !== "active") {
+        return false;
+      }
+    }
+
     // 判斷錯誤類型
     if (isDeviceConnectionError(errorMessage)) {
       // 設備連接錯誤 → 嘗試創建設備警報
@@ -227,6 +244,9 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
         // 獲取設備資訊
         const deviceInfo = await getDeviceInfo(deviceId);
         if (deviceInfo) {
+          if (deviceInfo.status && deviceInfo.status !== "active") {
+            return false;
+          }
           // 創建設備警報
           const alertCreated = await errorTracker.recordError(
             alertService.ALERT_SOURCES.DEVICE,

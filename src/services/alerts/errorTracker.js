@@ -33,7 +33,9 @@ async function recordError(
     const isIgnored = await alertService.isSourceIgnored(
       source,
       sourceId,
-      alertType
+      alertType,
+      null,
+      `${alertType}:default`,
     );
     if (isIgnored) {
       if (process.env.NODE_ENV === "development") {
@@ -95,8 +97,10 @@ async function recordError(
           source,
           source_id: sourceId,
           alert_type: alertType,
+          dimension_key: `${alertType}:default`,
           severity,
           message,
+          rule_id: rule?.id || null,
         };
 
         await alertService.createAlert(alertData);

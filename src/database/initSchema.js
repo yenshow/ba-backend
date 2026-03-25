@@ -450,12 +450,24 @@ async function initSchema() {
       `ALTER TABLE alerts DROP COLUMN IF EXISTS resolved_at;`,
     );
 
+    // 兼容舊版資料：先補齊欄位，再建立依賴這些欄位的索引
+    await targetPool.query(`
+      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS dimension_key VARCHAR(120) NOT NULL DEFAULT 'default';
+      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id INTEGER;
+    `);
+
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_alerts_source_composite ON alerts(source, source_id, alert_type, status);
 			CREATE INDEX IF NOT EXISTS idx_alerts_active_daily ON alerts(source, source_id, alert_type, status, created_at) WHERE status = 'active';
+			CREATE INDEX IF NOT EXISTS idx_alerts_dimension_key ON alerts(source, source_id, alert_type, dimension_key, status);
 			CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC) WHERE status = 'active';
 			CREATE INDEX IF NOT EXISTS idx_alerts_updated_at ON alerts(updated_at DESC);
 		`);
+    await targetPool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_unique_active_key
+      ON alerts(source, source_id, alert_type, dimension_key)
+      WHERE status = 'active';
+    `);
 
     await createUpdatedAtTrigger(targetPool, "alerts");
 
@@ -509,6 +521,40 @@ async function initSchema() {
     await createUpdatedAtTrigger(targetPool, "alert_rules");
 
     console.log("✅ alert_rules 表已建立（警報規則參照表）");
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM information_schema.table_constraints
+          WHERE table_name = 'alerts'
+            AND constraint_name = 'fk_alerts_rule_id'
+        ) THEN
+          ALTER TABLE alerts
+          ADD CONSTRAINT fk_alerts_rule_id
+          FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `);
+
+    // 建立警報事件表（事件流）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_events (
+        id BIGSERIAL PRIMARY KEY,
+        alert_id INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+        event_type VARCHAR(30) NOT NULL,
+        old_status alert_status,
+        new_status alert_status,
+        payload JSONB,
+        actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_events_alert_id ON alert_events(alert_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_alert_events_event_type ON alert_events(event_type, created_at DESC);
+    `);
+    console.log("✅ alert_events 表已建立（警報事件流）");
 
     // 建立 lighting_categories 表
     await targetPool.query(`
@@ -551,6 +597,7 @@ async function initSchema() {
 				building_id INTEGER,
 				image_url TEXT,
 				description TEXT,
+				sort_order INTEGER NOT NULL DEFAULT 0,
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -578,6 +625,22 @@ async function initSchema() {
 			END $$;
 		`);
 
+    await targetPool.query(`
+			DO $$ 
+			BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM information_schema.columns 
+					WHERE table_schema = 'public' AND table_name = 'zones' AND column_name = 'sort_order'
+				) THEN
+					ALTER TABLE zones ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+					UPDATE zones z SET sort_order = sub.rn FROM (
+						SELECT id, (ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) - 1)::int AS rn FROM zones
+					) sub WHERE z.id = sub.id;
+					RAISE NOTICE '已添加 zones.sort_order 並回填（與舊版 created_at DESC 列表順序對齊）';
+				END IF;
+			END $$;
+		`);
+
     console.log("✅ zones 表已建立（統一區域表）");
 
     // 建立統一的 locations 表（統一地點表）
@@ -588,6 +651,7 @@ async function initSchema() {
 				zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
 				name VARCHAR(100) NOT NULL,
 				description TEXT,
+				sort_order INTEGER NOT NULL DEFAULT 0,
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -605,6 +669,22 @@ async function initSchema() {
 				) THEN
 					ALTER TABLE locations ADD COLUMN description TEXT;
 					RAISE NOTICE '已添加 locations.description 欄位';
+				END IF;
+			END $$;
+		`);
+
+    await targetPool.query(`
+			DO $$ 
+			BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM information_schema.columns 
+					WHERE table_schema = 'public' AND table_name = 'locations' AND column_name = 'sort_order'
+				) THEN
+					ALTER TABLE locations ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+					UPDATE locations l SET sort_order = sub.rn FROM (
+						SELECT id, (ROW_NUMBER() OVER (PARTITION BY zone_id ORDER BY created_at ASC, id ASC) - 1)::int AS rn FROM locations
+					) sub WHERE l.id = sub.id;
+					RAISE NOTICE '已添加 locations.sort_order 並回填（與舊版 created_at ASC 順序對齊）';
 				END IF;
 			END $$;
 		`);
@@ -751,6 +831,26 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_payload ON isapi_access_events USING GIN (payload);
     `);
     console.log("✅ isapi_access_events 表已建立");
+
+    // ISAPI 攝影機 PeopleCounting 事件（統計用：enter/exit 為累積值；前端以增量推導 entry/exit）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS isapi_people_counting_events (
+        id BIGSERIAL PRIMARY KEY,
+        device_ip VARCHAR(45) NOT NULL,
+        channel_id INTEGER NOT NULL DEFAULT 1,
+        event_time TIMESTAMPTZ NOT NULL,
+        enter_total INTEGER,
+        exit_total INTEGER,
+        region_list JSONB,
+        raw_xml TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_people_counting_events_time 
+      ON isapi_people_counting_events(device_ip, channel_id, event_time DESC);
+    `);
+    console.log("✅ isapi_people_counting_events 表已建立");
 
     // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
     await targetPool.query(`
