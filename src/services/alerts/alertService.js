@@ -510,6 +510,7 @@ async function getAlerts(filters = {}) {
       source,
       source_id,
       device_id, // 相容欄位
+      exclude_sources,
       alert_type,
       severity,
       status,
@@ -544,6 +545,17 @@ async function getAlerts(filters = {}) {
     let query = buildAlertSelectQuery() + ` WHERE 1=1`;
     const params = [];
     const countParams = [];
+
+    const excludeSourcesList = Array.isArray(exclude_sources)
+      ? exclude_sources
+      : exclude_sources != null && exclude_sources !== ""
+        ? [exclude_sources]
+        : [];
+    if (excludeSourcesList.length > 0) {
+      const placeholders = excludeSourcesList.map(() => "?").join(", ");
+      query += ` AND a.source NOT IN (${placeholders})`;
+      params.push(...excludeSourcesList);
+    }
 
     if (actualSource) {
       query += " AND a.source = ?";
@@ -603,6 +615,11 @@ async function getAlerts(filters = {}) {
 
     // 總數：同一篩選條件的列數（不包含 limit/offset/updated_after）
     let countQuery = `SELECT COUNT(*) as total FROM alerts a WHERE 1=1`;
+    if (excludeSourcesList.length > 0) {
+      const placeholders = excludeSourcesList.map(() => "?").join(", ");
+      countQuery += ` AND a.source NOT IN (${placeholders})`;
+      countParams.push(...excludeSourcesList);
+    }
     if (actualSource) countQuery += " AND a.source = ?";
     if (actualSourceId) countQuery += " AND a.source_id = ?";
     if (alert_type) countQuery += " AND a.alert_type = ?";
@@ -1240,6 +1257,7 @@ async function getUnresolvedAlertCount(filters = {}) {
       source,
       source_id,
       device_id,
+      exclude_sources,
       alert_type,
       severity,
       start_date,
@@ -1260,6 +1278,17 @@ async function getUnresolvedAlertCount(filters = {}) {
 			WHERE status = ?
 		`;
     const params = [ALERT_STATUS.ACTIVE];
+
+    const excludeSourcesList = Array.isArray(exclude_sources)
+      ? exclude_sources
+      : exclude_sources != null && exclude_sources !== ""
+        ? [exclude_sources]
+        : [];
+    if (excludeSourcesList.length > 0) {
+      const placeholders = excludeSourcesList.map(() => "?").join(", ");
+      query += ` AND source NOT IN (${placeholders})`;
+      params.push(...excludeSourcesList);
+    }
 
     if (actualSource) {
       query += " AND source = ?";

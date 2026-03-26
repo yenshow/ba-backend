@@ -73,13 +73,18 @@ function applyUserInfoDefaults(userInfo) {
  */
 async function getDeviceAndClient(deviceId) {
   const { device } = await deviceService.getDeviceById(deviceId);
+  if (device.type_code !== "access_control") {
+    const err = new Error("該設備不是門禁設備");
+    err.statusCode = 400;
+    throw err;
+  }
   if (
     !device.config?.host ||
     !device.config?.username ||
     !device.config?.password
   ) {
     const err = new Error(
-      "設備連線設定不完整（缺少 host / username / password）",
+      "門禁設備連線設定不完整（缺少 host / username / password）",
     );
     err.statusCode = 400;
     throw err;

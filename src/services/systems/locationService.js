@@ -140,11 +140,6 @@ function formatSystem(system) {
           dataSource: config.data_source || "yscp",
           entryDeviceId: config.entry_device_id ?? undefined,
           exitDeviceId: config.exit_device_id ?? undefined,
-          cameraDeviceId: config.camera_device_id ?? undefined,
-          cameraChannelId:
-            config.camera_channel_id != null && config.camera_channel_id !== ""
-              ? Number(config.camera_channel_id) || 1
-              : 1,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
         },
       };
@@ -1055,8 +1050,6 @@ function buildSystemConfig(systemType, config) {
         data_source: config.dataSource || "yscp",
         entry_device_id: config.entryDeviceId ?? null,
         exit_device_id: config.exitDeviceId ?? null,
-        camera_device_id: config.cameraDeviceId ?? null,
-        camera_channel_id: config.cameraChannelId ?? 1,
         access_control_groups: config.accessControlGroups || [], // 相容保留
       };
 

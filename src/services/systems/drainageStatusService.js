@@ -7,6 +7,7 @@ const deviceService = require("../devices/deviceService");
 const modbusClient = require("../devices/modbusClient");
 const alertService = require("../alerts/alertService");
 const systemAlert = require("../alerts/systemAlertHelper");
+const alertRuleService = require("../alerts/alertRuleService");
 
 const REGISTER_READERS = {
   coil: (address, length, deviceConfig) =>
@@ -19,36 +20,18 @@ const REGISTER_READERS = {
     modbusClient.readInputRegisters(address, length, deviceConfig),
 };
 
-const DRAINAGE_STATEFUL_ALERTS = [
-  {
-    rawKey: "runningAlarm",
-    dimensionKey: "drainage:running_alarm",
-    alertType: alertService.ALERT_TYPES.ERROR,
-    severity: alertService.SEVERITIES.ERROR,
-    message: "排水設備運轉警報觸發，請立即檢查設備狀態",
-  },
-  {
-    rawKey: "coverAlarm",
-    dimensionKey: "drainage:cover_alarm",
-    alertType: alertService.ALERT_TYPES.ERROR,
-    severity: alertService.SEVERITIES.WARNING,
-    message: "排水水箱蓋狀態異常，請確認現場狀況",
-  },
-  {
-    rawKey: "highLevel",
-    dimensionKey: "drainage:high_level",
-    alertType: alertService.ALERT_TYPES.THRESHOLD,
-    severity: alertService.SEVERITIES.CRITICAL,
-    message: "排水高水位警報觸發，請立即處置",
-  },
-  {
-    rawKey: "lowLevel",
-    dimensionKey: "drainage:low_level",
-    alertType: alertService.ALERT_TYPES.THRESHOLD,
-    severity: alertService.SEVERITIES.WARNING,
-    message: "排水低水位警報觸發，請檢查液位狀態",
-  },
-];
+const BIT_KEY_TO_ALERT_TYPE = {
+  runningAlarm: alertService.ALERT_TYPES.ERROR,
+  coverAlarm: alertService.ALERT_TYPES.ERROR,
+  highLevel: alertService.ALERT_TYPES.THRESHOLD,
+  lowLevel: alertService.ALERT_TYPES.THRESHOLD,
+};
+
+const defaultDimensionKeyForDrainageBit = (bitKey) => {
+  const k = String(bitKey || "").trim();
+  if (!k) return "drainage:bit_state";
+  return `drainage:${k}`;
+};
 
 function parseInlineModbus(modbus) {
   if (!modbus || typeof modbus !== "object") return null;
@@ -196,20 +179,31 @@ function deriveUiStatus(equipmentKind, raw, hadDeviceConfig, pointKeysConfigured
 }
 
 async function syncStatefulDrainageAlerts(systemId, raw) {
-  for (const rule of DRAINAGE_STATEFUL_ALERTS) {
-    const bitValue = raw[rule.rawKey];
-    if (bitValue === undefined || bitValue === null) {
-      continue;
-    }
+  const rules = await alertRuleService.getDrainageBitStateRulesForSystem(systemId);
+  for (const r of rules) {
+    const bitKey = r?.condition_config?.bit_key;
+    if (!bitKey) continue;
+    const bitValue = raw[bitKey];
+    if (bitValue === undefined || bitValue === null) continue;
+
+    const alertType =
+      BIT_KEY_TO_ALERT_TYPE[bitKey] || alertService.ALERT_TYPES.ERROR;
+    const dimensionKey = r.dimension_key || defaultDimensionKeyForDrainageBit(bitKey);
+    const severity = r.severity || alertService.SEVERITIES.WARNING;
+    const message =
+      r.message_template ||
+      r.name ||
+      `排水警報觸發（${String(bitKey)}），請檢查設備狀態`;
 
     if (bitValue === true) {
       await alertService.createAlert({
         source: alertService.ALERT_SOURCES.DRAINAGE,
         source_id: systemId,
-        alert_type: rule.alertType,
-        dimension_key: rule.dimensionKey,
-        severity: rule.severity,
-        message: rule.message,
+        alert_type: alertType,
+        dimension_key: dimensionKey,
+        severity,
+        message,
+        rule_id: r.id,
       });
       continue;
     }
@@ -217,9 +211,9 @@ async function syncStatefulDrainageAlerts(systemId, raw) {
     try {
       await alertService.resolveAlert(
         systemId,
-        rule.alertType,
+        alertType,
         alertService.ALERT_SOURCES.DRAINAGE,
-        rule.dimensionKey,
+        dimensionKey,
       );
     } catch (error) {
       if (!String(error.message || "").includes("未找到可更新的警報")) {
@@ -227,17 +221,6 @@ async function syncStatefulDrainageAlerts(systemId, raw) {
       }
     }
   }
-}
-
-async function isDeviceActiveById(deviceId) {
-  if (!deviceId) return false;
-  const id = Number(deviceId);
-  if (!Number.isFinite(id)) return false;
-  const rows = await db.query(`SELECT status FROM devices WHERE id = ? LIMIT 1`, [
-    id,
-  ]);
-  const status = rows?.[0]?.status;
-  return status === "active";
 }
 
 async function syncDrainageConnectivityAlert(
@@ -292,31 +275,6 @@ async function buildItemForDrainageSystem(zone, location, system) {
   }
   if (!hadDeviceConfig) {
     readError = "無可用控制器連線設定（deviceId 或 modbus.host/port）";
-  }
-
-  // 「停用=全停」：設備停用時不讀取、不記錄、不推播警示
-  // - 仍回傳 uiStatus，供前端顯示（可用 error 文字提示已停用）
-  let isDeviceActive = true;
-  if (deviceId != null && String(deviceId).trim() !== "") {
-    try {
-      isDeviceActive = await isDeviceActiveById(deviceId);
-    } catch (_) {
-      isDeviceActive = true;
-    }
-  }
-  if (!isDeviceActive) {
-    return {
-      zoneId: String(zone.id),
-      zoneName: zone.name,
-      locationId: String(location.id),
-      locationName: location.name,
-      systemId: String(system.id),
-      equipmentKind,
-      viewCategory,
-      uiStatus: "warning",
-      raw: {},
-      error: "設備已停用，已暫停監控與警示處理",
-    };
   }
 
   const uiStatus = deriveUiStatus(

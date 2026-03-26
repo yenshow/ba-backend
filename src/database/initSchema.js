@@ -504,6 +504,10 @@ async function initSchema() {
 				source alert_source NOT NULL,
 				alert_type alert_type NOT NULL,
 				severity alert_severity NOT NULL,
+        name VARCHAR(120),
+        dimension_key VARCHAR(120),
+        target_type VARCHAR(30),
+        target_id INTEGER,
 				condition_type VARCHAR(50),
 				condition_config JSONB,
 				message_template TEXT,
@@ -513,9 +517,42 @@ async function initSchema() {
 			)
 		`);
 
+    // 遷移：既有 DB 補齊警報定義欄位（不破壞舊規則）
+    await targetPool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'alert_rules' AND column_name = 'name'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN name VARCHAR(120);
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'alert_rules' AND column_name = 'dimension_key'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN dimension_key VARCHAR(120);
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'alert_rules' AND column_name = 'target_type'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN target_type VARCHAR(30);
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'alert_rules' AND column_name = 'target_id'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN target_id INTEGER;
+        END IF;
+      END $$;
+    `);
+
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_alert_rules_source_type ON alert_rules(source, alert_type);
 			CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+      CREATE INDEX IF NOT EXISTS idx_alert_rules_target ON alert_rules(source, target_type, target_id);
+      CREATE INDEX IF NOT EXISTS idx_alert_rules_dimension_key ON alert_rules(source, alert_type, dimension_key);
 		`);
 
     await createUpdatedAtTrigger(targetPool, "alert_rules");
@@ -831,26 +868,6 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_payload ON isapi_access_events USING GIN (payload);
     `);
     console.log("✅ isapi_access_events 表已建立");
-
-    // ISAPI 攝影機 PeopleCounting 事件（統計用：enter/exit 為累積值；前端以增量推導 entry/exit）
-    await targetPool.query(`
-      CREATE TABLE IF NOT EXISTS isapi_people_counting_events (
-        id BIGSERIAL PRIMARY KEY,
-        device_ip VARCHAR(45) NOT NULL,
-        channel_id INTEGER NOT NULL DEFAULT 1,
-        event_time TIMESTAMPTZ NOT NULL,
-        enter_total INTEGER,
-        exit_total INTEGER,
-        region_list JSONB,
-        raw_xml TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    await targetPool.query(`
-      CREATE INDEX IF NOT EXISTS idx_isapi_people_counting_events_time 
-      ON isapi_people_counting_events(device_ip, channel_id, event_time DESC);
-    `);
-    console.log("✅ isapi_people_counting_events 表已建立");
 
     // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
     await targetPool.query(`

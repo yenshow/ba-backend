@@ -16,7 +16,11 @@ const websocketService = require("../websocket/websocketService");
  */
 async function getDeviceIdFromConfig(deviceConfig) {
   try {
-    if (!deviceConfig || !deviceConfig.host || deviceConfig.port === undefined) {
+    if (
+      !deviceConfig ||
+      !deviceConfig.host ||
+      deviceConfig.port === undefined
+    ) {
       return null;
     }
 
@@ -32,7 +36,7 @@ async function getDeviceIdFromConfig(deviceConfig) {
             AND (d.config::jsonb->>'port')::text = ?)
         )
       LIMIT 1`,
-      [deviceConfig.host, String(deviceConfig.port)]
+      [deviceConfig.host, String(deviceConfig.port)],
     );
 
     return result && result.length > 0 ? result[0].id : null;
@@ -58,22 +62,22 @@ async function getSourceInfoByType(systemId, systemType) {
        INNER JOIN locations l ON ls.location_id = l.id
        INNER JOIN zones z ON l.zone_id = z.id
        WHERE ls.id = ? AND ls.system_type = ?`,
-      [systemId, systemType]
+      [systemId, systemType],
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
-    console.error(`[systemAlertHelper] 獲取 ${systemType} 來源資訊失敗:`, error);
+    console.error(
+      `[systemAlertHelper] 獲取 ${systemType} 來源資訊失敗:`,
+      error,
+    );
     return null;
   }
 }
 
 const getLocationInfo = (systemId) =>
   getSourceInfoByType(systemId, "environment");
-const getAreaInfo = (systemId) =>
-  getSourceInfoByType(systemId, "lighting");
-const getDrainageInfo = (systemId) =>
-  getSourceInfoByType(systemId, "drainage");
-
+const getAreaInfo = (systemId) => getSourceInfoByType(systemId, "lighting");
+const getDrainageInfo = (systemId) => getSourceInfoByType(systemId, "drainage");
 
 /**
  * 獲取設備資訊
@@ -87,7 +91,7 @@ async function getDeviceInfo(deviceId) {
       FROM devices d
       INNER JOIN device_types dt ON d.type_id = dt.id
       WHERE d.id = ?`,
-      [deviceId]
+      [deviceId],
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
@@ -139,13 +143,13 @@ async function getDeviceIdFromLocationSystem(systemId, systemType) {
            system_config->>'device_id' IS NOT NULL
            OR system_config->>'deviceId' IS NOT NULL
          )`,
-      [systemId, systemType]
+      [systemId, systemType],
     );
     return result && result.length > 0 ? result[0].device_id : null;
   } catch (error) {
     console.error(
       `[systemAlertHelper] 從 ${systemType} 取得設備 ID 失敗:`,
-      error
+      error,
     );
     return null;
   }
@@ -172,13 +176,13 @@ async function getLocationSystemIdsByDeviceId(deviceId, systemType) {
        WHERE system_type = $1
          AND system_config->>'device_id' IS NOT NULL
          AND (system_config->>'device_id')::integer = $2`,
-      [systemType, deviceId]
+      [systemType, deviceId],
     );
     return (result || []).map((r) => r.id);
   } catch (error) {
     console.error(
       `[systemAlertHelper] 依設備取得 location_systems 失敗 (deviceId: ${deviceId}, systemType: ${systemType}):`,
-      error
+      error,
     );
     return [];
   }
@@ -231,7 +235,11 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
     const mappedDeviceId = await config.getDeviceId(sourceId);
     if (mappedDeviceId) {
       const deviceInfoForGate = await getDeviceInfo(mappedDeviceId);
-      if (deviceInfoForGate && deviceInfoForGate.status && deviceInfoForGate.status !== "active") {
+      if (
+        deviceInfoForGate &&
+        deviceInfoForGate.status &&
+        deviceInfoForGate.status !== "active"
+      ) {
         return false;
       }
     }
@@ -255,7 +263,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
             errorMessage,
             {
               name: deviceInfo.name,
-            }
+            },
           );
 
           // 推送 WebSocket 事件：設備離線（批次模式可跳過）
@@ -274,13 +282,15 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
     if (!sourceInfo) {
       if (process.env.NODE_ENV === "development") {
         console.warn(
-          `[systemAlertHelper] ⚠️  ${system} 來源 ID ${sourceId} 不存在，跳過錯誤記錄`
+          `[systemAlertHelper] ⚠️  ${system} 來源 ID ${sourceId} 不存在，跳過錯誤記錄`,
         );
       }
       return false;
     }
 
-    const alertType = isDeviceConnectionError(errorMessage) ? "offline" : "error";
+    const alertType = isDeviceConnectionError(errorMessage)
+      ? "offline"
+      : "error";
 
     // 記錄錯誤並創建警報（如果達到閾值）
     const alertCreated = await errorTracker.recordError(
@@ -291,7 +301,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
       {
         name: sourceInfo.name,
         zone_name: sourceInfo.zone_name,
-      }
+      },
     );
 
     // 推送 WebSocket 事件：系統設備離線（僅當創建了 offline 類型的警報時，批次模式可跳過）
@@ -302,7 +312,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
         config.source,
         sourceId,
         "offline",
-        deviceIdForWs
+        deviceIdForWs,
       );
     }
 
@@ -310,7 +320,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
   } catch (error) {
     console.error(
       `[systemAlertHelper] 記錄 ${system} 錯誤失敗 (sourceId: ${sourceId}):`,
-      error
+      error,
     );
     return false;
   }
@@ -338,7 +348,7 @@ async function clearError(system, sourceId, options = {}) {
       const deviceCleared = await errorTracker.clearError(
         alertService.ALERT_SOURCES.DEVICE,
         deviceId,
-        "offline"
+        "offline",
       );
       if (deviceCleared && !options.skipWebSocket) {
         websocketService.emitDeviceStatus("device", deviceId, "online");
@@ -347,7 +357,7 @@ async function clearError(system, sourceId, options = {}) {
 
     const systemCleared = await errorTracker.clearError(
       config.source,
-      sourceId
+      sourceId,
     );
 
     if (
@@ -358,7 +368,7 @@ async function clearError(system, sourceId, options = {}) {
     ) {
       const allSystemIds = await getLocationSystemIdsByDeviceId(
         deviceId,
-        system
+        system,
       );
       for (const otherId of allSystemIds) {
         if (Number(otherId) === Number(sourceId)) continue;
@@ -371,13 +381,13 @@ async function clearError(system, sourceId, options = {}) {
         config.source,
         sourceId,
         "online",
-        deviceId
+        deviceId,
       );
     }
   } catch (error) {
     console.error(
       `[systemAlertHelper] 清除 ${system} 錯誤狀態失敗 (sourceId: ${sourceId}):`,
-      error
+      error,
     );
   }
 }
@@ -394,4 +404,3 @@ module.exports = {
   // 導出系統配置供檢查
   SYSTEM_CONFIGS,
 };
-

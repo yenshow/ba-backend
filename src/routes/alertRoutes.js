@@ -9,13 +9,18 @@ const { validateIntegers } = require("../middleware/validation");
 
 const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
-const ALLOWED_CONDITION_TYPES = ["threshold", "error_count"];
+const ALLOWED_CONDITION_TYPES = ["threshold", "error_count", "bit_state"];
+const ALLOWED_TARGET_TYPES = ["system", "location", "zone"];
 
 function validateRulePayload(payload, { allowPartial = false } = {}) {
   const {
     source,
     alert_type,
     severity,
+    name,
+    dimension_key,
+    target_type,
+    target_id,
     condition_type,
     condition_config,
     enabled,
@@ -51,6 +56,33 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
     }
   }
 
+  if (name !== undefined && name !== null && typeof name !== "string") {
+    return "name 需為字串";
+  }
+
+  if (dimension_key !== undefined && dimension_key !== null && typeof dimension_key !== "string") {
+    return "dimension_key 需為字串";
+  }
+
+  if (target_type !== undefined && target_type !== null) {
+    if (!ALLOWED_TARGET_TYPES.includes(target_type)) {
+      return `target_type 不合法，支援：${ALLOWED_TARGET_TYPES.join(", ")}`;
+    }
+  }
+
+  if (target_id !== undefined && target_id !== null) {
+    if (typeof target_id !== "number" || !Number.isFinite(target_id)) {
+      return "target_id 需為數字";
+    }
+  }
+
+  if (condition_type === "bit_state") {
+    const bitKey = condition_config?.bit_key;
+    if (!bitKey || typeof bitKey !== "string") {
+      return "bit_state 規則需提供 condition_config.bit_key";
+    }
+  }
+
   if (enabled !== undefined && typeof enabled !== "boolean") {
     return "enabled 需為布林值";
   }
@@ -69,6 +101,7 @@ router.get("/", noCache, asyncHandler(async (req, res) => {
     source,
     source_id,
     device_id, // 向後兼容
+    exclude_sources,
     alert_type,
     severity,
     status,
@@ -87,6 +120,7 @@ router.get("/", noCache, asyncHandler(async (req, res) => {
     source,
     source_id: source_id ? parseInt(source_id) : undefined,
     device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
+    exclude_sources,
     alert_type,
     severity,
     status,
@@ -110,6 +144,7 @@ router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
     source,
     source_id,
     device_id,
+    exclude_sources,
     alert_type,
     severity,
     start_date,
@@ -120,6 +155,7 @@ router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
     source,
     source_id: source_id ? parseInt(source_id) : undefined,
     device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
+    exclude_sources,
     alert_type,
     severity,
     start_date, // 支持時間範圍篩選

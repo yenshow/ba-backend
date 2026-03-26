@@ -156,6 +156,10 @@ async function createAlertRule(payload) {
     source,
     alert_type,
     severity,
+    name = null,
+    dimension_key = null,
+    target_type = null,
+    target_id = null,
     condition_type = null,
     condition_config = null,
     message_template = null,
@@ -167,12 +171,16 @@ async function createAlertRule(payload) {
       source,
       alert_type,
       severity,
+      name,
+      dimension_key,
+      target_type,
+      target_id,
       condition_type,
       condition_config,
       message_template,
       enabled
     )
-    VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
     RETURNING *
   `;
 
@@ -180,6 +188,10 @@ async function createAlertRule(payload) {
     source,
     alert_type,
     severity,
+    name,
+    dimension_key,
+    target_type,
+    target_id,
     condition_type,
     condition_config ? JSON.stringify(condition_config) : null,
     message_template,
@@ -228,6 +240,22 @@ async function updateAlertRule(id, updates) {
   if (updates.severity !== undefined) {
     fields.push("severity = ?");
     params.push(updates.severity);
+  }
+  if (updates.name !== undefined) {
+    fields.push("name = ?");
+    params.push(updates.name);
+  }
+  if (updates.dimension_key !== undefined) {
+    fields.push("dimension_key = ?");
+    params.push(updates.dimension_key);
+  }
+  if (updates.target_type !== undefined) {
+    fields.push("target_type = ?");
+    params.push(updates.target_type);
+  }
+  if (updates.target_id !== undefined) {
+    fields.push("target_id = ?");
+    params.push(updates.target_id);
   }
   if (updates.condition_type !== undefined) {
     fields.push("condition_type = ?");
@@ -280,6 +308,42 @@ async function updateAlertRule(id, updates) {
   }
 
   return updatedRule;
+}
+
+/**
+ * 取得排水 bit_state 警報定義（套用 target 範圍）
+ * 優先序：system > location > zone > global
+ */
+async function getDrainageBitStateRulesForSystem(systemId) {
+  const q = `
+    SELECT
+      r.*,
+      ls.location_id,
+      l.zone_id
+    FROM alert_rules r
+    LEFT JOIN location_systems ls ON ls.id = ? AND ls.system_type = 'drainage'
+    LEFT JOIN locations l ON l.id = ls.location_id
+    WHERE r.source = 'drainage'
+      AND r.condition_type = 'bit_state'
+      AND r.enabled = TRUE
+      AND (
+        r.target_type IS NULL OR r.target_id IS NULL
+        OR (r.target_type = 'system' AND r.target_id = ?)
+        OR (r.target_type = 'location' AND r.target_id = ls.location_id)
+        OR (r.target_type = 'zone' AND r.target_id = l.zone_id)
+      )
+    ORDER BY
+      CASE r.target_type
+        WHEN 'system' THEN 1
+        WHEN 'location' THEN 2
+        WHEN 'zone' THEN 3
+        ELSE 4
+      END,
+      CASE r.severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END,
+      r.id DESC
+  `;
+  const rows = await db.query(q, [systemId, systemId]);
+  return rows || [];
 }
 
 /**
@@ -463,6 +527,7 @@ module.exports = {
   createAlertRule,
   updateAlertRule,
   deleteAlertRule,
+  getDrainageBitStateRulesForSystem,
   evaluateThreshold,
   formatMessage,
   getParameterDisplayName,
