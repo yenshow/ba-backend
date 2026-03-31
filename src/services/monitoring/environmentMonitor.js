@@ -174,7 +174,7 @@ async function checkEnvironmentLocations() {
     let successCount = 0;
     let failCount = 0;
 
-    // 並行檢查所有位置-設備對
+    // 併發控制由 modbusClient（全域 limiter）統一處理
     const checkPromises = locations.map(async (location) => {
       try {
         const deviceConfigRaw =

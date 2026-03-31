@@ -77,6 +77,28 @@ async function computeAndSaveDay() {
   await computeAndSaveBucket("day", bucketAt, periodEnd);
 }
 
+/**
+ * 依 offsetDays 計算並寫入 day 彙總
+ * offsetDays=1 表示「昨日」；offsetDays=2 表示「前天」…（UTC 日界）
+ */
+async function computeAndSaveDayByOffset(offsetDays) {
+  const now = new Date();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - offsetDays, 0, 0, 0, 0));
+  const dayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - offsetDays + 1, 0, 0, 0, 0));
+  await computeAndSaveBucket("day", dayStart, dayEnd);
+}
+
+/**
+ * 補寫最近 N 天 day 彙總（不含今日）
+ * 用途：備份排程停擺後復原資料缺口（例如只彙總到 28 號）
+ */
+async function backfillRecentDays(days) {
+  const n = Math.max(0, Math.floor(days || 0));
+  for (let offset = n; offset >= 1; offset--) {
+    await computeAndSaveDayByOffset(offset);
+  }
+}
+
 async function computeAndSaveMonth() {
   const now = new Date();
   const bucketAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1, 0, 0, 0, 0));
@@ -108,6 +130,8 @@ module.exports = {
   getEnvironmentLocationIds,
   computeAndSaveHour,
   computeAndSaveDay,
+  computeAndSaveDayByOffset,
+  backfillRecentDays,
   computeAndSaveMonth,
   computeAndSaveDayAndMonth,
 };

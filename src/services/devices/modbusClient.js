@@ -1,6 +1,7 @@
 const ModbusRTU = require("modbus-serial");
 const EventEmitter = require("events");
 const config = require("../../config");
+const modbusGlobalLimiter = require("./modbusGlobalLimiter");
 
 class ModbusClient extends EventEmitter {
   constructor(modbusConfig) {
@@ -10,9 +11,16 @@ class ModbusClient extends EventEmitter {
     this.connecting = new Map(); // 追蹤每個連接的連線狀態
     this.lastConnectedAt = new Map(); // 追蹤每個連接的最後連線時間
     this.clientConnections = new Map(); // 儲存多個設備連接
+    this.inflightReads = new Map(); // key -> Promise（避免同設備同讀取被重複打爆）
     this.client.on("error", (err) => {
       this.emit("error", err);
     });
+  }
+
+  createServiceUnavailableError(message) {
+    const err = new Error(message);
+    err.statusCode = 503;
+    return err;
   }
 
   // 產生連接的 key
@@ -38,6 +46,11 @@ class ModbusClient extends EventEmitter {
     );
     this.clientConnections.delete(key);
     this.lastConnectedAt.delete(key);
+    this.inflightReads.forEach((_p, readKey) => {
+      if (readKey.startsWith(`${key}|`)) {
+        this.inflightReads.delete(readKey);
+      }
+    });
   }
 
   // 處理操作錯誤（連接斷開檢測）
@@ -157,11 +170,14 @@ class ModbusClient extends EventEmitter {
     }
 
     // 創建帶有超時的連接 Promise
-    const connectPromise = this.withTimeout(
-      client.connectTCP(host, { port }),
-      this.timeout,
-      `連接超時: 無法在 ${this.timeout}ms 內連接到 ${host}:${port}`,
-    )
+    const connectPromise = modbusGlobalLimiter
+      .run(() =>
+        this.withTimeout(
+          client.connectTCP(host, { port }),
+          this.timeout,
+          `連接超時: 無法在 ${this.timeout}ms 內連接到 ${host}:${port}`,
+        ),
+      )
       .then(() => {
         client.setID(unitId);
         client.setTimeout(this.timeout);
@@ -195,71 +211,90 @@ class ModbusClient extends EventEmitter {
   }
 
   async readHoldingRegisters(address, length, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
-    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取保持暫存器。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.readHoldingRegisters(address, length),
-        this.timeout,
-        timeoutMsg,
-      );
-      return response.data;
-    } catch (error) {
-      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
-      this.handleOperationError(error, client, deviceConfig, "read");
-    }
+    return this.readWithCoalescing(
+      "holding",
+      address,
+      length,
+      deviceConfig,
+      (client) => client.readHoldingRegisters(address, length),
+      `讀取超時: 無法在 ${this.timeout}ms 內讀取保持暫存器。設備可能無回應或連接已斷開。`,
+    );
   }
 
   async readInputRegisters(address, length, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
-    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取輸入暫存器。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.readInputRegisters(address, length),
-        this.timeout,
-        timeoutMsg,
-      );
-      return response.data;
-    } catch (error) {
-      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
-      this.handleOperationError(error, client, deviceConfig, "read");
-    }
+    return this.readWithCoalescing(
+      "input",
+      address,
+      length,
+      deviceConfig,
+      (client) => client.readInputRegisters(address, length),
+      `讀取超時: 無法在 ${this.timeout}ms 內讀取輸入暫存器。設備可能無回應或連接已斷開。`,
+    );
   }
 
   async readCoils(address, length, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
-    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取線圈。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.readCoils(address, length),
-        this.timeout,
-        timeoutMsg,
-      );
-      return response.data;
-    } catch (error) {
-      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
-      this.handleOperationError(error, client, deviceConfig, "read");
-    }
+    return this.readWithCoalescing(
+      "coils",
+      address,
+      length,
+      deviceConfig,
+      (client) => client.readCoils(address, length),
+      `讀取超時: 無法在 ${this.timeout}ms 內讀取線圈。設備可能無回應或連接已斷開。`,
+    );
   }
 
   async readDiscreteInputs(address, length, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
-    const timeoutMsg = `讀取超時: 無法在 ${this.timeout}ms 內讀取離散輸入。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.readDiscreteInputs(address, length),
-        this.timeout,
-        timeoutMsg,
-      );
-      return response.data;
-    } catch (error) {
-      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
-      this.handleOperationError(error, client, deviceConfig, "read");
+    return this.readWithCoalescing(
+      "discrete",
+      address,
+      length,
+      deviceConfig,
+      (client) => client.readDiscreteInputs(address, length),
+      `讀取超時: 無法在 ${this.timeout}ms 內讀取離散輸入。設備可能無回應或連接已斷開。`,
+    );
+  }
+
+  getReadKey(kind, address, length, deviceConfig) {
+    const key = this.getConnectionKey(
+      deviceConfig.host,
+      deviceConfig.port,
+      deviceConfig.unitId,
+    );
+    return `${key}|${kind}|${address}|${length}`;
+  }
+
+  async readWithCoalescing(kind, address, length, deviceConfig, reader, timeoutMsg) {
+    const connKey = this.getConnectionKey(
+      deviceConfig.host,
+      deviceConfig.port,
+      deviceConfig.unitId,
+    );
+
+    const readKey = this.getReadKey(kind, address, length, deviceConfig);
+    if (this.inflightReads.has(readKey)) {
+      return this.inflightReads.get(readKey);
     }
+
+    const promise = (async () => {
+      const client = await this.ensureConnection(deviceConfig);
+      this.checkConnection(client, deviceConfig);
+      try {
+        const response = await modbusGlobalLimiter.run(() =>
+          this.withTimeout(reader(client), this.timeout, timeoutMsg),
+        );
+        return response.data;
+      } catch (error) {
+        if (this.isTimeoutError(error)) {
+          throw this.createServiceUnavailableError(timeoutMsg);
+        }
+        this.handleOperationError(error, client, deviceConfig, "read");
+      } finally {
+        this.inflightReads.delete(readKey);
+      }
+    })();
+
+    this.inflightReads.set(readKey, promise);
+    return promise;
   }
 
   async writeCoil(address, value, deviceConfig) {

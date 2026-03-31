@@ -381,6 +381,15 @@ function emitIsapiAccessEvent() {
   safeEmit("people-counting:access-control:event", { source: "isapi", timestamp: new Date().toISOString() }, { logMessage: "門禁事件已寫入" });
 }
 
+/** 攝影機 PeopleCounting 事件寫入後推送，前端人流統計頁監聽並重新載入 */
+function emitIsapiPeopleCountingEvent(data) {
+  safeEmit(
+    "people-counting:isapi-camera:event",
+    { ...(data || {}), source: "isapi_camera", timestamp: new Date().toISOString() },
+    { logMessage: "攝影機人流事件已寫入" },
+  );
+}
+
 module.exports = {
   initializeWebSocket,
   getIO,
@@ -397,4 +406,5 @@ module.exports = {
   emitEnvironmentReading,
   emitPeopleCountingRecord,
   emitIsapiAccessEvent,
+  emitIsapiPeopleCountingEvent,
 };

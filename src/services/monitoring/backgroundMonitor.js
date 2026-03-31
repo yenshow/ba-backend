@@ -4,13 +4,19 @@
  * 支持多系統擴展，易於添加新系統的監控邏輯
  */
 
-const db = require("../../database/db");
-const websocketService = require("../websocket/websocketService");
+const logger = require("../../utils/logger");
+
+const monitorLogger = logger.createLogger("backgroundMonitor");
 
 // 監控間隔（毫秒）- 每 15 秒檢查一次
 // 使用 WebSocket 後可提升更新頻率，從 30 秒調整為 15 秒以提升即時性
 // 注意：執行時間約 10 秒，設置 15 秒間隔確保任務有足夠時間完成
-const MONITORING_INTERVAL = 15000;
+const BASE_MONITORING_INTERVAL_MS = Number(
+  process.env.MONITORING_INTERVAL_MS || 15000,
+);
+const MONITORING_INTERVAL = Number.isFinite(BASE_MONITORING_INTERVAL_MS)
+  ? Math.max(1000, Math.floor(BASE_MONITORING_INTERVAL_MS))
+  : 15000;
 
 // 監控任務註冊表
 const monitoringTasks = [];
@@ -19,6 +25,7 @@ let monitoringTimer = null;
 let isRunning = false;
 let stopRequested = false;
 let resolveStopped = null;
+let lastOverlapWarnAtMs = 0;
 
 /**
  * 是否啟用背景監控詳細日誌
@@ -28,6 +35,8 @@ let resolveStopped = null;
 function isDetailedLogsEnabled() {
   return process.env.ENABLE_DETAILED_LOGS === "true";
 }
+
+const OVERLAP_WARN_COOLDOWN_MS = 30_000;
 
 /**
  * 註冊監控任務
@@ -43,12 +52,13 @@ function registerMonitoringTask(systemName, taskFunction, interval = null) {
   monitoringTasks.push({
     systemName,
     taskFunction,
-    interval: interval || MONITORING_INTERVAL,
+    interval: interval || MONITORING_INTERVAL, // 保留參數但目前不做 per-task 排程
     lastRun: null,
+    lastStartedAtMs: 0,
     errorCount: 0,
   });
 
-  console.log(`[backgroundMonitor] 已註冊監控任務: ${systemName}`);
+  monitorLogger.info(`已註冊監控任務: ${systemName}`);
 }
 
 /**
@@ -56,10 +66,11 @@ function registerMonitoringTask(systemName, taskFunction, interval = null) {
  */
 async function runTask(task) {
   const startTime = Date.now();
+  task.lastStartedAtMs = startTime;
 
   try {
     if (isDetailedLogsEnabled()) {
-      console.log(`[backgroundMonitor] 開始執行: ${task.systemName}`);
+      monitorLogger.info(`開始執行: ${task.systemName}`);
     }
 
     await task.taskFunction();
@@ -67,26 +78,26 @@ async function runTask(task) {
     task.errorCount = 0;
 
     const duration = Date.now() - startTime;
-    if (isDetailedLogsEnabled() || duration > 1000) {
-      console.log(
-        `[backgroundMonitor] ${task.systemName} 監控完成（耗時: ${duration}ms）`
-      );
+    if (isDetailedLogsEnabled()) {
+      monitorLogger.info(`${task.systemName} 監控完成（耗時: ${duration}ms）`);
     }
+    return { ok: true, durationMs: Date.now() - startTime };
   } catch (error) {
     task.errorCount++;
     const duration = Date.now() - startTime;
 
-    console.error(
-      `[backgroundMonitor] ${task.systemName} 監控失敗（錯誤次數: ${task.errorCount}, 耗時: ${duration}ms）:`,
-      error.message
+    monitorLogger.warn(
+      `${task.systemName} 監控失敗（錯誤次數: ${task.errorCount}, 耗時: ${duration}ms）`,
+      { error: error.message },
     );
 
     // 如果連續錯誤超過 5 次，記錄警告
     if (task.errorCount >= 5) {
-      console.warn(
-        `[backgroundMonitor] ${task.systemName} 連續 ${task.errorCount} 次監控失敗，請檢查系統狀態`
+      monitorLogger.warn(
+        `${task.systemName} 連續 ${task.errorCount} 次監控失敗，請檢查系統狀態`,
       );
     }
+    return { ok: false, durationMs: duration, error };
   }
 }
 
@@ -107,20 +118,22 @@ async function runAllTasks() {
 
   try {
     if (isDetailedLogsEnabled()) {
-      console.log(
-        `[backgroundMonitor] 本輪執行任務數: ${monitoringTasks.length}（${monitoringTasks
+      monitorLogger.info(
+        `本輪執行任務數: ${monitoringTasks.length}（${monitoringTasks
           .map((t) => t.systemName)
-          .join("、")}）`
+          .join("、")}）`,
       );
     }
 
-    // 並行執行所有監控任務（提高效率）
+    // 並行執行所有監控任務（簡單直覺）
     await Promise.all(monitoringTasks.map((task) => runTask(task)));
 
     const totalDuration = Date.now() - startTime;
-    if (isDetailedLogsEnabled() || totalDuration > 2000) {
-      console.log(
-        `[backgroundMonitor] 所有監控任務完成（總耗時: ${totalDuration}ms）`
+    if (isDetailedLogsEnabled()) {
+      monitorLogger.info(`所有監控任務完成（總耗時: ${totalDuration}ms）`);
+    } else if (totalDuration > MONITORING_INTERVAL) {
+      monitorLogger.warn(
+        `監控任務總耗時超過間隔（${totalDuration}ms > ${MONITORING_INTERVAL}ms）`,
       );
     }
 
@@ -139,7 +152,10 @@ async function runAllTasks() {
 		});
 		*/
   } catch (error) {
-    console.error("[backgroundMonitor] 執行監控任務時發生未預期的錯誤:", error);
+    monitorLogger.error("執行監控任務時發生未預期的錯誤", {
+      error: error?.message || error,
+      stack: error?.stack,
+    });
   } finally {
     isRunning = false;
 
@@ -157,33 +173,39 @@ async function runAllTasks() {
  */
 function startMonitoring() {
   if (monitoringTimer) {
-    console.warn("[backgroundMonitor] 監控服務已在運行中");
+    monitorLogger.warn("監控服務已在運行中");
     return;
   }
 
   stopRequested = false;
 
   if (monitoringTasks.length === 0) {
-    console.warn("[backgroundMonitor] 沒有註冊任何監控任務，跳過啟動");
+    monitorLogger.warn("沒有註冊任何監控任務，跳過啟動");
     return;
   }
 
-  console.log(
-    `[backgroundMonitor] 啟動背景監控服務（間隔: ${
-      MONITORING_INTERVAL / 1000
-    }秒，任務數: ${monitoringTasks.length}）`
+  monitorLogger.info(
+    `啟動背景監控服務（間隔: ${MONITORING_INTERVAL / 1000} 秒，任務數: ${monitoringTasks.length}）`,
   );
 
   // 立即執行一次
   void runAllTasks();
 
-  // 設置定時器
   monitoringTimer = setInterval(() => {
+    if (stopRequested) {
+      return;
+    }
+
     // 如果上次執行還在進行中，跳過本次執行（避免重疊）
     if (!isRunning) {
       void runAllTasks();
-    } else {
-      console.warn("[backgroundMonitor] 上次監控任務仍在執行中，跳過本次執行");
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastOverlapWarnAtMs >= OVERLAP_WARN_COOLDOWN_MS) {
+      lastOverlapWarnAtMs = now;
+      monitorLogger.warn("上次監控任務仍在執行中，跳過本次執行");
     }
   }, MONITORING_INTERVAL);
 }
@@ -195,7 +217,7 @@ function stopMonitoring() {
   if (monitoringTimer) {
     clearInterval(monitoringTimer);
     monitoringTimer = null;
-    console.log("[backgroundMonitor] 背景監控服務已停止");
+    monitorLogger.info("背景監控服務已停止");
   }
 
   stopRequested = true;

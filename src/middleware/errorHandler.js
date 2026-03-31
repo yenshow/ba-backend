@@ -9,6 +9,47 @@ const systemAlert = require("../services/alerts/systemAlertHelper");
 const logger = require("../utils/logger");
 
 /**
+ * 針對高頻 503（如 Modbus timeout）做限流，避免日誌刷屏與重複寫入告警。
+ * key 以 path + device host/port/unitId + message 組合，避免不同錯誤互相吞掉。
+ */
+const DEVICE_ERROR_COOLDOWN_MS = Number(
+  process.env.DEVICE_ERROR_COOLDOWN_MS || 30_000,
+);
+const lastDevice503LogAt = new Map(); // key -> timestamp(ms)
+const lastDeviceErrorAlertAt = new Map(); // key -> timestamp(ms)
+
+const getDeviceErrorKey = (req, errorMessage) => {
+  const host = req.query?.host ? String(req.query.host) : "";
+  const port =
+    req.query?.port !== undefined && req.query.port !== null
+      ? String(req.query.port)
+      : "";
+  const unitId =
+    req.query?.unitId !== undefined && req.query.unitId !== null
+      ? String(req.query.unitId)
+      : "";
+  return `${req.path}|${host}:${port}:${unitId}|${errorMessage || ""}`;
+};
+
+const shouldCooldown = (store, key) => {
+  const now = Date.now();
+  const lastAt = store.get(key);
+  if (lastAt !== undefined && now - lastAt < DEVICE_ERROR_COOLDOWN_MS) {
+    return true;
+  }
+  store.set(key, now);
+  // 簡單清理：避免 Map 無限制成長
+  if (store.size > 2000) {
+    for (const [k, ts] of store.entries()) {
+      if (now - ts > DEVICE_ERROR_COOLDOWN_MS) {
+        store.delete(k);
+      }
+    }
+  }
+  return false;
+};
+
+/**
  * 記錄設備錯誤（如 Modbus 連接失敗時關聯設備告警）
  * @param {Object} req - Express 請求對象
  * @param {string} errorMessage - 錯誤訊息
@@ -16,6 +57,8 @@ const logger = require("../utils/logger");
 async function recordDeviceError(req, errorMessage) {
   try {
     if (req.path && req.path.startsWith("/api/modbus")) {
+      const cooldownKey = getDeviceErrorKey(req, errorMessage);
+
       const deviceConfig = {
         host: req.query?.host,
         port: req.query?.port ? Number(req.query.port) : undefined,
@@ -25,7 +68,13 @@ async function recordDeviceError(req, errorMessage) {
       if (deviceConfig.host && deviceConfig.port !== undefined) {
         const deviceId = await systemAlert.getDeviceIdFromConfig(deviceConfig);
         if (deviceId) {
-          await systemAlert.recordError("device", deviceId, errorMessage);
+          // 告警去重：與 log 去重分離，避免互相影響
+          if (shouldCooldown(lastDeviceErrorAlertAt, cooldownKey)) {
+            return;
+          }
+          await systemAlert.recordError("device", deviceId, errorMessage, {
+            skipWebSocket: true,
+          });
         }
       }
     }
@@ -110,7 +159,29 @@ async function errorHandler(err, req, res, next) {
   const errorMessage = err.message || "Request failed";
 
   // 記錄錯誤日誌
-  if (statusCode >= 500) {
+  if (statusCode === 503) {
+    // 服務不可用（設備離線等）：簡潔日誌
+    const isModbusRequest = req.path && req.path.startsWith("/api/modbus");
+    if (isModbusRequest) {
+      const cooldownKey = getDeviceErrorKey(req, errorMessage);
+      if (!shouldCooldown(lastDevice503LogAt, cooldownKey)) {
+        logger.warn(`[503] ${errorMessage}`, {
+          path: req.path,
+          method: req.method,
+          host: req.query?.host,
+          port: req.query?.port,
+          unitId: req.query?.unitId,
+        });
+      }
+    } else {
+      logger.warn(`[503] ${errorMessage}`, {
+        path: req.path,
+        method: req.method,
+      });
+    }
+
+    await recordDeviceError(req, errorMessage);
+  } else if (statusCode >= 500) {
     // 伺服器錯誤：記錄完整堆疊
     logger.error("伺服器錯誤", {
       error: err.message,
@@ -119,14 +190,6 @@ async function errorHandler(err, req, res, next) {
       method: req.method,
       statusCode,
     });
-  } else if (statusCode === 503) {
-    // 服務不可用（設備離線等）：簡潔日誌
-    logger.warn(`[503] ${errorMessage}`, {
-      path: req.path,
-      method: req.method,
-    });
-
-    await recordDeviceError(req, errorMessage);
   } else {
     // 其他錯誤：記錄基本信息
     logger.warn("請求錯誤", {

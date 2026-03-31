@@ -59,6 +59,8 @@ const backupScheduler = require("./services/backup/backupScheduler");
 const environmentAggregationService = require("./services/systems/environmentAggregationService");
 // 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
 const isapiSubscribeService = require("./services/accessControl/isapiSubscribeService");
+// 攝影機 ISAPI PeopleCounting 訂閱服務
+const isapiPeopleCountingSubscribeService = require("./services/peopleCounting/isapiPeopleCountingSubscribeService");
 
 const app = express();
 
@@ -256,6 +258,45 @@ async function startServer() {
     global.__envHourAggIntervalId = setInterval(runHourAgg, 60 * 60 * 1000);
     serverLogger.info("環境彙總排程已啟用（每小時）");
 
+    // 環境彙總（日）：獨立於備份排程，避免備份停擺導致 week/month 趨勢缺洞
+    // - 啟動時先補寫最近 7 天（不含今日）
+    // - 之後每天在「下一個 UTC 00:05」跑一次（避免卡在整點跨日）
+    const runDayAggBackfill = async () => {
+      try {
+        await environmentAggregationService.backfillRecentDays(7);
+        serverLogger.info("環境彙總 day 補寫完成（最近 7 天）");
+      } catch (err) {
+        serverLogger.warn("環境彙總 day 補寫失敗", { error: err.message });
+      }
+    };
+
+    const runDayAgg = async () => {
+      try {
+        await environmentAggregationService.computeAndSaveDay();
+      } catch (err) {
+        serverLogger.warn("環境彙總 day 執行失敗", { error: err.message });
+      }
+    };
+
+    const scheduleDailyAtUtc = (hour, minute, fn) => {
+      const now = new Date();
+      const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0));
+      if (next.getTime() <= now.getTime()) {
+        next.setUTCDate(next.getUTCDate() + 1);
+      }
+      const delay = Math.max(0, next.getTime() - now.getTime());
+      const safeRun = () => Promise.resolve(fn()).catch(() => {});
+      const timeoutId = setTimeout(() => {
+        void safeRun();
+        global.__envDayAggIntervalId = setInterval(() => void safeRun(), 24 * 60 * 60 * 1000);
+      }, delay);
+      return timeoutId;
+    };
+
+    setImmediate(() => void runDayAggBackfill());
+    global.__envDayAggTimeoutId = scheduleDailyAtUtc(0, 5, runDayAgg);
+    serverLogger.info("環境彙總排程已啟用（每日 UTC 00:05，day bucket）");
+
     global.__httpServer = httpServer;
 
     // 門禁佈防訂閱：全面改為佈防模式，後端主動向門禁設備訂閱事件
@@ -270,6 +311,14 @@ async function startServer() {
         );
       });
     }
+
+    // 攝影機人流（ISAPI PeopleCounting）佈防訂閱：依 people_counting 地點配置 isapi_camera 啟動
+    isapiPeopleCountingSubscribeService.start().catch((err) => {
+      serverLogger.warn(
+        "攝影機人流佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
+        { error: err.message },
+      );
+    });
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
       serverLogger.error(
@@ -316,9 +365,23 @@ async function gracefulShutdown(signal) {
     isapiSubscribeService.stop();
     shutdownLogger.info("門禁佈防訂閱服務已停止");
 
+    // 停止攝影機人流佈防訂閱服務
+    isapiPeopleCountingSubscribeService.stop();
+    shutdownLogger.info("攝影機人流佈防訂閱服務已停止");
+
     if (global.__envHourAggIntervalId) {
       clearInterval(global.__envHourAggIntervalId);
       global.__envHourAggIntervalId = null;
+    }
+
+    if (global.__envDayAggTimeoutId) {
+      clearTimeout(global.__envDayAggTimeoutId);
+      global.__envDayAggTimeoutId = null;
+    }
+
+    if (global.__envDayAggIntervalId) {
+      clearInterval(global.__envDayAggIntervalId);
+      global.__envDayAggIntervalId = null;
     }
 
     if (global.__httpServer) {

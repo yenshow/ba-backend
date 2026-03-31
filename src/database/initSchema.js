@@ -176,47 +176,151 @@ async function initSchema() {
 
     // 種子：權限定義（system = 權限設定 UI「可使用的系統」四項；其餘供後端/既有邏輯用）
     const permissionSeeds = [
-      { code: "system.people_counting", category: "system", parent_id: null, name: "人流統計", sort_order: 10 },
-      { code: "system.video_surveillance", category: "system", parent_id: null, name: "影像監控", sort_order: 20 },
-      { code: "system.environment", category: "system", parent_id: null, name: "環境品質", sort_order: 30 },
-      { code: "system.vehicle_access", category: "system", parent_id: null, name: "車輛進出", sort_order: 40 },
-      { code: "resource_monitoring.realtime_preview", category: "resource", parent_id: null, name: "即時預覽", sort_order: 10 },
-      { code: "resource_monitoring.playback", category: "resource", parent_id: null, name: "播放", sort_order: 20 },
-      { code: "resource_monitoring.export", category: "resource", parent_id: null, name: "錄影匯出", sort_order: 30 },
-      { code: "resource_monitoring.ptz_control", category: "resource", parent_id: null, name: "PTZ 控制", sort_order: 40 },
-      { code: "configuration.devices", category: "configuration", parent_id: null, name: "裝置和伺服器", sort_order: 10 },
-      { code: "configuration.access_control", category: "configuration", parent_id: null, name: "門禁裝置", sort_order: 20 },
-      { code: "operation.monitoring", category: "operation", parent_id: null, name: "資源監測（操作）", sort_order: 10 },
-      { code: "operation.parking", category: "operation", parent_id: null, name: "停車場", sort_order: 20 },
-      { code: "operation.alarm_center", category: "operation", parent_id: null, name: "警報中心", sort_order: 30 },
-      { code: "operation.location_management", category: "operation", parent_id: null, name: "地點管理", sort_order: 40 },
+      {
+        code: "system.people_counting",
+        category: "system",
+        parent_id: null,
+        name: "人流統計",
+        sort_order: 10,
+      },
+      {
+        code: "system.video_surveillance",
+        category: "system",
+        parent_id: null,
+        name: "影像監控",
+        sort_order: 20,
+      },
+      {
+        code: "system.environment",
+        category: "system",
+        parent_id: null,
+        name: "環境品質",
+        sort_order: 30,
+      },
+      {
+        code: "system.vehicle_access",
+        category: "system",
+        parent_id: null,
+        name: "車輛進出",
+        sort_order: 40,
+      },
+      {
+        code: "resource_monitoring.realtime_preview",
+        category: "resource",
+        parent_id: null,
+        name: "即時預覽",
+        sort_order: 10,
+      },
+      {
+        code: "resource_monitoring.playback",
+        category: "resource",
+        parent_id: null,
+        name: "播放",
+        sort_order: 20,
+      },
+      {
+        code: "resource_monitoring.export",
+        category: "resource",
+        parent_id: null,
+        name: "錄影匯出",
+        sort_order: 30,
+      },
+      {
+        code: "resource_monitoring.ptz_control",
+        category: "resource",
+        parent_id: null,
+        name: "PTZ 控制",
+        sort_order: 40,
+      },
+      {
+        code: "configuration.devices",
+        category: "configuration",
+        parent_id: null,
+        name: "裝置和伺服器",
+        sort_order: 10,
+      },
+      {
+        code: "configuration.access_control",
+        category: "configuration",
+        parent_id: null,
+        name: "門禁裝置",
+        sort_order: 20,
+      },
+      {
+        code: "operation.monitoring",
+        category: "operation",
+        parent_id: null,
+        name: "資源監測（操作）",
+        sort_order: 10,
+      },
+      {
+        code: "operation.parking",
+        category: "operation",
+        parent_id: null,
+        name: "停車場",
+        sort_order: 20,
+      },
+      {
+        code: "operation.alarm_center",
+        category: "operation",
+        parent_id: null,
+        name: "警報中心",
+        sort_order: 30,
+      },
+      {
+        code: "operation.location_management",
+        category: "operation",
+        parent_id: null,
+        name: "地點管理",
+        sort_order: 40,
+      },
     ];
     for (const p of permissionSeeds) {
       await targetPool.query(
         `INSERT INTO permission_definitions (code, category, parent_id, name, sort_order)
          SELECT $1, $2, $3, $4, $5
          ON CONFLICT (code) DO NOTHING`,
-        [p.code, p.category, p.parent_id, p.name, p.sort_order]
+        [p.code, p.category, p.parent_id, p.name, p.sort_order],
       );
     }
     console.log("✅ 權限定義種子已插入");
 
     // 種子：角色預設權限（admin 全開由邏輯處理；此處為 operator/viewer 預設）
-    const defRows = await targetPool.query("SELECT id, code FROM permission_definitions");
-    const operatorGranted = ["system.people_counting", "system.video_surveillance", "system.environment", "system.vehicle_access", "resource_monitoring.realtime_preview", "resource_monitoring.playback", "operation.monitoring", "operation.parking", "operation.alarm_center", "operation.location_management", "configuration.access_control"];
-    const viewerGranted = ["system.people_counting", "system.video_surveillance", "resource_monitoring.realtime_preview", "resource_monitoring.playback", "operation.monitoring"];
+    const defRows = await targetPool.query(
+      "SELECT id, code FROM permission_definitions",
+    );
+    const operatorGranted = [
+      "system.people_counting",
+      "system.video_surveillance",
+      "system.environment",
+      "system.vehicle_access",
+      "resource_monitoring.realtime_preview",
+      "resource_monitoring.playback",
+      "operation.monitoring",
+      "operation.parking",
+      "operation.alarm_center",
+      "operation.location_management",
+      "configuration.access_control",
+    ];
+    const viewerGranted = [
+      "system.people_counting",
+      "system.video_surveillance",
+      "resource_monitoring.realtime_preview",
+      "resource_monitoring.playback",
+      "operation.monitoring",
+    ];
     for (const row of defRows.rows) {
       await targetPool.query(
         `INSERT INTO role_default_permissions (role, permission_id, granted)
          VALUES ('operator', $1, $2)
          ON CONFLICT (role, permission_id) DO NOTHING`,
-        [row.id, operatorGranted.includes(row.code)]
+        [row.id, operatorGranted.includes(row.code)],
       );
       await targetPool.query(
         `INSERT INTO role_default_permissions (role, permission_id, granted)
          VALUES ('viewer', $1, $2)
          ON CONFLICT (role, permission_id) DO NOTHING`,
-        [row.id, viewerGranted.includes(row.code)]
+        [row.id, viewerGranted.includes(row.code)],
       );
     }
     console.log("✅ 角色預設權限種子已插入");
@@ -271,8 +375,12 @@ async function initSchema() {
 
     // 若 port 為 NOT NULL DEFAULT 502，改為可為 NULL、移除預設（型號端口改為留空）
     try {
-      await targetPool.query("ALTER TABLE device_models ALTER COLUMN port DROP DEFAULT");
-      await targetPool.query("ALTER TABLE device_models ALTER COLUMN port DROP NOT NULL");
+      await targetPool.query(
+        "ALTER TABLE device_models ALTER COLUMN port DROP DEFAULT",
+      );
+      await targetPool.query(
+        "ALTER TABLE device_models ALTER COLUMN port DROP NOT NULL",
+      );
     } catch (_) {}
 
     // 如果表已存在但沒有 unit_id 欄位，添加它（感測器/控制器等每設備可不同）
@@ -396,6 +504,63 @@ async function initSchema() {
       ON people_counting_logs(location_id);
     `);
     console.log("✅ people_counting_logs 表已建立");
+
+    // ISAPI 攝影機 PeopleCounting 事件（enter/exit 為設備累計；enter_delta/exit_delta 與前筆差）
+    // 舊版曾使用 enter_abs/exit_abs 等欄位；執行 db:init 時偵測到舊表則 DROP 後重建（資料清空，請先備份）
+    await targetPool.query(`
+      DO $migration$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'isapi_people_counting_events'
+            AND column_name = 'enter_abs'
+        ) THEN
+          DROP TABLE IF EXISTS isapi_people_counting_events CASCADE;
+        END IF;
+      END
+      $migration$;
+    `);
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS isapi_people_counting_events (
+        id BIGSERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        device_ip VARCHAR(255),
+        channel_id INTEGER NOT NULL DEFAULT 1,
+        region_id INTEGER,
+        region_name VARCHAR(255),
+        event_time TIMESTAMPTZ NOT NULL,
+        enter INTEGER,
+        "exit" INTEGER,
+        enter_delta INTEGER NOT NULL DEFAULT 0,
+        exit_delta INTEGER NOT NULL DEFAULT 0,
+        is_retransmission BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_people_counting_events_location_time
+      ON isapi_people_counting_events(location_id, event_time DESC);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_people_counting_events_device_time
+      ON isapi_people_counting_events(device_id, channel_id, region_id, event_time DESC);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_people_counting_events_region_name
+      ON isapi_people_counting_events(region_name);
+    `);
+    await targetPool.query(`
+      DROP INDEX IF EXISTS idx_isapi_people_counting_events_unique_global;
+    `);
+    await targetPool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_isapi_people_counting_events_unique_region
+      ON isapi_people_counting_events(device_id, channel_id, region_id, event_time)
+      WHERE region_id IS NOT NULL;
+    `);
+    console.log("✅ isapi_people_counting_events 表已建立");
 
     // 車輛進出過車記錄快取表（同步自外部 vehiclebiz.passageway_log_data，供備份）
     await targetPool.query(`

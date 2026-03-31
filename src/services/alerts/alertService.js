@@ -544,7 +544,6 @@ async function getAlerts(filters = {}) {
 
     let query = buildAlertSelectQuery() + ` WHERE 1=1`;
     const params = [];
-    const countParams = [];
 
     const excludeSourcesList = Array.isArray(exclude_sources)
       ? exclude_sources
@@ -560,37 +559,30 @@ async function getAlerts(filters = {}) {
     if (actualSource) {
       query += " AND a.source = ?";
       params.push(actualSource);
-      countParams.push(actualSource);
     }
     if (actualSourceId) {
       query += " AND a.source_id = ?";
       params.push(actualSourceId);
-      countParams.push(actualSourceId);
     }
     if (alert_type) {
       query += " AND a.alert_type = ?";
       params.push(alert_type);
-      countParams.push(alert_type);
     }
     if (severity) {
       query += " AND a.severity = ?";
       params.push(severity);
-      countParams.push(severity);
     }
     if (actualStatus) {
       query += " AND a.status = ?";
       params.push(actualStatus);
-      countParams.push(actualStatus);
     }
     if (start_date) {
       query += " AND a.created_at >= ?";
       params.push(start_date);
-      countParams.push(start_date);
     }
     if (end_date) {
       query += " AND a.created_at <= ?";
       params.push(end_date);
-      countParams.push(end_date);
     }
     if (updated_after) {
       query += " AND (a.created_at >= ? OR a.updated_at >= ?)";
@@ -615,18 +607,40 @@ async function getAlerts(filters = {}) {
 
     // 總數：同一篩選條件的列數（不包含 limit/offset/updated_after）
     let countQuery = `SELECT COUNT(*) as total FROM alerts a WHERE 1=1`;
+    const countParams = [];
     if (excludeSourcesList.length > 0) {
       const placeholders = excludeSourcesList.map(() => "?").join(", ");
       countQuery += ` AND a.source NOT IN (${placeholders})`;
       countParams.push(...excludeSourcesList);
     }
-    if (actualSource) countQuery += " AND a.source = ?";
-    if (actualSourceId) countQuery += " AND a.source_id = ?";
-    if (alert_type) countQuery += " AND a.alert_type = ?";
-    if (severity) countQuery += " AND a.severity = ?";
-    if (actualStatus) countQuery += " AND a.status = ?";
-    if (start_date) countQuery += " AND a.created_at >= ?";
-    if (end_date) countQuery += " AND a.created_at <= ?";
+    if (actualSource) {
+      countQuery += " AND a.source = ?";
+      countParams.push(actualSource);
+    }
+    if (actualSourceId) {
+      countQuery += " AND a.source_id = ?";
+      countParams.push(actualSourceId);
+    }
+    if (alert_type) {
+      countQuery += " AND a.alert_type = ?";
+      countParams.push(alert_type);
+    }
+    if (severity) {
+      countQuery += " AND a.severity = ?";
+      countParams.push(severity);
+    }
+    if (actualStatus) {
+      countQuery += " AND a.status = ?";
+      countParams.push(actualStatus);
+    }
+    if (start_date) {
+      countQuery += " AND a.created_at >= ?";
+      countParams.push(start_date);
+    }
+    if (end_date) {
+      countQuery += " AND a.created_at <= ?";
+      countParams.push(end_date);
+    }
 
     const countResult = await db.query(countQuery, countParams);
     const total = parseInt(countResult[0]?.total || 0);

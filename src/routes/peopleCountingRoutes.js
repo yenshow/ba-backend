@@ -8,7 +8,10 @@ const peopleCountingService = require("../services/systems/peopleCountingService
 const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
-const { validateIntegers, validateNumbers } = require("../middleware/validation");
+const {
+  validateIntegers,
+  validateNumbers,
+} = require("../middleware/validation");
 
 // 以下路由皆需登入
 router.use(authenticate);
@@ -16,46 +19,71 @@ router.use(authenticate);
 // ========== 地點管理路由 ==========
 
 // 取得人流統計地點列表
-router.get("/locations", noCache, asyncHandler(async (req, res) => {
-  const { zoneId } = req.query;
-  const options = zoneId ? { zoneId: parseInt(zoneId) } : {};
-  const result = await peopleCountingService.getPeopleCountingLocations(options);
-  res.sendSuccess(result);
-}));
+router.get(
+  "/locations",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const { zoneId } = req.query;
+    const options = zoneId ? { zoneId: parseInt(zoneId) } : {};
+    const result =
+      await peopleCountingService.getPeopleCountingLocations(options);
+    res.sendSuccess(result);
+  }),
+);
 
 // 取得單一地點
-router.get("/locations/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await peopleCountingService.getPeopleCountingLocationById(parseInt(id));
-  res.sendSuccess(result);
-}));
+router.get(
+  "/locations/:id",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await peopleCountingService.getPeopleCountingLocationById(
+      parseInt(id),
+    );
+    res.sendSuccess(result);
+  }),
+);
 
 // 建立地點
-router.post("/locations", asyncHandler(async (req, res) => {
-  const result = await peopleCountingService.createPeopleCountingLocation(
-    req.body,
-    req.user.id
-  );
-  res.sendSuccess(result, 201);
-}));
+router.post(
+  "/locations",
+  asyncHandler(async (req, res) => {
+    const result = await peopleCountingService.createPeopleCountingLocation(
+      req.body,
+      req.user.id,
+    );
+    res.sendSuccess(result, 201);
+  }),
+);
 
 // 更新地點
-router.put("/locations/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await peopleCountingService.updatePeopleCountingLocation(
-    parseInt(id),
-    req.body,
-    req.user.id
-  );
-  res.sendSuccess(result);
-}));
+router.put(
+  "/locations/:id",
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await peopleCountingService.updatePeopleCountingLocation(
+      parseInt(id),
+      req.body,
+      req.user.id,
+    );
+    res.sendSuccess(result);
+  }),
+);
 
 // 刪除地點
-router.delete("/locations/:id", validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await peopleCountingService.deletePeopleCountingLocation(parseInt(id));
-  res.sendSuccess(result);
-}));
+router.delete(
+  "/locations/:id",
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await peopleCountingService.deletePeopleCountingLocation(
+      parseInt(id),
+    );
+    res.sendSuccess(result);
+  }),
+);
 
 // ========== 業務邏輯 API ==========
 
@@ -63,46 +91,80 @@ router.delete("/locations/:id", validateIntegers("id"), asyncHandler(async (req,
  * 取得所有工地列表（含統計）
  * GET /api/people-counting/sites
  */
-router.get("/sites", noCache, asyncHandler(async (req, res) => {
-  const result = await peopleCountingService.getSites();
-  res.sendSuccess(result);
-}));
+router.get(
+  "/sites",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const result = await peopleCountingService.getSites();
+    res.sendSuccess(result);
+  }),
+);
 
 /**
  * 取得單一工地詳情
  * GET /api/people-counting/sites/:id
  * 注意：前端主要使用統計數據，此路由返回地點詳情和統計
  */
-router.get("/sites/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const siteId = parseInt(id);
-  
-  // 並行查詢地點和統計，提高性能
-  const [locationResult, stats] = await Promise.all([
-    peopleCountingService.getPeopleCountingLocationById(siteId),
-    peopleCountingService.getSiteStats(siteId)
-  ]);
-  
-  res.sendSuccess({
-    ...locationResult,
-    stats,
-  });
-}));
+router.get(
+  "/sites/:id",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const siteId = parseInt(id);
+
+    // 並行查詢地點和統計，提高性能
+    const [locationResult, stats] = await Promise.all([
+      peopleCountingService.getPeopleCountingLocationById(siteId),
+      peopleCountingService.getSiteStats(siteId),
+    ]);
+
+    res.sendSuccess({
+      ...locationResult,
+      stats,
+    });
+  }),
+);
 
 /**
  * 取得工地統計
  * GET /api/people-counting/sites/:id/stats
  */
-router.get("/sites/:id/stats", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await peopleCountingService.getSiteStats(parseInt(id));
-  res.sendSuccess(result);
-}));
+router.get(
+  "/sites/:id/stats",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await peopleCountingService.getSiteStats(parseInt(id));
+    res.sendSuccess(result);
+  }),
+);
 
 /**
  * 取得工地進出場記錄（含資料關聯和事件類型判斷）
+ * 固定最新 5 筆「事件」（enter/exit 展開後；與門禁／YSCP 主畫面一致）
+ * GET /api/people-counting/sites/:id/logs/latest
+ */
+router.get(
+  "/sites/:id/logs/latest",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await peopleCountingService.getSiteLogs(parseInt(id), {
+      limit: 5,
+      offset: 0,
+    });
+    res.sendSuccess(result);
+  }),
+);
+
+/**
+ * 取得工地進出場記錄（含資料關聯和事件類型判斷）
+ * 注意：此端點支援分頁與時間區間，供「完整報表」等功能使用
  * GET /api/people-counting/sites/:id/logs?limit=50&offset=0&unitId=34&startTime=...&endTime=...
- * startTime / endTime 為 ISO 字串，未傳則預設為今日範圍；offset 用於分頁
+ * limit 語意為「事件數」（enter/exit 展開後）；startTime / endTime 為 ISO 字串，未傳則預設為今日範圍；offset 用於分頁
  */
 router.get(
   "/sites/:id/logs",
@@ -110,18 +172,21 @@ router.get(
   validateIntegers("id"),
   validateNumbers("limit", "offset", "unitId"),
   asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { limit, offset, unitId, startTime, endTime } = req.query;
-  const options = {
-    limit: limit ? parseInt(limit) : 50,
-    offset: offset ? parseInt(offset) : 0,
-    unitId: unitId ? parseInt(unitId) : undefined,
-    startTime: startTime || undefined,
-    endTime: endTime || undefined,
-  };
-  const result = await peopleCountingService.getSiteLogs(parseInt(id), options);
-  res.sendSuccess(result);
-  })
+    const { id } = req.params;
+    const { limit, offset, unitId, startTime, endTime } = req.query;
+    const options = {
+      limit: limit ? parseInt(limit) : 50,
+      offset: offset ? parseInt(offset) : 0,
+      unitId: unitId ? parseInt(unitId) : undefined,
+      startTime: startTime || undefined,
+      endTime: endTime || undefined,
+    };
+    const result = await peopleCountingService.getSiteLogs(
+      parseInt(id),
+      options,
+    );
+    res.sendSuccess(result);
+  }),
 );
 
 /**
@@ -134,17 +199,16 @@ router.get(
   validateIntegers("id"),
   validateNumbers("siteId"),
   asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { siteId } = req.query;
-  
-  // 傳遞 siteId 給 service，讓 service 層處理設備 ID 取得邏輯
-  const result = await peopleCountingService.getUnitPersonnel(
-    parseInt(id),
-    siteId ? parseInt(siteId) : null
-  );
-  res.sendSuccess(result);
-  })
+    const { id } = req.params;
+    const { siteId } = req.query;
+
+    // 傳遞 siteId 給 service，讓 service 層處理設備 ID 取得邏輯
+    const result = await peopleCountingService.getUnitPersonnel(
+      parseInt(id),
+      siteId ? parseInt(siteId) : null,
+    );
+    res.sendSuccess(result);
+  }),
 );
 
 module.exports = router;
-

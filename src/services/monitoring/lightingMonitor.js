@@ -48,7 +48,7 @@ async function checkLightingAreas() {
 		let successCount = 0;
 		let failCount = 0;
 
-		// 並行檢查所有區域（提高效率）
+		// 併發控制由 modbusClient（全域 limiter）統一處理
 		const checkPromises = areas.map(async (area) => {
 			try {
 				// 解析 modbus 配置

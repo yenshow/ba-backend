@@ -140,6 +140,20 @@ function formatSystem(system) {
           dataSource: config.data_source || "yscp",
           entryDeviceId: config.entry_device_id ?? undefined,
           exitDeviceId: config.exit_device_id ?? undefined,
+          cameraDeviceIds: Array.isArray(config.camera_device_ids)
+            ? config.camera_device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : undefined,
+          // 相容欄位：僅供舊前端/舊資料 fallback；以 cameraDeviceIds 為準
+          cameraDeviceId:
+            config.camera_device_id ??
+            (Array.isArray(config.camera_device_ids) &&
+            config.camera_device_ids.length > 0
+              ? Number(config.camera_device_ids[0])
+              : undefined),
+          cameraChannelId: config.camera_channel_id ?? undefined,
+          preferRegion: config.prefer_region ?? undefined,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
         },
       };
@@ -1007,6 +1021,45 @@ async function deleteLocation(id) {
 /**
  * 建立系統配置物件
  */
+/** DB snake_case → people_counting buildSystemConfig 用的 camel 欄位（供 update 合併） */
+function peopleCountingRowConfigToMergeInput(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const c =
+    typeof raw === "string"
+      ? (() => {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return {};
+          }
+        })()
+      : raw;
+  return {
+    personGroupIds: c.person_group_ids,
+    entryDoorId: c.entry_door_id,
+    exitDoorId: c.exit_door_id,
+    dataSource: c.data_source,
+    entryDeviceId: c.entry_device_id,
+    exitDeviceId: c.exit_device_id,
+    cameraDeviceId: c.camera_device_id,
+    cameraChannelId: c.camera_channel_id,
+    preferRegion: c.prefer_region,
+    accessControlGroups: c.access_control_groups,
+  };
+}
+
+/**
+ * 僅以 incoming 已定義的鍵覆寫（undefined 表示未傳，保留 baseline）
+ */
+function shallowMergePeopleCountingConfig(baseline, incoming) {
+  const out = { ...baseline };
+  if (!incoming || typeof incoming !== "object") return out;
+  for (const k of Object.keys(incoming)) {
+    if (incoming[k] !== undefined) out[k] = incoming[k];
+  }
+  return out;
+}
+
 function buildSystemConfig(systemType, config) {
   switch (systemType) {
     case "environment": {
@@ -1043,15 +1096,29 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "people_counting":
-      return {
+      {
+        const ids = Array.isArray(config.cameraDeviceIds)
+          ? config.cameraDeviceIds
+              .map((id) => Number(id))
+              .filter((n) => Number.isFinite(n) && n > 0)
+          : config.cameraDeviceId != null
+            ? [Number(config.cameraDeviceId)]
+            : [];
+        return {
         person_group_ids: config.personGroupIds || [],
         entry_door_id: config.entryDoorId ?? null,
         exit_door_id: config.exitDoorId ?? null,
         data_source: config.dataSource || "yscp",
         entry_device_id: config.entryDeviceId ?? null,
         exit_device_id: config.exitDeviceId ?? null,
+        // 相容欄位：僅供 fallback；以 camera_device_ids 為準
+        camera_device_id: ids[0] ?? (config.cameraDeviceId ?? null),
+        camera_device_ids: ids,
+        camera_channel_id: config.cameraChannelId ?? 1,
+        prefer_region: config.preferRegion ?? false,
         access_control_groups: config.accessControlGroups || [], // 相容保留
       };
+      }
 
     case "vehicle_access":
       return {
@@ -1125,7 +1192,19 @@ async function updateSystem(query, systemId, system) {
     throw new Error(`無效的系統類型: ${targetSystemType}`);
   }
 
-  const systemConfig = buildSystemConfig(targetSystemType, config);
+  let effectiveConfig = config;
+  if (targetSystemType === "people_counting" && config && typeof config === "object") {
+    const existingRow = await query(
+      `SELECT system_config FROM location_systems WHERE id = $1`,
+      [systemId],
+    );
+    const baseline = peopleCountingRowConfigToMergeInput(
+      existingRow[0]?.system_config,
+    );
+    effectiveConfig = shallowMergePeopleCountingConfig(baseline, config);
+  }
+
+  const systemConfig = buildSystemConfig(targetSystemType, effectiveConfig);
 
   await query(
     `UPDATE location_systems
