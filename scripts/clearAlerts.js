@@ -9,6 +9,7 @@ const db = require("../src/database/db");
  *
  * 功能：
  * - 支援按狀態篩選清除（只清除已解決的警報）
+ * - 可一併清除 alert_rules（測試重設）
  * - 使用事務確保資料一致性
  */
 
@@ -18,6 +19,7 @@ async function main() {
 
   // 解析參數
   let clearTracking = false;
+  let clearRules = false;
   let statusFilter = null;
 
   if (args.includes("--help") || args.includes("-h")) {
@@ -26,6 +28,7 @@ async function main() {
 
 選項:
   --clear-tracking      同時清除錯誤追蹤表（error_tracking）
+  --clear-rules         清除所有警報規則（alert_rules；alerts.rule_id 會設為 NULL）
   --status <status>     只清除特定狀態的警報（active, resolved, ignored）
   --help, -h            顯示此說明
 
@@ -38,12 +41,19 @@ async function main() {
 
   # 清除所有警示紀錄和錯誤追蹤表
   node scripts/clearAlerts.js --clear-tracking
+
+  # 測試環境完整重設：警報 + 追蹤 + 規則
+  node scripts/clearAlerts.js --clear-tracking --clear-rules
 		`);
     process.exit(0);
   }
 
   if (args.includes("--clear-tracking")) {
     clearTracking = true;
+  }
+
+  if (args.includes("--clear-rules")) {
+    clearRules = true;
   }
 
   // 解析狀態篩選
@@ -70,6 +80,9 @@ async function main() {
   }
   if (clearTracking) {
     console.log("⚠️  將同時清除錯誤追蹤表（error_tracking）");
+  }
+  if (clearRules) {
+    console.log("⚠️  將清除所有警報規則（alert_rules）");
   }
   console.log("=".repeat(60));
 
@@ -107,7 +120,16 @@ async function main() {
       console.log(`   error_tracking 表: ${trackingTotal} 筆`);
     }
 
-    if (alertsTotal === 0 && trackingTotal === 0) {
+    let rulesTotal = 0;
+    if (clearRules) {
+      const rulesCount = await db.query(
+        "SELECT COUNT(*) as count FROM alert_rules"
+      );
+      rulesTotal = parseInt(rulesCount[0]?.count || 0);
+      console.log(`   alert_rules 表: ${rulesTotal} 筆`);
+    }
+
+    if (alertsTotal === 0 && trackingTotal === 0 && (!clearRules || rulesTotal === 0)) {
       console.log("\n✅ 沒有需要清除的紀錄");
       await db.close();
       process.exit(0);
@@ -139,6 +161,14 @@ async function main() {
         );
         const deletedTrackingCount = deletedResult.length;
         console.log(`   ✅ 已清除 ${deletedTrackingCount} 筆錯誤追蹤紀錄`);
+      }
+
+      if (clearRules && rulesTotal > 0) {
+        console.log("   正在清除警報規則...");
+        const deletedRules = await txQuery(
+          "DELETE FROM alert_rules RETURNING id"
+        );
+        console.log(`   ✅ 已清除 ${deletedRules.length} 筆警報規則`);
       }
     });
 
@@ -175,6 +205,11 @@ async function clearErrorTracking() {
   return result.length;
 }
 
+async function clearAlertRules() {
+  const result = await db.query("DELETE FROM alert_rules RETURNING id");
+  return result.length;
+}
+
 // 向後兼容的函數
 async function clearAllAlerts() {
   return await clearAlerts(null);
@@ -183,5 +218,6 @@ async function clearAllAlerts() {
 module.exports = {
   clearAllAlerts,
   clearErrorTracking,
+  clearAlertRules,
   clearAlerts,
 };

@@ -1,12 +1,12 @@
 const express = require("express");
 const modbusClient = require("../services/devices/modbusClient");
+const modbusBatchService = require("../services/devices/modbusBatchService");
 const systemAlert = require("../services/alerts/systemAlertHelper");
 const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   validateRequired,
-  validateNumbers,
 } = require("../middleware/validation");
 const logger = require("../utils/logger");
 
@@ -112,6 +112,43 @@ router.get(
   routeFactory(modbusClient.readDiscreteInputs.bind(modbusClient)),
 );
 
+// POST /batch-read - 批次讀取（自動合併連續 address 範圍、內建快取/去重）
+router.post(
+  "/batch-read",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const requests = req.body?.requests;
+    if (!Array.isArray(requests)) {
+      return res.sendError("requests must be an array", 400);
+    }
+    if (requests.length === 0) {
+      return res.sendSuccess({ results: [] });
+    }
+    if (requests.length > 2000) {
+      return res.sendError("requests too large (max 2000)", 400);
+    }
+
+    const results = await modbusBatchService.batchRead(requests);
+
+    // 成功讀取資料時，清除設備錯誤狀態（device 連線恢復）
+    // 這裡只對 batch 中「成功」且能反推 deviceId 的項目做清除；失敗保持不動
+    Promise.allSettled(
+      results
+        .filter((r) => r && r.ok && r.device)
+        .map((r) =>
+          systemAlert
+            .getDeviceIdFromConfig(r.device)
+            .then((deviceId) => {
+              if (deviceId) return systemAlert.clearError("device", deviceId);
+            })
+            .catch(() => null),
+        ),
+    ).catch(() => null);
+
+    res.sendSuccess({ results });
+  }),
+);
+
 // PUT /coils - 寫入單個或多個 DO
 router.put(
   "/coils",
@@ -136,6 +173,9 @@ router.put(
         value,
         deviceConfig,
       );
+      if (success) {
+        modbusBatchService.invalidateDeviceCache(deviceConfig, "coil");
+      }
       return res.sendSuccess({ address, value, success, device: deviceConfig });
     }
 
@@ -155,6 +195,9 @@ router.put(
         values,
         deviceConfig,
       );
+      if (success) {
+        modbusBatchService.invalidateDeviceCache(deviceConfig, "coil");
+      }
       return res.sendSuccess({
         address,
         values,

@@ -73,6 +73,7 @@ async function initSchema() {
           "drainage",
           "hvac",
           "fire",
+          "emergency_rescue",
           "security",
         ],
       ],
@@ -80,6 +81,18 @@ async function initSchema() {
     ];
     for (const [name, values] of enums)
       await createEnum(targetPool, name, values);
+
+    // 既有資料庫：alert_type ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
+    for (const v of ["di", "do"]) {
+      try {
+        await targetPool.query(`ALTER TYPE alert_type ADD VALUE '${v}'`);
+      } catch (e) {
+        const msg = e && e.message ? String(e.message) : "";
+        if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
+          throw e;
+        }
+      }
+    }
 
     // 建立 users 表（不含 email；討論決策：email 已自系統移除）
     await targetPool.query(`
@@ -644,17 +657,34 @@ async function initSchema() {
 				id SERIAL PRIMARY KEY,
 				source alert_source NOT NULL,
 				source_id INTEGER NOT NULL,
+				alert_type VARCHAR(50) NOT NULL DEFAULT 'offline',
 				error_count INTEGER NOT NULL DEFAULT 0,
 				last_error_at TIMESTAMP,
 				alert_created BOOLEAN NOT NULL DEFAULT FALSE,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				UNIQUE(source, source_id)
+				UNIQUE(source, source_id, alert_type)
 			)
 		`);
 
+    // 向下相容：若從舊版升級（表已存在但無 alert_type），先補欄位再建索引
+    await targetPool.query(`
+      ALTER TABLE error_tracking ADD COLUMN IF NOT EXISTS alert_type VARCHAR(50) NOT NULL DEFAULT 'offline'
+    `);
+    // 移除舊的 UNIQUE(source, source_id) 約束（PostgreSQL 必須用 DROP CONSTRAINT）
+    try {
+      await targetPool.query(`
+        ALTER TABLE error_tracking DROP CONSTRAINT IF EXISTS error_tracking_source_source_id_key
+      `);
+    } catch (_e) { /* 約束不存在（新表已用三欄約束），忽略 */ }
+    await targetPool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS error_tracking_source_source_id_alert_type_key
+      ON error_tracking(source, source_id, alert_type)
+    `);
+
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_error_tracking_source ON error_tracking(source, source_id);
+			CREATE INDEX IF NOT EXISTS idx_error_tracking_source_type ON error_tracking(source, source_id, alert_type);
 			CREATE INDEX IF NOT EXISTS idx_error_tracking_alert_created ON error_tracking(alert_created);
 		`);
 
@@ -709,6 +739,18 @@ async function initSchema() {
           WHERE table_name = 'alert_rules' AND column_name = 'target_id'
         ) THEN
           ALTER TABLE alert_rules ADD COLUMN target_id INTEGER;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_template_key'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN message_template_key VARCHAR(64);
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_template_custom'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN message_template_custom BOOLEAN NOT NULL DEFAULT FALSE;
         END IF;
       END $$;
     `);
@@ -924,7 +966,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage', 'fire', 'emergency_rescue')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -936,12 +978,20 @@ async function initSchema() {
     await targetPool.query(`
 			ALTER TABLE location_systems DROP CONSTRAINT IF EXISTS location_systems_system_type_check;
 			ALTER TABLE location_systems ADD CONSTRAINT location_systems_system_type_check
-				CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage'));
+				CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage', 'fire', 'emergency_rescue'));
 		`);
 
     // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
     try {
       await targetPool.query(`ALTER TYPE alert_source ADD VALUE 'drainage'`);
+    } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
+        throw e;
+      }
+    }
+    try {
+      await targetPool.query(`ALTER TYPE alert_source ADD VALUE 'emergency_rescue'`);
     } catch (e) {
       const msg = e && e.message ? String(e.message) : "";
       if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {

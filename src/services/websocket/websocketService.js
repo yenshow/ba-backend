@@ -3,7 +3,17 @@
  * 使用 Socket.IO 提供即時推送功能
  */
 
+const logger = require("../../utils/logger");
+const userService = require("../userService");
+const permissionService = require("../permissionService");
+
 let ioInstance = null;
+const wsLogger = logger.createLogger("WebSocket");
+
+const ROOM_LEGACY = "app:legacy";
+const APP_ROOMS = new Set(["central", "construction"]);
+const ROOMS_ALL_APPS = ["app:central", "app:construction"];
+const PERM_ROOM_PREFIX = "perm:";
 
 /**
  * 檢查 Socket.IO 實例是否可用
@@ -11,7 +21,8 @@ let ioInstance = null;
  */
 function isAvailable() {
   if (!ioInstance) {
-    console.warn("[WebSocket] Socket.IO 實例尚未初始化，跳過事件推送");
+    // 避免在啟動初期刷屏，僅用 warn，並保持結構化欄位
+    wsLogger.warn("Socket.IO 實例尚未初始化，跳過事件推送", { event: "ws:emit:skip" });
     return false;
   }
   return true;
@@ -19,37 +30,53 @@ function isAvailable() {
 
 /**
  * 通用的 WebSocket 事件推送函數（帶錯誤處理和日誌）
- * 所有事件都會廣播給所有連接的客戶端
+ * 預設全廣播；若指定 rooms 則推送到指定 rooms（並保留 legacy room 做向下相容）
  * @param {string} eventName - 事件名稱
  * @param {*} data - 事件資料
  * @param {Object} options - 選項
  * @param {string} options.logMessage - 日誌訊息（可選）
+ * @param {string[]} options.rooms - 推送的 rooms（可選）
+ * @param {boolean} options.forceBroadcast - 強制全廣播 io.emit（可選；預設 false）
  */
 function safeEmit(eventName, data, options = {}) {
   if (!isAvailable()) {
     return;
   }
 
-  const { logMessage } = options;
+  const { logMessage, rooms, forceBroadcast } = options;
 
-  // 廣播給所有連接的客戶端
-  ioInstance.emit(eventName, data);
+  // 預設 rooms 策略（向下相容）：
+  // - 未指定 rooms：推送到「所有 app rooms」+ legacy
+  // - 指定 rooms：推送到「指定 rooms」+ legacy
+  // - forceBroadcast=true：強制全廣播（少數情境才用）
+  if (forceBroadcast === true) {
+    ioInstance.emit(eventName, data);
+  } else {
+    const targetRooms =
+      Array.isArray(rooms) && rooms.length > 0 ? rooms : ROOMS_ALL_APPS;
+
+    const uniqueRooms = Array.from(new Set([...targetRooms, ROOM_LEGACY])).filter(Boolean);
+    for (const room of uniqueRooms) {
+      ioInstance.to(room).emit(eventName, data);
+    }
+  }
 
   // 僅在明確開啟時輸出推送日誌，避免刷屏（LOG_WS_PUSH=true）
   if (process.env.LOG_WS_PUSH === "true" && logMessage) {
-    console.log(
-      `[WebSocket] 推送事件: ${eventName}${logMessage ? ` - ${logMessage}` : ""}`
-    );
+    wsLogger.debug("推送事件", {
+      event: eventName,
+      message: logMessage,
+      rooms: Array.isArray(rooms) ? rooms : undefined,
+    });
   }
 }
 
 /**
  * 初始化 WebSocket 服務
  * @param {Object} httpServer - HTTP 伺服器實例
- * @param {Object} corsOptions - CORS 選項
  * @returns {Object} Socket.IO 實例
  */
-function initializeWebSocket(httpServer, corsOptions) {
+function initializeWebSocket(httpServer) {
   const { Server } = require("socket.io");
 
   // 解析允許的來源（與 Express CORS 配置一致）
@@ -85,19 +112,109 @@ function initializeWebSocket(httpServer, corsOptions) {
   // 連接事件處理（僅在 LOG_WS_CONNECTIONS=true 時輸出連線/斷線日誌）
   const logConnections = process.env.LOG_WS_CONNECTIONS === "true";
   ioInstance.on("connection", (socket) => {
-    if (logConnections) console.log(`[WebSocket] 客戶端已連接: ${socket.id}`);
+    // 預設加入 legacy room，直到前端發送 client:hello 進行識別
+    socket.join(ROOM_LEGACY);
+
+    // 依 permissions 自動加入 rooms（不依賴 license；由後端驗證 token）
+    // - token 來源：socket.io-client 的 auth.token
+    // - 若無 token 或無效：維持 app:legacy/app:* 的基本分流即可
+    (async () => {
+      try {
+        const token = String(socket.handshake?.auth?.token || "").trim();
+        if (!token) return;
+
+        const decoded = userService.verifyToken(token);
+        if (!decoded?.id) return;
+
+        const role = decoded.role || null;
+        const result = await permissionService.getEffectivePermissionsForUser(decoded.id, role);
+        const codes = Array.isArray(result?.codes) ? result.codes : [];
+
+        socket.data.userId = decoded.id;
+        socket.data.role = decoded.role;
+        socket.data.permissions = codes;
+
+        for (const code of codes) {
+          if (!code) continue;
+          socket.join(`${PERM_ROOM_PREFIX}${code}`);
+        }
+
+        if (logConnections) {
+          wsLogger.info("客戶端已加入 permission rooms", {
+            socketId: socket.id,
+            event: "ws:perm:join",
+            userId: decoded.id,
+            role: decoded.role,
+            permissionCount: codes.length,
+          });
+        }
+      } catch (error) {
+        wsLogger.warn("permission rooms join 失敗", {
+          socketId: socket.id,
+          event: "ws:perm:join:error",
+          error: error?.message || String(error),
+        });
+      }
+    })();
+
+    if (logConnections) {
+      wsLogger.info("客戶端已連接", { socketId: socket.id, event: "ws:connect" });
+    }
+
+    // App 識別（向下相容：未發送仍留在 legacy）
+    socket.on("client:hello", (payload = {}) => {
+      try {
+        const app = String(payload?.app || "").trim();
+        if (!APP_ROOMS.has(app)) {
+          wsLogger.warn("client:hello app 不合法，忽略", {
+            socketId: socket.id,
+            event: "ws:client:hello:invalid",
+            app,
+          });
+          return;
+        }
+
+        socket.leave(ROOM_LEGACY);
+        socket.join(`app:${app}`);
+
+        if (logConnections) {
+          wsLogger.info("客戶端已識別 app", {
+            socketId: socket.id,
+            event: "ws:client:hello",
+            app,
+            room: `app:${app}`,
+          });
+        }
+      } catch (error) {
+        wsLogger.warn("處理 client:hello 失敗", {
+          socketId: socket.id,
+          event: "ws:client:hello:error",
+          error: error?.message || String(error),
+        });
+      }
+    });
 
     socket.on("disconnect", (reason) => {
-      if (logConnections) console.log(`[WebSocket] 客戶端已斷開: ${socket.id}, 原因: ${reason}`);
+      if (logConnections) {
+        wsLogger.info("客戶端已斷開", {
+          socketId: socket.id,
+          event: "ws:disconnect",
+          reason,
+        });
+      }
     });
 
     // 客戶端錯誤處理
     socket.on("error", (error) => {
-      console.error(`[WebSocket] 客戶端錯誤 (${socket.id}):`, error);
+      wsLogger.warn("客戶端錯誤", {
+        socketId: socket.id,
+        event: "ws:client:error",
+        error: error?.message || error,
+      });
     });
   });
 
-  console.log("✅ WebSocket 服務已初始化");
+  wsLogger.info("WebSocket 服務已初始化", { event: "ws:init" });
   return ioInstance;
 }
 
@@ -145,10 +262,11 @@ function emitAlertUpdated(alert, oldStatus, newStatus) {
  * @param {number} count - 未解決警報數量
  */
 function emitAlertCount(count) {
-  safeEmit("alert:count", {
-    count,
-    timestamp: new Date().toISOString(),
-  });
+  safeEmit(
+    "alert:count",
+    { count, timestamp: new Date().toISOString() },
+    {},
+  );
 }
 
 /**
@@ -233,9 +351,9 @@ function emitMonitoringStatus(summary) {
   // 前端不需要 monitoring:status 事件，已停用推送
   // 保留函數以維持 API 兼容性（未來管理員監控面板可能需要）
   if (process.env.NODE_ENV === "development") {
-    console.log(
-      `[WebSocket] monitoring:status 已停用（前端不需要此事件）`
-    );
+    wsLogger.debug("monitoring:status 已停用（前端不需要此事件）", {
+      event: "monitoring:status:disabled",
+    });
   }
   // safeEmit("monitoring:status", summary, {
   //   logMessage: `${summary.tasks?.length || 0} 個任務`,
@@ -378,7 +496,11 @@ function emitPeopleCountingRecord(data) {
 
 /** 門禁事件寫入後推送，前端人流統計頁監聽 people-counting:access-control:event 並重新載入 */
 function emitIsapiAccessEvent() {
-  safeEmit("people-counting:access-control:event", { source: "isapi", timestamp: new Date().toISOString() }, { logMessage: "門禁事件已寫入" });
+  safeEmit(
+    "people-counting:access-control:event",
+    { source: "isapi", timestamp: new Date().toISOString() },
+    { logMessage: "門禁事件已寫入" },
+  );
 }
 
 /** 攝影機 PeopleCounting 事件寫入後推送，前端人流統計頁監聽並重新載入 */

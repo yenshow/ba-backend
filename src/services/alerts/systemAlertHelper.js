@@ -78,6 +78,9 @@ const getLocationInfo = (systemId) =>
   getSourceInfoByType(systemId, "environment");
 const getAreaInfo = (systemId) => getSourceInfoByType(systemId, "lighting");
 const getDrainageInfo = (systemId) => getSourceInfoByType(systemId, "drainage");
+const getFireInfo = (systemId) => getSourceInfoByType(systemId, "fire");
+const getEmergencyRescueInfo = (systemId) =>
+  getSourceInfoByType(systemId, "emergency_rescue");
 
 /**
  * 獲取設備資訊
@@ -161,6 +164,10 @@ const getDeviceIdFromArea = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "lighting");
 const getDeviceIdFromDrainage = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "drainage");
+const getDeviceIdFromFire = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "fire");
+const getDeviceIdFromEmergencyRescue = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "emergency_rescue");
 
 /**
  * 依設備 ID 與系統類型取得所有對應的 location_systems.id
@@ -206,6 +213,16 @@ const SYSTEM_CONFIGS = {
     source: alertService.ALERT_SOURCES.DRAINAGE,
     getSourceInfo: getDrainageInfo,
     getDeviceId: getDeviceIdFromDrainage,
+  },
+  fire: {
+    source: alertService.ALERT_SOURCES.FIRE,
+    getSourceInfo: getFireInfo,
+    getDeviceId: getDeviceIdFromFire,
+  },
+  emergency_rescue: {
+    source: alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
+    getSourceInfo: getEmergencyRescueInfo,
+    getDeviceId: getDeviceIdFromEmergencyRescue,
   },
   device: {
     source: alertService.ALERT_SOURCES.DEVICE,
@@ -363,7 +380,9 @@ async function clearError(system, sourceId, options = {}) {
     if (
       (system === "environment" ||
         system === "lighting" ||
-        system === "drainage") &&
+        system === "drainage" ||
+        system === "fire" ||
+        system === "emergency_rescue") &&
       deviceId
     ) {
       const allSystemIds = await getLocationSystemIdsByDeviceId(

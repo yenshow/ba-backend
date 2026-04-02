@@ -1,5 +1,5 @@
 /**
- * 衛生排水：依 location_systems 設定讀取 Modbus 並合成 uiStatus（單點失敗不影響其他設備）
+ * 消防系統：依 location_systems 設定讀取 Modbus 並合成 uiStatus（單點失敗不影響其他設備）
  */
 
 const locationService = require("./locationService");
@@ -46,10 +46,10 @@ const BIT_KEY_TO_ALERT_TYPE = {
   lowLevel: alertService.ALERT_TYPES.THRESHOLD,
 };
 
-const defaultDimensionKeyForDrainageBit = (bitKey) => {
+const defaultDimensionKeyForFireBit = (bitKey) => {
   const k = String(bitKey || "").trim();
-  if (!k) return "drainage:bit_state";
-  return `drainage:${k}`;
+  if (!k) return "fire:bit_state";
+  return `fire:${k}`;
 };
 
 function parseInlineModbus(modbus) {
@@ -231,9 +231,9 @@ function deriveUiStatus(
   return "normal";
 }
 
-async function syncStatefulDrainageAlerts(systemId, raw) {
+async function syncStatefulFireAlerts(systemId, raw) {
   const rules =
-    await alertRuleService.getDrainageBitStateRulesForSystem(systemId);
+    await alertRuleService.getFireBitStateRulesForSystem(systemId);
   for (const r of rules) {
     const bitKey = r?.condition_config?.bit_key;
     if (!bitKey) continue;
@@ -243,7 +243,7 @@ async function syncStatefulDrainageAlerts(systemId, raw) {
     const alertType =
       BIT_KEY_TO_ALERT_TYPE[bitKey] || alertService.ALERT_TYPES.ERROR;
     const dimensionKey =
-      r.dimension_key || defaultDimensionKeyForDrainageBit(bitKey);
+      r.dimension_key || defaultDimensionKeyForFireBit(bitKey);
     const severity = r.severity || alertService.SEVERITIES.WARNING;
     let message = await alertRuleService.renderRuleMessage(r, {
       source_id: systemId,
@@ -252,12 +252,12 @@ async function syncStatefulDrainageAlerts(systemId, raw) {
       message =
         r.message_template ||
         r.name ||
-        `排水警報觸發（${String(bitKey)}），請檢查設備狀態`;
+        `消防警報觸發（${String(bitKey)}），請檢查設備狀態`;
     }
 
     if (bitValue === true) {
       await alertService.createAlert({
-        source: alertService.ALERT_SOURCES.DRAINAGE,
+        source: alertService.ALERT_SOURCES.FIRE,
         source_id: systemId,
         alert_type: alertType,
         dimension_key: dimensionKey,
@@ -272,7 +272,7 @@ async function syncStatefulDrainageAlerts(systemId, raw) {
       await alertService.resolveAlert(
         systemId,
         alertType,
-        alertService.ALERT_SOURCES.DRAINAGE,
+        alertService.ALERT_SOURCES.FIRE,
         dimensionKey,
       );
     } catch (error) {
@@ -283,7 +283,7 @@ async function syncStatefulDrainageAlerts(systemId, raw) {
   }
 }
 
-async function syncDrainageConnectivityAlert(
+async function syncFireConnectivityAlert(
   systemId,
   hadDeviceConfig,
   pointKeys,
@@ -300,15 +300,15 @@ async function syncDrainageConnectivityAlert(
   const hasConnectionFailure = !anyRead;
 
   if (hasConnectionFailure) {
-    const errorMessage = readError || "無法讀取排水設備資料";
-    await systemAlert.recordError("drainage", systemId, errorMessage, { skipWebSocket: true });
+    const errorMessage = readError || "無法讀取消防設備資料";
+    await systemAlert.recordError("fire", systemId, errorMessage, { skipWebSocket: true });
     return;
   }
 
-  await systemAlert.clearError("drainage", systemId, { skipWebSocket: true });
+  await systemAlert.clearError("fire", systemId, { skipWebSocket: true });
 }
 
-async function buildItemForDrainageSystem(
+async function buildItemForFireSystem(
   zone,
   location,
   system,
@@ -319,7 +319,7 @@ async function buildItemForDrainageSystem(
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
   const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "drainage";
+  const viewCategory = cfg.viewCategory || "sprinkler";
   const statusPoints = cfg.statusPoints || {};
 
   const pointKeys = Object.keys(statusPoints).filter(
@@ -354,18 +354,18 @@ async function buildItemForDrainageSystem(
 
   if (syncAlerts) {
     try {
-      await syncDrainageConnectivityAlert(
+      await syncFireConnectivityAlert(
         Number(system.id),
         hadDeviceConfig,
         pointKeys,
         raw,
         readError,
       );
-      await syncStatefulDrainageAlerts(Number(system.id), raw);
+      await syncStatefulFireAlerts(Number(system.id), raw);
     } catch (alertErr) {
       if (process.env.NODE_ENV === "development") {
         console.warn(
-          `[drainageStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
+          `[fireStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
         );
       }
     }
@@ -385,14 +385,14 @@ async function buildItemForDrainageSystem(
   };
 }
 
-function collectDrainageItemsFromZones(zones) {
+function collectFireItemsFromZones(zones) {
   const items = [];
   for (const zone of zones) {
     const locs = zone.locations || [];
     for (const loc of locs) {
       const systems = loc.systems || [];
       for (const sys of systems) {
-        if (sys.systemType === "drainage") {
+        if (sys.systemType === "fire") {
           items.push({ zone, location: loc, system: sys });
         }
       }
@@ -404,7 +404,7 @@ function collectDrainageItemsFromZones(zones) {
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZones({ locationType: "drainage" });
+  const result = await locationService.getZones({ locationType: "fire" });
   let zones = result.zones || [];
 
   if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
@@ -412,10 +412,10 @@ async function getStatusSnapshot(query = {}) {
     zones = zones.filter((z) => want.has(String(z.id)));
   }
 
-  const triples = collectDrainageItemsFromZones(zones);
+  const triples = collectFireItemsFromZones(zones);
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForDrainageSystem(zone, location, system, { syncAlerts }),
+      buildItemForFireSystem(zone, location, system, { syncAlerts }),
     ),
   );
 
@@ -424,12 +424,12 @@ async function getStatusSnapshot(query = {}) {
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZoneById(zoneId, "drainage");
+  const result = await locationService.getZoneById(zoneId, "fire");
   const zone = result.zone;
-  const triples = collectDrainageItemsFromZones([zone]);
+  const triples = collectFireItemsFromZones([zone]);
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForDrainageSystem(z, location, system, { syncAlerts }),
+      buildItemForFireSystem(z, location, system, { syncAlerts }),
     ),
   );
   return { zoneId: String(zone.id), items };

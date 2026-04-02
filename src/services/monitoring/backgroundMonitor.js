@@ -8,24 +8,56 @@ const logger = require("../../utils/logger");
 
 const monitorLogger = logger.createLogger("backgroundMonitor");
 
-// 監控間隔（毫秒）- 每 15 秒檢查一次
-// 使用 WebSocket 後可提升更新頻率，從 30 秒調整為 15 秒以提升即時性
-// 注意：執行時間約 10 秒，設置 15 秒間隔確保任務有足夠時間完成
-const BASE_MONITORING_INTERVAL_MS = Number(
+/**
+ * Mode A（自適應監控）：
+ * - 每個任務獨立排程 nextRunAt（不再固定每 15 秒全量跑）
+ * - 成功 → 漸進放慢（直到 maxInterval）
+ * - 失敗 → 指數退避（直到 maxBackoffInterval）
+ * - 同一任務不重疊執行
+ */
+const clampInt = (n, min, max) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, Math.floor(x)));
+};
+
+const BASE_INTERVAL_MS = clampInt(
   process.env.MONITORING_INTERVAL_MS || 15000,
+  1000,
+  10 * 60 * 1000,
 );
-const MONITORING_INTERVAL = Number.isFinite(BASE_MONITORING_INTERVAL_MS)
-  ? Math.max(1000, Math.floor(BASE_MONITORING_INTERVAL_MS))
-  : 15000;
+const MIN_INTERVAL_MS = clampInt(
+  process.env.MONITORING_MIN_INTERVAL_MS || BASE_INTERVAL_MS,
+  1000,
+  10 * 60 * 1000,
+);
+const MAX_INTERVAL_MS = clampInt(
+  process.env.MONITORING_MAX_INTERVAL_MS || 60000,
+  MIN_INTERVAL_MS,
+  60 * 60 * 1000,
+);
+const MAX_BACKOFF_INTERVAL_MS = clampInt(
+  process.env.MONITORING_MAX_BACKOFF_INTERVAL_MS || 5 * 60 * 1000,
+  MIN_INTERVAL_MS,
+  60 * 60 * 1000,
+);
+const BACKOFF_FACTOR = (() => {
+  const raw = Number(process.env.MONITORING_BACKOFF_FACTOR || 2);
+  if (!Number.isFinite(raw)) return 2;
+  return Math.max(1.2, Math.min(10, raw));
+})();
+const SUCCESS_RAMP_STEP_MS = clampInt(
+  process.env.MONITORING_SUCCESS_RAMP_STEP_MS || 5000,
+  0,
+  10 * 60 * 1000,
+);
 
 // 監控任務註冊表
 const monitoringTasks = [];
 
 let monitoringTimer = null;
-let isRunning = false;
 let stopRequested = false;
 let resolveStopped = null;
-let lastOverlapWarnAtMs = 0;
 
 /**
  * 是否啟用背景監控詳細日誌
@@ -36,29 +68,71 @@ function isDetailedLogsEnabled() {
   return process.env.ENABLE_DETAILED_LOGS === "true";
 }
 
-const OVERLAP_WARN_COOLDOWN_MS = 30_000;
+const SCHEDULER_TICK_MIN_MS = 200;
 
 /**
  * 註冊監控任務
  * @param {string} systemName - 系統名稱（用於日誌）
  * @param {Function} taskFunction - 監控任務函數（返回 Promise）
- * @param {number} interval - 可選的自定義間隔（毫秒），預設使用全局間隔
+ * @param {number|object} intervalOrOptions - 可選 interval（毫秒）或 options
  */
-function registerMonitoringTask(systemName, taskFunction, interval = null) {
+function registerMonitoringTask(
+  systemName,
+  taskFunction,
+  intervalOrOptions = null,
+) {
   if (typeof taskFunction !== "function") {
     throw new Error(`監控任務必須是一個函數: ${systemName}`);
   }
 
+  const opts =
+    intervalOrOptions && typeof intervalOrOptions === "object"
+      ? intervalOrOptions
+      : intervalOrOptions != null
+        ? { baseIntervalMs: intervalOrOptions }
+        : {};
+
+  const minIntervalMs = clampInt(
+    opts.minIntervalMs ?? MIN_INTERVAL_MS,
+    1000,
+    10 * 60 * 1000,
+  );
+  const maxIntervalMs = clampInt(
+    opts.maxIntervalMs ?? MAX_INTERVAL_MS,
+    minIntervalMs,
+    60 * 60 * 1000,
+  );
+  const baseIntervalMs = clampInt(
+    opts.baseIntervalMs ?? BASE_INTERVAL_MS,
+    minIntervalMs,
+    maxIntervalMs,
+  );
+  const maxBackoffIntervalMs = clampInt(
+    opts.maxBackoffIntervalMs ?? MAX_BACKOFF_INTERVAL_MS,
+    baseIntervalMs,
+    60 * 60 * 1000,
+  );
+
   monitoringTasks.push({
     systemName,
     taskFunction,
-    interval: interval || MONITORING_INTERVAL, // 保留參數但目前不做 per-task 排程
+    baseIntervalMs,
+    minIntervalMs,
+    maxIntervalMs,
+    maxBackoffIntervalMs,
+    currentIntervalMs: baseIntervalMs,
+    nextRunAtMs: Date.now(), // 立即可跑一次
     lastRun: null,
     lastStartedAtMs: 0,
+    isRunning: false,
     errorCount: 0,
   });
 
-  monitorLogger.info(`已註冊監控任務: ${systemName}`);
+  // 註冊 log 改為「啟動時一次性摘要」輸出，避免啟動刷屏
+  // 若需逐筆確認註冊行為，可透過 ENABLE_DETAILED_LOGS=true 檢視
+  if (isDetailedLogsEnabled()) {
+    monitorLogger.info(`已註冊監控任務: ${systemName}`);
+  }
 }
 
 /**
@@ -67,13 +141,14 @@ function registerMonitoringTask(systemName, taskFunction, interval = null) {
 async function runTask(task) {
   const startTime = Date.now();
   task.lastStartedAtMs = startTime;
+  task.isRunning = true;
 
   try {
     if (isDetailedLogsEnabled()) {
       monitorLogger.info(`開始執行: ${task.systemName}`);
     }
 
-    await task.taskFunction();
+    const hint = await task.taskFunction();
     task.lastRun = new Date();
     task.errorCount = 0;
 
@@ -81,6 +156,30 @@ async function runTask(task) {
     if (isDetailedLogsEnabled()) {
       monitorLogger.info(`${task.systemName} 監控完成（耗時: ${duration}ms）`);
     }
+
+    // success: 漸進放慢（直到 maxIntervalMs）
+    const suggested =
+      hint && typeof hint === "object" && Number.isFinite(hint.nextIntervalMs)
+        ? clampInt(hint.nextIntervalMs, task.minIntervalMs, task.maxIntervalMs)
+        : null;
+    if (suggested != null) {
+      task.currentIntervalMs = suggested;
+    } else if (SUCCESS_RAMP_STEP_MS > 0) {
+      task.currentIntervalMs = Math.min(
+        task.maxIntervalMs,
+        Math.max(
+          task.baseIntervalMs,
+          task.currentIntervalMs + SUCCESS_RAMP_STEP_MS,
+        ),
+      );
+    } else {
+      task.currentIntervalMs = Math.max(
+        task.baseIntervalMs,
+        task.currentIntervalMs,
+      );
+    }
+
+    task.nextRunAtMs = Date.now() + task.currentIntervalMs;
     return { ok: true, durationMs: Date.now() - startTime };
   } catch (error) {
     task.errorCount++;
@@ -97,14 +196,39 @@ async function runTask(task) {
         `${task.systemName} 連續 ${task.errorCount} 次監控失敗，請檢查系統狀態`,
       );
     }
+
+    // failure: 指數退避（直到 maxBackoffIntervalMs）
+    const next = Math.min(
+      task.maxBackoffIntervalMs,
+      Math.max(
+        task.baseIntervalMs,
+        Math.floor(task.currentIntervalMs * BACKOFF_FACTOR),
+      ),
+    );
+    task.currentIntervalMs = next;
+    task.nextRunAtMs = Date.now() + next;
     return { ok: false, durationMs: duration, error };
+  } finally {
+    task.isRunning = false;
   }
 }
 
-/**
- * 執行所有監控任務
- */
-async function runAllTasks() {
+function getDueTasks(now) {
+  return monitoringTasks.filter((t) => !t.isRunning && t.nextRunAtMs <= now);
+}
+
+function getNextWakeAtMs(now) {
+  if (monitoringTasks.length === 0) return now + 60_000;
+  let next = Infinity;
+  for (const t of monitoringTasks) {
+    const when = t.isRunning ? now + t.currentIntervalMs : t.nextRunAtMs;
+    if (when < next) next = when;
+  }
+  if (!Number.isFinite(next)) return now + 60_000;
+  return Math.max(now + SCHEDULER_TICK_MIN_MS, next);
+}
+
+async function runSchedulerTick() {
   if (monitoringTasks.length === 0) {
     return;
   }
@@ -113,28 +237,25 @@ async function runAllTasks() {
     return;
   }
 
-  isRunning = true;
   const startTime = Date.now();
 
   try {
-    if (isDetailedLogsEnabled()) {
-      monitorLogger.info(
-        `本輪執行任務數: ${monitoringTasks.length}（${monitoringTasks
-          .map((t) => t.systemName)
-          .join("、")}）`,
-      );
+    const now = Date.now();
+    const due = getDueTasks(now);
+    if (due.length === 0) {
+      return;
     }
 
-    // 並行執行所有監控任務（簡單直覺）
-    await Promise.all(monitoringTasks.map((task) => runTask(task)));
+    monitorLogger.info(
+      `本輪執行任務數: ${due.length}（${due.map((t) => t.systemName).join("、")}）`,
+    );
+
+    // 並行執行「到期」任務（同一任務不重疊）
+    await Promise.all(due.map((task) => runTask(task)));
 
     const totalDuration = Date.now() - startTime;
     if (isDetailedLogsEnabled()) {
-      monitorLogger.info(`所有監控任務完成（總耗時: ${totalDuration}ms）`);
-    } else if (totalDuration > MONITORING_INTERVAL) {
-      monitorLogger.warn(
-        `監控任務總耗時超過間隔（${totalDuration}ms > ${MONITORING_INTERVAL}ms）`,
-      );
+      monitorLogger.info(`本輪到期任務完成（總耗時: ${totalDuration}ms）`);
     }
 
     // 註解：前端不需要 monitoring:status 事件
@@ -157,8 +278,6 @@ async function runAllTasks() {
       stack: error?.stack,
     });
   } finally {
-    isRunning = false;
-
     if (stopRequested && !monitoringTimer && resolveStopped) {
       const resolve = resolveStopped;
       resolveStopped = null;
@@ -166,6 +285,21 @@ async function runAllTasks() {
       resolve();
     }
   }
+}
+
+function scheduleNextTick() {
+  if (stopRequested) return;
+  if (monitoringTimer) clearTimeout(monitoringTimer);
+  const now = Date.now();
+  const wakeAt = getNextWakeAtMs(now);
+  const delay = Math.max(SCHEDULER_TICK_MIN_MS, wakeAt - now);
+  monitoringTimer = setTimeout(async () => {
+    try {
+      await runSchedulerTick();
+    } finally {
+      scheduleNextTick();
+    }
+  }, delay);
 }
 
 /**
@@ -184,30 +318,20 @@ function startMonitoring() {
     return;
   }
 
+  // 啟動時一次性輸出註冊任務摘要（取代逐筆註冊 log）
   monitorLogger.info(
-    `啟動背景監控服務（間隔: ${MONITORING_INTERVAL / 1000} 秒，任務數: ${monitoringTasks.length}）`,
+    `已註冊監控任務: ${monitoringTasks
+      .map((t) => t.systemName)
+      .filter(Boolean)
+      .join("、")}（共 ${monitoringTasks.length} 個）`,
   );
 
-  // 立即執行一次
-  void runAllTasks();
+  monitorLogger.info(
+    `啟動背景監控服務（Mode A，自適應排程；任務數: ${monitoringTasks.length}）`,
+  );
 
-  monitoringTimer = setInterval(() => {
-    if (stopRequested) {
-      return;
-    }
-
-    // 如果上次執行還在進行中，跳過本次執行（避免重疊）
-    if (!isRunning) {
-      void runAllTasks();
-      return;
-    }
-
-    const now = Date.now();
-    if (now - lastOverlapWarnAtMs >= OVERLAP_WARN_COOLDOWN_MS) {
-      lastOverlapWarnAtMs = now;
-      monitorLogger.warn("上次監控任務仍在執行中，跳過本次執行");
-    }
-  }, MONITORING_INTERVAL);
+  // 立即安排一次 tick（各任務 nextRunAtMs 初始化為 now）
+  scheduleNextTick();
 }
 
 /**
@@ -215,14 +339,15 @@ function startMonitoring() {
  */
 function stopMonitoring() {
   if (monitoringTimer) {
-    clearInterval(monitoringTimer);
+    clearTimeout(monitoringTimer);
     monitoringTimer = null;
     monitorLogger.info("背景監控服務已停止");
   }
 
   stopRequested = true;
 
-  if (!isRunning) {
+  const anyRunning = monitoringTasks.some((t) => t.isRunning);
+  if (!anyRunning) {
     stopRequested = false;
     return Promise.resolve();
   }
@@ -246,6 +371,7 @@ function stopMonitoring() {
  * 取得監控狀態
  */
 function getMonitoringStatus() {
+  const now = Date.now();
   return {
     isRunning: !!monitoringTimer,
     taskCount: monitoringTasks.length,
@@ -253,6 +379,8 @@ function getMonitoringStatus() {
       systemName: task.systemName,
       lastRun: task.lastRun,
       errorCount: task.errorCount,
+      currentIntervalMs: task.currentIntervalMs,
+      nextRunInMs: Math.max(0, (task.nextRunAtMs || now) - now),
     })),
   };
 }
@@ -262,5 +390,5 @@ module.exports = {
   startMonitoring,
   stopMonitoring,
   getMonitoringStatus,
-  MONITORING_INTERVAL,
+  BASE_INTERVAL_MS,
 };

@@ -2,15 +2,30 @@ const express = require("express");
 const router = express.Router();
 const alertService = require("../services/alerts/alertService");
 const alertRuleService = require("../services/alerts/alertRuleService");
-const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requireAdminOrOperator,
+} = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
-const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold"];
+const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold", "di", "do"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
+const ALLOWED_RULE_ALERT_TYPES = ["offline", "threshold", "di", "do"];
+const ALLOWED_RULE_SEVERITIES = ["warning", "critical"];
 const ALLOWED_CONDITION_TYPES = ["threshold", "error_count", "bit_state"];
 const ALLOWED_TARGET_TYPES = ["system", "location", "zone"];
+const ALLOWED_MESSAGE_TEMPLATE_KEYS = [
+  "rule.threshold.v1",
+  "rule.offline.v1",
+  "rule.di.v1",
+  "rule.do.v1",
+  "custom",
+];
+
+/** 閾值條件運算子（不支援 = / ==） */
+const ALLOWED_THRESHOLD_OPERATORS = [">", ">=", "<", "<="];
 
 function validateRulePayload(payload, { allowPartial = false } = {}) {
   const {
@@ -36,11 +51,27 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
     if (!ALLOWED_ALERT_TYPES.includes(alert_type)) {
       return `alert_type 不合法，支援：${ALLOWED_ALERT_TYPES.join(", ")}`;
     }
+    // 規則端禁用 error（error 保留給 incident / 系統錯誤）
+    if (
+      alert_type !== null &&
+      alert_type !== undefined &&
+      !ALLOWED_RULE_ALERT_TYPES.includes(alert_type)
+    ) {
+      return `規則不允許的 alert_type：${alert_type}（規則僅允許：${ALLOWED_RULE_ALERT_TYPES.join(", ")}）`;
+    }
   }
 
   if (!allowPartial || severity !== undefined) {
     if (!ALLOWED_SEVERITIES.includes(severity)) {
       return `severity 不合法，支援：${ALLOWED_SEVERITIES.join(", ")}`;
+    }
+    // 規則端 severity 收斂為 warning/critical
+    if (
+      severity !== null &&
+      severity !== undefined &&
+      !ALLOWED_RULE_SEVERITIES.includes(severity)
+    ) {
+      return `規則不允許的 severity：${severity}（規則僅允許：${ALLOWED_RULE_SEVERITIES.join(", ")}）`;
     }
   }
 
@@ -51,7 +82,10 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
   }
 
   if (condition_config !== undefined && condition_config !== null) {
-    if (typeof condition_config !== "object" || Array.isArray(condition_config)) {
+    if (
+      typeof condition_config !== "object" ||
+      Array.isArray(condition_config)
+    ) {
       return "condition_config 需為物件";
     }
   }
@@ -60,7 +94,11 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
     return "name 需為字串";
   }
 
-  if (dimension_key !== undefined && dimension_key !== null && typeof dimension_key !== "string") {
+  if (
+    dimension_key !== undefined &&
+    dimension_key !== null &&
+    typeof dimension_key !== "string"
+  ) {
     return "dimension_key 需為字串";
   }
 
@@ -87,6 +125,77 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
     return "enabled 需為布林值";
   }
 
+  if (
+    payload.message_template_key !== undefined &&
+    payload.message_template_key !== null
+  ) {
+    if (typeof payload.message_template_key !== "string") {
+      return "message_template_key 需為字串";
+    }
+    if (!ALLOWED_MESSAGE_TEMPLATE_KEYS.includes(payload.message_template_key)) {
+      return `message_template_key 不合法，支援：${ALLOWED_MESSAGE_TEMPLATE_KEYS.join(", ")}`;
+    }
+  }
+
+  if (
+    payload.message_template_custom !== undefined &&
+    typeof payload.message_template_custom !== "boolean"
+  ) {
+    return "message_template_custom 需為布林值";
+  }
+
+  if (
+    payload.message_template !== undefined &&
+    payload.message_template !== null &&
+    typeof payload.message_template !== "string"
+  ) {
+    return "message_template 需為字串";
+  }
+
+  const condCfg = payload.condition_config;
+  const allowedOpHint = `僅支援 ${ALLOWED_THRESHOLD_OPERATORS.join("、")}（不支援 = / ==）`;
+  const opStr =
+    condCfg?.operator === undefined || condCfg?.operator === null || condCfg?.operator === ""
+      ? ""
+      : String(condCfg.operator);
+  const opOk = opStr !== "" && ALLOWED_THRESHOLD_OPERATORS.includes(opStr);
+  if (opStr !== "" && !opOk) {
+    return `threshold 的 operator 不合法，${allowedOpHint}`;
+  }
+  if (!allowPartial && condition_type === "threshold" && !opOk) {
+    return `threshold 規則需提供 operator，且 ${allowedOpHint}`;
+  }
+
+  return null;
+}
+
+function validateRulePreviewPayload(payload) {
+  if (!payload.source || typeof payload.source !== "string") {
+    return "source 為必填且需為字串";
+  }
+  if (
+    !payload.alert_type ||
+    !ALLOWED_RULE_ALERT_TYPES.includes(payload.alert_type)
+  ) {
+    return `alert_type 為必填且需為規則允許值：${ALLOWED_RULE_ALERT_TYPES.join(", ")}`;
+  }
+  if (
+    payload.condition_type != null &&
+    !ALLOWED_CONDITION_TYPES.includes(payload.condition_type)
+  ) {
+    return `condition_type 不合法，支援：${ALLOWED_CONDITION_TYPES.join(", ")}`;
+  }
+  if (
+    payload.message_template_key != null &&
+    payload.message_template_key !== ""
+  ) {
+    if (typeof payload.message_template_key !== "string") {
+      return "message_template_key 需為字串";
+    }
+    if (!ALLOWED_MESSAGE_TEMPLATE_KEYS.includes(payload.message_template_key)) {
+      return `message_template_key 不合法，支援：${ALLOWED_MESSAGE_TEMPLATE_KEYS.join(", ")}`;
+    }
+  }
   return null;
 }
 
@@ -96,111 +205,142 @@ router.use(authenticate);
 // ========== 警示 API ==========
 
 // 取得警示列表
-router.get("/", noCache, asyncHandler(async (req, res) => {
-  const {
-    source,
-    source_id,
-    device_id, // 向後兼容
-    exclude_sources,
-    alert_type,
-    severity,
-    status,
-    resolved, // 向後兼容
-    ignored, // 向後兼容
-    start_date,
-    end_date,
-    updated_after, // 增量查詢：只獲取更新時間在此之後的警報
-    limit,
-    offset,
-    orderBy,
-    order,
-  } = req.query;
+router.get(
+  "/",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const {
+      source,
+      source_id,
+      device_id, // 向後兼容
+      exclude_sources,
+      alert_type,
+      severity,
+      status,
+      resolved, // 向後兼容
+      ignored, // 向後兼容
+      start_date,
+      end_date,
+      updated_after, // 增量查詢：只獲取更新時間在此之後的警報
+      limit,
+      offset,
+      orderBy,
+      order,
+    } = req.query;
 
-  const result = await alertService.getAlerts({
-    source,
-    source_id: source_id ? parseInt(source_id) : undefined,
-    device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
-    exclude_sources,
-    alert_type,
-    severity,
-    status,
-    resolved: resolved !== undefined ? resolved === "true" : undefined, // 向後兼容
-    ignored: ignored !== undefined ? ignored === "true" : undefined, // 向後兼容
-    start_date,
-    end_date,
-    updated_after, // 增量查詢：只獲取更新時間在此之後的警報
-    limit: limit ? parseInt(limit) : undefined,
-    offset: offset ? parseInt(offset) : undefined,
-    orderBy,
-    order,
-  });
+    const result = await alertService.getAlerts({
+      source,
+      source_id: source_id ? parseInt(source_id) : undefined,
+      device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
+      exclude_sources,
+      alert_type,
+      severity,
+      status,
+      resolved: resolved !== undefined ? resolved === "true" : undefined, // 向後兼容
+      ignored: ignored !== undefined ? ignored === "true" : undefined, // 向後兼容
+      start_date,
+      end_date,
+      updated_after, // 增量查詢：只獲取更新時間在此之後的警報
+      limit: limit ? parseInt(limit) : undefined,
+      offset: offset ? parseInt(offset) : undefined,
+      orderBy,
+      order,
+    });
 
-  res.sendSuccess(result);
-}));
+    res.sendSuccess(result);
+  }),
+);
 
 // 取得未解決的警示數量（支持時間範圍篩選）
-router.get("/unresolved/count", noCache, asyncHandler(async (req, res) => {
-  const {
-    source,
-    source_id,
-    device_id,
-    exclude_sources,
-    alert_type,
-    severity,
-    start_date,
-    end_date,
-  } = req.query;
+router.get(
+  "/unresolved/count",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const {
+      source,
+      source_id,
+      device_id,
+      exclude_sources,
+      alert_type,
+      severity,
+      start_date,
+      end_date,
+    } = req.query;
 
-  const countResult = await alertService.getUnresolvedAlertCount({
-    source,
-    source_id: source_id ? parseInt(source_id) : undefined,
-    device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
-    exclude_sources,
-    alert_type,
-    severity,
-    start_date, // 支持時間範圍篩選
-    end_date, // 支持時間範圍篩選
-  });
+    const countResult = await alertService.getUnresolvedAlertCount({
+      source,
+      source_id: source_id ? parseInt(source_id) : undefined,
+      device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
+      exclude_sources,
+      alert_type,
+      severity,
+      start_date, // 支持時間範圍篩選
+      end_date, // 支持時間範圍篩選
+    });
 
-  res.sendSuccess(countResult);
-}));
+    res.sendSuccess(countResult);
+  }),
+);
 
 // 取得警報規則（用於前端顯示狀態）
-router.get("/rules", noCache, asyncHandler(async (req, res) => {
-  const { source, alert_type, parameter } = req.query;
+router.get(
+  "/rules",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const { source, alert_type, parameter } = req.query;
 
-  if (!source) {
-    return res.sendError("source 參數為必填", 400);
-  }
+    if (!source) {
+      return res.sendError("source 參數為必填", 400);
+    }
 
-  let rules;
-  if (alert_type === "threshold") {
-    // 獲取閾值規則（支持參數過濾）
-    rules = await alertRuleService.getThresholdRules(source, parameter || null);
-  } else if (alert_type) {
-    // 獲取特定類型的規則
-    rules = await alertRuleService.getAlertRules(source, alert_type);
-  } else {
-    // 如果沒有指定 alert_type，返回所有閾值規則（最常用於前端顯示）
-    rules = await alertRuleService.getThresholdRules(source);
-  }
+    let rules;
+    if (alert_type === "threshold") {
+      // 獲取閾值規則（支持參數過濾）
+      rules = await alertRuleService.getThresholdRules(
+        source,
+        parameter || null,
+      );
+    } else if (alert_type) {
+      // 獲取特定類型的規則
+      rules = await alertRuleService.getAlertRules(source, alert_type);
+    } else {
+      // 不指定 alert_type：回傳該 source 的所有啟用規則（避免前端 source x type 多次請求再 merge）
+      rules = await alertRuleService.getAllRulesForSource(source);
+    }
 
-  res.sendSuccess({ rules });
-}));
+    res.sendSuccess({ rules });
+  }),
+);
+
+// 規則訊息預覽（canonical 模板 + 變數；不寫入 DB）
+router.post(
+  "/rules/preview-message",
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const validationError = validateRulePreviewPayload(req.body);
+    if (validationError) {
+      return res.sendError(validationError, 400);
+    }
+    const preview = await alertRuleService.previewRuleMessage(req.body);
+    res.sendSuccess(preview);
+  }),
+);
 
 // 建立警報規則（需要 admin/operator 權限）
 router.post(
   "/rules",
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
-    const validationError = validateRulePayload(req.body, { allowPartial: false });
+    const validationError = validateRulePayload(req.body, {
+      allowPartial: false,
+    });
     if (validationError) {
       return res.sendError(validationError, 400);
     }
 
     const rule = await alertRuleService.createAlertRule(req.body);
     res.sendSuccess({ rule });
-  })
+  }),
 );
 
 // 更新警報規則（需要 admin/operator 權限）
@@ -210,13 +350,18 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const validationError = validateRulePayload(req.body, { allowPartial: true });
+    const validationError = validateRulePayload(req.body, {
+      allowPartial: true,
+    });
     if (validationError) {
       return res.sendError(validationError, 400);
     }
 
     try {
-      const rule = await alertRuleService.updateAlertRule(parseInt(id), req.body);
+      const rule = await alertRuleService.updateAlertRule(
+        parseInt(id),
+        req.body,
+      );
       res.sendSuccess({ rule });
     } catch (error) {
       if (error.message === "RULE_NOT_FOUND") {
@@ -224,7 +369,7 @@ router.put(
       }
       throw error;
     }
-  })
+  }),
 );
 
 // 刪除警報規則（需要 admin/operator 權限）
@@ -243,15 +388,20 @@ router.delete(
       }
       throw error;
     }
-  })
+  }),
 );
 
 // 取得單一警示
-router.get("/:id", noCache, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const alert = await alertService.getAlertById(parseInt(id));
-  res.sendSuccess({ alert });
-}));
+router.get(
+  "/:id",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const alert = await alertService.getAlertById(parseInt(id));
+    res.sendSuccess({ alert });
+  }),
+);
 
 // 注意：警報由系統自動解決，不提供手動解決的端點
 // 系統會在檢測到問題恢復時自動將警報標記為已解決
@@ -269,7 +419,7 @@ router.put(
     }
     const result = await alertService.unresolveAlert(parseInt(id), userId);
     res.sendSuccess({ alert: result });
-  })
+  }),
 );
 
 // 忽視警示（需要 admin/operator 權限，支持多系統來源）
@@ -293,7 +443,7 @@ router.post(
       dimension_key || null,
     );
     res.sendSuccess({ message: `已忽視 ${count} 個警示`, count });
-  })
+  }),
 );
 
 // 取消忽視警示（需要 admin/operator 權限，支持多系統來源）
@@ -312,7 +462,7 @@ router.post(
       dimension_key || null,
     );
     res.sendSuccess({ message: `已取消忽視 ${count} 個警示`, count });
-  })
+  }),
 );
 
 module.exports = router;

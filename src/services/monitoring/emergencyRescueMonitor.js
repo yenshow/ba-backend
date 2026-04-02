@@ -1,18 +1,17 @@
 /**
- * 衛生排水系統監控任務
- * 定期讀取所有排水點位狀態，並同步警報（bit_state / error_count）
+ * 緊急求救：背景巡檢（讀取狀態並同步連線類警報）
  */
 
 const logger = require("../../utils/logger");
-const drainageStatusService = require("../systems/drainageStatusService");
+const emergencyRescueStatusService = require("../systems/emergencyRescueStatusService");
 const websocketService = require("../websocket/websocketService");
 
 const lastDeviceStatus = new Map();
 
-async function checkDrainageSystems() {
-  const monitorLogger = logger.createLogger("drainageMonitor");
+async function checkEmergencyRescueSystems() {
+  const monitorLogger = logger.createLogger("emergencyRescueMonitor");
   try {
-    const { items } = await drainageStatusService.getStatusSnapshot();
+    const { items } = await emergencyRescueStatusService.getStatusSnapshot();
 
     const statusUpdates = [];
     if (Array.isArray(items)) {
@@ -21,13 +20,13 @@ async function checkDrainageSystems() {
         if (!systemId) continue;
 
         const currentStatus = item.error ? "offline" : "online";
-        const key = `drainage:${systemId}`;
+        const key = `emergency_rescue:${systemId}`;
         const lastStatus = lastDeviceStatus.get(key);
 
         if (lastStatus !== currentStatus) {
           lastDeviceStatus.set(key, currentStatus);
           statusUpdates.push({
-            system: "drainage",
+            system: "emergency_rescue",
             sourceId: Number(systemId),
             deviceId: null,
             status: currentStatus,
@@ -40,12 +39,12 @@ async function checkDrainageSystems() {
       websocketService.emitBatchDeviceStatus(statusUpdates);
     }
   } catch (error) {
-    monitorLogger.warn("排水監控執行失敗（不影響其他任務）", {
+    monitorLogger.warn("緊急求救監控執行失敗（不影響其他任務）", {
       error: error?.message || String(error),
     });
   }
 }
 
 module.exports = {
-  checkDrainageSystems,
+  checkEmergencyRescueSystems,
 };

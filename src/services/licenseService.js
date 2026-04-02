@@ -16,6 +16,8 @@ const ALL_FEATURE_KEYS = [
   "people_counting",
   "lighting",
   "drainage",
+  "fire",
+  "emergency_rescue",
   "environment",
   "surveillance",
   "vehicle_access",

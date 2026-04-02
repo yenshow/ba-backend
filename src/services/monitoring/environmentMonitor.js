@@ -4,7 +4,7 @@
  */
 
 const db = require("../../database/db");
-const modbusClient = require("../devices/modbusClient");
+const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
 const alertRuleService = require("../alerts/alertRuleService");
@@ -21,16 +21,16 @@ const RAW_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const lastRawWriteByLocation = new Map(); // key: location_id, value: timestamp
 
 /** 依 register_type 分組讀取 Modbus（FC01～FC04），合併為 deviceValues */
-async function readValuesByRegisterType(enabledValues, deviceConfig, modbusClient) {
+async function readValuesByRegisterType(enabledValues, deviceConfig) {
   const deviceValues = {};
   const registerTypes = [
-    { type: "holding", read: modbusClient.readHoldingRegisters.bind(modbusClient) },
-    { type: "input", read: modbusClient.readInputRegisters.bind(modbusClient) },
-    { type: "coils", read: modbusClient.readCoils.bind(modbusClient) },
-    { type: "discrete", read: modbusClient.readDiscreteInputs.bind(modbusClient) },
+    { type: "holding", batchType: "holding" },
+    { type: "input", batchType: "input" },
+    { type: "coils", batchType: "coil" },
+    { type: "discrete", batchType: "discrete" },
   ];
 
-  for (const { type: registerType, read } of registerTypes) {
+  for (const { type: registerType, batchType } of registerTypes) {
     const group = enabledValues.filter(
       (v) => (v.register_type || "holding") === registerType,
     );
@@ -48,7 +48,22 @@ async function readValuesByRegisterType(enabledValues, deviceConfig, modbusClien
 
     let modbusData;
     try {
-      modbusData = await read(minAddress, readLength, deviceConfig);
+      const results = await modbusBatchService.batchRead([
+        {
+          host: deviceConfig.host,
+          port: deviceConfig.port,
+          unitId: deviceConfig.unitId,
+          registerType: batchType,
+          address: minAddress,
+          length: readLength,
+          meta: { registerType },
+        },
+      ]);
+      const first = results?.[0];
+      if (!first || first.ok !== true) {
+        throw new Error(first?.error || "讀取失敗");
+      }
+      modbusData = first.data;
     } catch (err) {
       logger.warn(`environmentMonitor: 讀取 ${registerType} 失敗`, {
         error: err.message,
@@ -199,7 +214,23 @@ async function checkEnvironmentLocations() {
 
         // 嘗試讀取第一個保持寄存器（地址 0）來檢查設備狀態
         // 這是一個輕量級的檢查，不會讀取大量數據
-        await modbusClient.readHoldingRegisters(0, 1, deviceConfig);
+        {
+          const results = await modbusBatchService.batchRead([
+            {
+              host: deviceConfig.host,
+              port: deviceConfig.port,
+              unitId: deviceConfig.unitId,
+              registerType: "holding",
+              address: 0,
+              length: 1,
+              meta: { health: true, systemId: location.system_id },
+            },
+          ]);
+          const first = results?.[0];
+          if (!first || first.ok !== true) {
+            throw new Error(first?.error || "設備離線");
+          }
+        }
 
         // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
         await systemAlert.clearError("environment", location.system_id, {
@@ -224,7 +255,6 @@ async function checkEnvironmentLocations() {
               const deviceValues = await readValuesByRegisterType(
                 enabledValues,
                 deviceConfig,
-                modbusClient,
               );
 
               if (Object.keys(deviceValues).length > 0) {
@@ -590,18 +620,11 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
 
       if (exceeded) {
         // 數值超過閾值
-        const parameterDisplayName =
-          alertRuleService.getParameterDisplayName(parameter);
-        const message = alertRuleService.formatMessage(
-          matchedRule.message_template,
-          {
-            source_name: locationInfo?.name || `位置 ${systemId}`,
-            parameter: parameterDisplayName,
-            value: value,
-            threshold: matchedRule.condition_config.value,
-            unit: matchedRule.condition_config.unit || "",
-          },
-        );
+        const message = await alertRuleService.renderRuleMessage(matchedRule, {
+          source_id: systemId,
+          current_value: value,
+          value,
+        });
 
         await alertService.createAlert({
           source: alertService.ALERT_SOURCES.ENVIRONMENT,

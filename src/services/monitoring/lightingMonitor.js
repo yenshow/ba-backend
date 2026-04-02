@@ -4,7 +4,7 @@
  */
 
 const db = require("../../database/db");
-const modbusClient = require("../devices/modbusClient");
+const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger");
@@ -16,9 +16,9 @@ const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'onl
  * 檢查照明區域的設備狀態
  */
 async function checkLightingAreas() {
-	try {
-		// 取得所有照明地點
-		const areas = await db.query(`
+  try {
+    // 取得所有照明地點
+    const areas = await db.query(`
 			SELECT 
 				l.id as location_id,
 				l.name as location_name,
@@ -41,183 +41,227 @@ async function checkLightingAreas() {
 				AND ls.system_config->'modbus_config' != '{}'::jsonb
 		`);
 
-		if (areas.length === 0) {
-			return;
-		}
+    if (areas.length === 0) {
+      return;
+    }
 
-		let successCount = 0;
-		let failCount = 0;
+    let successCount = 0;
+    let failCount = 0;
 
-		// 併發控制由 modbusClient（全域 limiter）統一處理
-		const checkPromises = areas.map(async (area) => {
-			try {
-				// 解析 modbus 配置
-				const modbusConfigRaw = typeof area.modbus_config === "string" 
-					? JSON.parse(area.modbus_config) 
-					: area.modbus_config;
-					
-				if (!modbusConfigRaw || Object.keys(modbusConfigRaw).length === 0) {
-					return { systemId: area.system_id, areaId: area.location_id, success: false, reason: "配置為空" };
-				}
+    // 併發控制由 modbusClient（全域 limiter）統一處理
+    const checkPromises = areas.map(async (area) => {
+      try {
+        // 解析 modbus 配置
+        const modbusConfigRaw =
+          typeof area.modbus_config === "string"
+            ? JSON.parse(area.modbus_config)
+            : area.modbus_config;
 
-				let deviceConfig = null;
+        if (!modbusConfigRaw || Object.keys(modbusConfigRaw).length === 0) {
+          return {
+            systemId: area.system_id,
+            areaId: area.location_id,
+            success: false,
+            reason: "配置為空",
+          };
+        }
 
-				// 如果使用新格式（有 device_id 且 device_config 存在）
-				if (area.device_id && area.device_config) {
-					const config = typeof area.device_config === "string" 
-						? JSON.parse(area.device_config) 
-						: area.device_config;
-						
-					if (config.host && config.port !== undefined) {
-						deviceConfig = {
-							host: config.host,
-							port: config.port,
-							unitId: config.unitId || 1
-						};
-					}
-				} else if (modbusConfigRaw.host && modbusConfigRaw.port !== undefined) {
-					// 向後兼容：使用舊格式（從 modbus_config 直接讀取）
-					deviceConfig = {
-						host: modbusConfigRaw.host,
-						port: modbusConfigRaw.port,
-						unitId: modbusConfigRaw.unitId || 1
-					};
-				}
+        let deviceConfig = null;
 
-				if (!deviceConfig) {
-					return { systemId: area.system_id, areaId: area.location_id, success: false, reason: "配置不完整" };
-				}
+        // 如果使用新格式（有 device_id 且 device_config 存在）
+        if (area.device_id && area.device_config) {
+          const config =
+            typeof area.device_config === "string"
+              ? JSON.parse(area.device_config)
+              : area.device_config;
 
-				// 嘗試讀取第一個離散輸入或線圈來檢查設備狀態
-				// 優先使用 DI（離散輸入），因為它反映實際設備狀態
-				const diAddresses = modbusConfigRaw.points?.filter(p => p.type === "di").map(p => p.address) || [];
-				const doAddresses = modbusConfigRaw.points?.filter(p => p.type === "do").map(p => p.address) || [];
-				const address = diAddresses.length > 0 ? diAddresses[0] : (doAddresses.length > 0 ? doAddresses[0] : 0);
+          if (config.host && config.port !== undefined) {
+            deviceConfig = {
+              host: config.host,
+              port: config.port,
+              unitId: config.unitId || 1,
+            };
+          }
+        } else if (modbusConfigRaw.host && modbusConfigRaw.port !== undefined) {
+          // 向後兼容：使用舊格式（從 modbus_config 直接讀取）
+          deviceConfig = {
+            host: modbusConfigRaw.host,
+            port: modbusConfigRaw.port,
+            unitId: modbusConfigRaw.unitId || 1,
+          };
+        }
 
-				if (diAddresses.length > 0) {
-					await modbusClient.readDiscreteInputs(address, 1, deviceConfig);
-				} else if (doAddresses.length > 0) {
-					await modbusClient.readCoils(address, 1, deviceConfig);
-				} else {
-					// 如果沒有配置點位，嘗試讀取地址 0
-					await modbusClient.readDiscreteInputs(0, 1, deviceConfig);
-				}
-				
-				// 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
-				await systemAlert.clearError("lighting", area.system_id, { skipWebSocket: true });
+        if (!deviceConfig) {
+          return {
+            systemId: area.system_id,
+            areaId: area.location_id,
+            success: false,
+            reason: "配置不完整",
+          };
+        }
 
-				// 照明系統以警報為主要紀錄方式，不進行定期資料記錄
-				return { systemId: area.system_id, areaId: area.location_id, success: true };
-			} catch (error) {
-				// 讀取失敗，記錄錯誤（批次模式：跳過即時推送）
-				// 使用 location_systems.id 作為 source_id
-				const errorMessage = error.message || "無法讀取照明設備資料";
-				await systemAlert.recordError("lighting", area.system_id, errorMessage, { skipWebSocket: true });
-				
-				return { 
-					systemId: area.system_id,
-					areaId: area.location_id, 
-					success: false, 
-					reason: errorMessage 
-				};
-			}
-		});
+        // 嘗試讀取第一個離散輸入或線圈來檢查設備狀態
+        // 優先使用 DI（離散輸入），因為它反映實際設備狀態
+        const diAddresses =
+          modbusConfigRaw.points
+            ?.filter((p) => p.type === "di")
+            .map((p) => p.address) || [];
+        const doAddresses =
+          modbusConfigRaw.points
+            ?.filter((p) => p.type === "do")
+            .map((p) => p.address) || [];
+        const address =
+          diAddresses.length > 0
+            ? diAddresses[0]
+            : doAddresses.length > 0
+              ? doAddresses[0]
+              : 0;
 
-		const results = await Promise.allSettled(checkPromises);
-		
-		// 收集狀態更新，用於批次推送（只收集狀態改變的設備）
-		const statusUpdates = [];
+        const registerType = diAddresses.length > 0 ? "discrete" : "coil";
+        const safeAddress = Number.isFinite(address) ? address : 0;
 
-		results.forEach((result, index) => {
-			if (result.status === "fulfilled") {
-				const systemId = result.value.systemId;
-				const areaId = result.value.areaId;
-				const key = `lighting:${systemId}`;
-				const currentStatus = result.value.success ? "online" : "offline";
-				const lastStatus = lastDeviceStatus.get(key);
+        const results = await modbusBatchService.batchRead([
+          {
+            host: deviceConfig.host,
+            port: deviceConfig.port,
+            unitId: deviceConfig.unitId,
+            registerType,
+            address: safeAddress,
+            length: 1,
+            meta: { systemId: area.system_id },
+          },
+        ]);
 
-				// 從原始 areas 陣列中獲取 device_id
-				const area = areas[index];
-				const deviceId = area?.device_id ? parseInt(area.device_id) : null;
+        const first = results?.[0];
+        if (!first || first.ok !== true) {
+          throw new Error(first?.error || "無法讀取照明設備資料");
+        }
 
-				// 只在狀態改變時才添加到更新列表
-				if (lastStatus !== currentStatus) {
-					lastDeviceStatus.set(key, currentStatus);
-					
-					if (result.value.success) {
-						successCount++;
-						statusUpdates.push({
-							system: "lighting",
-							sourceId: systemId,
-							deviceId: deviceId,
-							status: "online",
-						});
-					} else {
-						failCount++;
-						statusUpdates.push({
-							system: "lighting",
-							sourceId: systemId,
-							deviceId: deviceId,
-							status: "offline",
-						});
-					}
-				} else {
-					// 狀態沒有改變，只更新計數（不推送 WebSocket）
-					if (result.value.success) {
-						successCount++;
-					} else {
-						failCount++;
-					}
-				}
-			} else {
-				// Promise 被 reject，記錄錯誤並標記為離線
-				failCount++;
-				const area = areas[index];
-				if (area) {
-					const key = `lighting:${area.system_id}`;
-					const lastStatus = lastDeviceStatus.get(key);
-					
-					// 只在狀態改變時才推送
-					if (lastStatus !== "offline") {
-						lastDeviceStatus.set(key, "offline");
-						statusUpdates.push({
-							system: "lighting",
-							sourceId: area.system_id,
-							deviceId: area.device_id ? parseInt(area.device_id) : null,
-							status: "offline",
-						});
-					}
-				}
-				logger.error("檢查區域失敗 (Promise rejected)", {
-					error: result.reason?.message || result.reason,
-					areaId: area?.location_id,
-					module: "lightingMonitor",
-				});
-			}
-		});
+        // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
+        await systemAlert.clearError("lighting", area.system_id, {
+          skipWebSocket: true,
+        });
 
-		// 批次推送設備狀態更新（只推送狀態改變的設備）
-		if (statusUpdates.length > 0) {
-			websocketService.emitBatchDeviceStatus(statusUpdates);
-		}
+        // 照明系統以警報為主要紀錄方式，不進行定期資料記錄
+        return {
+          systemId: area.system_id,
+          areaId: area.location_id,
+          success: true,
+        };
+      } catch (error) {
+        // 讀取失敗，記錄錯誤（批次模式：跳過即時推送）
+        // 使用 location_systems.id 作為 source_id
+        const errorMessage = error.message || "無法讀取照明設備資料";
+        await systemAlert.recordError(
+          "lighting",
+          area.system_id,
+          errorMessage,
+          { skipWebSocket: true },
+        );
 
-		if (successCount > 0 || failCount > 0) {
-			logger.info(`檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`, {
-				successCount,
-				failCount,
-				module: "lightingMonitor",
-			});
-		}
-	} catch (error) {
-		logger.error("檢查照明區域失敗", {
-			error,
-			module: "lightingMonitor",
-		});
-		// 不重新拋出錯誤，由 backgroundMonitor 統一處理
-	}
+        return {
+          systemId: area.system_id,
+          areaId: area.location_id,
+          success: false,
+          reason: errorMessage,
+        };
+      }
+    });
+
+    const results = await Promise.allSettled(checkPromises);
+
+    // 收集狀態更新，用於批次推送（只收集狀態改變的設備）
+    const statusUpdates = [];
+
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        const systemId = result.value.systemId;
+        const areaId = result.value.areaId;
+        const key = `lighting:${systemId}`;
+        const currentStatus = result.value.success ? "online" : "offline";
+        const lastStatus = lastDeviceStatus.get(key);
+
+        // 從原始 areas 陣列中獲取 device_id
+        const area = areas[index];
+        const deviceId = area?.device_id ? parseInt(area.device_id) : null;
+
+        // 只在狀態改變時才添加到更新列表
+        if (lastStatus !== currentStatus) {
+          lastDeviceStatus.set(key, currentStatus);
+
+          if (result.value.success) {
+            successCount++;
+            statusUpdates.push({
+              system: "lighting",
+              sourceId: systemId,
+              deviceId: deviceId,
+              status: "online",
+            });
+          } else {
+            failCount++;
+            statusUpdates.push({
+              system: "lighting",
+              sourceId: systemId,
+              deviceId: deviceId,
+              status: "offline",
+            });
+          }
+        } else {
+          // 狀態沒有改變，只更新計數（不推送 WebSocket）
+          if (result.value.success) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        }
+      } else {
+        // Promise 被 reject，記錄錯誤並標記為離線
+        failCount++;
+        const area = areas[index];
+        if (area) {
+          const key = `lighting:${area.system_id}`;
+          const lastStatus = lastDeviceStatus.get(key);
+
+          // 只在狀態改變時才推送
+          if (lastStatus !== "offline") {
+            lastDeviceStatus.set(key, "offline");
+            statusUpdates.push({
+              system: "lighting",
+              sourceId: area.system_id,
+              deviceId: area.device_id ? parseInt(area.device_id) : null,
+              status: "offline",
+            });
+          }
+        }
+        logger.error("檢查區域失敗 (Promise rejected)", {
+          error: result.reason?.message || result.reason,
+          areaId: area?.location_id,
+          module: "lightingMonitor",
+        });
+      }
+    });
+
+    // 批次推送設備狀態更新（只推送狀態改變的設備）
+    if (statusUpdates.length > 0) {
+      websocketService.emitBatchDeviceStatus(statusUpdates);
+    }
+
+    if (successCount > 0 || failCount > 0) {
+      logger.info(`檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`, {
+        successCount,
+        failCount,
+        module: "lightingMonitor",
+      });
+    }
+  } catch (error) {
+    logger.error("檢查照明區域失敗", {
+      error,
+      module: "lightingMonitor",
+    });
+    // 不重新拋出錯誤，由 backgroundMonitor 統一處理
+  }
 }
 
 module.exports = {
-	checkLightingAreas
+  checkLightingAreas,
 };
-

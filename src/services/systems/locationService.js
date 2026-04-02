@@ -130,6 +130,60 @@ function formatSystem(system) {
       };
     }
 
+    case "fire": {
+      const spFire = config.status_points;
+      return {
+        ...baseSystem,
+        config: {
+          deviceId: config.device_id || undefined,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus:
+            config.modbus_config && Object.keys(config.modbus_config).length > 0
+              ? config.modbus_config
+              : undefined,
+          equipmentKind: config.equipment_kind || "pump",
+          viewCategory:
+            config.view_category === null || config.view_category === undefined
+              ? "sprinkler"
+              : String(config.view_category),
+          statusPoints:
+            spFire && typeof spFire === "object" && Object.keys(spFire).length > 0
+              ? spFire
+              : undefined,
+        },
+      };
+    }
+
+    case "emergency_rescue": {
+      const spEr = config.status_points;
+      return {
+        ...baseSystem,
+        config: {
+          deviceId: config.device_id || undefined,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus:
+            config.modbus_config && Object.keys(config.modbus_config).length > 0
+              ? config.modbus_config
+              : undefined,
+          equipmentKind: config.equipment_kind || "pump",
+          viewCategory:
+            config.view_category === null || config.view_category === undefined
+              ? "sos"
+              : String(config.view_category),
+          statusPoints:
+            spEr && typeof spEr === "object" && Object.keys(spEr).length > 0
+              ? spEr
+              : undefined,
+        },
+      };
+    }
+
     case "people_counting":
       return {
         ...baseSystem,
@@ -1095,6 +1149,34 @@ function buildSystemConfig(systemType, config) {
         status_points: config.statusPoints || {},
       };
 
+    case "fire":
+      return {
+        device_id: config.deviceId || null,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: config.modbus || {},
+        equipment_kind: config.equipmentKind || "pump",
+        view_category:
+          config.viewCategory === undefined || config.viewCategory === null
+            ? "sprinkler"
+            : config.viewCategory,
+        status_points: config.statusPoints || {},
+      };
+
+    case "emergency_rescue":
+      return {
+        device_id: config.deviceId || null,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: config.modbus || {},
+        equipment_kind: config.equipmentKind || "pump",
+        view_category:
+          config.viewCategory === undefined || config.viewCategory === null
+            ? "sos"
+            : config.viewCategory,
+        status_points: config.statusPoints || {},
+      };
+
     case "people_counting":
       {
         const ids = Array.isArray(config.cameraDeviceIds)
@@ -1145,6 +1227,8 @@ async function createSystem(query, locationId, system) {
       "people_counting",
       "vehicle_access",
       "drainage",
+      "fire",
+      "emergency_rescue",
     ].includes(systemType)
   ) {
     throw new Error(`無效的系統類型: ${systemType}`);
@@ -1187,6 +1271,8 @@ async function updateSystem(query, systemId, system) {
       "people_counting",
       "vehicle_access",
       "drainage",
+      "fire",
+      "emergency_rescue",
     ].includes(targetSystemType)
   ) {
     throw new Error(`無效的系統類型: ${targetSystemType}`);
@@ -1263,6 +1349,28 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           if (modbus !== undefined) systemConfig.modbus = modbus;
           break;
         case "drainage":
+          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          if (locationXY !== undefined) systemConfig.location = locationXY;
+          if (modbus !== undefined) systemConfig.modbus = modbus;
+          if (equipmentKind !== undefined)
+            systemConfig.equipmentKind = equipmentKind;
+          if (viewCategory !== undefined)
+            systemConfig.viewCategory = viewCategory;
+          if (statusPoints !== undefined)
+            systemConfig.statusPoints = statusPoints;
+          break;
+        case "fire":
+          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          if (locationXY !== undefined) systemConfig.location = locationXY;
+          if (modbus !== undefined) systemConfig.modbus = modbus;
+          if (equipmentKind !== undefined)
+            systemConfig.equipmentKind = equipmentKind;
+          if (viewCategory !== undefined)
+            systemConfig.viewCategory = viewCategory;
+          if (statusPoints !== undefined)
+            systemConfig.statusPoints = statusPoints;
+          break;
+        case "emergency_rescue":
           if (deviceId !== undefined) systemConfig.deviceId = deviceId;
           if (locationXY !== undefined) systemConfig.location = locationXY;
           if (modbus !== undefined) systemConfig.modbus = modbus;

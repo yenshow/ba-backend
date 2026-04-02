@@ -1,15 +1,13 @@
 /**
- * 衛生排水：依 location_systems 設定讀取 Modbus 並合成 uiStatus（單點失敗不影響其他設備）
+ * 緊急求救：依 location_systems 讀取 Modbus（DI/DO 回授），不寫入控制。
+ * 狀態鍵建議：sos / trigger / running（觸發＝警報）、fault（故障＝異常）。
  */
 
 const locationService = require("./locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
-const alertService = require("../alerts/alertService");
 const systemAlert = require("../alerts/systemAlertHelper");
-const alertRuleService = require("../alerts/alertRuleService");
 
-// deviceId -> { ts, cfg }
 const DEVICE_CFG_CACHE_TTL_MS = Number(
   process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
 );
@@ -39,19 +37,6 @@ const ALLOWED_REGISTER_TYPES = new Set([
   "input",
 ]);
 
-const BIT_KEY_TO_ALERT_TYPE = {
-  runningAlarm: alertService.ALERT_TYPES.ERROR,
-  coverAlarm: alertService.ALERT_TYPES.ERROR,
-  highLevel: alertService.ALERT_TYPES.THRESHOLD,
-  lowLevel: alertService.ALERT_TYPES.THRESHOLD,
-};
-
-const defaultDimensionKeyForDrainageBit = (bitKey) => {
-  const k = String(bitKey || "").trim();
-  if (!k) return "drainage:bit_state";
-  return `drainage:${k}`;
-};
-
 function parseInlineModbus(modbus) {
   if (!modbus || typeof modbus !== "object") return null;
   const { host, port, unitId = 1 } = modbus;
@@ -77,7 +62,7 @@ async function resolveDeviceConfig(deviceId, modbus) {
         return cfg;
       }
     } catch (_) {
-      /* 設備不存在或離線時改試 inline */
+      /* ignore */
     }
   }
   return parseInlineModbus(modbus);
@@ -92,16 +77,12 @@ function normalizeRegisterType(pointDef) {
   return registerType;
 }
 
-/**
- * 讀取 statusPoints 物件中每個鍵對應的點位（可每點獨立 deviceId），失敗的鍵略過
- */
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
   if (!statusPoints || typeof statusPoints !== "object") {
     return raw;
   }
 
-  // 以 batch-read 讀取：同 device+registerType 自動合併範圍，且共用後端 snapshot cache
   const reqs = [];
   for (const key of Object.keys(statusPoints)) {
     const def = statusPoints[key];
@@ -197,93 +178,27 @@ async function hasResolvableDeviceForPoints(
 }
 
 /**
- * 產品語意（馬達／液位一致方向）：
- * - 串接點「觸發」警報條件（例如 running=true、highLevel=true）→ alarm（警報）
- * - 無法取得控制器連線或已設定點位但讀值全失敗 → warning（異常：視為未連線／通訊失敗）
- * - 其餘有成功讀值且無警報 → normal
+ * 求救觸發（sos / trigger / running 任一为 true）→ alarm
+ * fault → warning（異常）
  */
-function deriveUiStatus(
-  equipmentKind,
-  raw,
-  hadDeviceConfig,
-  pointKeysConfigured,
-) {
+function deriveEmergencyRescueUiStatus(raw, hadDeviceConfig, pointKeysConfigured) {
   if (!hadDeviceConfig) return "warning";
   if (!pointKeysConfigured || pointKeysConfigured.length === 0)
     return "unknown";
-
-  const kind = equipmentKind === "tank" ? "tank" : "pump";
 
   const anyRead = pointKeysConfigured.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (kind === "pump") {
-    if (raw.fault === true) return "alarm";
-    if (raw.running === true) return "alarm";
-    return "normal";
+  if (raw.sos === true || raw.trigger === true || raw.running === true) {
+    return "alarm";
   }
-
-  if (raw.coverAlarm === true || raw.highLevel === true) return "alarm";
-  if (raw.levelOk === false) return "alarm";
-  if (raw.lowLevel === true) return "alarm";
+  if (raw.fault === true) return "warning";
   return "normal";
 }
 
-async function syncStatefulDrainageAlerts(systemId, raw) {
-  const rules =
-    await alertRuleService.getDrainageBitStateRulesForSystem(systemId);
-  for (const r of rules) {
-    const bitKey = r?.condition_config?.bit_key;
-    if (!bitKey) continue;
-    const bitValue = raw[bitKey];
-    if (bitValue === undefined || bitValue === null) continue;
-
-    const alertType =
-      BIT_KEY_TO_ALERT_TYPE[bitKey] || alertService.ALERT_TYPES.ERROR;
-    const dimensionKey =
-      r.dimension_key || defaultDimensionKeyForDrainageBit(bitKey);
-    const severity = r.severity || alertService.SEVERITIES.WARNING;
-    let message = await alertRuleService.renderRuleMessage(r, {
-      source_id: systemId,
-    });
-    if (!message) {
-      message =
-        r.message_template ||
-        r.name ||
-        `排水警報觸發（${String(bitKey)}），請檢查設備狀態`;
-    }
-
-    if (bitValue === true) {
-      await alertService.createAlert({
-        source: alertService.ALERT_SOURCES.DRAINAGE,
-        source_id: systemId,
-        alert_type: alertType,
-        dimension_key: dimensionKey,
-        severity,
-        message,
-        rule_id: r.id,
-      });
-      continue;
-    }
-
-    try {
-      await alertService.resolveAlert(
-        systemId,
-        alertType,
-        alertService.ALERT_SOURCES.DRAINAGE,
-        dimensionKey,
-      );
-    } catch (error) {
-      if (!String(error.message || "").includes("未找到可更新的警報")) {
-        throw error;
-      }
-    }
-  }
-}
-
-async function syncDrainageConnectivityAlert(
+async function syncEmergencyRescueConnectivityAlert(
   systemId,
   hadDeviceConfig,
   pointKeys,
@@ -300,26 +215,21 @@ async function syncDrainageConnectivityAlert(
   const hasConnectionFailure = !anyRead;
 
   if (hasConnectionFailure) {
-    const errorMessage = readError || "無法讀取排水設備資料";
-    await systemAlert.recordError("drainage", systemId, errorMessage, { skipWebSocket: true });
+    const errorMessage = readError || "無法讀取緊急求救設備資料";
+    await systemAlert.recordError("emergency_rescue", systemId, errorMessage, { skipWebSocket: true });
     return;
   }
 
-  await systemAlert.clearError("drainage", systemId, { skipWebSocket: true });
+  await systemAlert.clearError("emergency_rescue", systemId, { skipWebSocket: true });
 }
 
-async function buildItemForDrainageSystem(
-  zone,
-  location,
-  system,
-  options = {},
-) {
+async function buildItemForEmergencyRescueSystem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
   const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "drainage";
+  const viewCategory = cfg.viewCategory || "sos";
   const statusPoints = cfg.statusPoints || {};
 
   const pointKeys = Object.keys(statusPoints).filter(
@@ -345,8 +255,7 @@ async function buildItemForDrainageSystem(
     readError = "無可用控制器連線設定（deviceId 或 modbus.host/port）";
   }
 
-  const uiStatus = deriveUiStatus(
-    equipmentKind,
+  const uiStatus = deriveEmergencyRescueUiStatus(
     raw,
     hadDeviceConfig,
     pointKeys,
@@ -354,18 +263,17 @@ async function buildItemForDrainageSystem(
 
   if (syncAlerts) {
     try {
-      await syncDrainageConnectivityAlert(
+      await syncEmergencyRescueConnectivityAlert(
         Number(system.id),
         hadDeviceConfig,
         pointKeys,
         raw,
         readError,
       );
-      await syncStatefulDrainageAlerts(Number(system.id), raw);
     } catch (alertErr) {
       if (process.env.NODE_ENV === "development") {
         console.warn(
-          `[drainageStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
+          `[emergencyRescueStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
         );
       }
     }
@@ -385,14 +293,14 @@ async function buildItemForDrainageSystem(
   };
 }
 
-function collectDrainageItemsFromZones(zones) {
+function collectEmergencyRescueItemsFromZones(zones) {
   const items = [];
   for (const zone of zones) {
     const locs = zone.locations || [];
     for (const loc of locs) {
       const systems = loc.systems || [];
       for (const sys of systems) {
-        if (sys.systemType === "drainage") {
+        if (sys.systemType === "emergency_rescue") {
           items.push({ zone, location: loc, system: sys });
         }
       }
@@ -404,7 +312,9 @@ function collectDrainageItemsFromZones(zones) {
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZones({ locationType: "drainage" });
+  const result = await locationService.getZones({
+    locationType: "emergency_rescue",
+  });
   let zones = result.zones || [];
 
   if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
@@ -412,10 +322,10 @@ async function getStatusSnapshot(query = {}) {
     zones = zones.filter((z) => want.has(String(z.id)));
   }
 
-  const triples = collectDrainageItemsFromZones(zones);
+  const triples = collectEmergencyRescueItemsFromZones(zones);
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForDrainageSystem(zone, location, system, { syncAlerts }),
+      buildItemForEmergencyRescueSystem(zone, location, system, { syncAlerts }),
     ),
   );
 
@@ -424,12 +334,12 @@ async function getStatusSnapshot(query = {}) {
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZoneById(zoneId, "drainage");
+  const result = await locationService.getZoneById(zoneId, "emergency_rescue");
   const zone = result.zone;
-  const triples = collectDrainageItemsFromZones([zone]);
+  const triples = collectEmergencyRescueItemsFromZones([zone]);
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForDrainageSystem(z, location, system, { syncAlerts }),
+      buildItemForEmergencyRescueSystem(z, location, system, { syncAlerts }),
     ),
   );
   return { zoneId: String(zone.id), items };

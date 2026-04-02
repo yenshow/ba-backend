@@ -803,6 +803,8 @@ async function updateDevice(id, deviceData, userId) {
             environment: alertService.ALERT_SOURCES.ENVIRONMENT,
             lighting: alertService.ALERT_SOURCES.LIGHTING,
             drainage: alertService.ALERT_SOURCES.DRAINAGE,
+            fire: alertService.ALERT_SOURCES.FIRE,
+            emergency_rescue: alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
           };
 
           for (const row of linked || []) {

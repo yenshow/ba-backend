@@ -5,6 +5,374 @@
 
 const db = require("../../database/db");
 
+/** 與前端約定：規則訊息以 canonical 模板 + 變數渲染（觸發時由 renderRuleMessage 統一處理） */
+const MESSAGE_TEMPLATE_KEYS = {
+  THRESHOLD_V1: "rule.threshold.v1",
+  OFFLINE_V1: "rule.offline.v1",
+  DI_V1: "rule.di.v1",
+  DO_V1: "rule.do.v1",
+  CUSTOM: "custom",
+};
+
+/** Canonical 與自訂模板皆應以 `{location_label}` 為唯一來源前綴占位（執行時會正規化舊版双占位／舊 source 占位） */
+const CANONICAL_TEMPLATES = {
+  [MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1]:
+    "{location_label} {parameter_name} {operator} {threshold}{unit}（當前 {current_value}{unit}）",
+  [MESSAGE_TEMPLATE_KEYS.OFFLINE_V1]:
+    "{location_label} 連續 {error_count} 次無法連接",
+  [MESSAGE_TEMPLATE_KEYS.DI_V1]:
+    "{location_label} DI 位址 {di_address} 觸發",
+  [MESSAGE_TEMPLATE_KEYS.DO_V1]:
+    "{location_label} DO 位址 {do_address} 觸發",
+};
+
+const LOCATION_SYSTEM_SOURCES = new Set([
+  "environment",
+  "lighting",
+  "drainage",
+  "people_counting",
+  "fire",
+  "emergency_rescue",
+]);
+
+/** 環境參數代碼 → 訊息／列表顯示名（與前端 getAlertParameterDisplayName 對齊） */
+const PARAMETER_DISPLAY_NAMES = {
+  pm25: "PM2.5",
+  pm10: "PM10",
+  tvoc: "TVOC",
+  hcho: "HCHO",
+  humidity: "濕度",
+  temperature: "溫度",
+  co2: "CO2",
+  noise: "噪音值",
+  wind: "風速",
+};
+
+function inferDefaultTemplateKey(alertType) {
+  if (alertType === "threshold") return MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
+  if (alertType === "offline") return MESSAGE_TEMPLATE_KEYS.OFFLINE_V1;
+  if (alertType === "di") return MESSAGE_TEMPLATE_KEYS.DI_V1;
+  if (alertType === "do") return MESSAGE_TEMPLATE_KEYS.DO_V1;
+  /** incident 用 error；舊排水規則可能仍為 error，無 canonical，改以 message_template 為準 */
+  return null;
+}
+
+function getCanonicalTemplateString(key) {
+  return CANONICAL_TEMPLATES[key] || "";
+}
+
+/** 訊息模板 {operator}：僅「超過／低於」（與前端列表、預覽一致） */
+function getThresholdOperatorDisplayLabel(operator) {
+  const op = String(operator ?? "").trim();
+  if (op === ">" || op === ">=") return "超過";
+  if (op === "<" || op === "<=") return "低於";
+  return "";
+}
+
+/**
+ * 依 location_systems.id（即警報的 source_id）解析區域／地點名稱
+ * —— 與規則 target 無關，供訊息前綴「區域 - 地點」一致顯示
+ */
+async function getZoneLocationPairByLocationSystemId(locationSystemId) {
+  if (locationSystemId == null || !Number.isFinite(Number(locationSystemId))) {
+    return { zone_name: "", location_name: "" };
+  }
+  const r = await db.query(
+    `SELECT z.name AS zone_name, l.name AS location_name
+     FROM location_systems ls
+     JOIN locations l ON l.id = ls.location_id
+     JOIN zones z ON z.id = l.zone_id
+     WHERE ls.id = ?
+     LIMIT 1`,
+    [locationSystemId],
+  );
+  return {
+    zone_name: r?.[0]?.zone_name || "",
+    location_name: r?.[0]?.location_name || "",
+  };
+}
+
+/** 「區域 - 地點」；缺其一則只顯示有名稱的一方 */
+function formatZoneDashLocation(zoneName, locationName) {
+  const z = String(zoneName || "").trim();
+  const l = String(locationName || "").trim();
+  if (z && l) return `${z} - ${l}`;
+  if (l) return l;
+  if (z) return z;
+  return "";
+}
+
+async function getTargetLabels(targetType, targetId) {
+  if (!targetType || targetId == null || !Number.isFinite(Number(targetId))) {
+    return { zone_name: "", location_name: "" };
+  }
+  if (targetType === "zone") {
+    const r = await db.query("SELECT name FROM zones WHERE id = ? LIMIT 1", [
+      targetId,
+    ]);
+    return { zone_name: r?.[0]?.name || "", location_name: "" };
+  }
+  if (targetType === "location") {
+    const r = await db.query(
+      `SELECT l.name AS location_name, z.name AS zone_name
+       FROM locations l
+       JOIN zones z ON z.id = l.zone_id
+       WHERE l.id = ?
+       LIMIT 1`,
+      [targetId],
+    );
+    return {
+      zone_name: r?.[0]?.zone_name || "",
+      location_name: r?.[0]?.location_name || "",
+    };
+  }
+  return { zone_name: "", location_name: "" };
+}
+
+/** 規則「目標」對應的區域名／地點名，統一套用「區域 - 地點」後再包全形括號（無則空字串） */
+async function computeZoneLocationSuffix(rule) {
+  const { zone_name, location_name } = await getTargetLabels(
+    rule.target_type,
+    rule.target_id,
+  );
+  const inner = formatZoneDashLocation(zone_name, location_name);
+  if (!inner) return "";
+  return `（${inner}）`;
+}
+
+function extractIoAddress(rule) {
+  const m = String(rule?.condition_config?.bit_key || "").match(
+    /^(di|do):(\d+)$/i,
+  );
+  return m ? m[2] : "1";
+}
+
+function resolveRuleTemplate(rule) {
+  if (rule.message_template_custom && rule.message_template) {
+    return rule.message_template;
+  }
+  const key = rule.message_template_key;
+  if (key && CANONICAL_TEMPLATES[key]) {
+    return CANONICAL_TEMPLATES[key];
+  }
+  if (rule.message_template) {
+    return rule.message_template;
+  }
+  const fb = inferDefaultTemplateKey(rule.alert_type);
+  return fb ? CANONICAL_TEMPLATES[fb] || "" : "";
+}
+
+/**
+ * 舊版模板升级为單一 `{location_label}`，避免再注入 source_display_name／source_name
+ */
+function normalizeAlertRuleTemplate(template) {
+  if (template == null || typeof template !== "string") return template;
+  return template
+    .replace(
+      /\{source_display_name\}\{zone_location_suffix\}/g,
+      "{location_label}",
+    )
+    .replace(/\{source_name\}\{zone_location_suffix\}/g, "{location_label}")
+    .replace(/\{source_display_name\}/g, "{location_label}")
+    .replace(/\{source_name\}/g, "{location_label}");
+}
+
+async function resolveSourceDisplayNameForRule(rule, sourceId) {
+  if (sourceId == null || !Number.isFinite(Number(sourceId))) {
+    return "";
+  }
+  if (rule.source === "device") {
+    const r = await db.query("SELECT name FROM devices WHERE id = ? LIMIT 1", [
+      sourceId,
+    ]);
+    return r?.[0]?.name || `device:${sourceId}`;
+  }
+  return `${rule.source}:${sourceId}`;
+}
+
+/**
+ * 訊息前綴：來源顯示名 + 規則「目標」括號後綴（非 location_system 來源／或無法由 DB 解析區域-地點時）
+ * location_system 來源：優先一次查詢 `區域 - 地點`，成功則不再查規則目標後綴（避免重複與多餘查詢）
+ */
+async function resolveMessageLocationPrefix(rule, runtimeVars) {
+  const sid =
+    runtimeVars.source_id != null &&
+    Number.isFinite(Number(runtimeVars.source_id))
+      ? Number(runtimeVars.source_id)
+      : null;
+
+  let displayName = String(
+    runtimeVars.source_display_name ?? runtimeVars.source_name ?? "",
+  ).trim();
+
+  if (LOCATION_SYSTEM_SOURCES.has(rule.source) && sid != null) {
+    const pair = await getZoneLocationPairByLocationSystemId(sid);
+    const canonicalLoc = formatZoneDashLocation(
+      pair.zone_name,
+      pair.location_name,
+    );
+    if (canonicalLoc) {
+      return { displayName: canonicalLoc, zoneLocationSuffix: "" };
+    }
+    const zoneSuffix = await computeZoneLocationSuffix(rule);
+    if (!displayName) {
+      displayName = `${rule.source}:${sid}`;
+    }
+    return { displayName, zoneLocationSuffix: zoneSuffix };
+  }
+
+  const zoneSuffix = await computeZoneLocationSuffix(rule);
+  if (!displayName && sid != null) {
+    displayName = await resolveSourceDisplayNameForRule(rule, sid);
+  }
+  return { displayName, zoneLocationSuffix: zoneSuffix };
+}
+
+/**
+ * 解析模板字串與替換變數（供 render / preview 共用，只 resolve 一次模板）
+ */
+async function buildRuleMessageRenderContext(rule, runtimeVars = {}) {
+  const cfg = rule.condition_config || {};
+  const ioAddr = extractIoAddress(rule);
+  const diAddress = rule.alert_type === "di" ? ioAddr : "";
+  const doAddress = rule.alert_type === "do" ? ioAddr : "";
+
+  const { displayName, zoneLocationSuffix } = await resolveMessageLocationPrefix(
+    rule,
+    runtimeVars,
+  );
+
+  const location_label = `${displayName}${zoneLocationSuffix}`;
+
+  const paramLabel = getParameterDisplayName(cfg.parameter);
+  const currentVal = String(
+    runtimeVars.current_value ?? runtimeVars.value ?? "",
+  );
+  const operatorLabel =
+    rule.alert_type === "threshold"
+      ? getThresholdOperatorDisplayLabel(cfg.operator)
+      : String(cfg.operator ?? "");
+  const {
+    source_display_name: _omitSd,
+    source_name: _omitSn,
+    ...restRuntime
+  } = runtimeVars;
+  const vars = {
+    ...restRuntime,
+    location_label: location_label,
+    zone_location_suffix: zoneLocationSuffix,
+    parameter_name: paramLabel,
+    /** 舊版模板可能使用 {parameter} / {value} */
+    parameter: paramLabel,
+    value: currentVal,
+    operator: operatorLabel,
+    threshold: cfg.value != null ? String(cfg.value) : "",
+    unit: cfg.unit ?? "",
+    di_address: diAddress,
+    do_address: doAddress,
+    current_value: currentVal,
+    error_count:
+      runtimeVars.error_count != null ? String(runtimeVars.error_count) : "",
+  };
+
+  const template = normalizeAlertRuleTemplate(resolveRuleTemplate(rule));
+  return { template, vars };
+}
+
+/**
+ * 產出正規化模板 + 套用變數後字串（render / preview 共用）
+ */
+async function formatRuleMessageFromContext(rule, runtimeVars) {
+  const { template, vars } = await buildRuleMessageRenderContext(
+    rule,
+    runtimeVars,
+  );
+  return { template, rendered: formatMessage(template, vars) };
+}
+
+/**
+ * 依規則與執行時變數產生警報訊息（SSOT：後端統一渲染）
+ * @param {Object} rule - alert_rules 列
+ * @param {Object} runtimeVars - source_id?, current_value?, value?, error_count?, …（來源前綴請依模板使用 {location_label}；可選傳 source_display_name 供無法解析 DB 時兜底）
+ */
+async function renderRuleMessage(rule, runtimeVars = {}) {
+  const { rendered } = await formatRuleMessageFromContext(rule, runtimeVars);
+  return rendered;
+}
+
+/**
+ * 規則表單預覽（不寫入 DB）
+ */
+function inferConditionTypeFromAlertType(alertType) {
+  if (alertType === "threshold") return "threshold";
+  if (alertType === "offline") return "error_count";
+  if (alertType === "di" || alertType === "do") return "bit_state";
+  return null;
+}
+
+async function previewRuleMessage(payload) {
+  const conditionType =
+    payload.condition_type ||
+    inferConditionTypeFromAlertType(payload.alert_type);
+  const ruleLike = {
+    source: payload.source,
+    alert_type: payload.alert_type,
+    target_type: payload.target_type ?? null,
+    target_id: payload.target_id ?? null,
+    condition_type: conditionType,
+    condition_config: payload.condition_config || {},
+    message_template_key:
+      payload.message_template_key ||
+      inferDefaultTemplateKey(payload.alert_type) ||
+      MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1,
+    message_template_custom: Boolean(payload.message_template_custom),
+    message_template: payload.message_template || null,
+  };
+  const sampleVars = {
+    source_display_name: payload.sample_source_display_name || "範例來源",
+    source_id:
+      payload.sample_source_id != null &&
+      Number.isFinite(Number(payload.sample_source_id))
+        ? Number(payload.sample_source_id)
+        : undefined,
+    current_value:
+      payload.sample_current_value != null
+        ? String(payload.sample_current_value)
+        : "—",
+    error_count:
+      payload.sample_error_count != null
+        ? String(payload.sample_error_count)
+        : "5",
+  };
+  return formatRuleMessageFromContext(ruleLike, sampleVars);
+}
+
+function resolvePersistedTemplateFields(payload) {
+  const alertType = payload.alert_type;
+  const custom = Boolean(payload.message_template_custom);
+  let key = inferDefaultTemplateKey(alertType);
+  if (
+    !custom &&
+    payload.message_template_key &&
+    CANONICAL_TEMPLATES[payload.message_template_key]
+  ) {
+    key = payload.message_template_key;
+  }
+  if (custom) {
+    key = MESSAGE_TEMPLATE_KEYS.CUSTOM;
+  }
+  const messageTemplate = custom
+    ? String(payload.message_template || "")
+    : key
+      ? getCanonicalTemplateString(key)
+      : String(payload.message_template || "");
+  return {
+    message_template_key: key,
+    message_template_custom: custom,
+    message_template: messageTemplate,
+  };
+}
+
 /**
  * 嚴重程度排序（用於規則匹配優先級）
  */
@@ -51,14 +419,15 @@ async function getAlertRules(source, alertType, enabled = true) {
       query += " AND enabled = TRUE";
     }
 
-    query += " ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END, id DESC";
+    query +=
+      " ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END, id DESC";
 
     const result = await db.query(query, params);
     return result || [];
   } catch (error) {
     console.error(
       `[alertRuleService] 查詢規則失敗 (source: ${source}, alertType: ${alertType}):`,
-      error
+      error,
     );
     return [];
   }
@@ -103,7 +472,7 @@ async function getThresholdRules(source, parameter = null) {
     // 如果指定了參數，過濾出該參數的規則
     if (parameter) {
       return cached.rules.filter(
-        (rule) => rule.condition_config?.parameter === parameter
+        (rule) => rule.condition_config?.parameter === parameter,
       );
     }
 
@@ -111,10 +480,85 @@ async function getThresholdRules(source, parameter = null) {
   } catch (error) {
     console.error(
       `[alertRuleService] 查詢閾值規則失敗 (source: ${source}, parameter: ${parameter}):`,
-      error
+      error,
     );
     return [];
   }
+}
+
+/**
+ * 查詢該來源的所有啟用規則（避免前端多次請求）
+ * @param {string} source
+ * @param {boolean} enabled - 是否只查詢啟用的規則（預設 true）
+ * @returns {Promise<Array>}
+ */
+async function getAllRulesForSource(source, enabled = true) {
+  try {
+    let query = `
+      SELECT * FROM alert_rules
+      WHERE source = ?
+    `;
+    const params = [source];
+
+    if (enabled) {
+      query += " AND enabled = TRUE";
+    }
+
+    query +=
+      " ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END, id DESC";
+
+    const result = await db.query(query, params);
+    return result || [];
+  } catch (error) {
+    console.error(
+      `[alertRuleService] 查詢來源所有規則失敗 (source: ${source}):`,
+      error,
+    );
+    return [];
+  }
+}
+
+function normalizeRuleDimensionValue(value) {
+  if (!value) return null;
+  return String(value).trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function deriveRuleDimensionKey({
+  alert_type,
+  condition_type,
+  condition_config,
+}) {
+  const alertType = normalizeRuleDimensionValue(alert_type);
+  const conditionType = normalizeRuleDimensionValue(condition_type);
+  const config = condition_config || {};
+
+  if (alertType === "threshold" && conditionType === "threshold") {
+    const parameter = normalizeRuleDimensionValue(config.parameter);
+    return parameter ? `threshold:${parameter}` : "threshold:default";
+  }
+
+  if (alertType === "offline" && conditionType === "error_count") {
+    return "offline:default";
+  }
+
+  if (
+    (alertType === "di" || alertType === "do") &&
+    conditionType === "bit_state"
+  ) {
+    const bitKey =
+      typeof config.bit_key === "string"
+        ? config.bit_key.trim().toLowerCase()
+        : "";
+    // 過渡格式：di:<channel> / do:<channel>
+    const match = bitKey.match(/^(di|do):(\d+)$/);
+    const channel = match ? match[2] : null;
+    if (alertType === "di") {
+      return channel ? `di:ch:${channel}` : "di:default";
+    }
+    return channel ? `do:ch:${channel}` : "do:default";
+  }
+
+  return alertType ? `${alertType}:default` : "default";
 }
 
 /**
@@ -140,7 +584,7 @@ async function getErrorCountRule(source, alertType) {
   } catch (error) {
     console.error(
       `[alertRuleService] 查詢錯誤次數規則失敗 (source: ${source}, alertType: ${alertType}):`,
-      error
+      error,
     );
     return null;
   }
@@ -162,9 +606,14 @@ async function createAlertRule(payload) {
     target_id = null,
     condition_type = null,
     condition_config = null,
-    message_template = null,
     enabled = true,
   } = payload;
+
+  const resolvedDimensionKey =
+    dimension_key ||
+    deriveRuleDimensionKey({ alert_type, condition_type, condition_config });
+
+  const persisted = resolvePersistedTemplateFields(payload);
 
   const query = `
     INSERT INTO alert_rules (
@@ -177,10 +626,12 @@ async function createAlertRule(payload) {
       target_id,
       condition_type,
       condition_config,
+      message_template_key,
+      message_template_custom,
       message_template,
       enabled
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)
     RETURNING *
   `;
 
@@ -189,12 +640,14 @@ async function createAlertRule(payload) {
     alert_type,
     severity,
     name,
-    dimension_key,
+    resolvedDimensionKey,
     target_type,
     target_id,
     condition_type,
     condition_config ? JSON.stringify(condition_config) : null,
-    message_template,
+    persisted.message_template_key,
+    persisted.message_template_custom,
+    persisted.message_template,
     enabled,
   ]);
 
@@ -219,7 +672,7 @@ async function createAlertRule(payload) {
 async function updateAlertRule(id, updates) {
   const existingResult = await db.query(
     "SELECT * FROM alert_rules WHERE id = ? LIMIT 1",
-    [id]
+    [id],
   );
   const existingRule = existingResult?.[0] || null;
   if (!existingRule) {
@@ -229,53 +682,96 @@ async function updateAlertRule(id, updates) {
   const fields = [];
   const params = [];
 
-  if (updates.source !== undefined) {
+  const nextRule = {
+    ...existingRule,
+    ...updates,
+    condition_config:
+      updates.condition_config !== undefined
+        ? updates.condition_config
+        : existingRule.condition_config,
+  };
+
+  const effectiveUpdates = { ...updates };
+  if (!Boolean(nextRule.message_template_custom)) {
+    const persisted = resolvePersistedTemplateFields({
+      ...nextRule,
+      message_template_custom: false,
+    });
+    Object.assign(effectiveUpdates, {
+      message_template_key: persisted.message_template_key,
+      message_template_custom: persisted.message_template_custom,
+      message_template: persisted.message_template,
+    });
+  }
+
+  if (effectiveUpdates.source !== undefined) {
     fields.push("source = ?");
-    params.push(updates.source);
+    params.push(effectiveUpdates.source);
   }
-  if (updates.alert_type !== undefined) {
+  if (effectiveUpdates.alert_type !== undefined) {
     fields.push("alert_type = ?");
-    params.push(updates.alert_type);
+    params.push(effectiveUpdates.alert_type);
   }
-  if (updates.severity !== undefined) {
+  if (effectiveUpdates.severity !== undefined) {
     fields.push("severity = ?");
-    params.push(updates.severity);
+    params.push(effectiveUpdates.severity);
   }
-  if (updates.name !== undefined) {
+  if (effectiveUpdates.name !== undefined) {
     fields.push("name = ?");
-    params.push(updates.name);
+    params.push(effectiveUpdates.name);
   }
-  if (updates.dimension_key !== undefined) {
+  if (effectiveUpdates.dimension_key !== undefined) {
     fields.push("dimension_key = ?");
-    params.push(updates.dimension_key);
+    params.push(effectiveUpdates.dimension_key);
   }
-  if (updates.target_type !== undefined) {
+  if (effectiveUpdates.target_type !== undefined) {
     fields.push("target_type = ?");
-    params.push(updates.target_type);
+    params.push(effectiveUpdates.target_type);
   }
-  if (updates.target_id !== undefined) {
+  if (effectiveUpdates.target_id !== undefined) {
     fields.push("target_id = ?");
-    params.push(updates.target_id);
+    params.push(effectiveUpdates.target_id);
   }
-  if (updates.condition_type !== undefined) {
+  if (effectiveUpdates.condition_type !== undefined) {
     fields.push("condition_type = ?");
-    params.push(updates.condition_type);
+    params.push(effectiveUpdates.condition_type);
   }
-  if (updates.condition_config !== undefined) {
+  if (effectiveUpdates.condition_config !== undefined) {
     fields.push("condition_config = ?::jsonb");
     params.push(
-      updates.condition_config === null
+      effectiveUpdates.condition_config === null
         ? null
-        : JSON.stringify(updates.condition_config)
+        : JSON.stringify(effectiveUpdates.condition_config),
     );
   }
-  if (updates.message_template !== undefined) {
+  if (effectiveUpdates.message_template !== undefined) {
     fields.push("message_template = ?");
-    params.push(updates.message_template);
+    params.push(effectiveUpdates.message_template);
   }
-  if (updates.enabled !== undefined) {
+  if (effectiveUpdates.message_template_key !== undefined) {
+    fields.push("message_template_key = ?");
+    params.push(effectiveUpdates.message_template_key);
+  }
+  if (effectiveUpdates.message_template_custom !== undefined) {
+    fields.push("message_template_custom = ?");
+    params.push(effectiveUpdates.message_template_custom);
+  }
+  if (effectiveUpdates.enabled !== undefined) {
     fields.push("enabled = ?");
-    params.push(updates.enabled);
+    params.push(effectiveUpdates.enabled);
+  }
+
+  // UI 移除 dimension_key 後：若呼叫端未提供 dimension_key，確保規則仍有可重現的維度鍵
+  if (updates.dimension_key === undefined) {
+    const resolvedDimensionKey =
+      existingRule.dimension_key ||
+      deriveRuleDimensionKey({
+        alert_type: nextRule.alert_type,
+        condition_type: nextRule.condition_type,
+        condition_config: nextRule.condition_config,
+      });
+    fields.push("dimension_key = ?");
+    params.push(resolvedDimensionKey);
   }
 
   if (fields.length === 0) {
@@ -347,6 +843,41 @@ async function getDrainageBitStateRulesForSystem(systemId) {
 }
 
 /**
+ * 取得消防 bit_state 警報定義（套用 target 範圍）
+ */
+async function getFireBitStateRulesForSystem(systemId) {
+  const q = `
+    SELECT
+      r.*,
+      ls.location_id,
+      l.zone_id
+    FROM alert_rules r
+    LEFT JOIN location_systems ls ON ls.id = ? AND ls.system_type = 'fire'
+    LEFT JOIN locations l ON l.id = ls.location_id
+    WHERE r.source = 'fire'
+      AND r.condition_type = 'bit_state'
+      AND r.enabled = TRUE
+      AND (
+        r.target_type IS NULL OR r.target_id IS NULL
+        OR (r.target_type = 'system' AND r.target_id = ?)
+        OR (r.target_type = 'location' AND r.target_id = ls.location_id)
+        OR (r.target_type = 'zone' AND r.target_id = l.zone_id)
+      )
+    ORDER BY
+      CASE r.target_type
+        WHEN 'system' THEN 1
+        WHEN 'location' THEN 2
+        WHEN 'zone' THEN 3
+        ELSE 4
+      END,
+      CASE r.severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END,
+      r.id DESC
+  `;
+  const rows = await db.query(q, [systemId, systemId]);
+  return rows || [];
+}
+
+/**
  * 刪除警報規則
  * @param {number} id
  * @returns {Promise<Object>} 刪除前的規則
@@ -354,7 +885,7 @@ async function getDrainageBitStateRulesForSystem(systemId) {
 async function deleteAlertRule(id) {
   const result = await db.query(
     "DELETE FROM alert_rules WHERE id = ? RETURNING *",
-    [id]
+    [id],
   );
   const deletedRule = result?.[0] || null;
   if (!deletedRule) {
@@ -396,9 +927,7 @@ function evaluateThreshold(config, value) {
     case "<=":
       return value <= threshold;
     default:
-      console.warn(
-        `[alertRuleService] 不支援的運算符: ${operator}`
-      );
+      console.warn(`[alertRuleService] 不支援的運算符: ${operator}`);
       return false;
   }
 }
@@ -431,19 +960,11 @@ function formatMessage(template, variables) {
  * @returns {string} 顯示名稱
  */
 function getParameterDisplayName(parameter) {
-  const displayNames = {
-    pm25: "PM2.5",
-    pm10: "PM10",
-    tvoc: "TVOC",
-    hcho: "HCHO",
-    humidity: "濕度",
-    temperature: "溫度",
-    co2: "CO2",
-    noise: "噪音值",
-    wind: "風速",
-  };
-
-  return displayNames[parameter] || parameter.toUpperCase();
+  if (parameter == null || parameter === "") {
+    return "";
+  }
+  const code = String(parameter).trim();
+  return PARAMETER_DISPLAY_NAMES[code] || code.toUpperCase();
 }
 
 /**
@@ -491,7 +1012,7 @@ function matchRule(rules, conditionType, sourceId) {
 
   // 過濾出指定條件類型的規則
   const candidateRules = rules.filter(
-    (r) => r.condition_type === conditionType
+    (r) => r.condition_type === conditionType,
   );
 
   if (candidateRules.length === 0) {
@@ -503,7 +1024,7 @@ function matchRule(rules, conditionType, sourceId) {
   const specificRule = candidateRules.find(
     (r) =>
       r.condition_config?.source_id !== undefined &&
-      Number(r.condition_config.source_id) === Number(sourceId)
+      Number(r.condition_config.source_id) === Number(sourceId),
   );
 
   if (specificRule) {
@@ -512,28 +1033,54 @@ function matchRule(rules, conditionType, sourceId) {
 
   // 2. 再找沒有指定 source_id 的全域規則
   const globalRule = candidateRules.find(
-    (r) =>
-      !r.condition_config ||
-      r.condition_config.source_id === undefined
+    (r) => !r.condition_config || r.condition_config.source_id === undefined,
   );
 
   return globalRule || null;
+}
+
+/**
+ * 查詢所有啟用的 DI/DO 規則（供泛用 diDoMonitor 使用）
+ * @returns {Promise<Array>}
+ */
+async function getEnabledDiDoRules() {
+  try {
+    const rows = await db.query(
+      `SELECT * FROM alert_rules
+       WHERE alert_type IN ('di', 'do')
+         AND condition_type = 'bit_state'
+         AND enabled = TRUE
+       ORDER BY source, id`,
+    );
+    return rows || [];
+  } catch (error) {
+    console.error("[alertRuleService] 查詢 DI/DO 規則失敗:", error);
+    return [];
+  }
 }
 
 module.exports = {
   getAlertRules,
   getThresholdRules,
   getErrorCountRule,
+  getEnabledDiDoRules,
+  getAllRulesForSource,
   createAlertRule,
   updateAlertRule,
   deleteAlertRule,
   getDrainageBitStateRulesForSystem,
+  getFireBitStateRulesForSystem,
+  deriveRuleDimensionKey,
   evaluateThreshold,
   formatMessage,
   getParameterDisplayName,
+  getThresholdOperatorDisplayLabel,
   groupRulesByParameter,
   matchRule,
   clearThresholdRulesCache,
   SEVERITY_ORDER,
+  renderRuleMessage,
+  previewRuleMessage,
+  MESSAGE_TEMPLATE_KEYS,
+  inferDefaultTemplateKey,
 };
-

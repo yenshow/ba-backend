@@ -146,7 +146,12 @@ async function queryAlerts(
 /**
  * 查詢被忽視的警報（Incident key）
  */
-async function findIgnoredAlert(source, sourceId, alertType, dimensionKey = null) {
+async function findIgnoredAlert(
+  source,
+  sourceId,
+  alertType,
+  dimensionKey = null,
+) {
   const alerts = await queryAlerts(
     source,
     sourceId,
@@ -370,6 +375,7 @@ const ALERT_SOURCES = {
   DRAINAGE: "drainage",
   HVAC: "hvac",
   FIRE: "fire",
+  EMERGENCY_RESCUE: "emergency_rescue",
   SECURITY: "security",
 };
 
@@ -385,6 +391,8 @@ const ALERT_TYPES = {
   OFFLINE: "offline",
   ERROR: "error",
   THRESHOLD: "threshold",
+  DI: "di",
+  DO: "do",
 };
 
 /**
@@ -392,7 +400,12 @@ const ALERT_TYPES = {
  * - 用於「設備停用」等情境：停用後不應持續出現 active 警示
  * - 會沿用 updateAlertStatus，確保 event/WS/count 都一致
  */
-async function updateAllAlertTypesStatus(source, sourceId, newStatus, userId = null) {
+async function updateAllAlertTypesStatus(
+  source,
+  sourceId,
+  newStatus,
+  userId = null,
+) {
   let total = 0;
   const alertTypes = Object.values(ALERT_TYPES);
 
@@ -439,6 +452,13 @@ function enrichAlert(alert) {
     enriched.device_id = alert.source_id;
   }
 
+  // 與 source_name 同源（避免 SQL 重複三段相同 CASE）
+  const display = enriched.source_name;
+  if (display != null && display !== "") {
+    enriched.location_name = enriched.location_name ?? display;
+    enriched.source_display_name = enriched.source_display_name ?? display;
+  }
+
   return enriched;
 }
 
@@ -465,34 +485,34 @@ function buildAlertSelectQuery() {
       iu.username as ignored_by_username,
       CASE 
         WHEN a.source = 'device' THEN dt.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN dt_system.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN dt_system.name
         ELSE NULL
       END as device_type_name,
       CASE 
         WHEN a.source = 'device' THEN dt.code
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN dt_system.code
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN dt_system.code
         ELSE NULL
       END as device_type_code,
       CASE 
         WHEN a.source = 'device' THEN d.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN l.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN l.name
         ELSE NULL
       END as source_name,
       CASE WHEN a.source = 'device' THEN d.name END as device_name,
       CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN z.name 
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN z.name 
         ELSE NULL 
       END as zone_name,
       CASE 
         WHEN a.source = 'device' THEN d.config
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN d_system.config
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN d_system.config
         ELSE NULL
       END as device_config
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
     LEFT JOIN device_types dt ON d.type_id = dt.id
-    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage') AND a.source_id = ls.id
+    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
@@ -971,7 +991,9 @@ async function resolveStaleActiveAlerts() {
         null,
       );
     }
-    devLog.log(`[alertService] 每日結案：${count} 筆歷史 active 已標記為已解決`);
+    devLog.log(
+      `[alertService] 每日結案：${count} 筆歷史 active 已標記為已解決`,
+    );
     emitUnresolvedAlertCount();
   }
   return count;
@@ -1361,9 +1383,23 @@ function emitUnresolvedAlertCount() {
   // 設置新的計時器（防抖）
   unresolvedCountTimer = setTimeout(async () => {
     try {
-      const count = await getUnresolvedAlertCount();
-      websocketService.emitAlertCount(count);
-      devLog.log(`[alertService] 📢 已推送未解決警報數量: ${count}`);
+      const now = new Date();
+      const todayStart = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      );
+      const todayEnd = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+      );
+      const countResult = await getUnresolvedAlertCount({
+        start_date: todayStart.toISOString(),
+        end_date: todayEnd.toISOString(),
+      });
+      const n =
+        typeof countResult === "number"
+          ? countResult
+          : parseInt(String(countResult?.count ?? 0), 10);
+      websocketService.emitAlertCount(Number.isFinite(n) ? n : 0);
+      devLog.log(`[alertService] 📢 已推送今日未解決警報數量: ${n}`);
     } catch (error) {
       devLog.error(
         "[alertService] ❌ 推送未解決警報數量失敗: " + error.message,
@@ -1390,30 +1426,30 @@ async function getAlertById(id) {
         -- 設備類型資訊（適用於設備來源和系統的關聯設備）
         CASE 
           WHEN a.source = 'device' THEN dt.name
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN dt_system.name
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN dt_system.name
           ELSE NULL
         END as device_type_name,
         CASE 
           WHEN a.source = 'device' THEN dt.code
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN dt_system.code
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN dt_system.code
           ELSE NULL
         END as device_type_code,
         -- 來源名稱（統一欄位，適用於所有來源類型）
         CASE 
           WHEN a.source = 'device' THEN d.name
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN l.name
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN l.name
           ELSE NULL
         END as source_name,
         -- 相容欄位：device_name（當 source = 'device'）
         CASE WHEN a.source = 'device' THEN d.name END as device_name,
         -- 區域名稱（統一使用 zones 表）
         CASE 
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN z.name 
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN z.name 
           ELSE NULL 
         END as zone_name,
         CASE 
           WHEN a.source = 'device' THEN d.config
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN d_system.config
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') THEN d_system.config
           ELSE NULL
         END as device_config
       FROM alerts a
@@ -1421,7 +1457,7 @@ async function getAlertById(id) {
       LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
       LEFT JOIN device_types dt ON d.type_id = dt.id
       -- 使用新架構：location_systems 關聯到 locations 和 zones
-      LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage') AND a.source_id = ls.id
+      LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire', 'emergency_rescue') AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
       LEFT JOIN zones z ON l.zone_id = z.id
       LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
@@ -1463,28 +1499,28 @@ async function getResolvedAlertsForBackup(beforeDate) {
       iu.username as ignored_by_username,
       CASE 
         WHEN a.source = 'device' THEN dt.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN dt_system.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire') THEN dt_system.name
         ELSE NULL
       END as device_type_name,
       CASE 
         WHEN a.source = 'device' THEN d.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN l.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire') THEN l.name
         ELSE NULL
       END as source_name,
       CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN z.name 
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire') THEN z.name 
         ELSE NULL 
       END as zone_name,
       CASE 
         WHEN a.source = 'device' THEN d.config
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage') THEN d_system.config
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire') THEN d_system.config
         ELSE NULL
       END as device_config
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
     LEFT JOIN device_types dt ON d.type_id = dt.id
-    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage') AND a.source_id = ls.id
+    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'fire') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id

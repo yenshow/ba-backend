@@ -26,6 +26,8 @@ const userRoutes = require("./routes/userRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const lightingRoutes = require("./routes/lightingRoutes");
 const drainageRoutes = require("./routes/drainageRoutes");
+const fireRoutes = require("./routes/fireRoutes");
+const emergencyRescueRoutes = require("./routes/emergencyRescueRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
@@ -51,6 +53,9 @@ const backgroundMonitor = require("./services/monitoring/backgroundMonitor");
 const environmentMonitor = require("./services/monitoring/environmentMonitor");
 const lightingMonitor = require("./services/monitoring/lightingMonitor");
 const drainageMonitor = require("./services/monitoring/drainageMonitor");
+const fireMonitor = require("./services/monitoring/fireMonitor");
+const emergencyRescueMonitor = require("./services/monitoring/emergencyRescueMonitor");
+const diDoMonitor = require("./services/monitoring/diDoMonitor");
 // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
 // 備份排程
@@ -102,7 +107,20 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // HTTP 請求日誌（過濾掉 /ws 請求的日誌，避免日誌被刷屏）
 app.use(
   morgan("dev", {
-    skip: (req) => req.url === "/ws",
+    skip: (req, res) => {
+      // 1) /ws（舊端點）或 Socket.IO polling（若存在）不記錄
+      if (req.url === "/ws" || req.url?.startsWith("/socket.io")) {
+        return true;
+      }
+
+      // 2) 高頻成功請求降噪：batch-read 成功不記錄（保留非 2xx/3xx）
+      const url = req.originalUrl || req.url || "";
+      if (url.startsWith("/api/modbus/batch-read") && res.statusCode < 400) {
+        return true;
+      }
+
+      return false;
+    },
   }),
 );
 
@@ -112,7 +130,7 @@ app.use(responseHandler);
 // 靜態檔案服務（用於提供上傳的檔案）
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-// 註冊路由（授權僅控：人流、照明、排水、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
+// 註冊路由（授權僅控：人流、照明、排水、消防、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/permissions", permissionRoutes);
@@ -120,6 +138,12 @@ app.use("/api/license", licenseRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
 app.use("/api/drainage", requireFeature("drainage"), drainageRoutes);
+app.use("/api/fire", requireFeature("fire"), fireRoutes);
+app.use(
+  "/api/emergency-rescue",
+  requireFeature("emergency_rescue"),
+  emergencyRescueRoutes,
+);
 app.use("/api/environment", requireFeature("environment"), environmentRoutes);
 app.use("/api/locations", locationRoutes); // 統一地點管理 API
 app.use(
@@ -182,7 +206,7 @@ async function startServer() {
     const httpServer = http.createServer(app);
 
     // 初始化 WebSocket 服務
-    websocketService.initializeWebSocket(httpServer, corsOptions);
+    websocketService.initializeWebSocket(httpServer);
 
     await new Promise((resolve, reject) => {
       httpServer.once("error", reject);
@@ -234,6 +258,19 @@ async function startServer() {
       backgroundMonitor.registerMonitoringTask(
         "衛生排水系統",
         drainageMonitor.checkDrainageSystems,
+      );
+      backgroundMonitor.registerMonitoringTask(
+        "消防系統",
+        fireMonitor.checkFireSystems,
+      );
+      backgroundMonitor.registerMonitoringTask(
+        "緊急求救系統",
+        emergencyRescueMonitor.checkEmergencyRescueSystems,
+      );
+      backgroundMonitor.registerMonitoringTask(
+        "DI/DO 泛用警報",
+        diDoMonitor.checkDiDoAlerts,
+        { baseIntervalMs: 5000, minIntervalMs: 5000, maxIntervalMs: 5000 },
       );
       // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
