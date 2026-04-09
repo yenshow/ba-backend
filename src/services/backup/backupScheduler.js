@@ -28,7 +28,7 @@ const RETENTION_DAYS = backupConfig.retention.databaseDays;
 const FILE_RETENTION_DAYS = backupConfig.retention.backupFileDays;
 
 /**
- * 執行完整備份流程（每次備份前先執行每日結案：昨日及更早的 active 警報標記為已解決）
+ * 執行完整備份流程（警報為狀態型：不因跨日自動結案；僅備份並刪除已解決且過保留期之資料）
  */
 async function runBackup() {
   const beforeDate = new Date();
@@ -41,12 +41,9 @@ async function runBackup() {
     people_counting_logs: null,
     vehicle_passageway_logs: null,
     deletedFiles: 0,
-    staleAlertsResolved: 0,
   };
 
   try {
-    results.staleAlertsResolved = await alertService.resolveStaleActiveAlerts();
-
     // 彙總寫入：昨日 day、上月 month（每日備份時執行一次）
     try {
       await environmentAggregationService.computeAndSaveDayAndMonth();

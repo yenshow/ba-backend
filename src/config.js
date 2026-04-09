@@ -139,11 +139,24 @@ const features = {
 };
 
 /**
+ * 授權部署樣貌：與前端產品線對應，決定本後端可正規化／啟用的 feature keys
+ * - central：智慧管理平台（全模組）
+ * - construction：工地管理平台（子集）
+ */
+const resolveLicenseDeploymentProfile = () => {
+	const raw = String(getEnv("LICENSE_DEPLOYMENT_PROFILE", "central") || "central")
+		.trim()
+		.toLowerCase();
+	return raw === "construction" ? "construction" : "central";
+};
+
+/**
  * 授權配置
  * LICENSE_OPEN_ALL_FEATURES=true 時暫時開放所有功能（不檢查 system_settings 授權）
  */
 const license = {
 	openAllFeatures: toBoolean(getEnv("LICENSE_OPEN_ALL_FEATURES"), false),
+	deploymentProfile: resolveLicenseDeploymentProfile(),
 	// 授權平台 API（線上啟用）Base URL，例如 https://api.yenshow.com/api/license
 	platformApiBaseUrl: getEnv("LICENSE_PLATFORM_API_BASE_URL", ""),
 	// 授權平台 API 逾時（毫秒）

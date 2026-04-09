@@ -276,7 +276,34 @@ function emitAlertCount(count) {
  * @param {string} status - 狀態 (online, offline)
  * @param {number} [deviceId] - 可選的設備 ID（用於前端設備管理頁面）
  */
+const DEVICE_STATUS_DEDUPE_TTL_MS = 2000;
+const deviceStatusDedupe = new Map(); // key -> lastTs
+let lastDedupeSweepAt = 0;
+
+function sweepDeviceStatusDedupe(now) {
+  // 只有在 map 變大或距離上次清理較久才掃描，避免每次 emit 都 O(n)
+  const shouldSweep =
+    deviceStatusDedupe.size > 2000 || now - lastDedupeSweepAt > 30_000;
+  if (!shouldSweep) return;
+
+  for (const [k, ts] of deviceStatusDedupe.entries()) {
+    if (now - ts > DEVICE_STATUS_DEDUPE_TTL_MS) {
+      deviceStatusDedupe.delete(k);
+    }
+  }
+  lastDedupeSweepAt = now;
+}
+
 function emitDeviceStatus(system, sourceId, status, deviceId = null) {
+  const now = Date.now();
+  const dedupeKey = `${system}:${String(sourceId)}:${String(status)}`;
+  const lastTs = deviceStatusDedupe.get(dedupeKey);
+  if (lastTs && now - lastTs < DEVICE_STATUS_DEDUPE_TTL_MS) {
+    return;
+  }
+  deviceStatusDedupe.set(dedupeKey, now);
+  sweepDeviceStatusDedupe(now);
+
   safeEmit(
     "monitoring:device:status",
     {

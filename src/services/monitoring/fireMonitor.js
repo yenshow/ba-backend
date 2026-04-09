@@ -1,6 +1,8 @@
 /**
  * 消防系統監控任務
- * 定期讀取所有消防點位狀態，並同步警報（bit_state / error_count）
+ * 定期讀取所有消防點位狀態，並推送連線狀態（monitoring:device:status:batch）
+ * - 連線類警報由 statusService 內部的 recordError/clearError 處理
+ * - DI/DO（bit_state）警報統一由 diDoMonitor 處理
  */
 
 const logger = require("../../utils/logger");

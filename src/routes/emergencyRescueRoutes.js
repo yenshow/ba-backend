@@ -6,7 +6,6 @@ const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
-const systemAlert = require("../services/alerts/systemAlertHelper");
 
 router.get("/zones", noCache, authenticate, asyncHandler(async (req, res) => {
   const result = await emergencyRescueService.getZones();
@@ -54,26 +53,6 @@ router.get("/zones/:id/status", noCache, authenticate, validateIntegers("id"), a
   const { id } = req.params;
   const result = await emergencyRescueStatusService.getZoneStatusSnapshot(parseInt(id, 10), { syncAlerts: false });
   res.sendSuccess(result);
-}));
-
-router.post("/systems/:systemId/errors", noCache, validateIntegers("systemId"), asyncHandler(async (req, res) => {
-  const { systemId } = req.params;
-  const { errorMessage } = req.body;
-
-  const alertCreated = await systemAlert.recordError(
-    "emergency_rescue",
-    parseInt(systemId, 10),
-    errorMessage || "無法讀取緊急求救設備資料",
-  );
-
-  res.sendSuccess({ alertCreated });
-}));
-
-router.delete("/systems/:systemId/errors", noCache, validateIntegers("systemId"), asyncHandler(async (req, res) => {
-  const { systemId } = req.params;
-
-  await systemAlert.clearError("emergency_rescue", parseInt(systemId, 10));
-  res.sendSuccess({ success: true });
 }));
 
 module.exports = router;

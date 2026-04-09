@@ -30,6 +30,7 @@ const LOCATION_SYSTEM_SOURCES = new Set([
   "environment",
   "lighting",
   "drainage",
+  "power",
   "people_counting",
   "fire",
   "emergency_rescue",
@@ -545,17 +546,24 @@ function deriveRuleDimensionKey({
     (alertType === "di" || alertType === "do") &&
     conditionType === "bit_state"
   ) {
-    const bitKey =
-      typeof config.bit_key === "string"
-        ? config.bit_key.trim().toLowerCase()
-        : "";
-    // 過渡格式：di:<channel> / do:<channel>
-    const match = bitKey.match(/^(di|do):(\d+)$/);
-    const channel = match ? match[2] : null;
-    if (alertType === "di") {
-      return channel ? `di:ch:${channel}` : "di:default";
+    const bitKeyRaw =
+      typeof config.bit_key === "string" ? config.bit_key.trim() : "";
+    const bitKey = bitKeyRaw.toLowerCase();
+    // 規格化硬體位址：di|do|discrete|coil + 通道（與 diDoMonitor／statusPoints 一致）
+    const match = bitKey.match(/^(di|do|discrete|coil):(\d+)$/);
+    if (match) {
+      const channel = match[2];
+      if (alertType === "di") {
+        return channel ? `di:ch:${channel}` : "di:default";
+      }
+      return channel ? `do:ch:${channel}` : "do:default";
     }
-    return channel ? `do:ch:${channel}` : "do:default";
+    // 語意欄位名（對應 statusPoints 的鍱，如 highLevel、running）
+    const safe = normalizeRuleDimensionValue(bitKeyRaw);
+    if (alertType === "di") {
+      return safe ? `di:sem:${safe}` : "di:default";
+    }
+    return safe ? `do:sem:${safe}` : "do:default";
   }
 
   return alertType ? `${alertType}:default` : "default";
@@ -807,77 +815,6 @@ async function updateAlertRule(id, updates) {
 }
 
 /**
- * 取得排水 bit_state 警報定義（套用 target 範圍）
- * 優先序：system > location > zone > global
- */
-async function getDrainageBitStateRulesForSystem(systemId) {
-  const q = `
-    SELECT
-      r.*,
-      ls.location_id,
-      l.zone_id
-    FROM alert_rules r
-    LEFT JOIN location_systems ls ON ls.id = ? AND ls.system_type = 'drainage'
-    LEFT JOIN locations l ON l.id = ls.location_id
-    WHERE r.source = 'drainage'
-      AND r.condition_type = 'bit_state'
-      AND r.enabled = TRUE
-      AND (
-        r.target_type IS NULL OR r.target_id IS NULL
-        OR (r.target_type = 'system' AND r.target_id = ?)
-        OR (r.target_type = 'location' AND r.target_id = ls.location_id)
-        OR (r.target_type = 'zone' AND r.target_id = l.zone_id)
-      )
-    ORDER BY
-      CASE r.target_type
-        WHEN 'system' THEN 1
-        WHEN 'location' THEN 2
-        WHEN 'zone' THEN 3
-        ELSE 4
-      END,
-      CASE r.severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END,
-      r.id DESC
-  `;
-  const rows = await db.query(q, [systemId, systemId]);
-  return rows || [];
-}
-
-/**
- * 取得消防 bit_state 警報定義（套用 target 範圍）
- */
-async function getFireBitStateRulesForSystem(systemId) {
-  const q = `
-    SELECT
-      r.*,
-      ls.location_id,
-      l.zone_id
-    FROM alert_rules r
-    LEFT JOIN location_systems ls ON ls.id = ? AND ls.system_type = 'fire'
-    LEFT JOIN locations l ON l.id = ls.location_id
-    WHERE r.source = 'fire'
-      AND r.condition_type = 'bit_state'
-      AND r.enabled = TRUE
-      AND (
-        r.target_type IS NULL OR r.target_id IS NULL
-        OR (r.target_type = 'system' AND r.target_id = ?)
-        OR (r.target_type = 'location' AND r.target_id = ls.location_id)
-        OR (r.target_type = 'zone' AND r.target_id = l.zone_id)
-      )
-    ORDER BY
-      CASE r.target_type
-        WHEN 'system' THEN 1
-        WHEN 'location' THEN 2
-        WHEN 'zone' THEN 3
-        ELSE 4
-      END,
-      CASE r.severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END,
-      r.id DESC
-  `;
-  const rows = await db.query(q, [systemId, systemId]);
-  return rows || [];
-}
-
-/**
  * 刪除警報規則
  * @param {number} id
  * @returns {Promise<Object>} 刪除前的規則
@@ -1068,8 +1005,6 @@ module.exports = {
   createAlertRule,
   updateAlertRule,
   deleteAlertRule,
-  getDrainageBitStateRulesForSystem,
-  getFireBitStateRulesForSystem,
   deriveRuleDimensionKey,
   evaluateThreshold,
   formatMessage,

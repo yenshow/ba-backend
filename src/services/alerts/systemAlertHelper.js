@@ -78,6 +78,7 @@ const getLocationInfo = (systemId) =>
   getSourceInfoByType(systemId, "environment");
 const getAreaInfo = (systemId) => getSourceInfoByType(systemId, "lighting");
 const getDrainageInfo = (systemId) => getSourceInfoByType(systemId, "drainage");
+const getPowerInfo = (systemId) => getSourceInfoByType(systemId, "power");
 const getFireInfo = (systemId) => getSourceInfoByType(systemId, "fire");
 const getEmergencyRescueInfo = (systemId) =>
   getSourceInfoByType(systemId, "emergency_rescue");
@@ -164,6 +165,8 @@ const getDeviceIdFromArea = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "lighting");
 const getDeviceIdFromDrainage = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "drainage");
+const getDeviceIdFromPower = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "power");
 const getDeviceIdFromFire = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "fire");
 const getDeviceIdFromEmergencyRescue = (systemId) =>
@@ -214,6 +217,11 @@ const SYSTEM_CONFIGS = {
     getSourceInfo: getDrainageInfo,
     getDeviceId: getDeviceIdFromDrainage,
   },
+  power: {
+    source: alertService.ALERT_SOURCES.POWER,
+    getSourceInfo: getPowerInfo,
+    getDeviceId: getDeviceIdFromPower,
+  },
   fire: {
     source: alertService.ALERT_SOURCES.FIRE,
     getSourceInfo: getFireInfo,
@@ -247,6 +255,8 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
       throw new Error(`未知的系統: ${system}`);
     }
 
+    const isConnErr = isDeviceConnectionError(errorMessage);
+
     // 「停用=全停」：如果能映射到設備且設備非 active，直接跳過（不創建警示、不推送狀態）
     // - 避免停用設備仍持續產生 alerts/WS，造成前端仍收到「設備訊息」
     const mappedDeviceId = await config.getDeviceId(sourceId);
@@ -262,7 +272,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
     }
 
     // 判斷錯誤類型
-    if (isDeviceConnectionError(errorMessage)) {
+    if (isConnErr) {
       // 設備連接錯誤 → 嘗試創建設備警報
       const deviceId = await config.getDeviceId(sourceId);
       if (deviceId) {
@@ -284,7 +294,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
           );
 
           // 推送 WebSocket 事件：設備離線（批次模式可跳過）
-          if (alertCreated && !options.skipWebSocket) {
+          if (!options.skipWebSocket) {
             websocketService.emitDeviceStatus("device", deviceId, "offline");
           }
 
@@ -305,9 +315,7 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
       return false;
     }
 
-    const alertType = isDeviceConnectionError(errorMessage)
-      ? "offline"
-      : "error";
+    const alertType = isConnErr ? "offline" : "error";
 
     // 記錄錯誤並創建警報（如果達到閾值）
     const alertCreated = await errorTracker.recordError(
@@ -322,8 +330,11 @@ async function recordError(system, sourceId, errorMessage, options = {}) {
     );
 
     // 推送 WebSocket 事件：系統設備離線（僅當創建了 offline 類型的警報時，批次模式可跳過）
-    // 注意：這裡的設備狀態推送與警報創建是分離的，確保即使警報未創建也能推送狀態
-    if (alertCreated && alertType === "offline" && !options.skipWebSocket) {
+    // 注意：設備狀態推送不應綁定「是否達到警報閾值」：
+    // - 警報（alert）是「達閾後的 incident」
+    // - 設備狀態（status）是「即時連線觀測」
+    // 批次模式（skipWebSocket）會由 monitor 在輪次結束後統一用 batch emit 做狀態 diff 推送。
+    if (alertType === "offline" && !options.skipWebSocket) {
       const deviceIdForWs = await config.getDeviceId(sourceId);
       websocketService.emitDeviceStatus(
         config.source,
@@ -381,6 +392,7 @@ async function clearError(system, sourceId, options = {}) {
       (system === "environment" ||
         system === "lighting" ||
         system === "drainage" ||
+        system === "power" ||
         system === "fire" ||
         system === "emergency_rescue") &&
       deviceId

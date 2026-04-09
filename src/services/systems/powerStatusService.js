@@ -1,5 +1,5 @@
 /**
- * 衛生排水：依 location_systems 設定讀取 Modbus 並合成 uiStatus（單點失敗不影響其他設備）
+ * 電力系統：依 location_systems 讀取 Modbus 並合成 uiStatus（發電機／ATS）
  */
 
 const locationService = require("./locationService");
@@ -7,7 +7,6 @@ const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 
-// deviceId -> { ts, cfg }
 const DEVICE_CFG_CACHE_TTL_MS = Number(
   process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
 );
@@ -62,7 +61,7 @@ async function resolveDeviceConfig(deviceId, modbus) {
         return cfg;
       }
     } catch (_) {
-      /* 設備不存在或離線時改試 inline */
+      /* fallback inline */
     }
   }
   return parseInlineModbus(modbus);
@@ -77,16 +76,12 @@ function normalizeRegisterType(pointDef) {
   return registerType;
 }
 
-/**
- * 讀取 statusPoints 物件中每個鍵對應的點位（可每點獨立 deviceId），失敗的鍵略過
- */
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
   if (!statusPoints || typeof statusPoints !== "object") {
     return raw;
   }
 
-  // 以 batch-read 讀取：同 device+registerType 自動合併範圍，且共用後端 snapshot cache
   const reqs = [];
   for (const key of Object.keys(statusPoints)) {
     const def = statusPoints[key];
@@ -182,10 +177,7 @@ async function hasResolvableDeviceForPoints(
 }
 
 /**
- * 產品語意（馬達／液位一致方向）：
- * - 串接點「觸發」警報條件（例如 running=true、highLevel=true）→ alarm（警報）
- * - 無法取得控制器連線或已設定點位但讀值全失敗 → warning（異常：視為未連線／通訊失敗）
- * - 其餘有成功讀值且無警報 → normal
+ * 最差狀態優先：發電機（故障／運轉警報／低油位等）與 ATS（故障／異常）
  */
 function deriveUiStatus(
   equipmentKind,
@@ -197,26 +189,32 @@ function deriveUiStatus(
   if (!pointKeysConfigured || pointKeysConfigured.length === 0)
     return "unknown";
 
-  const kind = equipmentKind === "tank" ? "tank" : "pump";
-
   const anyRead = pointKeysConfigured.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (kind === "pump") {
-    if (raw.fault === true) return "alarm";
-    if (raw.running === true) return "alarm";
+  const kind = equipmentKind === "ats" ? "ats" : "generator";
+
+  if (kind === "ats") {
+    if (raw.fault === true || raw.abnormal === true) return "alarm";
     return "normal";
   }
 
-  if (raw.coverAlarm === true || raw.highLevel === true) return "alarm";
-  if (raw.levelOk === false) return "alarm";
-  if (raw.lowLevel === true) return "alarm";
+  if (
+    raw.fault === true ||
+    raw.runningAlarm === true ||
+    raw.lowOil === true ||
+    raw.oilLevelAlarm === true ||
+    raw.oilLevelLow === true
+  ) {
+    return "alarm";
+  }
+  if (raw.oilLevelOk === false) return "alarm";
   return "normal";
 }
 
-async function syncDrainageConnectivityAlert(
+async function syncPowerConnectivityAlert(
   systemId,
   hadDeviceConfig,
   pointKeys,
@@ -233,26 +231,23 @@ async function syncDrainageConnectivityAlert(
   const hasConnectionFailure = !anyRead;
 
   if (hasConnectionFailure) {
-    const errorMessage = readError || "無法讀取排水設備資料";
-    await systemAlert.recordError("drainage", systemId, errorMessage, { skipWebSocket: true });
+    const errorMessage = readError || "無法讀取電力設備資料";
+    await systemAlert.recordError("power", systemId, errorMessage, {
+      skipWebSocket: true,
+    });
     return;
   }
 
-  await systemAlert.clearError("drainage", systemId, { skipWebSocket: true });
+  await systemAlert.clearError("power", systemId, { skipWebSocket: true });
 }
 
-async function buildItemForDrainageSystem(
-  zone,
-  location,
-  system,
-  options = {},
-) {
+async function buildItemForPowerSystem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
-  const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "drainage";
+  const equipmentKind = cfg.equipmentKind || "generator";
+  const viewCategory = cfg.viewCategory || "generator";
   const statusPoints = cfg.statusPoints || {};
 
   const pointKeys = Object.keys(statusPoints).filter(
@@ -287,7 +282,7 @@ async function buildItemForDrainageSystem(
 
   if (syncAlerts) {
     try {
-      await syncDrainageConnectivityAlert(
+      await syncPowerConnectivityAlert(
         Number(system.id),
         hadDeviceConfig,
         pointKeys,
@@ -297,7 +292,7 @@ async function buildItemForDrainageSystem(
     } catch (alertErr) {
       if (process.env.NODE_ENV === "development") {
         console.warn(
-          `[drainageStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
+          `[powerStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
         );
       }
     }
@@ -317,14 +312,14 @@ async function buildItemForDrainageSystem(
   };
 }
 
-function collectDrainageItemsFromZones(zones) {
+function collectPowerItemsFromZones(zones) {
   const items = [];
   for (const zone of zones) {
     const locs = zone.locations || [];
     for (const loc of locs) {
       const systems = loc.systems || [];
       for (const sys of systems) {
-        if (sys.systemType === "drainage") {
+        if (sys.systemType === "power") {
           items.push({ zone, location: loc, system: sys });
         }
       }
@@ -336,7 +331,7 @@ function collectDrainageItemsFromZones(zones) {
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZones({ locationType: "drainage" });
+  const result = await locationService.getZones({ locationType: "power" });
   let zones = result.zones || [];
 
   if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
@@ -344,10 +339,10 @@ async function getStatusSnapshot(query = {}) {
     zones = zones.filter((z) => want.has(String(z.id)));
   }
 
-  const triples = collectDrainageItemsFromZones(zones);
+  const triples = collectPowerItemsFromZones(zones);
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForDrainageSystem(zone, location, system, { syncAlerts }),
+      buildItemForPowerSystem(zone, location, system, { syncAlerts }),
     ),
   );
 
@@ -356,12 +351,12 @@ async function getStatusSnapshot(query = {}) {
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZoneById(zoneId, "drainage");
+  const result = await locationService.getZoneById(zoneId, "power");
   const zone = result.zone;
-  const triples = collectDrainageItemsFromZones([zone]);
+  const triples = collectPowerItemsFromZones([zone]);
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForDrainageSystem(z, location, system, { syncAlerts }),
+      buildItemForPowerSystem(z, location, system, { syncAlerts }),
     ),
   );
   return { zoneId: String(zone.id), items };

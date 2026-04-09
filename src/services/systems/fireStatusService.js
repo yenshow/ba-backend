@@ -5,9 +5,7 @@
 const locationService = require("./locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
-const alertService = require("../alerts/alertService");
 const systemAlert = require("../alerts/systemAlertHelper");
-const alertRuleService = require("../alerts/alertRuleService");
 
 // deviceId -> { ts, cfg }
 const DEVICE_CFG_CACHE_TTL_MS = Number(
@@ -38,19 +36,6 @@ const ALLOWED_REGISTER_TYPES = new Set([
   "holding",
   "input",
 ]);
-
-const BIT_KEY_TO_ALERT_TYPE = {
-  runningAlarm: alertService.ALERT_TYPES.ERROR,
-  coverAlarm: alertService.ALERT_TYPES.ERROR,
-  highLevel: alertService.ALERT_TYPES.THRESHOLD,
-  lowLevel: alertService.ALERT_TYPES.THRESHOLD,
-};
-
-const defaultDimensionKeyForFireBit = (bitKey) => {
-  const k = String(bitKey || "").trim();
-  if (!k) return "fire:bit_state";
-  return `fire:${k}`;
-};
 
 function parseInlineModbus(modbus) {
   if (!modbus || typeof modbus !== "object") return null;
@@ -231,58 +216,6 @@ function deriveUiStatus(
   return "normal";
 }
 
-async function syncStatefulFireAlerts(systemId, raw) {
-  const rules =
-    await alertRuleService.getFireBitStateRulesForSystem(systemId);
-  for (const r of rules) {
-    const bitKey = r?.condition_config?.bit_key;
-    if (!bitKey) continue;
-    const bitValue = raw[bitKey];
-    if (bitValue === undefined || bitValue === null) continue;
-
-    const alertType =
-      BIT_KEY_TO_ALERT_TYPE[bitKey] || alertService.ALERT_TYPES.ERROR;
-    const dimensionKey =
-      r.dimension_key || defaultDimensionKeyForFireBit(bitKey);
-    const severity = r.severity || alertService.SEVERITIES.WARNING;
-    let message = await alertRuleService.renderRuleMessage(r, {
-      source_id: systemId,
-    });
-    if (!message) {
-      message =
-        r.message_template ||
-        r.name ||
-        `消防警報觸發（${String(bitKey)}），請檢查設備狀態`;
-    }
-
-    if (bitValue === true) {
-      await alertService.createAlert({
-        source: alertService.ALERT_SOURCES.FIRE,
-        source_id: systemId,
-        alert_type: alertType,
-        dimension_key: dimensionKey,
-        severity,
-        message,
-        rule_id: r.id,
-      });
-      continue;
-    }
-
-    try {
-      await alertService.resolveAlert(
-        systemId,
-        alertType,
-        alertService.ALERT_SOURCES.FIRE,
-        dimensionKey,
-      );
-    } catch (error) {
-      if (!String(error.message || "").includes("未找到可更新的警報")) {
-        throw error;
-      }
-    }
-  }
-}
-
 async function syncFireConnectivityAlert(
   systemId,
   hadDeviceConfig,
@@ -361,7 +294,6 @@ async function buildItemForFireSystem(
         raw,
         readError,
       );
-      await syncStatefulFireAlerts(Number(system.id), raw);
     } catch (alertErr) {
       if (process.env.NODE_ENV === "development") {
         console.warn(

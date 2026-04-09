@@ -223,20 +223,34 @@ async function clearError(source, sourceId, alertType = null) {
         const previousCount = tracking.error_count;
         const hadAlert = tracking.alert_created;
 
-        await updateErrorTracking(source, sourceId, {
-          error_count: 0,
-          last_error_at: null,
-          alert_created: false,
-        }, type);
+        // 去重：在多個 monitor 同時 clearError 時，只有「第一個成功把 error_count 從 previousCount 變成 0」者才輸出恢復訊息
+        const updateResult = await db.query(
+          `UPDATE error_tracking
+           SET error_count = 0,
+               last_error_at = NULL,
+               alert_created = FALSE,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE source = ?
+             AND source_id = ?
+             AND alert_type = ?
+             AND error_count = ?`,
+          [source, sourceId, type, previousCount],
+        );
+
+        const didUpdate = (updateResult || []).length > 0;
+        if (!didUpdate) {
+          // 另一個併發呼叫已先完成清除；不重複 log / 不重複推後續行為
+          continue;
+        }
 
         if (hadAlert) {
           const resolvedAny = await resolveActiveAlerts(source, sourceId, [type]);
           console.log(
-            `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，已創建警報${resolvedAny ? "並自動解決" : ""}）`
+            `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，已創建警報${resolvedAny ? "並自動解決" : ""}）`,
           );
         } else {
           console.log(
-            `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，未達警報閾值）`
+            `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，未達警報閾值）`,
           );
         }
 

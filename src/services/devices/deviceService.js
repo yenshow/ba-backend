@@ -7,6 +7,8 @@ const {
 } = require("../../utils/deviceHelpers");
 const websocketService = require("../websocket/websocketService");
 const alertService = require("../alerts/alertService");
+const licenseService = require("../licenseService");
+const licenseQuotaService = require("../licenseQuotaService");
 
 // 取得設備列表
 async function getDevices(filters = {}) {
@@ -207,6 +209,67 @@ async function createDevice(deviceData, userId) {
     }
 
     const typeCode = types[0].code;
+
+    // Quota/授權：決定此設備歸屬的 feature key（若可判定）
+    const inputSystemType =
+      typeof deviceData?.system_type === "string"
+        ? deviceData.system_type
+        : typeof deviceData?.systemType === "string"
+          ? deviceData.systemType
+          : typeof config?.systemType === "string"
+            ? config.systemType
+            : null;
+
+    // controller 的 Quota/授權改以 location_systems 綁定時檢查（做法 B）。
+    // 因此建立 controller 設備本身不再要求 system_type，也不在此做 quota 檢查。
+    const featureKey =
+      typeCode === "controller"
+        ? null
+        : licenseQuotaService.resolveDeviceFeatureKey({
+            typeCode,
+            systemType: inputSystemType,
+          });
+
+    // 若能判定 feature，則做授權與 quota 檢查（openAll 時略過）
+    if (featureKey) {
+      const license = await licenseService.getLicenseState();
+      const activeKeys = licenseService.getActiveFeatureKeys();
+
+      if (!activeKeys.includes(featureKey)) {
+        const err = new Error(`不支援的 system_type：${featureKey}`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const openAll = license?.activationMethod === "open_all";
+      const licensed =
+        Array.isArray(license?.features) && license.features.includes(featureKey);
+
+      if (!openAll && !licensed) {
+        const err = new Error(`未授權功能：${featureKey}`);
+        err.statusCode = 403;
+        err.code = "FEATURE_NOT_LICENSED";
+        err.feature = featureKey;
+        throw err;
+      }
+
+      const rawMax = license?.quotas?.[featureKey]?.maxDevices;
+      const max = rawMax == null ? null : Math.floor(Number(rawMax));
+      const hasMax = Number.isFinite(max) && max >= 0;
+
+      if (!openAll && hasMax) {
+        const used = await licenseQuotaService.getUsedDevicesCount(featureKey);
+        if (used >= max) {
+          const err = new Error("已達到授權配額上限");
+          err.statusCode = 403;
+          err.code = "LICENSE_QUOTA_EXCEEDED";
+          err.feature = featureKey;
+          err.used = used;
+          err.max = max;
+          throw err;
+        }
+      }
+    }
 
     // 驗證 model_id 必填
     if (!model_id) {
@@ -803,6 +866,7 @@ async function updateDevice(id, deviceData, userId) {
             environment: alertService.ALERT_SOURCES.ENVIRONMENT,
             lighting: alertService.ALERT_SOURCES.LIGHTING,
             drainage: alertService.ALERT_SOURCES.DRAINAGE,
+            power: alertService.ALERT_SOURCES.POWER,
             fire: alertService.ALERT_SOURCES.FIRE,
             emergency_rescue: alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
           };

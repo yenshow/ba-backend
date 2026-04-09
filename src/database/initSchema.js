@@ -71,6 +71,7 @@ async function initSchema() {
           "lighting",
           "people_counting",
           "drainage",
+          "power",
           "hvac",
           "fire",
           "emergency_rescue",
@@ -617,6 +618,8 @@ async function initSchema() {
 				status alert_status NOT NULL DEFAULT 'active',
 				ignored_at TIMESTAMP,
 				ignored_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        acknowledged_at TIMESTAMP,
+        acknowledged_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)
@@ -676,7 +679,9 @@ async function initSchema() {
       await targetPool.query(`
         ALTER TABLE error_tracking DROP CONSTRAINT IF EXISTS error_tracking_source_source_id_key
       `);
-    } catch (_e) { /* 約束不存在（新表已用三欄約束），忽略 */ }
+    } catch (_e) {
+      /* 約束不存在（新表已用三欄約束），忽略 */
+    }
     await targetPool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS error_tracking_source_source_id_alert_type_key
       ON error_tracking(source, source_id, alert_type)
@@ -799,6 +804,78 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_events_event_type ON alert_events(event_type, created_at DESC);
     `);
     console.log("✅ alert_events 表已建立（警報事件流）");
+
+    // ========== 警報連動（MVP-1/2） ==========
+
+    // 警報連動規則：DI 警報觸發後可連動 DO（alarm out）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_linkages (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(120),
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        trigger_source alert_source NOT NULL,
+        trigger_alert_type alert_type NOT NULL,
+        trigger_dimension_key VARCHAR(120),
+        trigger_severity_min alert_severity NOT NULL DEFAULT 'warning',
+        do_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        do_address INTEGER,
+        do_value BOOLEAN NOT NULL DEFAULT TRUE,
+        auto_off_seconds INTEGER,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_linkages");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_linkages_enabled ON alert_linkages(enabled);
+      CREATE INDEX IF NOT EXISTS idx_alert_linkages_trigger ON alert_linkages(trigger_source, trigger_alert_type);
+      CREATE INDEX IF NOT EXISTS idx_alert_linkages_do_target ON alert_linkages(do_device_id, do_address);
+    `);
+    console.log("✅ alert_linkages 表已建立（警報連動規則）");
+
+    // DO 人工覆寫：強制關閉（manual off）期間禁止自動連動把 DO 打開
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS do_output_overrides (
+        id SERIAL PRIMARY KEY,
+        do_device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        do_address INTEGER NOT NULL,
+        mode VARCHAR(30) NOT NULL CHECK (mode IN ('manual_off')),
+        reason TEXT,
+        expires_at TIMESTAMP,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(do_device_id, do_address, mode)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_do_output_overrides_device_addr ON do_output_overrides(do_device_id, do_address);
+      CREATE INDEX IF NOT EXISTS idx_do_output_overrides_expires_at ON do_output_overrides(expires_at);
+    `);
+    console.log("✅ do_output_overrides 表已建立（DO 人工覆寫）");
+
+    // 連動執行記錄（稽核）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_linkage_executions (
+        id BIGSERIAL PRIMARY KEY,
+        linkage_id INTEGER NOT NULL REFERENCES alert_linkages(id) ON DELETE CASCADE,
+        alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
+        execution_type VARCHAR(30) NOT NULL CHECK (execution_type IN ('trigger', 'auto_off', 'manual_off')),
+        do_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        do_address INTEGER,
+        do_value BOOLEAN,
+        success BOOLEAN NOT NULL DEFAULT FALSE,
+        error_message TEXT,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_linkage ON alert_linkage_executions(linkage_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_alert ON alert_linkage_executions(alert_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_do_target ON alert_linkage_executions(do_device_id, do_address, created_at DESC);
+    `);
+    console.log("✅ alert_linkage_executions 表已建立（連動執行記錄）");
 
     // 建立 lighting_categories 表
     await targetPool.query(`
@@ -966,7 +1043,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage', 'fire', 'emergency_rescue')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -978,10 +1055,18 @@ async function initSchema() {
     await targetPool.query(`
 			ALTER TABLE location_systems DROP CONSTRAINT IF EXISTS location_systems_system_type_check;
 			ALTER TABLE location_systems ADD CONSTRAINT location_systems_system_type_check
-				CHECK (system_type IN ('environment', 'lighting', 'people_counting', 'vehicle_access', 'drainage', 'fire', 'emergency_rescue'));
+				CHECK (system_type IN ('environment', 'lighting', 'hvac', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue'));
 		`);
 
     // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
+    try {
+      await targetPool.query(`ALTER TYPE alert_source ADD VALUE 'power'`);
+    } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
+        throw e;
+      }
+    }
     try {
       await targetPool.query(`ALTER TYPE alert_source ADD VALUE 'drainage'`);
     } catch (e) {
@@ -991,7 +1076,9 @@ async function initSchema() {
       }
     }
     try {
-      await targetPool.query(`ALTER TYPE alert_source ADD VALUE 'emergency_rescue'`);
+      await targetPool.query(
+        `ALTER TYPE alert_source ADD VALUE 'emergency_rescue'`,
+      );
     } catch (e) {
       const msg = e && e.message ? String(e.message) : "";
       if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {

@@ -5,9 +5,8 @@
  * 依規則的 target 解析對應的 location_systems → device → Modbus 暫存器，
  * 讀取位元值後觸發或解除警報。
  *
- * 與排水/消防的 syncStateful*Alerts 不同，本模組**不依賴特定系統的 statusPoints**，
- * 而是直接以 bit_key（`di:<addr>` / `do:<addr>`）讀取 Modbus discrete/coil 暫存器，
- * 使任何系統皆可在「區域管理」設好 DI/DO 地點後，於「警報設定」建立規則即自動生效。
+ * 本模組為 DI/DO（bit_state）單一路徑：以規格化 `di|do|discrete|coil:<addr>` 讀 Modbus，
+ * 不依賴各系統自訂 statusPoints。語意請由 alert_rules 的訊息模板／名稱補足。
  */
 
 const logger = require("../../utils/logger");
@@ -21,7 +20,9 @@ const SOURCE_TO_SYSTEM_TYPE = {
   environment: "environment",
   lighting: "lighting",
   people_counting: "people_counting",
+  hvac: "hvac",
   drainage: "drainage",
+  power: "power",
   fire: "fire",
   emergency_rescue: "emergency_rescue",
 };
@@ -32,10 +33,13 @@ const SOURCE_TO_SYSTEM_TYPE = {
  * @returns {{ registerType: string, address: number } | null}
  */
 function parseBitKey(bitKey) {
-  const m = String(bitKey || "").match(/^(di|do):(\d+)$/i);
+  const m = String(bitKey || "").match(/^(di|do|discrete|coil):(\d+)$/i);
   if (!m) return null;
+  const kind = m[1].toLowerCase();
+  const registerType =
+    kind === "di" || kind === "discrete" ? "discrete" : "coil";
   return {
-    registerType: m[1].toLowerCase() === "di" ? "discrete" : "coil",
+    registerType,
     address: Number(m[2]),
   };
 }

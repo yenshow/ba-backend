@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const alertService = require("../services/alerts/alertService");
 const alertRuleService = require("../services/alerts/alertRuleService");
+const alertLinkageService = require("../services/alerts/alertLinkageService");
 const {
   authenticate,
   requireAdminOrOperator,
@@ -26,6 +27,90 @@ const ALLOWED_MESSAGE_TEMPLATE_KEYS = [
 
 /** 閾值條件運算子（不支援 = / ==） */
 const ALLOWED_THRESHOLD_OPERATORS = [">", ">=", "<", "<="];
+
+const ALLOWED_LINKAGE_SEVERITIES = ["warning", "error", "critical"];
+
+function validateLinkagePayload(payload, { allowPartial = false } = {}) {
+  const p = payload || {};
+
+  if (!allowPartial || p.enabled !== undefined) {
+    if (p.enabled !== undefined && typeof p.enabled !== "boolean") {
+      return "enabled 需為布林值";
+    }
+  }
+
+  if (!allowPartial || p.trigger_source !== undefined) {
+    if (!p.trigger_source || typeof p.trigger_source !== "string") {
+      return "trigger_source 為必填且需為字串";
+    }
+  }
+
+  if (!allowPartial || p.trigger_alert_type !== undefined) {
+    if (!p.trigger_alert_type || typeof p.trigger_alert_type !== "string") {
+      return "trigger_alert_type 為必填且需為字串";
+    }
+    if (!ALLOWED_ALERT_TYPES.includes(p.trigger_alert_type)) {
+      return `trigger_alert_type 不合法，支援：${ALLOWED_ALERT_TYPES.join(", ")}`;
+    }
+  }
+
+  if (!allowPartial || p.trigger_dimension_key !== undefined) {
+    if (
+      p.trigger_dimension_key !== undefined &&
+      p.trigger_dimension_key !== null &&
+      typeof p.trigger_dimension_key !== "string"
+    ) {
+      return "trigger_dimension_key 需為字串或 null";
+    }
+  }
+
+  if (!allowPartial || p.trigger_severity_min !== undefined) {
+    const v = p.trigger_severity_min ?? "warning";
+    if (typeof v !== "string" || !ALLOWED_LINKAGE_SEVERITIES.includes(v)) {
+      return `trigger_severity_min 不合法，支援：${ALLOWED_LINKAGE_SEVERITIES.join(", ")}`;
+    }
+  }
+
+  if (!allowPartial || p.do_device_id !== undefined) {
+    if (p.do_device_id === null || p.do_device_id === undefined) {
+      return "do_device_id 為必填";
+    }
+    if (!Number.isInteger(p.do_device_id) || p.do_device_id <= 0) {
+      return "do_device_id 需為正整數";
+    }
+  }
+
+  if (!allowPartial || p.do_address !== undefined) {
+    if (p.do_address === null || p.do_address === undefined) {
+      return "do_address 為必填";
+    }
+    if (!Number.isInteger(p.do_address) || p.do_address < 0) {
+      return "do_address 需為非負整數";
+    }
+  }
+
+  if (!allowPartial || p.do_value !== undefined) {
+    if (p.do_value !== undefined && typeof p.do_value !== "boolean") {
+      return "do_value 需為布林值";
+    }
+  }
+
+  if (!allowPartial || p.auto_off_seconds !== undefined) {
+    if (p.auto_off_seconds === null || p.auto_off_seconds === undefined) {
+      // ok
+    } else if (!Number.isInteger(p.auto_off_seconds) || p.auto_off_seconds <= 0) {
+      return "auto_off_seconds 需為正整數或 null";
+    }
+  }
+
+  if (!allowPartial || p.name !== undefined) {
+    if (p.name !== undefined && p.name !== null && typeof p.name !== "string") {
+      return "name 需為字串或 null";
+    }
+  }
+
+  return null;
+}
 
 function validateRulePayload(payload, { allowPartial = false } = {}) {
   const {
@@ -212,13 +297,10 @@ router.get(
     const {
       source,
       source_id,
-      device_id, // 向後兼容
       exclude_sources,
       alert_type,
       severity,
       status,
-      resolved, // 向後兼容
-      ignored, // 向後兼容
       start_date,
       end_date,
       updated_after, // 增量查詢：只獲取更新時間在此之後的警報
@@ -231,13 +313,10 @@ router.get(
     const result = await alertService.getAlerts({
       source,
       source_id: source_id ? parseInt(source_id) : undefined,
-      device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
       exclude_sources,
       alert_type,
       severity,
       status,
-      resolved: resolved !== undefined ? resolved === "true" : undefined, // 向後兼容
-      ignored: ignored !== undefined ? ignored === "true" : undefined, // 向後兼容
       start_date,
       end_date,
       updated_after, // 增量查詢：只獲取更新時間在此之後的警報
@@ -259,7 +338,6 @@ router.get(
     const {
       source,
       source_id,
-      device_id,
       exclude_sources,
       alert_type,
       severity,
@@ -270,12 +348,11 @@ router.get(
     const countResult = await alertService.getUnresolvedAlertCount({
       source,
       source_id: source_id ? parseInt(source_id) : undefined,
-      device_id: device_id ? parseInt(device_id) : undefined, // 向後兼容
       exclude_sources,
       alert_type,
       severity,
-      start_date, // 支持時間範圍篩選
-      end_date, // 支持時間範圍篩選
+      start_date,
+      end_date,
     });
 
     res.sendSuccess(countResult);
@@ -323,6 +400,109 @@ router.post(
     }
     const preview = await alertRuleService.previewRuleMessage(req.body);
     res.sendSuccess(preview);
+  }),
+);
+
+// ========== 警報連動（DI 觸發後 DO 輸出等） ==========
+
+// 連動規則列表（MVP-2）
+router.get(
+  "/linkages",
+  requireAdminOrOperator,
+  noCache,
+  asyncHandler(async (req, res) => {
+    const linkages = await alertLinkageService.listLinkages();
+    res.sendSuccess({ linkages });
+  }),
+);
+
+// 建立連動規則（MVP-2）
+router.post(
+  "/linkages",
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const validationError = validateLinkagePayload(req.body, {
+      allowPartial: false,
+    });
+    if (validationError) return res.sendError(validationError, 400);
+
+    const userId = req.user?.id ?? null;
+    const linkage = await alertLinkageService.createLinkage(req.body, userId);
+    res.sendSuccess({ linkage });
+  }),
+);
+
+// 更新連動規則（MVP-2）
+router.put(
+  "/linkages/:id",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const validationError = validateLinkagePayload(req.body, {
+      allowPartial: true,
+    });
+    if (validationError) return res.sendError(validationError, 400);
+
+    const userId = req.user?.id ?? null;
+    const linkage = await alertLinkageService.updateLinkage(
+      Number(req.params.id),
+      req.body,
+      userId,
+    );
+    res.sendSuccess({ linkage });
+  }),
+);
+
+// 刪除連動規則（MVP-2）
+router.delete(
+  "/linkages/:id",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const linkage = await alertLinkageService.deleteLinkage(Number(req.params.id));
+    res.sendSuccess({ linkage });
+  }),
+);
+
+// 手動強制關閉 DO（manual off）
+router.post(
+  "/do-outputs/manual-off",
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { do_device_id, do_address, reason, expires_at, linkage_id } = req.body || {};
+    if (!Number.isInteger(do_device_id) || do_device_id <= 0) {
+      return res.sendError("do_device_id 需為正整數", 400);
+    }
+    if (!Number.isInteger(do_address) || do_address < 0) {
+      return res.sendError("do_address 需為非負整數", 400);
+    }
+
+    const userId = req.user?.id ?? null;
+    const result = await alertLinkageService.manualOffDoOutput(
+      { linkage_id, do_device_id, do_address, reason, expires_at },
+      userId,
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+// 解除手動覆寫（恢復自動連動）
+router.post(
+  "/do-outputs/release-manual-off",
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { do_device_id, do_address } = req.body || {};
+    if (!Number.isInteger(do_device_id) || do_device_id <= 0) {
+      return res.sendError("do_device_id 需為正整數", 400);
+    }
+    if (!Number.isInteger(do_address) || do_address < 0) {
+      return res.sendError("do_address 需為非負整數", 400);
+    }
+    const result = await alertLinkageService.releaseManualOffOverride({
+      do_device_id,
+      do_address,
+    });
+    res.sendSuccess(result);
   }),
 );
 

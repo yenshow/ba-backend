@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const lightingService = require("../services/systems/lightingService");
-const systemAlert = require("../services/alerts/systemAlertHelper");
 const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -40,30 +39,6 @@ router.delete("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(a
 	const { id } = req.params;
 	const result = await lightingService.deleteZone(parseInt(id));
 	res.sendSuccess(result);
-}));
-
-// ========== 錯誤追蹤路由 ==========
-
-// 記錄照明地點錯誤
-router.post("/systems/:systemId/errors", noCache, validateIntegers("systemId"), asyncHandler(async (req, res) => {
-	const { systemId } = req.params;
-	const { errorMessage } = req.body;
-
-	const alertCreated = await systemAlert.recordError(
-		"lighting",
-		parseInt(systemId),
-		errorMessage || "無法讀取照明設備資料"
-	);
-
-	res.sendSuccess({ alertCreated });
-}));
-
-// 清除照明地點錯誤
-router.delete("/systems/:systemId/errors", noCache, validateIntegers("systemId"), asyncHandler(async (req, res) => {
-	const { systemId } = req.params;
-
-	await systemAlert.clearError("lighting", parseInt(systemId));
-	res.sendSuccess({ success: true });
 }));
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const db = require("../../database/db");
+const licenseService = require("../licenseService");
 
 /**
  * 統一地點管理服務（多系統架構）
@@ -103,6 +104,28 @@ function formatSystem(system) {
         },
       };
 
+    case "hvac": {
+      const spHvac = config.status_points;
+      return {
+        ...baseSystem,
+        config: {
+          deviceId: config.device_id || undefined,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus:
+            config.modbus_config && Object.keys(config.modbus_config).length > 0
+              ? config.modbus_config
+              : undefined,
+          statusPoints:
+            spHvac && typeof spHvac === "object" && Object.keys(spHvac).length > 0
+              ? spHvac
+              : undefined,
+        },
+      };
+    }
+
     case "drainage": {
       const sp = config.status_points;
       return {
@@ -125,6 +148,33 @@ function formatSystem(system) {
           statusPoints:
             sp && typeof sp === "object" && Object.keys(sp).length > 0
               ? sp
+              : undefined,
+        },
+      };
+    }
+
+    case "power": {
+      const spPow = config.status_points;
+      return {
+        ...baseSystem,
+        config: {
+          deviceId: config.device_id || undefined,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus:
+            config.modbus_config && Object.keys(config.modbus_config).length > 0
+              ? config.modbus_config
+              : undefined,
+          equipmentKind: config.equipment_kind || "generator",
+          viewCategory:
+            config.view_category === null || config.view_category === undefined
+              ? "generator"
+              : String(config.view_category),
+          statusPoints:
+            spPow && typeof spPow === "object" && Object.keys(spPow).length > 0
+              ? spPow
               : undefined,
         },
       };
@@ -1135,6 +1185,15 @@ function buildSystemConfig(systemType, config) {
         modbus_config: config.modbus || {},
       };
 
+    case "hvac":
+      return {
+        device_id: config.deviceId || null,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: config.modbus || {},
+        status_points: config.statusPoints || {},
+      };
+
     case "drainage":
       return {
         device_id: config.deviceId || null,
@@ -1145,6 +1204,20 @@ function buildSystemConfig(systemType, config) {
         view_category:
           config.viewCategory === undefined || config.viewCategory === null
             ? "drainage"
+            : config.viewCategory,
+        status_points: config.statusPoints || {},
+      };
+
+    case "power":
+      return {
+        device_id: config.deviceId || null,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: config.modbus || {},
+        equipment_kind: config.equipmentKind || "generator",
+        view_category:
+          config.viewCategory === undefined || config.viewCategory === null
+            ? "generator"
             : config.viewCategory,
         status_points: config.statusPoints || {},
       };
@@ -1213,6 +1286,115 @@ function buildSystemConfig(systemType, config) {
   }
 }
 
+const CONTROLLER_QUOTA_SYSTEM_TYPES = new Set([
+  "lighting",
+  "hvac",
+  "drainage",
+  "power",
+  "fire",
+  "emergency_rescue",
+]);
+
+async function assertSystemLicensed(systemType) {
+  const license = await licenseService.getLicenseState();
+  const openAll = license?.activationMethod === "open_all";
+  if (openAll) return;
+
+  const activeKeys = licenseService.getActiveFeatureKeys();
+  if (!activeKeys.includes(systemType)) {
+    const err = new Error(`不支援的 system_type：${systemType}`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const licensed =
+    Array.isArray(license?.features) && license.features.includes(systemType);
+  if (!licensed) {
+    const err = new Error(`未授權功能：${systemType}`);
+    err.statusCode = 403;
+    err.code = "FEATURE_NOT_LICENSED";
+    err.feature = systemType;
+    throw err;
+  }
+}
+
+async function assertControllerQuotaWithinLimit({
+  query,
+  systemType,
+  nextDeviceId,
+  currentDeviceId = null,
+  excludeSystemId = null,
+} = {}) {
+  if (!CONTROLLER_QUOTA_SYSTEM_TYPES.has(systemType)) return;
+  if (!nextDeviceId) return;
+  if (currentDeviceId && Number(nextDeviceId) === Number(currentDeviceId)) return;
+
+  const license = await licenseService.getLicenseState();
+  const openAll = license?.activationMethod === "open_all";
+  if (openAll) return;
+
+  const rawMax = license?.quotas?.[systemType]?.maxDevices;
+  const max = rawMax == null ? null : Math.floor(Number(rawMax));
+  const hasMax = Number.isFinite(max) && max >= 0;
+  if (!hasMax) return;
+
+  // 僅允許綁定 controller 類型設備（避免把用量算錯）
+  const deviceRows = await query(
+    `SELECT dt.code AS type_code
+     FROM devices d
+     JOIN device_types dt ON dt.id = d.type_id
+     WHERE d.id = $1`,
+    [Number(nextDeviceId)],
+  );
+  if (deviceRows.length === 0) {
+    const err = new Error("綁定的設備不存在");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (deviceRows[0].type_code !== "controller") {
+    const err = new Error("此系統僅允許綁定 controller 類型設備");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const rows = await query(
+    `SELECT
+       COUNT(*)::int AS used,
+       SUM(CASE WHEN device_id = $2 THEN 1 ELSE 0 END)::int AS has
+     FROM (
+       SELECT DISTINCT
+         COALESCE(
+           (ls.system_config->>'device_id')::int,
+           (ls.system_config->>'deviceId')::int
+         ) AS device_id
+       FROM location_systems ls
+       WHERE ls.system_type = $1
+         AND (
+           ls.system_config->>'device_id' IS NOT NULL
+           OR ls.system_config->>'deviceId' IS NOT NULL
+         )
+         AND ($3::int IS NULL OR ls.id <> $3::int)
+     ) t`,
+    [
+      systemType,
+      Number(nextDeviceId),
+      excludeSystemId != null ? Number(excludeSystemId) : null,
+    ],
+  );
+
+  const used = Number(rows?.[0]?.used ?? 0);
+  const has = Number(rows?.[0]?.has ?? 0);
+  if (used >= max && has === 0) {
+    const err = new Error("已達到授權配額上限");
+    err.statusCode = 403;
+    err.code = "LICENSE_QUOTA_EXCEEDED";
+    err.feature = systemType;
+    err.used = used;
+    err.max = max;
+    throw err;
+  }
+}
+
 /**
  * 建立系統（用於事務內部）
  */
@@ -1224,9 +1406,11 @@ async function createSystem(query, locationId, system) {
     ![
       "environment",
       "lighting",
+      "hvac",
       "people_counting",
       "vehicle_access",
       "drainage",
+      "power",
       "fire",
       "emergency_rescue",
     ].includes(systemType)
@@ -1235,6 +1419,14 @@ async function createSystem(query, locationId, system) {
   }
 
   const systemConfig = buildSystemConfig(systemType, config);
+
+  // 授權/Quota（做法 B）：controller 類系統的用量以 location_systems 綁定計數
+  await assertSystemLicensed(systemType);
+  await assertControllerQuotaWithinLimit({
+    query,
+    systemType,
+    nextDeviceId: systemConfig?.device_id ?? null,
+  });
 
   const result = await query(
     `INSERT INTO location_systems (location_id, system_type, system_config)
@@ -1254,7 +1446,7 @@ async function updateSystem(query, systemId, system) {
 
   // 檢查系統是否存在
   const existing = await query(
-    "SELECT system_type FROM location_systems WHERE id = $1",
+    "SELECT system_type, system_config FROM location_systems WHERE id = $1",
     [systemId],
   );
   if (existing.length === 0) {
@@ -1262,15 +1454,29 @@ async function updateSystem(query, systemId, system) {
   }
 
   const currentSystemType = existing[0].system_type;
+  const currentSystemConfig =
+    typeof existing[0].system_config === "string"
+      ? (() => {
+          try {
+            return JSON.parse(existing[0].system_config);
+          } catch {
+            return {};
+          }
+        })()
+      : existing[0].system_config || {};
+  const currentDeviceId =
+    currentSystemConfig?.device_id ?? currentSystemConfig?.deviceId ?? null;
   const targetSystemType = systemType || currentSystemType;
 
   if (
     ![
       "environment",
       "lighting",
+      "hvac",
       "people_counting",
       "vehicle_access",
       "drainage",
+      "power",
       "fire",
       "emergency_rescue",
     ].includes(targetSystemType)
@@ -1280,17 +1486,22 @@ async function updateSystem(query, systemId, system) {
 
   let effectiveConfig = config;
   if (targetSystemType === "people_counting" && config && typeof config === "object") {
-    const existingRow = await query(
-      `SELECT system_config FROM location_systems WHERE id = $1`,
-      [systemId],
-    );
     const baseline = peopleCountingRowConfigToMergeInput(
-      existingRow[0]?.system_config,
+      existing[0]?.system_config,
     );
     effectiveConfig = shallowMergePeopleCountingConfig(baseline, config);
   }
 
   const systemConfig = buildSystemConfig(targetSystemType, effectiveConfig);
+
+  await assertSystemLicensed(targetSystemType);
+  await assertControllerQuotaWithinLimit({
+    query,
+    systemType: targetSystemType,
+    nextDeviceId: systemConfig?.device_id ?? null,
+    currentDeviceId: targetSystemType === currentSystemType ? currentDeviceId : null,
+    excludeSystemId: systemId,
+  });
 
   await query(
     `UPDATE location_systems
@@ -1349,6 +1560,17 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           if (modbus !== undefined) systemConfig.modbus = modbus;
           break;
         case "drainage":
+          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          if (locationXY !== undefined) systemConfig.location = locationXY;
+          if (modbus !== undefined) systemConfig.modbus = modbus;
+          if (equipmentKind !== undefined)
+            systemConfig.equipmentKind = equipmentKind;
+          if (viewCategory !== undefined)
+            systemConfig.viewCategory = viewCategory;
+          if (statusPoints !== undefined)
+            systemConfig.statusPoints = statusPoints;
+          break;
+        case "power":
           if (deviceId !== undefined) systemConfig.deviceId = deviceId;
           if (locationXY !== undefined) systemConfig.location = locationXY;
           if (modbus !== undefined) systemConfig.modbus = modbus;

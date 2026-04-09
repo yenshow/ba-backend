@@ -132,7 +132,9 @@ async function checkEnvironmentLocations() {
           ? JSON.parse(row.system_config || "{}")
           : row.system_config || {};
       const deviceIds = Array.isArray(config.device_ids)
-        ? config.device_ids.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n))
+        ? config.device_ids
+            .map((id) => parseInt(id, 10))
+            .filter((n) => !Number.isNaN(n))
         : config.device_id != null && config.device_id !== ""
           ? [parseInt(String(config.device_id), 10)]
           : [];
@@ -169,7 +171,9 @@ async function checkEnvironmentLocations() {
                AND d.config->>'protocol' = 'modbus'`,
             [deviceIdList],
           );
-    const deviceConfigMap = new Map(devices.map((d) => [d.id, d.device_config]));
+    const deviceConfigMap = new Map(
+      devices.map((d) => [d.id, d.device_config]),
+    );
 
     const locations = locationDevicePairs
       .map((pair) => {
@@ -251,57 +255,60 @@ async function checkEnvironmentLocations() {
               loggingConfig.values &&
               loggingConfig.values.length > 0
             ) {
-              const enabledValues = loggingConfig.values.filter((v) => v.enabled);
+              const enabledValues = loggingConfig.values.filter(
+                (v) => v.enabled,
+              );
               const deviceValues = await readValuesByRegisterType(
                 enabledValues,
                 deviceConfig,
               );
 
               if (Object.keys(deviceValues).length > 0) {
-                    const data = {};
-                    for (const [name, obj] of Object.entries(deviceValues)) {
-                      data[name] = obj?.value ?? null;
-                    }
-                    const dataRounded =
-                      environmentReadingsService.roundDataToOneDecimal(data);
-                    const ts = new Date().toISOString();
-                    const now = Date.now();
-                    const rawKey = `${location.location_id}:${deviceId}`;
-                    const lastWrite = lastRawWriteByLocation.get(rawKey);
-                    const shouldWriteRaw =
-                      lastWrite === undefined || now - lastWrite >= RAW_WRITE_INTERVAL_MS;
-                    if (shouldWriteRaw) {
-                      environmentReadingsService
-                        .saveReading({
-                          locationId: location.location_id,
-                          sourceId: location.system_id,
-                          deviceId: deviceId,
-                          data,
-                        })
-                        .then(() => {
-                          lastRawWriteByLocation.set(rawKey, now);
-                        })
-                        .catch((error) => {
-                          logger.error(
-                            `記錄環境讀數失敗 (locationId: ${location.location_id})`,
-                            {
-                              error: error.message,
-                              locationId: location.location_id,
-                              module: "environmentMonitor",
-                            },
-                          );
-                        });
-                    }
-                    websocketService.emitEnvironmentReading({
+                const data = {};
+                for (const [name, obj] of Object.entries(deviceValues)) {
+                  data[name] = obj?.value ?? null;
+                }
+                const dataRounded =
+                  environmentReadingsService.roundDataToOneDecimal(data);
+                const ts = new Date().toISOString();
+                const now = Date.now();
+                const rawKey = `${location.location_id}:${deviceId}`;
+                const lastWrite = lastRawWriteByLocation.get(rawKey);
+                const shouldWriteRaw =
+                  lastWrite === undefined ||
+                  now - lastWrite >= RAW_WRITE_INTERVAL_MS;
+                if (shouldWriteRaw) {
+                  environmentReadingsService
+                    .saveReading({
                       locationId: location.location_id,
-                      reading: {
-                        id: `monitor_${location.location_id}_${Date.now()}`,
-                        locationId: String(location.location_id),
-                        timestamp: ts,
-                        data: dataRounded,
-                        createdAt: ts,
-                      },
+                      sourceId: location.system_id,
+                      deviceId: deviceId,
+                      data,
+                    })
+                    .then(() => {
+                      lastRawWriteByLocation.set(rawKey, now);
+                    })
+                    .catch((error) => {
+                      logger.error(
+                        `記錄環境讀數失敗 (locationId: ${location.location_id})`,
+                        {
+                          error: error.message,
+                          locationId: location.location_id,
+                          module: "environmentMonitor",
+                        },
+                      );
                     });
+                }
+                websocketService.emitEnvironmentReading({
+                  locationId: location.location_id,
+                  reading: {
+                    id: `monitor_${location.location_id}_${Date.now()}`,
+                    locationId: String(location.location_id),
+                    timestamp: ts,
+                    data: dataRounded,
+                    createdAt: ts,
+                  },
+                });
               }
             }
           } catch (logError) {

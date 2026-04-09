@@ -5,6 +5,7 @@ const router = express.Router();
 
 const licenseService = require("../services/licenseService");
 const licensePlatformService = require("../services/licensePlatformService");
+const licenseQuotaService = require("../services/licenseQuotaService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { verifyLicensePayload } = require("../utils/licenseSign");
@@ -37,9 +38,14 @@ router.get(
   asyncHandler(async (req, res) => {
     const license = await licenseService.getLicenseState();
     const canActivate = req.user?.role === "admin";
+    const usage = await licenseQuotaService.getUsageMap(
+      Object.keys(license.quotas || {}),
+    );
 
     res.sendSuccess({
       features: license.features || [],
+      quotas: license.quotas || {},
+      usage,
       expired: license.expired,
       canActivate,
       serialNumber: license.serialNumber ?? null,
@@ -100,6 +106,8 @@ router.post(
         const license = await licenseService.setLicenseState({
           mergeFeatures: true,
           features: result.features,
+          mergeQuotas: true,
+          quotas: result.quotas || {},
           preserveMainLicenseKey: true,
           appendExtensionKey: trimmedKey,
           deviceFingerprint: result.deviceFingerprint != null
@@ -110,6 +118,10 @@ router.post(
 
         return res.sendSuccess({
           features: license.features || [],
+          quotas: license.quotas || {},
+          usage: await licenseQuotaService.getUsageMap(
+            Object.keys(license.quotas || {}),
+          ),
           expired: license.expired,
           serialNumber: license.serialNumber ?? null,
           licenseKey: license.licenseKey ?? null,
@@ -121,6 +133,7 @@ router.post(
 
       const license = await licenseService.setLicenseState({
         features: result.features,
+        quotas: result.quotas || {},
         serialNumber: result.serialNumber ?? null,
         licenseKey: result.licenseKey ?? trimmedKey,
         activationMethod: "online",
@@ -131,6 +144,10 @@ router.post(
 
       return res.sendSuccess({
         features: license.features || [],
+        quotas: license.quotas || {},
+        usage: await licenseQuotaService.getUsageMap(
+          Object.keys(license.quotas || {}),
+        ),
         expired: license.expired,
         serialNumber: license.serialNumber ?? null,
         licenseKey: license.licenseKey ?? null,
@@ -156,6 +173,10 @@ router.post(
 
     return res.sendSuccess({
       features: license.features || [],
+      quotas: license.quotas || {},
+      usage: await licenseQuotaService.getUsageMap(
+        Object.keys(license.quotas || {}),
+      ),
       expired: license.expired,
       serialNumber: license.serialNumber ?? null,
       licenseKey: license.licenseKey ?? null,
@@ -294,6 +315,7 @@ router.post(
     if (!isExtension) {
       const license = await licenseService.setLicenseState({
         features: payload.features,
+        quotas: payload.quotas || {},
         serialNumber: payload.serialNumber ?? null,
         licenseKey: payload.licenseKey ?? null,
         activationMethod: "offline",
@@ -304,6 +326,10 @@ router.post(
 
       return res.sendSuccess({
         features: license.features || [],
+        quotas: license.quotas || {},
+        usage: await licenseQuotaService.getUsageMap(
+          Object.keys(license.quotas || {}),
+        ),
         expired: license.expired,
         serialNumber: license.serialNumber ?? null,
         licenseKey: license.licenseKey ?? null,
@@ -316,6 +342,8 @@ router.post(
     const license = await licenseService.setLicenseState({
       mergeFeatures: true,
       features: payload.features,
+      mergeQuotas: true,
+      quotas: payload.quotas || {},
       preserveMainLicenseKey: true,
       appendExtensionKey: activatedKey || undefined,
       deviceFingerprint: payload.deviceFingerprint != null
@@ -326,6 +354,10 @@ router.post(
 
     return res.sendSuccess({
       features: license.features || [],
+      quotas: license.quotas || {},
+      usage: await licenseQuotaService.getUsageMap(
+        Object.keys(license.quotas || {}),
+      ),
       expired: license.expired,
       serialNumber: license.serialNumber ?? null,
       licenseKey: license.licenseKey ?? null,

@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const environmentService = require("../services/systems/environmentService");
-const systemAlert = require("../services/alerts/systemAlertHelper");
 const { authenticate } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -69,39 +68,5 @@ router.get("/readings/:locationId", noCache, authenticate, asyncHandler(async (r
   const result = await environmentService.getReadings(locationId, options);
   res.sendSuccess(result);
 }));
-
-// ========== 錯誤追蹤路由 ==========
-
-// 記錄環境地點錯誤
-router.post(
-  "/systems/:systemId/errors",
-  noCache,
-  validateIntegers("systemId"),
-  asyncHandler(async (req, res) => {
-    const { systemId } = req.params;
-    const { errorMessage } = req.body;
-
-    const alertCreated = await systemAlert.recordError(
-      "environment",
-      parseInt(systemId),
-      errorMessage || "無法讀取感測器資料"
-    );
-
-    res.sendSuccess({ alertCreated });
-  })
-);
-
-// 清除環境地點錯誤
-router.delete(
-  "/systems/:systemId/errors",
-  noCache,
-  validateIntegers("systemId"),
-  asyncHandler(async (req, res) => {
-    const { systemId } = req.params;
-
-    await systemAlert.clearError("environment", parseInt(systemId));
-    res.sendSuccess({ success: true });
-  })
-);
 
 module.exports = router;

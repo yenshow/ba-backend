@@ -26,6 +26,7 @@ const userRoutes = require("./routes/userRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const lightingRoutes = require("./routes/lightingRoutes");
 const drainageRoutes = require("./routes/drainageRoutes");
+const powerRoutes = require("./routes/powerRoutes");
 const fireRoutes = require("./routes/fireRoutes");
 const emergencyRescueRoutes = require("./routes/emergencyRescueRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
@@ -47,12 +48,14 @@ const { requireFeature } = require("./middleware/licenseMiddleware");
 const db = require("./database/db");
 const externalDb = require("./database/externalDb");
 const websocketService = require("./services/websocket/websocketService");
+const initSchema = require("./database/initSchema");
 
 // 背景監控服務
 const backgroundMonitor = require("./services/monitoring/backgroundMonitor");
 const environmentMonitor = require("./services/monitoring/environmentMonitor");
 const lightingMonitor = require("./services/monitoring/lightingMonitor");
 const drainageMonitor = require("./services/monitoring/drainageMonitor");
+const powerMonitor = require("./services/monitoring/powerMonitor");
 const fireMonitor = require("./services/monitoring/fireMonitor");
 const emergencyRescueMonitor = require("./services/monitoring/emergencyRescueMonitor");
 const diDoMonitor = require("./services/monitoring/diDoMonitor");
@@ -138,6 +141,7 @@ app.use("/api/license", licenseRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
 app.use("/api/drainage", requireFeature("drainage"), drainageRoutes);
+app.use("/api/power", requireFeature("power"), powerRoutes);
 app.use("/api/fire", requireFeature("fire"), fireRoutes);
 app.use(
   "/api/emergency-rescue",
@@ -237,6 +241,25 @@ async function startServer() {
       serverLogger.info("資料庫連線成功");
     }
 
+    // 可選：啟動時補齊 DB schema（CREATE TABLE IF NOT EXISTS）
+    // 預設關閉，避免在受管環境意外變更 DB。
+    if (
+      dbConnected &&
+      String(process.env.DB_INIT_SCHEMA_ON_START || "").toLowerCase() === "true"
+    ) {
+      try {
+        serverLogger.info(
+          "DB_INIT_SCHEMA_ON_START=true，開始初始化/補齊資料庫 Schema",
+        );
+        await initSchema();
+        serverLogger.info("資料庫 Schema 初始化完成");
+      } catch (err) {
+        serverLogger.warn("資料庫 Schema 初始化失敗（不影響服務啟動）", {
+          error: err?.message || String(err),
+        });
+      }
+    }
+
     // 測試外部資料庫連線
     const externalDbConnected = await externalDb.testConnection();
     if (!externalDbConnected) {
@@ -258,6 +281,10 @@ async function startServer() {
       backgroundMonitor.registerMonitoringTask(
         "衛生排水系統",
         drainageMonitor.checkDrainageSystems,
+      );
+      backgroundMonitor.registerMonitoringTask(
+        "電力系統",
+        powerMonitor.checkPowerSystems,
       );
       backgroundMonitor.registerMonitoringTask(
         "消防系統",
@@ -317,7 +344,17 @@ async function startServer() {
 
     const scheduleDailyAtUtc = (hour, minute, fn) => {
       const now = new Date();
-      const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0));
+      const next = new Date(
+        Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate(),
+          hour,
+          minute,
+          0,
+          0,
+        ),
+      );
       if (next.getTime() <= now.getTime()) {
         next.setUTCDate(next.getUTCDate() + 1);
       }
@@ -325,7 +362,10 @@ async function startServer() {
       const safeRun = () => Promise.resolve(fn()).catch(() => {});
       const timeoutId = setTimeout(() => {
         void safeRun();
-        global.__envDayAggIntervalId = setInterval(() => void safeRun(), 24 * 60 * 60 * 1000);
+        global.__envDayAggIntervalId = setInterval(
+          () => void safeRun(),
+          24 * 60 * 60 * 1000,
+        );
       }, delay);
       return timeoutId;
     };
