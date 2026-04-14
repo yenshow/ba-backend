@@ -11,6 +11,24 @@ const alertRuleService = require("./alertRuleService");
 const ERROR_THRESHOLD = 5; // 預設閾值（如果規則不存在時使用）
 
 /**
+ * 規則快取（error_count 只會用到 source+alertType 這一維）
+ * 目的：避免 recordError 每次都查 DB，但仍能在「剛更新規則」後很快生效。
+ */
+const errorCountRuleCache = new Map();
+const ERROR_RULE_CACHE_TTL_MS = 1_000;
+
+async function getCachedErrorCountRule(source, alertType) {
+  const key = `${String(source)}:${String(alertType)}`;
+  const cached = errorCountRuleCache.get(key);
+  if (cached && Date.now() - cached.ts < ERROR_RULE_CACHE_TTL_MS) {
+    return cached.rule;
+  }
+  const rule = await alertRuleService.getErrorCountRule(source, alertType);
+  errorCountRuleCache.set(key, { rule: rule || null, ts: Date.now() });
+  return rule || null;
+}
+
+/**
  * 記錄錯誤（支持多系統來源）
  * @param {string} source - 系統來源 (device, environment, lighting 等)
  * @param {number} sourceId - 來源實體 ID
@@ -24,7 +42,7 @@ async function recordError(
   sourceId,
   alertType,
   errorMessage,
-  metadata = {}
+  metadata = {},
 ) {
   const startTime = Date.now();
 
@@ -40,7 +58,7 @@ async function recordError(
     if (isIgnored) {
       if (process.env.NODE_ENV === "development") {
         console.log(
-          `[errorTracker] ⏭️  來源 ${source}:${sourceId} 的 ${alertType} 警報已被忽視，跳過`
+          `[errorTracker] ⏭️  來源 ${source}:${sourceId} 的 ${alertType} 警報已被忽視，跳過`,
         );
       }
       return false;
@@ -57,7 +75,7 @@ async function recordError(
         last_error_at = ?,
         updated_at = CURRENT_TIMESTAMP
       RETURNING *`,
-      [source, sourceId, alertType, now, now]
+      [source, sourceId, alertType, now, now],
     );
 
     if (!upsertResult || upsertResult.length === 0) {
@@ -66,13 +84,9 @@ async function recordError(
 
     const tracking = upsertResult[0];
 
-    // 3. 延遲查詢規則：只在達到預設閾值且未創建警報時才查詢（優化：減少不必要的規則查詢）
-    let rule = null;
-    let threshold = ERROR_THRESHOLD;
-    if (tracking.error_count >= ERROR_THRESHOLD && !tracking.alert_created) {
-      rule = await alertRuleService.getErrorCountRule(source, alertType);
-      threshold = rule?.condition_config?.min_errors || ERROR_THRESHOLD;
-    }
+    // 3. 取得規則（加 TTL cache）：確保「新增/編輯警報規則」能在短時間內生效
+    const rule = await getCachedErrorCountRule(source, alertType);
+    const threshold = rule?.condition_config?.min_errors || ERROR_THRESHOLD;
 
     // 4. 判斷是否達到閾值並創建/更新警報
     if (tracking.error_count >= threshold) {
@@ -106,13 +120,13 @@ async function recordError(
 
         await alertService.createAlert(alertData);
 
-        // 如果是首次創建警報，標記已創建（用於規則查詢優化）
+        // 如果是首次創建警報，標記已創建
         const isFirstCreation = !tracking.alert_created;
         if (isFirstCreation) {
           await db.query(
             `UPDATE error_tracking SET alert_created = TRUE
             WHERE source = ? AND source_id = ? AND alert_type = ?`,
-            [source, sourceId, alertType]
+            [source, sourceId, alertType],
           );
         }
 
@@ -120,12 +134,12 @@ async function recordError(
         if (isFirstCreation) {
           console.log(
             `[errorTracker] ✅ 警報已創建 | ${source}:${sourceId} | ${alertType} | ` +
-              `錯誤次數:${tracking.error_count}/${threshold} | 嚴重程度:${severity} | 耗時:${duration}ms`
+              `錯誤次數:${tracking.error_count}/${threshold} | 嚴重程度:${severity} | 耗時:${duration}ms`,
           );
         } else if (process.env.NODE_ENV === "development") {
           console.log(
             `[errorTracker] 🔄 警報已更新 | ${source}:${sourceId} | ${alertType} | ` +
-              `錯誤次數:${tracking.error_count}/${threshold} | 耗時:${duration}ms`
+              `錯誤次數:${tracking.error_count}/${threshold} | 耗時:${duration}ms`,
           );
         }
 
@@ -133,7 +147,7 @@ async function recordError(
       } catch (alertError) {
         console.error(
           `[errorTracker] ❌ 創建/更新警報失敗 | ${source}:${sourceId} | ${alertType}:`,
-          alertError.message
+          alertError.message,
         );
         return false;
       }
@@ -145,7 +159,7 @@ async function recordError(
         const duration = Date.now() - startTime;
         console.log(
           `[errorTracker] 📊 錯誤計數更新 | ${source}:${sourceId} | ${alertType} | ` +
-            `當前:${tracking.error_count}/${threshold} | 耗時:${duration}ms`
+            `當前:${tracking.error_count}/${threshold} | 耗時:${duration}ms`,
         );
       }
       return false;
@@ -154,7 +168,7 @@ async function recordError(
     const duration = Date.now() - startTime;
     console.error(
       `[errorTracker] ❌ 記錄錯誤失敗 | ${source}:${sourceId} | ${alertType} | 耗時:${duration}ms:`,
-      error.message
+      error.message,
     );
     return false;
   }
@@ -186,7 +200,7 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
       if (!resolveError.message.includes("未找到可更新的警報")) {
         console.error(
           `[errorTracker] 自動解決警報失敗 (source: ${source}, sourceId: ${sourceId}, type: ${type}):`,
-          resolveError.message
+          resolveError.message,
         );
       }
     }
@@ -204,9 +218,7 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
  */
 async function clearError(source, sourceId, alertType = null) {
   try {
-    const alertTypesToResolve = alertType
-      ? [alertType]
-      : ["offline", "error"];
+    const alertTypesToResolve = alertType ? [alertType] : ["offline", "error"];
 
     // 逐一處理每種 alertType 的 tracking 記錄
     let clearedAny = false;
@@ -244,7 +256,9 @@ async function clearError(source, sourceId, alertType = null) {
         }
 
         if (hadAlert) {
-          const resolvedAny = await resolveActiveAlerts(source, sourceId, [type]);
+          const resolvedAny = await resolveActiveAlerts(source, sourceId, [
+            type,
+          ]);
           console.log(
             `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，已創建警報${resolvedAny ? "並自動解決" : ""}）`,
           );
@@ -261,9 +275,14 @@ async function clearError(source, sourceId, alertType = null) {
       if (tracking.alert_created) {
         const resolvedAny = await resolveActiveAlerts(source, sourceId, [type]);
         if (resolvedAny) {
-          await updateErrorTracking(source, sourceId, {
-            alert_created: false,
-          }, type);
+          await updateErrorTracking(
+            source,
+            sourceId,
+            {
+              alert_created: false,
+            },
+            type,
+          );
         }
         clearedAny = clearedAny || resolvedAny;
       }
@@ -273,7 +292,7 @@ async function clearError(source, sourceId, alertType = null) {
   } catch (error) {
     console.error(
       `[errorTracker] 清除錯誤狀態失敗 (source: ${source}, sourceId: ${sourceId}):`,
-      error
+      error,
     );
     return false;
   }
@@ -292,7 +311,7 @@ async function getErrorTracking(source, sourceId, alertType = null) {
       const result = await db.query(
         `SELECT * FROM error_tracking 
         WHERE source = ? AND source_id = ? AND alert_type = ?`,
-        [source, sourceId, alertType]
+        [source, sourceId, alertType],
       );
       return result && result.length > 0 ? result[0] : null;
     }
@@ -300,7 +319,7 @@ async function getErrorTracking(source, sourceId, alertType = null) {
       `SELECT * FROM error_tracking 
       WHERE source = ? AND source_id = ?
       ORDER BY error_count DESC LIMIT 1`,
-      [source, sourceId]
+      [source, sourceId],
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
@@ -317,7 +336,12 @@ async function getErrorTracking(source, sourceId, alertType = null) {
  * @param {string} [alertType] - 警報類型；未提供時更新該 (source, source_id) 的所有記錄
  * @returns {Promise<void>}
  */
-async function updateErrorTracking(source, sourceId, updates, alertType = null) {
+async function updateErrorTracking(
+  source,
+  sourceId,
+  updates,
+  alertType = null,
+) {
   try {
     const fields = [];
     const params = [];
@@ -344,14 +368,14 @@ async function updateErrorTracking(source, sourceId, updates, alertType = null) 
         `UPDATE error_tracking 
         SET ${fields.join(", ")}
         WHERE source = ? AND source_id = ? AND alert_type = ?`,
-        params
+        params,
       );
     } else {
       await db.query(
         `UPDATE error_tracking 
         SET ${fields.join(", ")}
         WHERE source = ? AND source_id = ?`,
-        params
+        params,
       );
     }
   } catch (error) {

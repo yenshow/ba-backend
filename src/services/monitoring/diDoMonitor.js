@@ -185,7 +185,12 @@ async function checkDiDoAlerts() {
       const systems = await resolveTargetSystems(rule);
       for (const sys of systems) {
         if (!sys.deviceId) continue;
-        tasks.push({ rule, systemId: sys.systemId, deviceId: sys.deviceId, parsed });
+        tasks.push({
+          rule,
+          systemId: sys.systemId,
+          deviceId: sys.deviceId,
+          parsed,
+        });
       }
     }
 
@@ -196,7 +201,11 @@ async function checkDiDoAlerts() {
     for (const t of tasks) {
       const key = `${t.deviceId}:${t.parsed.registerType}:${t.parsed.address}`;
       if (!readKeyMap.has(key)) {
-        readKeyMap.set(key, { deviceId: t.deviceId, parsed: t.parsed, tasks: [] });
+        readKeyMap.set(key, {
+          deviceId: t.deviceId,
+          parsed: t.parsed,
+          tasks: [],
+        });
       }
       readKeyMap.get(key).tasks.push(t);
     }

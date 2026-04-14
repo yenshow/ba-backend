@@ -28,7 +28,7 @@ async function main() {
 
 選項:
   --clear-tracking      同時清除錯誤追蹤表（error_tracking）
-  --clear-rules         清除所有警報規則（alert_rules；alerts.rule_id 會設為 NULL）
+  --clear-rules         清除所有警報規則（alert_rules；依 FK CASCADE 一併刪除 alert_linkages）
   --status <status>     只清除特定狀態的警報（active, resolved, ignored）
   --help, -h            顯示此說明
 

@@ -177,6 +177,22 @@ const yscp = {
 };
 
 /**
+ * 警報每日結案（日界線）：批次 active→resolved、連動 DO 復歸、忽視僅當曆日阻擋
+ */
+const alerts = {
+	dailyRolloverEnabled: toBoolean(getEnv("ALERT_DAILY_ROLLOVER_ENABLED"), true),
+	dailyRolloverTimezone: getEnv("ALERT_DAILY_ROLLOVER_TZ", "Asia/Taipei"),
+	dailyRolloverLocalHour: Math.min(
+		23,
+		Math.max(0, toNumber(getEnv("ALERT_DAILY_ROLLOVER_LOCAL_HOUR"), 0)),
+	),
+	dailyRolloverLocalMinute: Math.min(
+		59,
+		Math.max(0, toNumber(getEnv("ALERT_DAILY_ROLLOVER_LOCAL_MINUTE"), 5)),
+	),
+};
+
+/**
  * MediaMTX 配置（RTSP ingest + WebRTC 分發）
  * 用於攝影機串流：後端依 deviceId 呼叫 API 增刪 path，回傳 webrtcUrl 給前端
  */
@@ -199,6 +215,7 @@ module.exports = {
 	features,
 	license,
 	yscp,
+	alerts,
 	mediaMTX,
 	cors,
 	logging,

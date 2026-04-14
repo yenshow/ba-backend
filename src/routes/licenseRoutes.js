@@ -31,6 +31,21 @@ const toPlatformErrorCode = (error) => {
   return "LICENSE_PLATFORM_ERROR";
 };
 
+const toLicenseApiPayload = async (license) => ({
+  features: license.features || [],
+  quotas: license.quotas || {},
+  usage: await licenseQuotaService.getUsageMap(
+    Object.keys(license.quotas || {}),
+  ),
+  expired: license.expired,
+  serialNumber: license.serialNumber ?? null,
+  licenseKey: license.licenseKey ?? null,
+  activationMethod: license.activationMethod ?? null,
+  deviceFingerprint: license.deviceFingerprint ?? null,
+  extensionKeys: license.extensionKeys ?? [],
+  licenseEntitlements: license.licenseEntitlements ?? [],
+});
+
 /** GET /api/license 需認證；回傳本地授權狀態 */
 router.get(
   "/",
@@ -38,21 +53,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const license = await licenseService.getLicenseState();
     const canActivate = req.user?.role === "admin";
-    const usage = await licenseQuotaService.getUsageMap(
-      Object.keys(license.quotas || {}),
-    );
 
     res.sendSuccess({
-      features: license.features || [],
-      quotas: license.quotas || {},
-      usage,
-      expired: license.expired,
+      ...(await toLicenseApiPayload(license)),
       canActivate,
-      serialNumber: license.serialNumber ?? null,
-      licenseKey: license.licenseKey ?? null,
-      activationMethod: license.activationMethod ?? null,
-      deviceFingerprint: license.deviceFingerprint ?? null,
-      extensionKeys: license.extensionKeys ?? [],
     });
   }),
 );
@@ -110,6 +114,10 @@ router.post(
           quotas: result.quotas || {},
           preserveMainLicenseKey: true,
           appendExtensionKey: trimmedKey,
+          appendLicenseEntitlement: {
+            licenseKey: trimmedKey,
+            features: result.features,
+          },
           deviceFingerprint: result.deviceFingerprint != null
             ? result.deviceFingerprint
             : undefined,
@@ -117,43 +125,29 @@ router.post(
         });
 
         return res.sendSuccess({
-          features: license.features || [],
-          quotas: license.quotas || {},
-          usage: await licenseQuotaService.getUsageMap(
-            Object.keys(license.quotas || {}),
-          ),
-          expired: license.expired,
-          serialNumber: license.serialNumber ?? null,
-          licenseKey: license.licenseKey ?? null,
-          activationMethod: license.activationMethod ?? null,
-          deviceFingerprint: license.deviceFingerprint ?? null,
-          extensionKeys: license.extensionKeys ?? [],
+          ...(await toLicenseApiPayload(license)),
+          canActivate: true,
         });
       }
 
+      const mainKey = result.licenseKey ?? trimmedKey;
       const license = await licenseService.setLicenseState({
         features: result.features,
         quotas: result.quotas || {},
         serialNumber: result.serialNumber ?? null,
-        licenseKey: result.licenseKey ?? trimmedKey,
+        licenseKey: mainKey,
         activationMethod: "online",
         deviceFingerprint: result.deviceFingerprint ?? deviceFingerprint,
         extensionKeys: [],
+        replaceLicenseEntitlements: [
+          { licenseKey: mainKey, features: result.features },
+        ],
         description: `授權啟用（online 主LK, by user:${req.user?.id ?? "unknown"}）`,
       });
 
       return res.sendSuccess({
-        features: license.features || [],
-        quotas: license.quotas || {},
-        usage: await licenseQuotaService.getUsageMap(
-          Object.keys(license.quotas || {}),
-        ),
-        expired: license.expired,
-        serialNumber: license.serialNumber ?? null,
-        licenseKey: license.licenseKey ?? null,
-        activationMethod: license.activationMethod ?? null,
-        deviceFingerprint: license.deviceFingerprint ?? null,
-        extensionKeys: license.extensionKeys ?? [],
+        ...(await toLicenseApiPayload(license)),
+        canActivate: true,
       });
     }
 
@@ -168,21 +162,13 @@ router.post(
     const license = await licenseService.setLicenseState({
       features,
       activationMethod: "manual",
+      replaceLicenseEntitlements: [],
       description: `授權啟用（manual, by user:${req.user?.id ?? "unknown"}）`,
     });
 
     return res.sendSuccess({
-      features: license.features || [],
-      quotas: license.quotas || {},
-      usage: await licenseQuotaService.getUsageMap(
-        Object.keys(license.quotas || {}),
-      ),
-      expired: license.expired,
-      serialNumber: license.serialNumber ?? null,
-      licenseKey: license.licenseKey ?? null,
-      activationMethod: license.activationMethod ?? null,
-      deviceFingerprint: license.deviceFingerprint ?? null,
-      extensionKeys: license.extensionKeys ?? [],
+      ...(await toLicenseApiPayload(license)),
+      canActivate: true,
     });
   }),
 );
@@ -247,13 +233,8 @@ router.post(
     });
 
     return res.sendSuccess({
-      features: next.features || [],
-      expired: next.expired,
-      serialNumber: next.serialNumber ?? null,
-      licenseKey: next.licenseKey ?? null,
-      activationMethod: next.activationMethod ?? null,
-      deviceFingerprint: next.deviceFingerprint ?? null,
-      extensionKeys: next.extensionKeys ?? [],
+      ...(await toLicenseApiPayload(next)),
+      canActivate: true,
     });
   }),
 );
@@ -313,6 +294,8 @@ router.post(
     const activatedKey = typeof payload.licenseKey === "string" ? payload.licenseKey.trim() : null;
 
     if (!isExtension) {
+      const mainLk =
+        typeof payload.licenseKey === "string" ? payload.licenseKey.trim() : null;
       const license = await licenseService.setLicenseState({
         features: payload.features,
         quotas: payload.quotas || {},
@@ -321,21 +304,15 @@ router.post(
         activationMethod: "offline",
         deviceFingerprint: payload.deviceFingerprint ?? null,
         extensionKeys: [],
+        replaceLicenseEntitlements: mainLk
+          ? [{ licenseKey: mainLk, features: payload.features }]
+          : [],
         description: `授權匯入（offline 首次, by user:${req.user?.id ?? "unknown"}）`,
       });
 
       return res.sendSuccess({
-        features: license.features || [],
-        quotas: license.quotas || {},
-        usage: await licenseQuotaService.getUsageMap(
-          Object.keys(license.quotas || {}),
-        ),
-        expired: license.expired,
-        serialNumber: license.serialNumber ?? null,
-        licenseKey: license.licenseKey ?? null,
-        activationMethod: license.activationMethod ?? null,
-        deviceFingerprint: license.deviceFingerprint ?? null,
-        extensionKeys: license.extensionKeys ?? [],
+        ...(await toLicenseApiPayload(license)),
+        canActivate: true,
       });
     }
 
@@ -346,6 +323,9 @@ router.post(
       quotas: payload.quotas || {},
       preserveMainLicenseKey: true,
       appendExtensionKey: activatedKey || undefined,
+      appendLicenseEntitlement: activatedKey
+        ? { licenseKey: activatedKey, features: payload.features }
+        : undefined,
       deviceFingerprint: payload.deviceFingerprint != null
         ? payload.deviceFingerprint
         : undefined,
@@ -353,17 +333,8 @@ router.post(
     });
 
     return res.sendSuccess({
-      features: license.features || [],
-      quotas: license.quotas || {},
-      usage: await licenseQuotaService.getUsageMap(
-        Object.keys(license.quotas || {}),
-      ),
-      expired: license.expired,
-      serialNumber: license.serialNumber ?? null,
-      licenseKey: license.licenseKey ?? null,
-      activationMethod: license.activationMethod ?? null,
-      deviceFingerprint: license.deviceFingerprint ?? null,
-      extensionKeys: license.extensionKeys ?? [],
+      ...(await toLicenseApiPayload(license)),
+      canActivate: true,
     });
   }),
 );

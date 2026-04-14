@@ -10,6 +10,8 @@ const SETTINGS_KEYS = {
   activationMethod: "license_activation_method",
   deviceFingerprint: "license_device_fingerprint",
   extensionKeys: "license_extension_keys",
+  /** JSON：`[{ licenseKey, features[] }]`，記錄各次啟用（主／副 LK）所帶入的功能，供管理介面顯示 */
+  entitlements: "license_entitlements",
 };
 
 /**
@@ -56,6 +58,7 @@ let cached = {
   activationMethod: null,
   deviceFingerprint: null,
   extensionKeys: [],
+  licenseEntitlements: [],
 };
 
 const parseFeaturesValue = (value) => {
@@ -139,6 +142,59 @@ const normalizeFeatureArray = (arr) => {
   return raw.filter((key) => allowed.includes(key));
 };
 
+const parseLicenseEntitlementsValue = (value) => {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return value
+      .filter((x) => x && typeof x === "object" && !Array.isArray(x))
+      .map((x) => ({
+        licenseKey: parseStringValue(x.licenseKey),
+        features: normalizeFeatureArray(x.features),
+      }))
+      .filter((x) => x.licenseKey);
+  }
+  const raw = String(value).trim();
+  if (!raw || raw === "[]") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((x) => x && typeof x === "object" && !Array.isArray(x))
+      .map((x) => ({
+        licenseKey: parseStringValue(x.licenseKey),
+        features: normalizeFeatureArray(x.features),
+      }))
+      .filter((x) => x.licenseKey);
+  } catch {
+    return [];
+  }
+};
+
+const normalizeLicenseEntitlementsInput = (entries) => {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((x) => x && typeof x === "object" && !Array.isArray(x))
+    .map((x) => ({
+      licenseKey: parseStringValue(x.licenseKey),
+      features: normalizeFeatureArray(x.features),
+    }))
+    .filter((x) => x.licenseKey);
+};
+
+const appendLicenseEntitlementEntry = (list, { licenseKey, features } = {}) => {
+  const k = parseStringValue(licenseKey);
+  if (!k) return [...list];
+  const feats = normalizeFeatureArray(features);
+  const idx = list.findIndex((e) => e.licenseKey === k);
+  const entry = { licenseKey: k, features: feats };
+  if (idx >= 0) {
+    const next = [...list];
+    next[idx] = entry;
+    return next;
+  }
+  return [...list, entry];
+};
+
 const normalizeQuotasObject = (quotas) => {
   const obj =
     quotas && typeof quotas === "object" && !Array.isArray(quotas)
@@ -202,6 +258,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
       activationMethod: "open_all",
       deviceFingerprint: null,
       extensionKeys: [],
+      licenseEntitlements: [],
     };
   }
 
@@ -216,6 +273,10 @@ async function getLicenseState({ bypassCache = false } = {}) {
       activationMethod: cached.activationMethod,
       deviceFingerprint: cached.deviceFingerprint,
       extensionKeys: [...cached.extensionKeys],
+      licenseEntitlements: (cached.licenseEntitlements ?? []).map((e) => ({
+        licenseKey: e.licenseKey,
+        features: [...e.features],
+      })),
     };
   }
 
@@ -227,6 +288,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
     SETTINGS_KEYS.activationMethod,
     SETTINGS_KEYS.deviceFingerprint,
     SETTINGS_KEYS.extensionKeys,
+    SETTINGS_KEYS.entitlements,
   ]);
 
   const allowed = getActiveFeatureKeys();
@@ -247,6 +309,9 @@ async function getLicenseState({ bypassCache = false } = {}) {
   const quotas = normalizeQuotasObject(
     parseQuotasValue(settings[SETTINGS_KEYS.quotas]),
   );
+  const licenseEntitlements = parseLicenseEntitlementsValue(
+    settings[SETTINGS_KEYS.entitlements],
+  );
 
   cached = {
     atMs: now,
@@ -257,6 +322,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
     activationMethod,
     deviceFingerprint,
     extensionKeys,
+    licenseEntitlements,
   };
 
   return {
@@ -268,6 +334,10 @@ async function getLicenseState({ bypassCache = false } = {}) {
     activationMethod,
     deviceFingerprint,
     extensionKeys: [...extensionKeys],
+    licenseEntitlements: licenseEntitlements.map((e) => ({
+      licenseKey: e.licenseKey,
+      features: [...e.features],
+    })),
   };
 }
 
@@ -282,6 +352,8 @@ async function getLicenseState({ bypassCache = false } = {}) {
  * @param {string[]|undefined} opts.extensionKeys — 整份取代；未傳則不更新
  * @param {string|undefined} opts.appendExtensionKey — 追加一筆副 LK（去重）
  * @param {string|null|undefined} opts.activationMethod
+ * @param {Array<{licenseKey:string,features:string[]}>|undefined} opts.replaceLicenseEntitlements — 整份取代各 LK 功能明細
+ * @param {{licenseKey:string,features:string[]}|undefined} opts.appendLicenseEntitlement — 追加或更新單一 LK 之明細
  */
 async function setLicenseState({
   features,
@@ -296,6 +368,8 @@ async function setLicenseState({
   appendExtensionKey,
   activationMethod,
   description,
+  replaceLicenseEntitlements,
+  appendLicenseEntitlement,
 } = {}) {
   const current = await getLicenseState({ bypassCache: true });
 
@@ -375,6 +449,31 @@ async function setLicenseState({
     );
   }
 
+  let nextLicenseEntitlements = (current.licenseEntitlements ?? []).map((e) => ({
+    licenseKey: e.licenseKey,
+    features: [...e.features],
+  }));
+  if (replaceLicenseEntitlements !== undefined) {
+    nextLicenseEntitlements = normalizeLicenseEntitlementsInput(
+      replaceLicenseEntitlements,
+    );
+    await settingsService.upsertSetting(
+      SETTINGS_KEYS.entitlements,
+      JSON.stringify(nextLicenseEntitlements),
+      description || "license entitlements",
+    );
+  } else if (appendLicenseEntitlement) {
+    nextLicenseEntitlements = appendLicenseEntitlementEntry(
+      nextLicenseEntitlements,
+      appendLicenseEntitlement,
+    );
+    await settingsService.upsertSetting(
+      SETTINGS_KEYS.entitlements,
+      JSON.stringify(nextLicenseEntitlements),
+      description || "license entitlements",
+    );
+  }
+
   await settingsService.upsertSetting(
     SETTINGS_KEYS.updatedAt,
     new Date().toISOString(),
@@ -411,6 +510,7 @@ async function setLicenseState({
       extensionKeys !== undefined || appendExtensionKey
         ? nextExtensionKeys
         : current.extensionKeys,
+    licenseEntitlements: nextLicenseEntitlements,
   };
 
   return getLicenseState({ bypassCache: true });
@@ -438,6 +538,11 @@ async function resetLicenseState({ description } = {}) {
     reason,
   );
   await settingsService.upsertSetting(
+    SETTINGS_KEYS.entitlements,
+    "[]",
+    reason,
+  );
+  await settingsService.upsertSetting(
     SETTINGS_KEYS.updatedAt,
     new Date().toISOString(),
     null,
@@ -452,6 +557,7 @@ async function resetLicenseState({ description } = {}) {
     activationMethod: null,
     deviceFingerprint: null,
     extensionKeys: [],
+    licenseEntitlements: [],
   };
 
   return getLicenseState({ bypassCache: true });

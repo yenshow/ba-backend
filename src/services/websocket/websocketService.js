@@ -270,6 +270,25 @@ function emitAlertCount(count) {
 }
 
 /**
+ * 每日日界線批次結案後廣播（避免逐筆 alert:updated 風暴）
+ * @param {{ resolvedCount: number, occurredAt: string, timezone: string }} data
+ */
+function emitAlertDailyRollover(data) {
+  safeEmit(
+    "alert:daily_rollover",
+    {
+      resolvedCount: data.resolvedCount,
+      occurredAt: data.occurredAt,
+      timezone: data.timezone,
+      timestamp: new Date().toISOString(),
+    },
+    {
+      logMessage: `日界線結案 ${data.resolvedCount} 筆`,
+    },
+  );
+}
+
+/**
  * 推送設備狀態變化事件
  * @param {string} system - 系統名稱 (environment, lighting, device)
  * @param {number} sourceId - 來源 ID (systemId 或 deviceId)
@@ -545,6 +564,7 @@ module.exports = {
   emitAlertNew,
   emitAlertUpdated,
   emitAlertCount,
+  emitAlertDailyRollover,
   emitDeviceStatus,
   emitBatchDeviceStatus,
   emitMonitoringStatus,

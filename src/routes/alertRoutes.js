@@ -3,6 +3,8 @@ const router = express.Router();
 const alertService = require("../services/alerts/alertService");
 const alertRuleService = require("../services/alerts/alertRuleService");
 const alertLinkageService = require("../services/alerts/alertLinkageService");
+const alertCameraLinkageService = require("../services/alerts/alertCameraLinkageService");
+const alertWebhookSubscriptionService = require("../services/alerts/alertWebhookSubscriptionService");
 const {
   authenticate,
   requireAdminOrOperator,
@@ -22,90 +24,93 @@ const ALLOWED_MESSAGE_TEMPLATE_KEYS = [
   "rule.offline.v1",
   "rule.di.v1",
   "rule.do.v1",
-  "custom",
 ];
 
 /** 閾值條件運算子（不支援 = / ==） */
 const ALLOWED_THRESHOLD_OPERATORS = [">", ">=", "<", "<="];
 
-const ALLOWED_LINKAGE_SEVERITIES = ["warning", "error", "critical"];
-
-function validateLinkagePayload(payload, { allowPartial = false } = {}) {
-  const p = payload || {};
-
-  if (!allowPartial || p.enabled !== undefined) {
+function validateRuleIntegrationsPayload(body) {
+  const b = body || {};
+  if (Object.prototype.hasOwnProperty.call(b, "doLinkage") && b.doLinkage) {
+    const p = b.doLinkage || {};
     if (p.enabled !== undefined && typeof p.enabled !== "boolean") {
-      return "enabled 需為布林值";
+      return "doLinkage.enabled 需為布林值";
     }
-  }
-
-  if (!allowPartial || p.trigger_source !== undefined) {
-    if (!p.trigger_source || typeof p.trigger_source !== "string") {
-      return "trigger_source 為必填且需為字串";
-    }
-  }
-
-  if (!allowPartial || p.trigger_alert_type !== undefined) {
-    if (!p.trigger_alert_type || typeof p.trigger_alert_type !== "string") {
-      return "trigger_alert_type 為必填且需為字串";
-    }
-    if (!ALLOWED_ALERT_TYPES.includes(p.trigger_alert_type)) {
-      return `trigger_alert_type 不合法，支援：${ALLOWED_ALERT_TYPES.join(", ")}`;
-    }
-  }
-
-  if (!allowPartial || p.trigger_dimension_key !== undefined) {
     if (
-      p.trigger_dimension_key !== undefined &&
-      p.trigger_dimension_key !== null &&
-      typeof p.trigger_dimension_key !== "string"
+      p.do_device_id == null ||
+      !Number.isInteger(Number(p.do_device_id)) ||
+      Number(p.do_device_id) <= 0
     ) {
-      return "trigger_dimension_key 需為字串或 null";
+      return "doLinkage.do_device_id 為必填且需為正整數";
+    }
+    if (
+      p.do_address == null ||
+      !Number.isInteger(Number(p.do_address)) ||
+      Number(p.do_address) < 0
+    ) {
+      return "doLinkage.do_address 為必填且需為非負整數";
+    }
+    const v = String(p.do_output_value || "")
+      .trim()
+      .toLowerCase();
+    if (v !== "on" && v !== "off") {
+      return "doLinkage.do_output_value 僅允許 on/off";
+    }
+    if (p.auto_off_seconds != null) {
+      if (
+        !Number.isInteger(Number(p.auto_off_seconds)) ||
+        Number(p.auto_off_seconds) <= 0
+      ) {
+        return "doLinkage.auto_off_seconds 需為正整數或 null";
+      }
     }
   }
 
-  if (!allowPartial || p.trigger_severity_min !== undefined) {
-    const v = p.trigger_severity_min ?? "warning";
-    if (typeof v !== "string" || !ALLOWED_LINKAGE_SEVERITIES.includes(v)) {
-      return `trigger_severity_min 不合法，支援：${ALLOWED_LINKAGE_SEVERITIES.join(", ")}`;
+  if (
+    Object.prototype.hasOwnProperty.call(b, "cameraLinkage") &&
+    b.cameraLinkage
+  ) {
+    const c = b.cameraLinkage || {};
+    if (c.enabled !== undefined && typeof c.enabled !== "boolean") {
+      return "cameraLinkage.enabled 需為布林值";
+    }
+    if (
+      c.camera_device_id != null &&
+      (!Number.isInteger(Number(c.camera_device_id)) ||
+        Number(c.camera_device_id) <= 0)
+    ) {
+      return "cameraLinkage.camera_device_id 需為正整數或 null";
     }
   }
 
-  if (!allowPartial || p.do_device_id !== undefined) {
-    if (p.do_device_id === null || p.do_device_id === undefined) {
-      return "do_device_id 為必填";
+  if (Object.prototype.hasOwnProperty.call(b, "webhookSubscriptions")) {
+    if (!Array.isArray(b.webhookSubscriptions)) {
+      return "webhookSubscriptions 需為陣列";
     }
-    if (!Number.isInteger(p.do_device_id) || p.do_device_id <= 0) {
-      return "do_device_id 需為正整數";
-    }
-  }
-
-  if (!allowPartial || p.do_address !== undefined) {
-    if (p.do_address === null || p.do_address === undefined) {
-      return "do_address 為必填";
-    }
-    if (!Number.isInteger(p.do_address) || p.do_address < 0) {
-      return "do_address 需為非負整數";
-    }
-  }
-
-  if (!allowPartial || p.do_value !== undefined) {
-    if (p.do_value !== undefined && typeof p.do_value !== "boolean") {
-      return "do_value 需為布林值";
-    }
-  }
-
-  if (!allowPartial || p.auto_off_seconds !== undefined) {
-    if (p.auto_off_seconds === null || p.auto_off_seconds === undefined) {
-      // ok
-    } else if (!Number.isInteger(p.auto_off_seconds) || p.auto_off_seconds <= 0) {
-      return "auto_off_seconds 需為正整數或 null";
-    }
-  }
-
-  if (!allowPartial || p.name !== undefined) {
-    if (p.name !== undefined && p.name !== null && typeof p.name !== "string") {
-      return "name 需為字串或 null";
+    for (const it of b.webhookSubscriptions) {
+      if (!it) continue;
+      if (it.enabled !== undefined && typeof it.enabled !== "boolean") {
+        return "webhookSubscriptions[].enabled 需為布林值";
+      }
+      const url = String(it.url || "").trim();
+      if (!url) {
+        return "webhookSubscriptions[].url 為必填";
+      }
+      if (
+        it.secret !== undefined &&
+        it.secret !== null &&
+        typeof it.secret !== "string"
+      ) {
+        return "webhookSubscriptions[].secret 需為字串";
+      }
+      if (it.headers_json !== undefined && it.headers_json !== null) {
+        if (
+          typeof it.headers_json !== "object" ||
+          Array.isArray(it.headers_json)
+        ) {
+          return "webhookSubscriptions[].headers_json 需為物件";
+        }
+      }
     }
   }
 
@@ -237,10 +242,20 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
     return "message_template 需為字串";
   }
 
+  if (
+    payload.message_suffix !== undefined &&
+    payload.message_suffix !== null &&
+    typeof payload.message_suffix !== "string"
+  ) {
+    return "message_suffix 需為字串";
+  }
+
   const condCfg = payload.condition_config;
   const allowedOpHint = `僅支援 ${ALLOWED_THRESHOLD_OPERATORS.join("、")}（不支援 = / ==）`;
   const opStr =
-    condCfg?.operator === undefined || condCfg?.operator === null || condCfg?.operator === ""
+    condCfg?.operator === undefined ||
+    condCfg?.operator === null ||
+    condCfg?.operator === ""
       ? ""
       : String(condCfg.operator);
   const opOk = opStr !== "" && ALLOWED_THRESHOLD_OPERATORS.includes(opStr);
@@ -251,36 +266,6 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
     return `threshold 規則需提供 operator，且 ${allowedOpHint}`;
   }
 
-  return null;
-}
-
-function validateRulePreviewPayload(payload) {
-  if (!payload.source || typeof payload.source !== "string") {
-    return "source 為必填且需為字串";
-  }
-  if (
-    !payload.alert_type ||
-    !ALLOWED_RULE_ALERT_TYPES.includes(payload.alert_type)
-  ) {
-    return `alert_type 為必填且需為規則允許值：${ALLOWED_RULE_ALERT_TYPES.join(", ")}`;
-  }
-  if (
-    payload.condition_type != null &&
-    !ALLOWED_CONDITION_TYPES.includes(payload.condition_type)
-  ) {
-    return `condition_type 不合法，支援：${ALLOWED_CONDITION_TYPES.join(", ")}`;
-  }
-  if (
-    payload.message_template_key != null &&
-    payload.message_template_key !== ""
-  ) {
-    if (typeof payload.message_template_key !== "string") {
-      return "message_template_key 需為字串";
-    }
-    if (!ALLOWED_MESSAGE_TEMPLATE_KEYS.includes(payload.message_template_key)) {
-      return `message_template_key 不合法，支援：${ALLOWED_MESSAGE_TEMPLATE_KEYS.join(", ")}`;
-    }
-  }
   return null;
 }
 
@@ -366,12 +351,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const { source, alert_type, parameter } = req.query;
 
-    if (!source) {
-      return res.sendError("source 參數為必填", 400);
-    }
-
     let rules;
-    if (alert_type === "threshold") {
+    const hasSource = Boolean(source && String(source).trim());
+    if (!hasSource) {
+      // 未指定 source：回傳所有來源的啟用規則（供後台「全部系統」一次載入）
+      rules = await alertRuleService.getAllRules(true);
+    } else if (alert_type === "threshold") {
       // 獲取閾值規則（支持參數過濾）
       rules = await alertRuleService.getThresholdRules(
         source,
@@ -389,122 +374,54 @@ router.get(
   }),
 );
 
-// 規則訊息預覽（canonical 模板 + 變數；不寫入 DB）
+// 批次取得多個規則的整合設定（DO / 攝影機 / Webhook）
 router.post(
-  "/rules/preview-message",
-  requireAdminOrOperator,
-  asyncHandler(async (req, res) => {
-    const validationError = validateRulePreviewPayload(req.body);
-    if (validationError) {
-      return res.sendError(validationError, 400);
-    }
-    const preview = await alertRuleService.previewRuleMessage(req.body);
-    res.sendSuccess(preview);
-  }),
-);
-
-// ========== 警報連動（DI 觸發後 DO 輸出等） ==========
-
-// 連動規則列表（MVP-2）
-router.get(
-  "/linkages",
+  "/rules/integrations/batch",
   requireAdminOrOperator,
   noCache,
   asyncHandler(async (req, res) => {
-    const linkages = await alertLinkageService.listLinkages();
-    res.sendSuccess({ linkages });
-  }),
-);
+    const raw = req.body || {};
+    const ruleIds = Array.isArray(raw.ruleIds) ? raw.ruleIds : [];
+    const ids = [...new Set(ruleIds.map((v) => Number(v)))]
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .slice(0, 1000);
 
-// 建立連動規則（MVP-2）
-router.post(
-  "/linkages",
-  requireAdminOrOperator,
-  asyncHandler(async (req, res) => {
-    const validationError = validateLinkagePayload(req.body, {
-      allowPartial: false,
-    });
-    if (validationError) return res.sendError(validationError, 400);
-
-    const userId = req.user?.id ?? null;
-    const linkage = await alertLinkageService.createLinkage(req.body, userId);
-    res.sendSuccess({ linkage });
-  }),
-);
-
-// 更新連動規則（MVP-2）
-router.put(
-  "/linkages/:id",
-  requireAdminOrOperator,
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const validationError = validateLinkagePayload(req.body, {
-      allowPartial: true,
-    });
-    if (validationError) return res.sendError(validationError, 400);
-
-    const userId = req.user?.id ?? null;
-    const linkage = await alertLinkageService.updateLinkage(
-      Number(req.params.id),
-      req.body,
-      userId,
-    );
-    res.sendSuccess({ linkage });
-  }),
-);
-
-// 刪除連動規則（MVP-2）
-router.delete(
-  "/linkages/:id",
-  requireAdminOrOperator,
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const linkage = await alertLinkageService.deleteLinkage(Number(req.params.id));
-    res.sendSuccess({ linkage });
-  }),
-);
-
-// 手動強制關閉 DO（manual off）
-router.post(
-  "/do-outputs/manual-off",
-  requireAdminOrOperator,
-  asyncHandler(async (req, res) => {
-    const { do_device_id, do_address, reason, expires_at, linkage_id } = req.body || {};
-    if (!Number.isInteger(do_device_id) || do_device_id <= 0) {
-      return res.sendError("do_device_id 需為正整數", 400);
-    }
-    if (!Number.isInteger(do_address) || do_address < 0) {
-      return res.sendError("do_address 需為非負整數", 400);
+    if (ids.length === 0) {
+      return res.sendSuccess({});
     }
 
-    const userId = req.user?.id ?? null;
-    const result = await alertLinkageService.manualOffDoOutput(
-      { linkage_id, do_device_id, do_address, reason, expires_at },
-      userId,
-    );
-    res.sendSuccess(result);
+    const [doLinkages, cameraLinkages, webhookSubs] = await Promise.all([
+      alertLinkageService.getLatestLinkagesByRuleIds(ids),
+      alertCameraLinkageService.getByRuleIds(ids),
+      alertWebhookSubscriptionService.listByRuleIds(ids),
+    ]);
+
+    const result = {};
+    for (const id of ids) {
+      result[id] = { doLinkage: null, cameraLinkage: null, webhookSubscriptions: [] };
+    }
+
+    for (const d of doLinkages || []) {
+      const rid = d?.rule_id != null ? Number(d.rule_id) : null;
+      if (!rid || !result[rid]) continue;
+      result[rid].doLinkage = d;
+    }
+    for (const c of cameraLinkages || []) {
+      const rid = c?.rule_id != null ? Number(c.rule_id) : null;
+      if (!rid || !result[rid]) continue;
+      result[rid].cameraLinkage = c;
+    }
+    for (const w of webhookSubs || []) {
+      const rid = w?.rule_id != null ? Number(w.rule_id) : null;
+      if (!rid || !result[rid]) continue;
+      result[rid].webhookSubscriptions.push(w);
+    }
+
+    return res.sendSuccess(result);
   }),
 );
 
-// 解除手動覆寫（恢復自動連動）
-router.post(
-  "/do-outputs/release-manual-off",
-  requireAdminOrOperator,
-  asyncHandler(async (req, res) => {
-    const { do_device_id, do_address } = req.body || {};
-    if (!Number.isInteger(do_device_id) || do_device_id <= 0) {
-      return res.sendError("do_device_id 需為正整數", 400);
-    }
-    if (!Number.isInteger(do_address) || do_address < 0) {
-      return res.sendError("do_address 需為非負整數", 400);
-    }
-    const result = await alertLinkageService.releaseManualOffOverride({
-      do_device_id,
-      do_address,
-    });
-    res.sendSuccess(result);
-  }),
-);
+// 規則訊息預覽 API 已移除（訊息模板固定 + 後綴，前端不提供預覽）
 
 // 建立警報規則（需要 admin/operator 權限）
 router.post(
@@ -520,6 +437,80 @@ router.post(
 
     const rule = await alertRuleService.createAlertRule(req.body);
     res.sendSuccess({ rule });
+  }),
+);
+
+// 取得單一規則的整合設定（連動 DO / 攝影機 / Webhook）
+router.get(
+  "/rules/:id/integrations",
+  requireAdminOrOperator,
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const ruleId = Number(req.params.id);
+    const doLinkage =
+      await alertLinkageService.getSingleLinkageByRuleId(ruleId);
+    const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
+    const webhookSubscriptions =
+      await alertWebhookSubscriptionService.listByRuleId(ruleId);
+    res.sendSuccess({ doLinkage, cameraLinkage, webhookSubscriptions });
+  }),
+);
+
+// 更新單一規則的整合設定（以 rule_id 為主鍵 upsert）
+router.put(
+  "/rules/:id/integrations",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const ruleId = Number(req.params.id);
+    const userId = req.user?.id ?? null;
+    const body = req.body || {};
+
+    const integrationErr = validateRuleIntegrationsPayload(body);
+    if (integrationErr) return res.sendError(integrationErr, 400);
+
+    // DO linkage
+    if (Object.prototype.hasOwnProperty.call(body, "doLinkage")) {
+      if (!body.doLinkage) {
+        await alertLinkageService.deleteAllLinkagesForRule(ruleId);
+      } else {
+        await alertLinkageService.upsertSingleLinkageForRule(
+          ruleId,
+          body.doLinkage,
+          userId,
+        );
+      }
+    }
+
+    // Camera linkage
+    if (Object.prototype.hasOwnProperty.call(body, "cameraLinkage")) {
+      if (!body.cameraLinkage) {
+        await alertCameraLinkageService.deleteForRule(ruleId);
+      } else {
+        await alertCameraLinkageService.upsertForRule(
+          ruleId,
+          body.cameraLinkage,
+          userId,
+        );
+      }
+    }
+
+    // Webhook subscriptions (replace-all)
+    if (Object.prototype.hasOwnProperty.call(body, "webhookSubscriptions")) {
+      await alertWebhookSubscriptionService.replaceForRule(
+        ruleId,
+        body.webhookSubscriptions,
+        userId,
+      );
+    }
+
+    const doLinkage =
+      await alertLinkageService.getSingleLinkageByRuleId(ruleId);
+    const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
+    const webhookSubscriptions =
+      await alertWebhookSubscriptionService.listByRuleId(ruleId);
+    res.sendSuccess({ doLinkage, cameraLinkage, webhookSubscriptions });
   }),
 );
 

@@ -33,6 +33,7 @@
     "express": "^5.1.0",
     "form-data": "^4.0.5",
     "jsonwebtoken": "^9.0.2",
+    "luxon": "^3.7.2",
     "modbus-serial": "^8.0.23",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",

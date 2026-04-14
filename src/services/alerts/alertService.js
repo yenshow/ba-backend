@@ -1,6 +1,14 @@
 const db = require("../../database/db");
+const config = require("../../config");
+const { getCalendarDateKeyInTimeZone } = require("../../utils/alertRolloverTz");
 const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");
+
+/** 忽視「僅當曆日」：設定時區下今日之 YYYY-MM-DD */
+function ignoreEffectiveTodayKey() {
+  const tz = config.alerts.dailyRolloverTimezone;
+  return { tz, todayKey: getCalendarDateKeyInTimeZone(new Date(), tz) };
+}
 
 /**
  * 統一警報服務
@@ -121,6 +129,7 @@ async function queryAlerts(
 
 /**
  * 查詢被忽視的警報（Incident key）
+ * 忽視僅在「設定時區之當曆日」阻擋 createAlert；跨曆日後同列仍存在但不阻擋。
  */
 async function findIgnoredAlert(
   source,
@@ -128,17 +137,22 @@ async function findIgnoredAlert(
   alertType,
   dimensionKey = null,
 ) {
-  const alerts = await queryAlerts(
-    source,
-    sourceId,
-    alertType,
-    ALERT_STATUS.IGNORED,
-    dimensionKey,
-    null, // 不限日期
-    null, // 不需要排序
-    1, // 只取第一個
+  const dk = dimensionKey != null ? normalizeDimensionValue(dimensionKey) : "default";
+  const rows = await db.query(
+    `SELECT * FROM alerts
+     WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?
+       AND dimension_key = ? AND ignored_at IS NOT NULL
+     ORDER BY ignored_at DESC NULLS LAST
+     LIMIT 20`,
+    [source, sourceId, alertType, ALERT_STATUS.IGNORED, dk],
   );
-  return alerts.length > 0 ? alerts[0] : null;
+  const { tz, todayKey } = ignoreEffectiveTodayKey();
+  for (const row of rows || []) {
+    if (getCalendarDateKeyInTimeZone(row.ignored_at, tz) === todayKey) {
+      return row;
+    }
+  }
+  return null;
 }
 
 /**
@@ -348,6 +362,7 @@ const ALERT_SOURCES = {
   DEVICE: "device",
   ENVIRONMENT: "environment",
   LIGHTING: "lighting",
+  PEOPLE_COUNTING: "people_counting",
   DRAINAGE: "drainage",
   POWER: "power",
   HVAC: "hvac",
@@ -1203,18 +1218,24 @@ async function isSourceIgnored(
       message,
       explicitDimensionKey,
     );
-    const result = await db.query(
-      `SELECT id FROM alerts 
-			WHERE source = ? 
-				AND source_id = ? 
-				AND alert_type = ? 
-				AND status = ?
-        AND dimension_key = ?
-			LIMIT 1`,
+    const rows = await db.query(
+      `SELECT id, ignored_at FROM alerts
+       WHERE source = ?
+         AND source_id = ?
+         AND alert_type = ?
+         AND status = ?
+         AND dimension_key = ?
+         AND ignored_at IS NOT NULL
+       ORDER BY ignored_at DESC NULLS LAST
+       LIMIT 20`,
       [source, sourceId, alertType, ALERT_STATUS.IGNORED, dimensionKey],
     );
-
-    return result && result.length > 0;
+    const { tz, todayKey } = ignoreEffectiveTodayKey();
+    return (rows || []).some(
+      (r) =>
+        r.ignored_at &&
+        getCalendarDateKeyInTimeZone(r.ignored_at, tz) === todayKey,
+    );
   } catch (error) {
     console.error(`[alertService] 檢查忽視狀態失敗:`, error);
     return false;
@@ -1335,6 +1356,67 @@ function emitUnresolvedAlertCount() {
       unresolvedCountTimer = null;
     }
   }, UNRESOLVED_COUNT_DEBOUNCE_MS);
+}
+
+/**
+ * 日界線：將所有 active 批次結案為 resolved，寫入 alert_events、連動 DO 復歸、廣播 alert:daily_rollover 與 alert:count
+ * @returns {Promise<{ resolvedCount: number }>}
+ */
+async function resolveAllActiveForDailyRollover() {
+  const tz = config.alerts.dailyRolloverTimezone;
+  const occurredAt = new Date().toISOString();
+  const snapshot = await db.query(`SELECT * FROM alerts WHERE status = ?`, [
+    ALERT_STATUS.ACTIVE,
+  ]);
+  let resolvedCount = 0;
+
+  if ((snapshot?.length ?? 0) > 0) {
+    try {
+      await alertLinkageService.revertLinkagesForDailyRollover(snapshot);
+    } catch (linkErr) {
+      devLog.warn(
+        `[alertService] 日界線連動復歸部分失敗: ${linkErr?.message || linkErr}`,
+      );
+    }
+    const payloadJson = JSON.stringify({ reason: "daily_rollover" });
+    try {
+      resolvedCount = await db.transaction(async (tq) => {
+        const rows = await tq(
+          `
+          WITH closing AS (
+            UPDATE alerts
+            SET status = 'resolved'::alert_status, updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'active'::alert_status
+            RETURNING id
+          ),
+          ins AS (
+            INSERT INTO alert_events (alert_id, event_type, old_status, new_status, payload, actor_user_id)
+            SELECT id, 'resolved', 'active'::alert_status, 'resolved'::alert_status, ?::jsonb, NULL
+            FROM closing
+            RETURNING alert_id
+          )
+          SELECT count(*)::int AS resolved_count FROM ins
+          `,
+          [payloadJson],
+        );
+        return rows[0]?.resolved_count ?? 0;
+      });
+    } catch (err) {
+      console.error("[alertService] 日界線批次結案失敗:", err);
+      throw err;
+    }
+    if (resolvedCount > 0) {
+      devLog.log(`[alertService] 日界線結案完成: ${resolvedCount} 筆`);
+    }
+  }
+
+  websocketService.emitAlertDailyRollover({
+    resolvedCount,
+    occurredAt,
+    timezone: tz,
+  });
+  emitUnresolvedAlertCount();
+  return { resolvedCount };
 }
 
 /**
@@ -1471,6 +1553,7 @@ module.exports = {
   unresolveAlert,
   isSourceIgnored,
   getUnresolvedAlertCount,
+  resolveAllActiveForDailyRollover,
   findAllActiveAlerts,
   ALERT_SOURCES,
   ALERT_STATUS,

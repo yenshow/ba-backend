@@ -20,10 +20,8 @@ const CANONICAL_TEMPLATES = {
     "{location_label} {parameter_name} {operator} {threshold}{unit}（當前 {current_value}{unit}）",
   [MESSAGE_TEMPLATE_KEYS.OFFLINE_V1]:
     "{location_label} 連續 {error_count} 次無法連接",
-  [MESSAGE_TEMPLATE_KEYS.DI_V1]:
-    "{location_label} DI 位址 {di_address} 觸發",
-  [MESSAGE_TEMPLATE_KEYS.DO_V1]:
-    "{location_label} DO 位址 {do_address} 觸發",
+  [MESSAGE_TEMPLATE_KEYS.DI_V1]: "{location_label} DI {di_address} 觸發",
+  [MESSAGE_TEMPLATE_KEYS.DO_V1]: "{location_label} DO {do_address} 觸發",
 };
 
 const LOCATION_SYSTEM_SOURCES = new Set([
@@ -149,9 +147,6 @@ function extractIoAddress(rule) {
 }
 
 function resolveRuleTemplate(rule) {
-  if (rule.message_template_custom && rule.message_template) {
-    return rule.message_template;
-  }
   const key = rule.message_template_key;
   if (key && CANONICAL_TEMPLATES[key]) {
     return CANONICAL_TEMPLATES[key];
@@ -238,10 +233,8 @@ async function buildRuleMessageRenderContext(rule, runtimeVars = {}) {
   const diAddress = rule.alert_type === "di" ? ioAddr : "";
   const doAddress = rule.alert_type === "do" ? ioAddr : "";
 
-  const { displayName, zoneLocationSuffix } = await resolveMessageLocationPrefix(
-    rule,
-    runtimeVars,
-  );
+  const { displayName, zoneLocationSuffix } =
+    await resolveMessageLocationPrefix(rule, runtimeVars);
 
   const location_label = `${displayName}${zoneLocationSuffix}`;
 
@@ -298,7 +291,8 @@ async function formatRuleMessageFromContext(rule, runtimeVars) {
  */
 async function renderRuleMessage(rule, runtimeVars = {}) {
   const { rendered } = await formatRuleMessageFromContext(rule, runtimeVars);
-  return rendered;
+  const suffix = rule?.message_suffix != null ? String(rule.message_suffix) : "";
+  return rendered + suffix;
 }
 
 /**
@@ -350,26 +344,15 @@ async function previewRuleMessage(payload) {
 
 function resolvePersistedTemplateFields(payload) {
   const alertType = payload.alert_type;
-  const custom = Boolean(payload.message_template_custom);
-  let key = inferDefaultTemplateKey(alertType);
-  if (
-    !custom &&
-    payload.message_template_key &&
-    CANONICAL_TEMPLATES[payload.message_template_key]
-  ) {
-    key = payload.message_template_key;
+  // 訊息模板固定：一律使用 canonical（不允許 custom 全文）
+  let key = inferDefaultTemplateKey(alertType) || MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
+  if (!CANONICAL_TEMPLATES[key]) {
+    key = MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
   }
-  if (custom) {
-    key = MESSAGE_TEMPLATE_KEYS.CUSTOM;
-  }
-  const messageTemplate = custom
-    ? String(payload.message_template || "")
-    : key
-      ? getCanonicalTemplateString(key)
-      : String(payload.message_template || "");
+  const messageTemplate = key ? getCanonicalTemplateString(key) : "";
   return {
     message_template_key: key,
-    message_template_custom: custom,
+    message_template_custom: false,
     message_template: messageTemplate,
   };
 }
@@ -384,8 +367,8 @@ const SEVERITY_ORDER = {
 };
 
 /**
- * 閾值規則緩存（規則寫入資料庫後就是固定的，可以永久緩存）
- * key: source, value: { rules: Array, timestamp: number }
+ * 閾值規則快取（以 source 為 key）
+ * 注意：規則可被新增/編輯/刪除，所以快取必須在 CRUD 後清除（見 create/update/delete 內 clearThresholdRulesCache）。
  */
 const thresholdRulesCache = new Map();
 
@@ -435,8 +418,7 @@ async function getAlertRules(source, alertType, enabled = true) {
 }
 
 /**
- * 查詢閾值規則（帶緩存）
- * 規則寫入資料庫後就是固定的，可以永久緩存直到手動清除
+ * 查詢閾值規則（帶快取；CRUD 後會清除快取）
  * @param {string} source - 系統來源
  * @param {string} parameter - 參數名稱（可選）
  * @returns {Promise<Array>} 閾值規則列表
@@ -461,7 +443,7 @@ async function getThresholdRules(source, parameter = null) {
       const result = await db.query(query, [source]);
       const rules = result || [];
 
-      // 永久緩存（規則寫入後就是固定的）
+      // 快取：避免 monitor 每輪重複查 DB；規則變更時會清除
       thresholdRulesCache.set(cacheKey, {
         rules: rules,
         timestamp: Date.now(),
@@ -614,6 +596,7 @@ async function createAlertRule(payload) {
     target_id = null,
     condition_type = null,
     condition_config = null,
+    message_suffix = null,
     enabled = true,
   } = payload;
 
@@ -637,9 +620,10 @@ async function createAlertRule(payload) {
       message_template_key,
       message_template_custom,
       message_template,
+      message_suffix,
       enabled
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?)
     RETURNING *
   `;
 
@@ -656,6 +640,7 @@ async function createAlertRule(payload) {
     persisted.message_template_key,
     persisted.message_template_custom,
     persisted.message_template,
+    message_suffix != null ? String(message_suffix) : null,
     enabled,
   ]);
 
@@ -763,6 +748,12 @@ async function updateAlertRule(id, updates) {
   if (effectiveUpdates.message_template_custom !== undefined) {
     fields.push("message_template_custom = ?");
     params.push(effectiveUpdates.message_template_custom);
+  }
+  if (effectiveUpdates.message_suffix !== undefined) {
+    fields.push("message_suffix = ?");
+    params.push(
+      effectiveUpdates.message_suffix === null ? null : String(effectiveUpdates.message_suffix),
+    );
   }
   if (effectiveUpdates.enabled !== undefined) {
     fields.push("enabled = ?");
@@ -996,12 +987,39 @@ async function getEnabledDiDoRules() {
   }
 }
 
+/**
+ * 查詢所有來源的規則（預設只回傳 enabled=true）
+ * 目的：支援後台列表「全部系統」一次載入，避免前端 source N 次請求。
+ * @param {boolean} enabled - 是否只查詢啟用的規則（預設 true）
+ * @returns {Promise<Array>}
+ */
+async function getAllRules(enabled = true) {
+  try {
+    let query = `
+      SELECT * FROM alert_rules
+      WHERE 1=1
+    `;
+    const params = [];
+    if (enabled) {
+      query += " AND enabled = TRUE";
+    }
+    query +=
+      " ORDER BY source ASC, CASE severity WHEN 'critical' THEN 1 WHEN 'error' THEN 2 WHEN 'warning' THEN 3 END, id DESC";
+    const result = await db.query(query, params);
+    return result || [];
+  } catch (error) {
+    console.error("[alertRuleService] 查詢所有來源規則失敗:", error);
+    return [];
+  }
+}
+
 module.exports = {
   getAlertRules,
   getThresholdRules,
   getErrorCountRule,
   getEnabledDiDoRules,
   getAllRulesForSource,
+  getAllRules,
   createAlertRule,
   updateAlertRule,
   deleteAlertRule,

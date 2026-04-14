@@ -711,6 +711,7 @@ async function initSchema() {
 				condition_type VARCHAR(50),
 				condition_config JSONB,
 				message_template TEXT,
+        message_suffix TEXT,
 				enabled BOOLEAN DEFAULT TRUE,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -756,6 +757,12 @@ async function initSchema() {
           WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_template_custom'
         ) THEN
           ALTER TABLE alert_rules ADD COLUMN message_template_custom BOOLEAN NOT NULL DEFAULT FALSE;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_suffix'
+        ) THEN
+          ALTER TABLE alert_rules ADD COLUMN message_suffix TEXT;
         END IF;
       END $$;
     `);
@@ -805,62 +812,102 @@ async function initSchema() {
     `);
     console.log("✅ alert_events 表已建立（警報事件流）");
 
-    // ========== 警報連動（MVP-1/2） ==========
+    // ========== 警報連動（掛載 alert_rules） ==========
+    // 舊版以 trigger_* 平行描述條件；遷移時整表重建（連動執行紀錄一併清空）
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'alert_linkages'
+            AND column_name = 'trigger_source'
+        ) THEN
+          DROP TABLE IF EXISTS alert_linkage_executions CASCADE;
+          DROP TABLE IF EXISTS alert_linkages CASCADE;
+        END IF;
+      END $$;
+    `);
 
-    // 警報連動規則：DI 警報觸發後可連動 DO（alarm out）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_linkages (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(120),
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
-        trigger_source alert_source NOT NULL,
-        trigger_alert_type alert_type NOT NULL,
-        trigger_dimension_key VARCHAR(120),
-        trigger_severity_min alert_severity NOT NULL DEFAULT 'warning',
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
         do_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
         do_address INTEGER,
-        do_value BOOLEAN NOT NULL DEFAULT TRUE,
+        do_output_value VARCHAR(8) NOT NULL DEFAULT 'on' CHECK (do_output_value IN ('on', 'off')),
         auto_off_seconds INTEGER,
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // 遷移：移除舊版 name 欄位（連動不需要命名）
+    await targetPool.query(`
+      DO $$ 
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'alert_linkages'
+            AND column_name = 'name'
+        ) THEN
+          ALTER TABLE alert_linkages DROP COLUMN name;
+        END IF;
+        -- 遷移：do_value(boolean) -> do_output_value('on'/'off')
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'alert_linkages' AND column_name = 'do_output_value'
+        ) THEN
+          ALTER TABLE alert_linkages ADD COLUMN do_output_value VARCHAR(8) NOT NULL DEFAULT 'on';
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'alert_linkages' AND column_name = 'do_value'
+        ) THEN
+          -- 將舊資料回填到新欄位（true->on, false->off）
+          UPDATE alert_linkages
+          SET do_output_value = CASE WHEN do_value = TRUE THEN 'on' ELSE 'off' END
+          WHERE do_value IS NOT NULL;
+          ALTER TABLE alert_linkages DROP COLUMN do_value;
+        END IF;
+      END $$;
+    `);
     await createUpdatedAtTrigger(targetPool, "alert_linkages");
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_enabled ON alert_linkages(enabled);
-      CREATE INDEX IF NOT EXISTS idx_alert_linkages_trigger ON alert_linkages(trigger_source, trigger_alert_type);
+      CREATE INDEX IF NOT EXISTS idx_alert_linkages_rule_id ON alert_linkages(rule_id);
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_do_target ON alert_linkages(do_device_id, do_address);
     `);
-    console.log("✅ alert_linkages 表已建立（警報連動規則）");
+    console.log("✅ alert_linkages 表已建立（警報連動規則，綁定 alert_rules）");
 
-    // DO 人工覆寫：強制關閉（manual off）期間禁止自動連動把 DO 打開
+    // 移除舊版 DO 人工覆寫（manual off）機制：改為「手動觸發」一次性寫入
     await targetPool.query(`
-      CREATE TABLE IF NOT EXISTS do_output_overrides (
-        id SERIAL PRIMARY KEY,
-        do_device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-        do_address INTEGER NOT NULL,
-        mode VARCHAR(30) NOT NULL CHECK (mode IN ('manual_off')),
-        reason TEXT,
-        expires_at TIMESTAMP,
-        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(do_device_id, do_address, mode)
-      )
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name = 'do_output_overrides'
+        ) THEN
+          DROP TABLE IF EXISTS do_output_overrides CASCADE;
+        END IF;
+      END $$;
     `);
-    await targetPool.query(`
-      CREATE INDEX IF NOT EXISTS idx_do_output_overrides_device_addr ON do_output_overrides(do_device_id, do_address);
-      CREATE INDEX IF NOT EXISTS idx_do_output_overrides_expires_at ON do_output_overrides(expires_at);
-    `);
-    console.log("✅ do_output_overrides 表已建立（DO 人工覆寫）");
 
     // 連動執行記錄（稽核）
+    // 若舊表存在，直接重建以更新 execution_type 白名單
+    await targetPool.query(`
+      DROP TABLE IF EXISTS alert_linkage_executions CASCADE;
+    `);
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_linkage_executions (
         id BIGSERIAL PRIMARY KEY,
         linkage_id INTEGER NOT NULL REFERENCES alert_linkages(id) ON DELETE CASCADE,
         alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
-        execution_type VARCHAR(30) NOT NULL CHECK (execution_type IN ('trigger', 'auto_off', 'manual_off')),
+        execution_type VARCHAR(30) NOT NULL CHECK (execution_type IN ('trigger', 'auto_off', 'manual_trigger', 'rollover_revert')),
         do_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
         do_address INTEGER,
         do_value BOOLEAN,
@@ -876,6 +923,48 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_do_target ON alert_linkage_executions(do_device_id, do_address, created_at DESC);
     `);
     console.log("✅ alert_linkage_executions 表已建立（連動執行記錄）");
+
+    // ========== 警報攝影機連動（rule_id -> camera device） ==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_camera_linkages (
+        id SERIAL PRIMARY KEY,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        camera_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rule_id)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_camera_linkages");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_enabled ON alert_camera_linkages(enabled);
+      CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_rule_id ON alert_camera_linkages(rule_id);
+      CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_camera ON alert_camera_linkages(camera_device_id);
+    `);
+    console.log("✅ alert_camera_linkages 表已建立（攝影機連動）");
+
+    // ========== 警報外部通知（Webhook）==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_webhook_subscriptions (
+        id SERIAL PRIMARY KEY,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        url TEXT NOT NULL,
+        secret TEXT,
+        headers_json JSONB,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_webhook_subscriptions");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_webhook_subscriptions_rule_id ON alert_webhook_subscriptions(rule_id);
+      CREATE INDEX IF NOT EXISTS idx_alert_webhook_subscriptions_enabled ON alert_webhook_subscriptions(enabled);
+    `);
+    console.log("✅ alert_webhook_subscriptions 表已建立（Webhook 設定）");
 
     // 建立 lighting_categories 表
     await targetPool.query(`

@@ -242,6 +242,7 @@ async function checkEnvironmentLocations() {
         });
 
         // 記錄設備數值（如果設備配置了 logging）
+        let sensorDataForThreshold = null;
         const deviceId = location.device_id
           ? parseInt(location.device_id)
           : null;
@@ -270,6 +271,7 @@ async function checkEnvironmentLocations() {
                 }
                 const dataRounded =
                   environmentReadingsService.roundDataToOneDecimal(data);
+                sensorDataForThreshold = dataRounded;
                 const ts = new Date().toISOString();
                 const now = Date.now();
                 const rawKey = `${location.location_id}:${deviceId}`;
@@ -322,7 +324,7 @@ async function checkEnvironmentLocations() {
         }
 
         // 讀取成功後，檢查閾值（僅在設備連接正常時）
-        // 從 environment_readings 獲取最新數據進行閾值檢查
+        // 優先用「本次即時讀取」資料；若無（例如 logging 未啟用），再回退用 environment_readings
         try {
           if (!deviceId) {
             return {
@@ -332,45 +334,52 @@ async function checkEnvironmentLocations() {
             };
           }
 
-          const latestReading = await db.query(
-            `SELECT data
-             FROM environment_readings
-             WHERE location_id = $1
-               AND recorded_at >= NOW() - INTERVAL '1 minute'
-             ORDER BY recorded_at DESC
-             LIMIT 1`,
-            [location.location_id],
-          );
-
-          if (
-            latestReading &&
-            latestReading.length > 0 &&
-            latestReading[0].data
-          ) {
-            const sensorData =
-              typeof latestReading[0].data === "object"
-                ? latestReading[0].data
-                : JSON.parse(latestReading[0].data || "{}");
-
-            // 調試日誌：只在需要時輸出（可通過環境變數控制）
-            // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
-            if (process.env.ENABLE_DETAILED_LOGS === "true") {
-              logger.debug(
-                `位置 ${location.location_id} (${location.location_name}) 感測器數據`,
-                {
-                  locationId: location.location_id,
-                  locationName: location.location_name,
-                  sensorData,
-                  module: "environmentMonitor",
-                },
-              );
-            }
-
-            // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
-            await checkAndResolveThresholds(location.system_id, sensorData, {
+          if (sensorDataForThreshold) {
+            await checkAndResolveThresholds(location.system_id, sensorDataForThreshold, {
               name: location.location_name,
               zone_name: location.zone_name,
             });
+          } else {
+            const latestReading = await db.query(
+              `SELECT data
+               FROM environment_readings
+               WHERE location_id = $1
+                 AND recorded_at >= NOW() - INTERVAL '10 minutes'
+               ORDER BY recorded_at DESC
+               LIMIT 1`,
+              [location.location_id],
+            );
+
+            if (
+              latestReading &&
+              latestReading.length > 0 &&
+              latestReading[0].data
+            ) {
+              const sensorData =
+                typeof latestReading[0].data === "object"
+                  ? latestReading[0].data
+                  : JSON.parse(latestReading[0].data || "{}");
+
+              // 調試日誌：只在需要時輸出（可通過環境變數控制）
+              // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
+              if (process.env.ENABLE_DETAILED_LOGS === "true") {
+                logger.debug(
+                  `位置 ${location.location_id} (${location.location_name}) 感測器數據`,
+                  {
+                    locationId: location.location_id,
+                    locationName: location.location_name,
+                    sensorData,
+                    module: "environmentMonitor",
+                  },
+                );
+              }
+
+              // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
+              await checkAndResolveThresholds(location.system_id, sensorData, {
+                name: location.location_name,
+                zone_name: location.zone_name,
+              });
+            }
           }
         } catch (thresholdError) {
           // 閾值檢查失敗不影響連線檢查結果
@@ -563,8 +572,7 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
     // 按參數分組規則（每個參數只匹配最嚴重的規則）
     const parameterRules = alertRuleService.groupRulesByParameter(rules);
 
-    // 記錄哪些參數觸發了警報，以及每個參數的當前狀態
-    const triggeredParameters = new Set();
+    // 記錄每個參數的當前狀態
     const parameterExceededStatus = new Map(); // parameter -> { exceeded: boolean, matchedRule: rule|null }
 
     // 第一階段：檢查每個參數的規則，記錄狀態
@@ -596,10 +604,6 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         matchedRule: matchedRule,
         value: value,
       });
-
-      if (thresholdExceeded) {
-        triggeredParameters.add(parameter);
-      }
 
       // 調試日誌：只在超過閾值或啟用詳細日誌時輸出
       if (thresholdExceeded || process.env.ENABLE_DETAILED_LOGS === "true") {
@@ -645,8 +649,6 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
       } else {
         // 數值未超過閾值，如果有對應的 active 警報，則解決它
         // 使用 findAllActiveAlerts 並傳遞參數，精確匹配需要解決的警報
-        const parameterDisplayName =
-          alertRuleService.getParameterDisplayName(parameter);
         const parameterAlerts = await alertService.findAllActiveAlerts(
           alertService.ALERT_SOURCES.ENVIRONMENT,
           systemId,
@@ -680,8 +682,6 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
       }
 
       // 檢查是否有該參數的警報（使用參數顯示名稱精確匹配）
-      const parameterDisplayName =
-        alertRuleService.getParameterDisplayName(parameter);
       const parameterAlerts = await alertService.findAllActiveAlerts(
         alertService.ALERT_SOURCES.ENVIRONMENT,
         systemId,

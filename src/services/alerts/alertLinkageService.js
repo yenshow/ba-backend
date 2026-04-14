@@ -6,22 +6,11 @@ const logger = require("../../utils/logger");
 
 const linkageLogger = logger.createLogger("alertLinkageService");
 
-const SEVERITY_RANK = {
-  warning: 1,
-  error: 2,
-  critical: 3,
-};
-
-const isSeverityAtLeast = (severity, minSeverity) => {
-  const s = SEVERITY_RANK[String(severity || "").toLowerCase()] || 0;
-  const m = SEVERITY_RANK[String(minSeverity || "").toLowerCase()] || 0;
-  return s >= m;
-};
-
 const nowIso = () => new Date().toISOString();
 
 const autoOffTimers = new Map(); // key -> Timeout
-const buildDoKey = (doDeviceId, doAddress) => `${Number(doDeviceId)}:${Number(doAddress)}`;
+const buildDoKey = (doDeviceId, doAddress) =>
+  `${Number(doDeviceId)}:${Number(doAddress)}`;
 
 const deviceCfgCache = new Map(); // deviceId -> { ts, cfg }
 const DEVICE_CFG_TTL_MS = 60_000;
@@ -42,26 +31,6 @@ async function resolveDeviceConfig(deviceId) {
   };
   deviceCfgCache.set(id, { ts: Date.now(), cfg });
   return cfg;
-}
-
-async function hasActiveManualOffOverride(doDeviceId, doAddress) {
-  if (!doDeviceId && doDeviceId !== 0) return false;
-  if (!Number.isInteger(Number(doAddress))) return false;
-
-  const rows = await db.query(
-    `
-      SELECT 1
-      FROM do_output_overrides
-      WHERE do_device_id = ?
-        AND do_address = ?
-        AND mode = 'manual_off'
-        AND (expires_at IS NULL OR expires_at > NOW())
-      LIMIT 1
-    `,
-    [Number(doDeviceId), Number(doAddress)],
-  );
-
-  return Array.isArray(rows) && rows.length > 0;
 }
 
 async function insertExecution({
@@ -105,6 +74,17 @@ async function insertExecution({
   );
 }
 
+const normalizeDoOutputValue = (v) => {
+  const s = String(v ?? "")
+    .trim()
+    .toLowerCase();
+  return s === "off" ? "off" : "on";
+};
+
+const outputValueToBool = (v) => normalizeDoOutputValue(v) === "on";
+const invertOutputValue = (v) =>
+  normalizeDoOutputValue(v) === "on" ? "off" : "on";
+
 async function writeDo({
   linkageId,
   alertId = null,
@@ -132,7 +112,11 @@ async function writeDo({
   }
 
   try {
-    const ok = await modbusClient.writeCoil(Number(doAddress), Boolean(doValue), cfg);
+    const ok = await modbusClient.writeCoil(
+      Number(doAddress),
+      Boolean(doValue),
+      cfg,
+    );
     if (ok) {
       modbusBatchService.invalidateDeviceCache(cfg, "coil");
     }
@@ -180,109 +164,264 @@ function scheduleAutoOff({ linkage, alertId = null, createdBy = null }) {
     autoOffTimers.delete(key);
   }
 
-  const timeout = setTimeout(async () => {
-    autoOffTimers.delete(key);
-    const offValue = !Boolean(linkage.do_value);
-    try {
-      await writeDo({
-        linkageId: linkage.id,
-        alertId,
-        executionType: "auto_off",
-        doDeviceId,
-        doAddress,
-        doValue: offValue,
-        createdBy,
-      });
-    } catch (err) {
-      linkageLogger.warn("auto_off 執行失敗", {
-        linkageId: linkage?.id,
-        doDeviceId,
-        doAddress,
-        error: err?.message || String(err),
-      });
-    }
-  }, Number(seconds) * 1000);
+  const timeout = setTimeout(
+    async () => {
+      autoOffTimers.delete(key);
+      const offValue = !outputValueToBool(linkage.do_output_value);
+      try {
+        await writeDo({
+          linkageId: linkage.id,
+          alertId,
+          executionType: "auto_off",
+          doDeviceId,
+          doAddress,
+          doValue: offValue,
+          createdBy,
+        });
+      } catch (err) {
+        linkageLogger.warn("auto_off 執行失敗", {
+          linkageId: linkage?.id,
+          doDeviceId,
+          doAddress,
+          error: err?.message || String(err),
+        });
+      }
+    },
+    Number(seconds) * 1000,
+  );
 
   autoOffTimers.set(key, timeout);
+}
+
+/**
+ * 取消尚未觸發的延時 auto_off（日界線復歸 DO 前呼叫，避免與 rollover_revert 打架）
+ */
+function cancelPendingAutoOffForDo(doDeviceId, doAddress) {
+  if (doDeviceId == null || doAddress == null) return;
+  const key = buildDoKey(doDeviceId, doAddress);
+  const existing = autoOffTimers.get(key);
+  if (existing) {
+    clearTimeout(existing);
+    autoOffTimers.delete(key);
+  }
+}
+
+/**
+ * 日界線：對仍為 active 的警報，依 rule_id 將連動 DO 寫回觸發值的相反狀態
+ * @param {Array<Object>} activeAlerts - SELECT * FROM alerts WHERE status=active
+ * @returns {Promise<{ reverted: number }>}
+ */
+async function revertLinkagesForDailyRollover(activeAlerts) {
+  if (!Array.isArray(activeAlerts) || activeAlerts.length === 0) {
+    return { reverted: 0 };
+  }
+  let reverted = 0;
+  for (const a of activeAlerts) {
+    const rid = a.rule_id != null ? Number(a.rule_id) : null;
+    if (!Number.isInteger(rid) || rid <= 0) continue;
+
+    const linkages = await db.query(
+      `
+      SELECT *
+      FROM alert_linkages
+      WHERE enabled = true
+        AND rule_id = ?
+      ORDER BY id ASC
+    `,
+      [rid],
+    );
+
+    if (!Array.isArray(linkages) || linkages.length === 0) continue;
+
+    for (const linkage of linkages) {
+      const doDeviceId = linkage?.do_device_id;
+      const doAddress = linkage?.do_address;
+      if (doDeviceId == null || doAddress == null) continue;
+
+      cancelPendingAutoOffForDo(doDeviceId, doAddress);
+
+      await writeDo({
+        linkageId: linkage.id,
+        alertId: a.id ?? null,
+        executionType: "rollover_revert",
+        doDeviceId,
+        doAddress,
+        doValue: !outputValueToBool(linkage?.do_output_value),
+        createdBy: null,
+      });
+      reverted += 1;
+    }
+  }
+  return { reverted };
+}
+
+function mapLinkageRowFromJoin(row) {
+  if (!row) return null;
+  const linkage = {
+    id: row.id,
+    enabled: row.enabled,
+    rule_id: row.rule_id,
+    do_device_id: row.do_device_id,
+    do_address: row.do_address,
+    do_output_value: row.do_output_value,
+    auto_off_seconds: row.auto_off_seconds,
+    created_by: row.created_by,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+  if (row.r_id != null) {
+    linkage.rule = {
+      id: row.r_id,
+      source: row.r_source,
+      alert_type: row.r_alert_type,
+      severity: row.r_severity,
+      dimension_key: row.r_dimension_key,
+      enabled: row.r_enabled,
+      condition_type: row.r_condition_type,
+      condition_config: row.r_condition_config,
+      target_type: row.r_target_type,
+      target_id: row.r_target_id,
+    };
+  } else {
+    linkage.rule = null;
+  }
+  return linkage;
+}
+
+async function assertRuleExists(ruleId) {
+  const id = Number(ruleId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("rule_id 不合法");
+  }
+  const rows = await db.query(
+    `SELECT id FROM alert_rules WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error(`警報規則不存在: rule_id=${id}`);
+  }
 }
 
 async function listLinkages() {
   const rows = await db.query(
     `
-      SELECT *
-      FROM alert_linkages
-      ORDER BY id DESC
+      SELECT
+        l.id,
+        l.enabled,
+        l.rule_id,
+        l.do_device_id,
+        l.do_address,
+        l.do_output_value,
+        l.auto_off_seconds,
+        l.created_by,
+        l.created_at,
+        l.updated_at,
+        r.id AS r_id,
+        r.source AS r_source,
+        r.alert_type AS r_alert_type,
+        r.severity AS r_severity,
+        r.dimension_key AS r_dimension_key,
+        r.enabled AS r_enabled,
+        r.condition_type AS r_condition_type,
+        r.condition_config AS r_condition_config,
+        r.target_type AS r_target_type,
+        r.target_id AS r_target_id
+      FROM alert_linkages l
+      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      ORDER BY l.id DESC
     `,
   );
-  return rows || [];
+  return (rows || []).map(mapLinkageRowFromJoin);
 }
 
 async function createLinkage(payload, userId = null) {
   const {
-    name = null,
     enabled = true,
-    trigger_source,
-    trigger_alert_type,
-    trigger_dimension_key = null,
-    trigger_severity_min = "warning",
+    rule_id,
     do_device_id,
     do_address,
-    do_value = true,
+    do_output_value = "on",
     auto_off_seconds = null,
   } = payload || {};
+
+  await assertRuleExists(rule_id);
 
   const rows = await db.query(
     `
       INSERT INTO alert_linkages (
-        name,
         enabled,
-        trigger_source,
-        trigger_alert_type,
-        trigger_dimension_key,
-        trigger_severity_min,
+        rule_id,
         do_device_id,
         do_address,
-        do_value,
+        do_output_value,
         auto_off_seconds,
         created_by
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       RETURNING *
     `,
     [
-      name,
       Boolean(enabled),
-      trigger_source,
-      trigger_alert_type,
-      trigger_dimension_key,
-      trigger_severity_min,
+      Number(rule_id),
       do_device_id != null ? Number(do_device_id) : null,
       do_address != null ? Number(do_address) : null,
-      Boolean(do_value),
+      normalizeDoOutputValue(do_output_value),
       auto_off_seconds != null ? Number(auto_off_seconds) : null,
       userId != null ? Number(userId) : null,
     ],
   );
 
-  return rows?.[0] || null;
+  const created = rows?.[0];
+  if (!created) return null;
+
+  const listed = await db.query(
+    `
+      SELECT
+        l.id,
+        l.enabled,
+        l.rule_id,
+        l.do_device_id,
+        l.do_address,
+        l.do_output_value,
+        l.auto_off_seconds,
+        l.created_by,
+        l.created_at,
+        l.updated_at,
+        r.id AS r_id,
+        r.source AS r_source,
+        r.alert_type AS r_alert_type,
+        r.severity AS r_severity,
+        r.dimension_key AS r_dimension_key,
+        r.enabled AS r_enabled,
+        r.condition_type AS r_condition_type,
+        r.condition_config AS r_condition_config,
+        r.target_type AS r_target_type,
+        r.target_id AS r_target_id
+      FROM alert_linkages l
+      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      WHERE l.id = ?
+    `,
+    [created.id],
+  );
+  return mapLinkageRowFromJoin(listed?.[0]) || created;
 }
 
-async function updateLinkage(id, updates, userId = null) {
+async function updateLinkage(id, updates, _userId = null) {
   const linkageId = Number(id);
   if (!Number.isInteger(linkageId) || linkageId <= 0) {
     throw new Error("linkage id 不合法");
   }
 
+  if (updates?.rule_id !== undefined) {
+    await assertRuleExists(updates.rule_id);
+  }
+
   const allowed = [
-    "name",
     "enabled",
-    "trigger_source",
-    "trigger_alert_type",
-    "trigger_dimension_key",
-    "trigger_severity_min",
+    "rule_id",
     "do_device_id",
     "do_address",
-    "do_value",
+    "do_output_value",
     "auto_off_seconds",
   ];
 
@@ -292,30 +431,92 @@ async function updateLinkage(id, updates, userId = null) {
     if (updates?.[key] === undefined) continue;
     setParts.push(`${key} = ?`);
     if (key === "enabled") params.push(Boolean(updates[key]));
-    else if (key === "do_value") params.push(Boolean(updates[key]));
-    else if (key === "do_device_id") params.push(updates[key] != null ? Number(updates[key]) : null);
-    else if (key === "do_address") params.push(updates[key] != null ? Number(updates[key]) : null);
+    else if (key === "do_output_value")
+      params.push(normalizeDoOutputValue(updates[key]));
+    else if (key === "rule_id")
+      params.push(updates[key] != null ? Number(updates[key]) : null);
+    else if (key === "do_device_id")
+      params.push(updates[key] != null ? Number(updates[key]) : null);
+    else if (key === "do_address")
+      params.push(updates[key] != null ? Number(updates[key]) : null);
     else if (key === "auto_off_seconds")
       params.push(updates[key] != null ? Number(updates[key]) : null);
     else params.push(updates[key]);
   }
 
   if (setParts.length === 0) {
-    const found = await db.query(`SELECT * FROM alert_linkages WHERE id = ?`, [linkageId]);
-    return found?.[0] || null;
+    const listed = await db.query(
+      `
+      SELECT
+        l.id,
+        l.enabled,
+        l.rule_id,
+        l.do_device_id,
+        l.do_address,
+        l.do_output_value,
+        l.auto_off_seconds,
+        l.created_by,
+        l.created_at,
+        l.updated_at,
+        r.id AS r_id,
+        r.source AS r_source,
+        r.alert_type AS r_alert_type,
+        r.severity AS r_severity,
+        r.dimension_key AS r_dimension_key,
+        r.enabled AS r_enabled,
+        r.condition_type AS r_condition_type,
+        r.condition_config AS r_condition_config,
+        r.target_type AS r_target_type,
+        r.target_id AS r_target_id
+      FROM alert_linkages l
+      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      WHERE l.id = ?
+    `,
+      [linkageId],
+    );
+    return mapLinkageRowFromJoin(listed?.[0]);
   }
 
   params.push(linkageId);
-  const rows = await db.query(
+  await db.query(
     `
       UPDATE alert_linkages
       SET ${setParts.join(", ")}, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-      RETURNING *
     `,
     params,
   );
-  return rows?.[0] || null;
+
+  const listed = await db.query(
+    `
+      SELECT
+        l.id,
+        l.enabled,
+        l.rule_id,
+        l.do_device_id,
+        l.do_address,
+        l.do_output_value,
+        l.auto_off_seconds,
+        l.created_by,
+        l.created_at,
+        l.updated_at,
+        r.id AS r_id,
+        r.source AS r_source,
+        r.alert_type AS r_alert_type,
+        r.severity AS r_severity,
+        r.dimension_key AS r_dimension_key,
+        r.enabled AS r_enabled,
+        r.condition_type AS r_condition_type,
+        r.condition_config AS r_condition_config,
+        r.target_type AS r_target_type,
+        r.target_id AS r_target_id
+      FROM alert_linkages l
+      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      WHERE l.id = ?
+    `,
+    [linkageId],
+  );
+  return mapLinkageRowFromJoin(listed?.[0]);
 }
 
 async function deleteLinkage(id) {
@@ -324,54 +525,37 @@ async function deleteLinkage(id) {
     throw new Error("linkage id 不合法");
   }
 
-  const rows = await db.query(`DELETE FROM alert_linkages WHERE id = ? RETURNING *`, [linkageId]);
+  const rows = await db.query(
+    `DELETE FROM alert_linkages WHERE id = ? RETURNING *`,
+    [linkageId],
+  );
   return rows?.[0] || null;
 }
 
 async function processLinkagesForNewAlert(alert, { createdBy = null } = {}) {
   const a = alert || {};
-  if (!a.source || !a.alert_type) return { processed: 0 };
+  const rid = a.rule_id != null ? Number(a.rule_id) : null;
+  if (!Number.isInteger(rid) || rid <= 0) return { processed: 0 };
 
   const linkages = await db.query(
     `
       SELECT *
       FROM alert_linkages
       WHERE enabled = true
-        AND trigger_source = ?
-        AND trigger_alert_type = ?
+        AND rule_id = ?
       ORDER BY id ASC
     `,
-    [String(a.source), String(a.alert_type)],
+    [rid],
   );
 
-  if (!Array.isArray(linkages) || linkages.length === 0) return { processed: 0 };
+  if (!Array.isArray(linkages) || linkages.length === 0)
+    return { processed: 0 };
 
   let processed = 0;
   for (const linkage of linkages) {
-    const dim = linkage?.trigger_dimension_key;
-    if (dim && String(dim) !== String(a.dimension_key || "")) continue;
-    if (!isSeverityAtLeast(a.severity, linkage?.trigger_severity_min)) continue;
-
     const doDeviceId = linkage?.do_device_id;
     const doAddress = linkage?.do_address;
     if (doDeviceId == null || doAddress == null) continue;
-
-    const manualOff = await hasActiveManualOffOverride(doDeviceId, doAddress);
-    if (manualOff && Boolean(linkage?.do_value) === true) {
-      await insertExecution({
-        linkageId: linkage.id,
-        alertId: a.id ?? null,
-        executionType: "trigger",
-        doDeviceId,
-        doAddress,
-        doValue: Boolean(linkage?.do_value),
-        success: false,
-        errorMessage: `已被 manual_off 覆寫，拒絕自動開啟（${nowIso()}）`,
-        createdBy,
-      });
-      processed += 1;
-      continue;
-    }
 
     await writeDo({
       linkageId: linkage.id,
@@ -379,7 +563,7 @@ async function processLinkagesForNewAlert(alert, { createdBy = null } = {}) {
       executionType: "trigger",
       doDeviceId,
       doAddress,
-      doValue: Boolean(linkage?.do_value),
+      doValue: outputValueToBool(linkage?.do_output_value),
       createdBy,
     });
 
@@ -390,95 +574,88 @@ async function processLinkagesForNewAlert(alert, { createdBy = null } = {}) {
   return { processed };
 }
 
-async function manualOffDoOutput(
-  { linkage_id = null, do_device_id, do_address, reason = null, expires_at = null },
-  userId = null,
-) {
-  const doDeviceId = Number(do_device_id);
-  const doAddress = Number(do_address);
-  if (!Number.isInteger(doDeviceId) || doDeviceId <= 0) {
-    throw new Error("do_device_id 不合法");
-  }
-  if (!Number.isInteger(doAddress) || doAddress < 0) {
-    throw new Error("do_address 不合法");
-  }
+async function manualTriggerLinkage(linkageId, userId = null) {
+  const id = Number(linkageId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("linkage id 不合法");
 
-  const cfg = await resolveDeviceConfig(doDeviceId);
-  if (!cfg) throw new Error("DO 設備連線設定不足");
-
-  const ok = await modbusClient.writeCoil(doAddress, false, cfg);
-  if (ok) modbusBatchService.invalidateDeviceCache(cfg, "coil");
-
-  await db.query(
-    `
-      INSERT INTO do_output_overrides (
-        do_device_id,
-        do_address,
-        mode,
-        reason,
-        expires_at,
-        created_by
-      )
-      VALUES (?, ?, 'manual_off', ?, ?, ?)
-      ON CONFLICT (do_device_id, do_address, mode)
-      DO UPDATE SET
-        reason = EXCLUDED.reason,
-        expires_at = EXCLUDED.expires_at,
-        created_by = EXCLUDED.created_by,
-        created_at = CURRENT_TIMESTAMP
-      RETURNING *
-    `,
-    [
-      doDeviceId,
-      doAddress,
-      reason ? String(reason) : null,
-      expires_at ? new Date(expires_at) : null,
-      userId != null ? Number(userId) : null,
-    ],
+  const rows = await db.query(
+    `SELECT * FROM alert_linkages WHERE id = ? LIMIT 1`,
+    [id],
   );
+  const linkage = rows?.[0] || null;
+  if (!linkage) throw new Error("連動規則不存在");
 
-  // alert_linkage_executions 的 linkage_id 為必填 FK。
-  // 若呼叫端有對應 linkage_id，可寫入 execution；否則只保留 override 本身即可。
-  const linkageId = linkage_id != null ? Number(linkage_id) : null;
-  if (Number.isInteger(linkageId) && linkageId > 0) {
-    await insertExecution({
-      linkageId,
-      alertId: null,
-      executionType: "manual_off",
-      doDeviceId,
-      doAddress,
-      doValue: false,
-      success: Boolean(ok),
-      errorMessage: ok ? null : "writeCoil 回傳失敗",
-      createdBy: userId,
-    });
-  }
+  const doDeviceId = linkage?.do_device_id;
+  const doAddress = linkage?.do_address;
+  if (doDeviceId == null || doAddress == null)
+    throw new Error("此連動未設定 DO 目標");
 
-  return { success: Boolean(ok) };
+  // 手動觸發：依此連動的「觸發時輸出」寫入一次（不建立 override）
+  const result = await writeDo({
+    linkageId: linkage.id,
+    alertId: null,
+    executionType: "manual_trigger",
+    doDeviceId,
+    doAddress,
+    doValue: outputValueToBool(linkage?.do_output_value),
+    createdBy: userId,
+  });
+
+  return { success: Boolean(result?.success) };
 }
 
-async function releaseManualOffOverride({ do_device_id, do_address }) {
-  const doDeviceId = Number(do_device_id);
-  const doAddress = Number(do_address);
-  if (!Number.isInteger(doDeviceId) || doDeviceId <= 0) {
-    throw new Error("do_device_id 不合法");
-  }
-  if (!Number.isInteger(doAddress) || doAddress < 0) {
-    throw new Error("do_address 不合法");
-  }
-
-  const deleted = await db.query(
+async function getSingleLinkageByRuleId(ruleId) {
+  const id = Number(ruleId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const rows = await db.query(
     `
-      DELETE FROM do_output_overrides
-      WHERE do_device_id = ?
-        AND do_address = ?
-        AND mode = 'manual_off'
-      RETURNING *
+    SELECT *
+    FROM alert_linkages
+    WHERE rule_id = ?
+    ORDER BY id DESC
+    LIMIT 1
     `,
-    [doDeviceId, doAddress],
+    [id],
   );
+  return rows?.[0] || null;
+}
 
-  return { success: Array.isArray(deleted) && deleted.length > 0 };
+async function getLatestLinkagesByRuleIds(ruleIds) {
+  const ids = Array.isArray(ruleIds)
+    ? [...new Set(ruleIds.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))]
+    : [];
+  if (ids.length === 0) return [];
+
+  // 每個 rule_id 只取最新一筆（以 id DESC）
+  const rows = await db.query(
+    `
+    SELECT DISTINCT ON (rule_id) *
+    FROM alert_linkages
+    WHERE rule_id = ANY(?)
+    ORDER BY rule_id ASC, id DESC
+    `,
+    [ids],
+  );
+  return rows || [];
+}
+
+async function deleteAllLinkagesForRule(ruleId) {
+  const id = Number(ruleId);
+  if (!Number.isInteger(id) || id <= 0) return { deleted: 0 };
+  const rows = await db.query(
+    `DELETE FROM alert_linkages WHERE rule_id = ? RETURNING id`,
+    [id],
+  );
+  return { deleted: rows?.length || 0 };
+}
+
+async function upsertSingleLinkageForRule(ruleId, payload, userId = null) {
+  await assertRuleExists(ruleId);
+  const existing = await getSingleLinkageByRuleId(ruleId);
+  if (!existing) {
+    return await createLinkage({ ...payload, rule_id: Number(ruleId) }, userId);
+  }
+  return await updateLinkage(existing.id, payload, userId);
 }
 
 module.exports = {
@@ -487,8 +664,11 @@ module.exports = {
   updateLinkage,
   deleteLinkage,
   processLinkagesForNewAlert,
-  manualOffDoOutput,
-  releaseManualOffOverride,
-  hasActiveManualOffOverride,
+  manualTriggerLinkage,
+  cancelPendingAutoOffForDo,
+  revertLinkagesForDailyRollover,
+  getSingleLinkageByRuleId,
+  getLatestLinkagesByRuleIds,
+  upsertSingleLinkageForRule,
+  deleteAllLinkagesForRule,
 };
-

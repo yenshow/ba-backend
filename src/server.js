@@ -63,6 +63,9 @@ const diDoMonitor = require("./services/monitoring/diDoMonitor");
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
+const {
+  startAlertDailyRolloverScheduler,
+} = require("./services/alerts/alertRolloverScheduler");
 // 環境彙總排程（時／日／月）
 const environmentAggregationService = require("./services/systems/environmentAggregationService");
 // 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
@@ -310,6 +313,9 @@ async function startServer() {
     // 啟動備份排程
     backupScheduler.startScheduler();
     serverLogger.info("備份排程已啟用");
+
+    global.__alertRolloverStop = startAlertDailyRolloverScheduler();
+    serverLogger.info("警報日界線排程已啟用（依 ALERT_DAILY_ROLLOVER_*）");
 
     // 環境彙總：每小時寫入「上一小時」hour（日／月由備份日執行）
     const runHourAgg = () =>
