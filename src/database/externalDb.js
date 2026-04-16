@@ -1,5 +1,8 @@
 const { Pool } = require("pg");
 const config = require("../config");
+const logger = require("../utils/logger");
+
+const externalDbLogger = logger.createLogger("externalDb");
 
 // 建立外部資料庫連線池
 const externalPool = new Pool({
@@ -16,11 +19,14 @@ const externalPool = new Pool({
 // 測試連線
 async function testConnection() {
   try {
-    const result = await externalPool.query("SELECT NOW()");
-    console.log("✅ 外部資料庫連線成功");
+    await externalPool.query("SELECT NOW()");
+    externalDbLogger.info("外部資料庫連線成功", { module: "externalDb" });
     return true;
   } catch (error) {
-    console.error("❌ 外部資料庫連線失敗:", error.message);
+    externalDbLogger.error("外部資料庫連線失敗", {
+      error: error?.message || String(error),
+      module: "externalDb",
+    });
     return false;
   }
 }
@@ -40,14 +46,17 @@ async function query(sql, params = []) {
   try {
     const { sql: convertedSql, params: convertedParams } = convertQueryParams(
       sql,
-      params
+      params,
     );
     const result = await externalPool.query(convertedSql, convertedParams);
     const rows = result.rows;
     rows.rowCount = result.rowCount;
     return rows;
   } catch (error) {
-    console.error("外部資料庫查詢錯誤:", error.message);
+    externalDbLogger.error("外部資料庫查詢錯誤", {
+      error: error?.message || String(error),
+      module: "externalDb",
+    });
     throw error;
   }
 }
@@ -55,7 +64,7 @@ async function query(sql, params = []) {
 // 關閉連線池
 async function close() {
   await externalPool.end();
-  console.log("外部資料庫連線池已關閉");
+  externalDbLogger.info("外部資料庫連線池已關閉", { module: "externalDb" });
 }
 
 module.exports = {

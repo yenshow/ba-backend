@@ -29,9 +29,14 @@ async function getFirstAdmin() {
  * 取得認證資訊（從 .env 或資料庫）
  */
 async function getAuthInfo() {
-  // 優先使用 API 專用的環境變數
-  let username = process.env.API_USER;
-  let password = process.env.API_PASSWORD;
+  const args = process.argv.slice(2);
+  const usernameArgIndex = args.indexOf("--user");
+  const passwordArgIndex = args.indexOf("--password");
+
+  let username =
+    usernameArgIndex >= 0 ? args[usernameArgIndex + 1] : undefined;
+  let password =
+    passwordArgIndex >= 0 ? args[passwordArgIndex + 1] : undefined;
 
   // 如果沒有設定，從資料庫取得管理員帳號
   if (!username) {
@@ -44,11 +49,12 @@ async function getAuthInfo() {
     }
   }
 
-  // 如果沒有密碼，提示用戶設定
+  // 如果沒有密碼，提示用戶提供參數
   if (!password) {
     throw new Error(
-      "請在 .env 中設定 API_PASSWORD（用於 API 登入的密碼）\n" +
-        "注意：這應該是 users 表中管理員帳號的密碼，不是資料庫密碼"
+      "請提供 --password <密碼>（用於 API 登入的密碼）\n" +
+        "注意：這應該是 users 表中管理員帳號的密碼，不是資料庫密碼\n" +
+        "範例：node scripts/externalData.js --user admin --password <password>"
     );
   }
 
@@ -576,15 +582,16 @@ function showUsage() {
   console.log("  npm run external-data:test              - 測試所有 API 端點");
   console.log("  npm run external-data:fetch             - 抓取資料（預設：人流統計系統）");
   console.log("  npm run external-data:fetch --system=SYSTEM - 抓取指定系統的資料");
+  console.log("  （進階）node scripts/externalData.js fetch --user <username> --password <password>");
   console.log("\n可用的系統類型:");
   systemMapping.getAllSystemTypes().forEach((type) => {
     const tables = systemMapping.getTablesBySystem(type);
     console.log(`  - ${type} (${tables.length} 個資料表)`);
   });
   console.log("\n認證資訊:");
-  console.log("  從 .env 檔案讀取:");
-  console.log("  - API_USER (或從資料庫查詢管理員)");
-  console.log("  - API_PASSWORD (必填，users 表中管理員帳號的密碼)");
+  console.log("  以參數提供:");
+  console.log("  - --user (未提供則自 DB 查詢第一個 admin)");
+  console.log("  - --password (必填，users 表中管理員帳號的密碼)");
   console.log("\n注意:");
   console.log("  請確保後端服務已啟動 (npm start)");
 }
@@ -636,10 +643,8 @@ async function main() {
     if (error.message.includes("找不到可用的管理員帳號")) {
       console.log("\n請先建立管理員: npm run admin:create");
     }
-    if (error.message.includes("API_PASSWORD")) {
-      console.log(
-        "\n請在 .env 中設定 API_PASSWORD（這是 users 表中管理員帳號的密碼）"
-      );
+    if (error.message.includes("--password")) {
+      console.log("\n請提供 --password（這是 users 表中管理員帳號的密碼）");
     }
     process.exit(1);
   }

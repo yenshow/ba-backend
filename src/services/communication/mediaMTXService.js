@@ -17,6 +17,21 @@ const api = axios.create({
 });
 
 /**
+ * MediaMTX 的 /v3/config 變更會觸發 reload。
+ * 多視窗/多分割同時啟動多台時，若並發呼叫 add/remove path，
+ * 會造成同一秒連續 reload，進而中斷剛建立的 WebRTC session。
+ * 因此把 config 變更統一排隊（全域序列化）。
+ */
+let configMutationQueue = Promise.resolve();
+const enqueueConfigMutation = (fn) => {
+  const run = async () => await fn();
+  const next = configMutationQueue.then(run, run);
+  // 防止 rejected 讓 queue 中斷
+  configMutationQueue = next.catch(() => {});
+  return next;
+};
+
+/**
  * 由 deviceId 產生 MediaMTX path 名稱（唯一、URL 安全）
  * @param {number} deviceId
  * @returns {string}
@@ -42,34 +57,37 @@ async function addPath(pathName, rtspUrl) {
     logger.info("MediaMTX path 已新增", { pathName, rtspUrl: rtspUrl.replace(/:[^:@]+@/, ":***@") });
   };
 
-  try {
-    await doAdd();
-  } catch (err) {
-    const status = err.response?.status;
-    const data = err.response?.data;
-    const msg = data?.message ?? data?.error ?? err.message;
-    const detail = typeof data === "object" ? JSON.stringify(data) : String(data);
-    logger.error("MediaMTX 新增 path 失敗", {
-      pathName,
-      status,
-      message: msg,
-      responseBody: detail,
-    });
-    if (status === 400) {
-      try {
-        await api.delete(`/v3/config/paths/delete/${encodeURIComponent(pathName)}`);
-        logger.info("MediaMTX 已移除既有 path，重試新增", { pathName });
-        await doAdd();
-      } catch (retryErr) {
-        const retryMsg = retryErr.response?.data?.message ?? retryErr.response?.data?.error ?? retryErr.message;
-        throw new Error(
-          `MediaMTX 拒絕此設定 (400)。請檢查 RTSP URL 是否正確、路徑是否完整（海康威視常見：/Streaming/Channels/101 或 /102），以及帳密是否正確。詳情: ${retryMsg}`
-        );
+  await enqueueConfigMutation(async () => {
+    try {
+      await doAdd();
+    } catch (err) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      const msg = data?.message ?? data?.error ?? err.message;
+      const detail = typeof data === "object" ? JSON.stringify(data) : String(data);
+      logger.error("MediaMTX 新增 path 失敗", {
+        pathName,
+        status,
+        message: msg,
+        responseBody: detail,
+      });
+      if (status === 400) {
+        try {
+          await api.delete(`/v3/config/paths/delete/${encodeURIComponent(pathName)}`);
+          logger.info("MediaMTX 已移除既有 path，重試新增", { pathName });
+          await doAdd();
+        } catch (retryErr) {
+          const retryMsg =
+            retryErr.response?.data?.message ?? retryErr.response?.data?.error ?? retryErr.message;
+          throw new Error(
+            `MediaMTX 拒絕此設定 (400)。請檢查 RTSP URL 是否正確、路徑是否完整（海康威視常見：/Streaming/Channels/101 或 /102），以及帳密是否正確。詳情: ${retryMsg}`
+          );
+        }
+      } else {
+        throw new Error(`MediaMTX 新增 path 失敗: ${msg}`);
       }
-    } else {
-      throw new Error(`MediaMTX 新增 path 失敗: ${msg}`);
     }
-  }
+  });
   const webrtcUrl = `${WEBRTC_BASE}/${pathName}/whep`;
   return { webrtcUrl };
 }
@@ -80,18 +98,20 @@ async function addPath(pathName, rtspUrl) {
  */
 async function removePath(pathName) {
   const url = `/v3/config/paths/delete/${encodeURIComponent(pathName)}`;
-  try {
-    await api.delete(url);
-    logger.info("MediaMTX path 已移除", { pathName });
-  } catch (err) {
-    if (err.response?.status === 404) {
-      logger.debug("MediaMTX path 不存在，略過移除", { pathName });
-      return;
+  await enqueueConfigMutation(async () => {
+    try {
+      await api.delete(url);
+      logger.info("MediaMTX path 已移除", { pathName });
+    } catch (err) {
+      if (err.response?.status === 404) {
+        logger.debug("MediaMTX path 不存在，略過移除", { pathName });
+        return;
+      }
+      const msg = err.response?.data?.message ?? err.message;
+      logger.error("MediaMTX 移除 path 失敗", { pathName, error: msg });
+      throw new Error(`MediaMTX 移除 path 失敗: ${msg}`);
     }
-    const msg = err.response?.data?.message ?? err.message;
-    logger.error("MediaMTX 移除 path 失敗", { pathName, error: msg });
-    throw new Error(`MediaMTX 移除 path 失敗: ${msg}`);
-  }
+  });
 }
 
 /**

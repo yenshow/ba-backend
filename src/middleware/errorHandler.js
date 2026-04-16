@@ -66,16 +66,14 @@ async function recordDeviceError(req, errorMessage) {
       };
 
       if (deviceConfig.host && deviceConfig.port !== undefined) {
-        const deviceId = await systemAlert.getDeviceIdFromConfig(deviceConfig);
-        if (deviceId) {
-          // 告警去重：與 log 去重分離，避免互相影響
-          if (shouldCooldown(lastDeviceErrorAlertAt, cooldownKey)) {
-            return;
-          }
-          await systemAlert.recordError("device", deviceId, errorMessage, {
-            skipWebSocket: true,
-          });
+        if (shouldCooldown(lastDeviceErrorAlertAt, cooldownKey)) {
+          return;
         }
+        await systemAlert.notifyModbusHttpDeviceFailed(
+          deviceConfig,
+          errorMessage,
+          { skipWebSocket: true },
+        );
       }
     }
   } catch (trackError) {

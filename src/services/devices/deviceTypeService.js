@@ -1,4 +1,7 @@
 const db = require("../../database/db");
+const logger = require("../../utils/logger");
+
+const deviceTypeLogger = logger.createLogger("deviceTypeService");
 
 // 取得所有設備類型
 async function getAllDeviceTypes() {
@@ -6,7 +9,10 @@ async function getAllDeviceTypes() {
 		const deviceTypes = await db.query("SELECT * FROM device_types ORDER BY id");
 		return { device_types: deviceTypes };
 	} catch (error) {
-		console.error("取得設備類型失敗:", error);
+		deviceTypeLogger.error("取得設備類型失敗", {
+			error: error?.message || String(error),
+			module: "deviceTypeService",
+		});
 		throw new Error("取得設備類型失敗: " + error.message);
 	}
 }
@@ -26,7 +32,11 @@ async function getDeviceTypeById(id) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("取得設備類型失敗:", error);
+		deviceTypeLogger.error("取得設備類型失敗", {
+			id,
+			error: error?.message || String(error),
+			module: "deviceTypeService",
+		});
 		throw new Error("取得設備類型失敗: " + error.message);
 	}
 }
@@ -46,7 +56,11 @@ async function getDeviceTypeByCode(code) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("取得設備類型失敗:", error);
+		deviceTypeLogger.error("取得設備類型失敗", {
+			code,
+			error: error?.message || String(error),
+			module: "deviceTypeService",
+		});
 		throw new Error("取得設備類型失敗: " + error.message);
 	}
 }
@@ -83,7 +97,10 @@ async function createDeviceType(deviceTypeData) {
 			device_type: deviceTypes[0]
 		};
 	} catch (error) {
-		console.error("建立設備類型失敗:", error);
+		deviceTypeLogger.error("建立設備類型失敗", {
+			error: error?.message || String(error),
+			module: "deviceTypeService",
+		});
 		throw new Error("建立設備類型失敗: " + error.message);
 	}
 }
@@ -150,7 +167,11 @@ async function updateDeviceType(id, deviceTypeData) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("更新設備類型失敗:", error);
+		deviceTypeLogger.error("更新設備類型失敗", {
+			id,
+			error: error?.message || String(error),
+			module: "deviceTypeService",
+		});
 		throw new Error("更新設備類型失敗: " + error.message);
 	}
 }
@@ -179,7 +200,11 @@ async function deleteDeviceType(id) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("刪除設備類型失敗:", error);
+		deviceTypeLogger.error("刪除設備類型失敗", {
+			id,
+			error: error?.message || String(error),
+			module: "deviceTypeService",
+		});
 		throw new Error("刪除設備類型失敗: " + error.message);
 	}
 }

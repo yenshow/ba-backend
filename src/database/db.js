@@ -1,5 +1,8 @@
 const { Pool } = require("pg");
 const config = require("../config");
+const logger = require("../utils/logger");
+
+const dbLogger = logger.createLogger("db");
 
 // 建立連線池
 const pool = new Pool({
@@ -16,11 +19,14 @@ const pool = new Pool({
 // 測試連線
 async function testConnection() {
   try {
-    const result = await pool.query("SELECT NOW()");
-    console.log("✅ 資料庫連線成功");
+    await pool.query("SELECT NOW()");
+    dbLogger.info("資料庫連線成功", { module: "db" });
     return true;
   } catch (error) {
-    console.error("❌ 資料庫連線失敗:", error.message);
+    dbLogger.error("資料庫連線失敗", {
+      error: error?.message || String(error),
+      module: "db",
+    });
     return false;
   }
 }
@@ -40,7 +46,7 @@ async function query(sql, params = []) {
   try {
     const { sql: convertedSql, params: convertedParams } = convertQueryParams(
       sql,
-      params
+      params,
     );
     const result = await pool.query(convertedSql, convertedParams);
     // 返回 rows，但添加 rowCount 屬性以便訪問
@@ -48,7 +54,10 @@ async function query(sql, params = []) {
     rows.rowCount = result.rowCount;
     return rows;
   } catch (error) {
-    console.error("資料庫查詢錯誤:", error.message);
+    dbLogger.error("資料庫查詢錯誤", {
+      error: error?.message || String(error),
+      module: "db",
+    });
     throw error;
   }
 }
@@ -85,7 +94,7 @@ async function transaction(callback) {
 // 關閉連線池
 async function close() {
   await pool.end();
-  console.log("資料庫連線池已關閉");
+  dbLogger.info("資料庫連線池已關閉", { module: "db" });
 }
 
 module.exports = {

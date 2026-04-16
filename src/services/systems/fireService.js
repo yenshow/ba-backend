@@ -1,4 +1,7 @@
 const locationService = require("./locationService");
+const logger = require("../../utils/logger");
+
+const fireLogger = logger.createLogger("fireService");
 
 const toFireZone = (zone) => ({ ...zone });
 
@@ -7,7 +10,10 @@ async function getZones() {
     const result = await locationService.getZones({ locationType: "fire" });
     return { zones: result.zones.map(toFireZone) };
   } catch (error) {
-    console.error("取得消防區域列表失敗:", error);
+    fireLogger.error("取得消防區域列表失敗", {
+      error: error?.message || String(error),
+      module: "fireService",
+    });
     throw new Error("取得消防區域列表失敗: " + error.message);
   }
 }
@@ -20,7 +26,11 @@ async function getZoneById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得消防區域失敗:", error);
+    fireLogger.error("取得消防區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "fireService",
+    });
     throw new Error("取得消防區域失敗: " + error.message);
   }
 }
@@ -58,7 +68,10 @@ async function createZone(zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("建立消防區域失敗:", error);
+    fireLogger.error("建立消防區域失敗", {
+      error: error?.message || String(error),
+      module: "fireService",
+    });
     throw new Error("建立消防區域失敗: " + error.message);
   }
 }
@@ -88,7 +101,11 @@ async function updateZone(id, zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新消防區域失敗:", error);
+    fireLogger.error("更新消防區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "fireService",
+    });
     throw new Error("更新消防區域失敗: " + error.message);
   }
 }
@@ -100,7 +117,11 @@ async function deleteZone(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除消防區域失敗:", error);
+    fireLogger.error("刪除消防區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "fireService",
+    });
     throw new Error("刪除消防區域失敗: " + error.message);
   }
 }

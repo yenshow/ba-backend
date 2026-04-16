@@ -1,4 +1,7 @@
 const locationService = require("./locationService");
+const logger = require("../../utils/logger");
+
+const drainageLogger = logger.createLogger("drainageService");
 
 /** 回傳與統一 zone 一致，僅使用 locations（不再附加 areas） */
 const toDrainageZone = (zone) => ({ ...zone });
@@ -8,7 +11,10 @@ async function getZones() {
     const result = await locationService.getZones({ locationType: "drainage" });
     return { zones: result.zones.map(toDrainageZone) };
   } catch (error) {
-    console.error("取得排水區域列表失敗:", error);
+    drainageLogger.error("取得排水區域列表失敗", {
+      error: error?.message || String(error),
+      module: "drainageService",
+    });
     throw new Error("取得排水區域列表失敗: " + error.message);
   }
 }
@@ -21,7 +27,11 @@ async function getZoneById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得排水區域失敗:", error);
+    drainageLogger.error("取得排水區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "drainageService",
+    });
     throw new Error("取得排水區域失敗: " + error.message);
   }
 }
@@ -59,7 +69,10 @@ async function createZone(zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("建立排水區域失敗:", error);
+    drainageLogger.error("建立排水區域失敗", {
+      error: error?.message || String(error),
+      module: "drainageService",
+    });
     throw new Error("建立排水區域失敗: " + error.message);
   }
 }
@@ -89,7 +102,11 @@ async function updateZone(id, zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新排水區域失敗:", error);
+    drainageLogger.error("更新排水區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "drainageService",
+    });
     throw new Error("更新排水區域失敗: " + error.message);
   }
 }
@@ -101,7 +118,11 @@ async function deleteZone(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除排水區域失敗:", error);
+    drainageLogger.error("刪除排水區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "drainageService",
+    });
     throw new Error("刪除排水區域失敗: " + error.message);
   }
 }

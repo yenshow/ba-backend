@@ -1,4 +1,7 @@
 const locationService = require("./locationService");
+const logger = require("../../utils/logger");
+
+const lightingLogger = logger.createLogger("lightingService");
 
 /** 回傳與統一 zone 一致，僅使用 locations（不再附加 areas） */
 const toLightingZone = (zone) => ({ ...zone });
@@ -10,7 +13,10 @@ async function getZones() {
     const result = await locationService.getZones({ locationType: "lighting" });
     return { zones: result.zones.map(toLightingZone) };
   } catch (error) {
-    console.error("取得區域列表失敗:", error);
+    lightingLogger.error("取得區域列表失敗", {
+      error: error?.message || String(error),
+      module: "lightingService",
+    });
     throw new Error("取得區域列表失敗: " + error.message);
   }
 }
@@ -23,7 +29,11 @@ async function getZoneById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得區域失敗:", error);
+    lightingLogger.error("取得區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "lightingService",
+    });
     throw new Error("取得區域失敗: " + error.message);
   }
 }
@@ -53,7 +63,10 @@ async function createZone(zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("建立區域失敗:", error);
+    lightingLogger.error("建立區域失敗", {
+      error: error?.message || String(error),
+      module: "lightingService",
+    });
     throw new Error("建立區域失敗: " + error.message);
   }
 }
@@ -89,7 +102,11 @@ async function updateZone(id, zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新區域失敗:", error);
+    lightingLogger.error("更新區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "lightingService",
+    });
     throw new Error("更新區域失敗: " + error.message);
   }
 }
@@ -101,7 +118,11 @@ async function deleteZone(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除區域失敗:", error);
+    lightingLogger.error("刪除區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "lightingService",
+    });
     throw new Error("刪除區域失敗: " + error.message);
   }
 }

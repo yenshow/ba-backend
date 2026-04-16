@@ -5,6 +5,9 @@
 
 const db = require("../../database/db");
 const backupConfig = require("./backupConfig");
+const logger = require("../../utils/logger");
+
+const backupLogger = logger.createLogger("backupService");
 
 async function getPeopleCountingForBackup(beforeDate) {
   const rows = await db.query(
@@ -157,13 +160,20 @@ async function backupTable(options) {
         
         // 確保是 DELETE 語句
         if (!finalDeleteQuery.trim().toUpperCase().startsWith("DELETE")) {
-          console.warn(`[backupService] 無法自動生成刪除查詢，請提供 deleteQuery 選項`);
+          backupLogger.warn("無法自動生成刪除查詢，請提供 deleteQuery 選項", {
+            tableName,
+            module: "backupService",
+          });
         } else {
           const deleteResult = await db.query(finalDeleteQuery, finalDeleteParams);
           deletedCount = deleteResult ? (deleteResult.rowCount || deleteResult.length || 0) : 0;
         }
       } catch (error) {
-        console.error(`[backupService] 刪除資料失敗:`, error);
+        backupLogger.error("刪除資料失敗", {
+          tableName,
+          error: error?.message || String(error),
+          module: "backupService",
+        });
         throw new Error(`備份成功但刪除資料失敗: ${error.message}`);
       }
     }
@@ -176,7 +186,11 @@ async function backupTable(options) {
       success: true,
     };
   } catch (error) {
-    console.error(`[backupService] 備份表 ${tableName} 失敗:`, error);
+    backupLogger.error("備份表失敗", {
+      tableName,
+      error: error?.message || String(error),
+      module: "backupService",
+    });
     throw error;
   }
 }
@@ -279,7 +293,11 @@ async function deleteOldBackups(category = "default", retentionDays = null) {
             fs.unlinkSync(itemPath);
             deletedCount++;
           } catch (error) {
-            console.error(`[backupService] 刪除備份檔案失敗 ${itemPath}:`, error);
+            backupLogger.warn("刪除備份檔案失敗", {
+              itemPath,
+              error: error?.message || String(error),
+              module: "backupService",
+            });
           }
         }
       }
@@ -289,7 +307,12 @@ async function deleteOldBackups(category = "default", retentionDays = null) {
 
     return deletedCount;
   } catch (error) {
-    console.error(`[backupService] 刪除舊備份檔案失敗:`, error);
+    backupLogger.error("刪除舊備份檔案失敗", {
+      category,
+      retentionDays: retentionDays ?? backupConfig.retention.backupFileDays,
+      error: error?.message || String(error),
+      module: "backupService",
+    });
     throw error;
   }
 }

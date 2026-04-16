@@ -22,7 +22,7 @@ const backupConfig = {
   },
 
   scheduler: {
-    enabled: process.env.BACKUP_SCHEDULER_ENABLED !== "false",
+    enabled: true,
     interval:
       parseInt(process.env.BACKUP_SCHEDULER_INTERVAL, 10) ||
       24 * 60 * 60 * 1000,

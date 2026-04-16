@@ -18,6 +18,7 @@
     "external-data:fetch": "node scripts/externalData.js fetch",
     "backup:run": "node scripts/runBackup.js",
     "mediamtx": "node scripts/start-mediamtx.js",
+    "mediamtx:generate": "node scripts/generate-mediamtx-config.js",
     "mediamtx:pm2:start": "pm2 start ../ecosystem.config.cjs --only ba-mediamtx",
     "mediamtx:pm2:stop": "pm2 stop ba-mediamtx"
   },
@@ -37,6 +38,7 @@
     "modbus-serial": "^8.0.23",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
+    "nodemailer": "^8.0.5",
     "pg": "^8.11.3",
     "socket.io": "^4.8.3"
   },

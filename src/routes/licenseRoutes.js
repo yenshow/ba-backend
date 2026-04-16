@@ -117,6 +117,7 @@ router.post(
           appendLicenseEntitlement: {
             licenseKey: trimmedKey,
             features: result.features,
+            quotas: result.quotas || {},
           },
           deviceFingerprint: result.deviceFingerprint != null
             ? result.deviceFingerprint
@@ -140,7 +141,7 @@ router.post(
         deviceFingerprint: result.deviceFingerprint ?? deviceFingerprint,
         extensionKeys: [],
         replaceLicenseEntitlements: [
-          { licenseKey: mainKey, features: result.features },
+          { licenseKey: mainKey, features: result.features, quotas: result.quotas || {} },
         ],
         description: `授權啟用（online 主LK, by user:${req.user?.id ?? "unknown"}）`,
       });
@@ -305,7 +306,7 @@ router.post(
         deviceFingerprint: payload.deviceFingerprint ?? null,
         extensionKeys: [],
         replaceLicenseEntitlements: mainLk
-          ? [{ licenseKey: mainLk, features: payload.features }]
+          ? [{ licenseKey: mainLk, features: payload.features, quotas: payload.quotas || {} }]
           : [],
         description: `授權匯入（offline 首次, by user:${req.user?.id ?? "unknown"}）`,
       });
@@ -324,7 +325,7 @@ router.post(
       preserveMainLicenseKey: true,
       appendExtensionKey: activatedKey || undefined,
       appendLicenseEntitlement: activatedKey
-        ? { licenseKey: activatedKey, features: payload.features }
+        ? { licenseKey: activatedKey, features: payload.features, quotas: payload.quotas || {} }
         : undefined,
       deviceFingerprint: payload.deviceFingerprint != null
         ? payload.deviceFingerprint

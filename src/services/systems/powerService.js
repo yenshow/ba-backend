@@ -1,4 +1,7 @@
 const locationService = require("./locationService");
+const logger = require("../../utils/logger");
+
+const powerLogger = logger.createLogger("powerService");
 
 const toPowerZone = (zone) => ({ ...zone });
 
@@ -7,7 +10,10 @@ async function getZones() {
     const result = await locationService.getZones({ locationType: "power" });
     return { zones: result.zones.map(toPowerZone) };
   } catch (error) {
-    console.error("取得電力區域列表失敗:", error);
+    powerLogger.error("取得電力區域列表失敗", {
+      error: error?.message || String(error),
+      module: "powerService",
+    });
     throw new Error("取得電力區域列表失敗: " + error.message);
   }
 }
@@ -20,7 +26,11 @@ async function getZoneById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得電力區域失敗:", error);
+    powerLogger.error("取得電力區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "powerService",
+    });
     throw new Error("取得電力區域失敗: " + error.message);
   }
 }
@@ -58,7 +68,10 @@ async function createZone(zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("建立電力區域失敗:", error);
+    powerLogger.error("建立電力區域失敗", {
+      error: error?.message || String(error),
+      module: "powerService",
+    });
     throw new Error("建立電力區域失敗: " + error.message);
   }
 }
@@ -88,7 +101,11 @@ async function updateZone(id, zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新電力區域失敗:", error);
+    powerLogger.error("更新電力區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "powerService",
+    });
     throw new Error("更新電力區域失敗: " + error.message);
   }
 }
@@ -100,7 +117,11 @@ async function deleteZone(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除電力區域失敗:", error);
+    powerLogger.error("刪除電力區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "powerService",
+    });
     throw new Error("刪除電力區域失敗: " + error.message);
   }
 }

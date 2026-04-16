@@ -59,15 +59,6 @@ let monitoringTimer = null;
 let stopRequested = false;
 let resolveStopped = null;
 
-/**
- * 是否啟用背景監控詳細日誌
- * - 設置環境變數 ENABLE_DETAILED_LOGS=true 可啟用
- * - 目的：排查「某個任務是否有被執行」與任務耗時/錯誤
- */
-function isDetailedLogsEnabled() {
-  return process.env.ENABLE_DETAILED_LOGS === "true";
-}
-
 const SCHEDULER_TICK_MIN_MS = 200;
 
 /**
@@ -129,10 +120,7 @@ function registerMonitoringTask(
   });
 
   // 註冊 log 改為「啟動時一次性摘要」輸出，避免啟動刷屏
-  // 若需逐筆確認註冊行為，可透過 ENABLE_DETAILED_LOGS=true 檢視
-  if (isDetailedLogsEnabled()) {
-    monitorLogger.info(`已註冊監控任務: ${systemName}`);
-  }
+  monitorLogger.debug(`已註冊監控任務: ${systemName}`);
 }
 
 /**
@@ -144,18 +132,14 @@ async function runTask(task) {
   task.isRunning = true;
 
   try {
-    if (isDetailedLogsEnabled()) {
-      monitorLogger.info(`開始執行: ${task.systemName}`);
-    }
+    monitorLogger.debug(`開始執行: ${task.systemName}`);
 
     const hint = await task.taskFunction();
     task.lastRun = new Date();
     task.errorCount = 0;
 
     const duration = Date.now() - startTime;
-    if (isDetailedLogsEnabled()) {
-      monitorLogger.info(`${task.systemName} 監控完成（耗時: ${duration}ms）`);
-    }
+    monitorLogger.debug(`${task.systemName} 監控完成（耗時: ${duration}ms）`);
 
     // success: 漸進放慢（直到 maxIntervalMs）
     const suggested =
@@ -246,17 +230,17 @@ async function runSchedulerTick() {
       return;
     }
 
-    monitorLogger.info(
-      `本輪執行任務數: ${due.length}（${due.map((t) => t.systemName).join("、")}）`,
-    );
+    const dueSummary = `本輪執行任務數: ${due.length}（${due
+      .map((t) => t.systemName)
+      .join("、")}）`;
+    // 只要進到這裡代表本輪真的有「到期任務」要跑，因此用 info 代表有實際工作發生
+    monitorLogger.info(dueSummary);
 
     // 並行執行「到期」任務（同一任務不重疊）
     await Promise.all(due.map((task) => runTask(task)));
 
     const totalDuration = Date.now() - startTime;
-    if (isDetailedLogsEnabled()) {
-      monitorLogger.info(`本輪到期任務完成（總耗時: ${totalDuration}ms）`);
-    }
+    monitorLogger.debug(`本輪到期任務完成（總耗時: ${totalDuration}ms）`);
 
     // 註解：前端不需要 monitoring:status 事件
     // 如需監控任務狀態，可透過 REST API 查詢，或實作管理員專用的監控面板

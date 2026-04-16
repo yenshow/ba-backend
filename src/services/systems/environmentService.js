@@ -1,5 +1,8 @@
 const db = require("../../database/db");
 const locationService = require("./locationService");
+const logger = require("../../utils/logger");
+
+const envServiceLogger = logger.createLogger("environmentService");
 
 // ========== 區域管理函數 ==========
 
@@ -11,7 +14,10 @@ async function getZones() {
     });
     return { zones: result.zones };
   } catch (error) {
-    console.error("取得區域列表失敗:", error);
+    envServiceLogger.error("取得區域列表失敗", {
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("取得區域列表失敗: " + error.message);
   }
 }
@@ -25,7 +31,11 @@ async function getZoneById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得區域失敗:", error);
+    envServiceLogger.error("取得區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("取得區域失敗: " + error.message);
   }
 }
@@ -57,7 +67,10 @@ async function createZone(zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("建立區域失敗:", error);
+    envServiceLogger.error("建立區域失敗", {
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("建立區域失敗: " + error.message);
   }
 }
@@ -92,7 +105,11 @@ async function updateZone(id, zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新區域失敗:", error);
+    envServiceLogger.error("更新區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("更新區域失敗: " + error.message);
   }
 }
@@ -105,7 +122,11 @@ async function deleteZone(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除區域失敗:", error);
+    envServiceLogger.error("刪除區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("刪除區域失敗: " + error.message);
   }
 }
@@ -156,7 +177,11 @@ async function getReadings(locationId, options = {}) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得讀數失敗:", error);
+    envServiceLogger.error("取得讀數失敗", {
+      locationId,
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("取得讀數失敗: " + error.message);
   }
 }
@@ -205,7 +230,12 @@ async function getReadingsAggregated(locationId, options = {}) {
     };
   } catch (error) {
     if (error.statusCode) throw error;
-    console.error("取得彙總讀數失敗:", error);
+    envServiceLogger.error("取得彙總讀數失敗", {
+      locationId,
+      bucket: options?.bucket,
+      error: error?.message || String(error),
+      module: "environmentService",
+    });
     throw new Error("取得彙總讀數失敗: " + error.message);
   }
 }

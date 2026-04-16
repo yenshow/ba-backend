@@ -1,10 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const alertService = require("../services/alerts/alertService");
+const alertIgnoreService = require("../services/alerts/alertIgnoreService");
 const alertRuleService = require("../services/alerts/alertRuleService");
 const alertLinkageService = require("../services/alerts/alertLinkageService");
 const alertCameraLinkageService = require("../services/alerts/alertCameraLinkageService");
-const alertWebhookSubscriptionService = require("../services/alerts/alertWebhookSubscriptionService");
+const alertEmailSubscriptionService = require("../services/alerts/alertEmailSubscriptionService");
+const db = require("../database/db");
+const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
 const {
   authenticate,
   requireAdminOrOperator,
@@ -74,46 +77,141 @@ function validateRuleIntegrationsPayload(body) {
     if (c.enabled !== undefined && typeof c.enabled !== "boolean") {
       return "cameraLinkage.enabled 需為布林值";
     }
-    if (
-      c.camera_device_id != null &&
-      (!Number.isInteger(Number(c.camera_device_id)) ||
-        Number(c.camera_device_id) <= 0)
-    ) {
-      return "cameraLinkage.camera_device_id 需為正整數或 null";
+    if (!Array.isArray(c.camera_device_ids)) {
+      return "cameraLinkage.camera_device_ids 需為陣列";
+    }
+    const ids = c.camera_device_ids
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const unique = [...new Set(ids)];
+    if (unique.length !== ids.length) {
+      return "cameraLinkage.camera_device_ids 不可重複";
+    }
+    if (unique.length === 0) {
+      return "cameraLinkage.camera_device_ids 至少需 1 台";
+    }
+    if (unique.length > 4) {
+      return "cameraLinkage.camera_device_ids 最多 4 台";
     }
   }
 
-  if (Object.prototype.hasOwnProperty.call(b, "webhookSubscriptions")) {
-    if (!Array.isArray(b.webhookSubscriptions)) {
-      return "webhookSubscriptions 需為陣列";
+  if (Object.prototype.hasOwnProperty.call(b, "emailSubscription")) {
+    if (b.emailSubscription && typeof b.emailSubscription !== "object") {
+      return "emailSubscription 需為物件或 null";
     }
-    for (const it of b.webhookSubscriptions) {
-      if (!it) continue;
-      if (it.enabled !== undefined && typeof it.enabled !== "boolean") {
-        return "webhookSubscriptions[].enabled 需為布林值";
+    if (b.emailSubscription) {
+      const e = b.emailSubscription || {};
+      if (e.enabled !== undefined && typeof e.enabled !== "boolean") {
+        return "emailSubscription.enabled 需為布林值";
       }
-      const url = String(it.url || "").trim();
-      if (!url) {
-        return "webhookSubscriptions[].url 為必填";
+      const enabled = e.enabled !== undefined ? Boolean(e.enabled) : false;
+      const security = String(e.smtp_security || "none").trim().toLowerCase();
+      if (!["none", "ssl", "tls"].includes(security)) {
+        return "emailSubscription.smtp_security 僅允許 none/ssl/tls";
       }
-      if (
-        it.secret !== undefined &&
-        it.secret !== null &&
-        typeof it.secret !== "string"
-      ) {
-        return "webhookSubscriptions[].secret 需為字串";
+      if (enabled) {
+        const host = String(e.smtp_host || "").trim();
+        if (!host) return "emailSubscription.smtp_host 為必填";
+        const portN = Number(e.smtp_port);
+        if (!Number.isInteger(portN) || portN <= 0) {
+          return "emailSubscription.smtp_port 為必填且需為正整數";
+        }
+        const fromEmail = String(e.smtp_user || "").trim();
+        if (!fromEmail) return "emailSubscription.smtp_user（寄件人 Email）為必填";
+        if (!looksLikeEmail(fromEmail)) {
+          return "emailSubscription.smtp_user（寄件人 Email）格式不正確";
+        }
+        if (!Array.isArray(e.to_emails) || e.to_emails.length === 0) {
+          return "emailSubscription.to_emails 為必填且需為陣列";
+        }
       }
-      if (it.headers_json !== undefined && it.headers_json !== null) {
-        if (
-          typeof it.headers_json !== "object" ||
-          Array.isArray(it.headers_json)
-        ) {
-          return "webhookSubscriptions[].headers_json 需為物件";
+
+      if (e.to_emails !== undefined && !Array.isArray(e.to_emails)) {
+        return "emailSubscription.to_emails 需為陣列";
+      }
+      if (e.repeat_min_interval_seconds !== undefined) {
+        const n = Number(e.repeat_min_interval_seconds);
+        if (!Number.isInteger(n) || n < 15) {
+          return "emailSubscription.repeat_min_interval_seconds 需為整數且最小 15";
+        }
+      }
+      if (e.repeat_max_send_count !== undefined) {
+        const n = Number(e.repeat_max_send_count);
+        if (!Number.isInteger(n) || n < 1 || n > 10) {
+          return "emailSubscription.repeat_max_send_count 需為整數且介於 1~10";
         }
       }
     }
   }
 
+  return null;
+}
+
+function pickDefined(obj) {
+  const out = {};
+  if (!obj || typeof obj !== "object") return out;
+  for (const k of Object.keys(obj)) {
+    if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined) {
+      out[k] = obj[k];
+    }
+  }
+  return out;
+}
+
+function mergeEmailSubscriptionForTest(storedRow, overrideObj) {
+  const s = storedRow && typeof storedRow === "object" ? storedRow : {};
+  const o = overrideObj && typeof overrideObj === "object" ? overrideObj : {};
+  const p = pickDefined(o);
+
+  const merged = { ...s, ...p };
+
+  // 密碼欄位：允許用 null 清空；空字串視為 null（與 upsert 行為一致）
+  if (Object.prototype.hasOwnProperty.call(p, "smtp_password")) {
+    const pw = p.smtp_password;
+    merged.smtp_password =
+      pw == null || String(pw).trim() === "" ? null : String(pw);
+  }
+
+  return merged;
+}
+
+function looksLikeEmail(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());
+}
+
+function validateEmailSubscriptionForSmtpTest(sub) {
+  const e = sub || {};
+  const host = String(e.smtp_host || "").trim();
+  if (!host) return "emailSubscription.smtp_host 為必填";
+  const portN = Number(e.smtp_port);
+  if (!Number.isInteger(portN) || portN <= 0) {
+    return "emailSubscription.smtp_port 為必填且需為正整數";
+  }
+  const security = String(e.smtp_security || "none").trim().toLowerCase();
+  if (!["none", "ssl", "tls"].includes(security)) {
+    return "emailSubscription.smtp_security 僅允許 none/ssl/tls";
+  }
+  const fromEmail = String(e.smtp_user || "").trim();
+  if (!fromEmail) return "emailSubscription.smtp_user（寄件人 Email）為必填";
+  if (!looksLikeEmail(fromEmail)) {
+    return "emailSubscription.smtp_user（寄件人 Email）格式不正確";
+  }
+  const toEmails = Array.isArray(e.to_emails) ? e.to_emails : null;
+  if (!toEmails || toEmails.length === 0) {
+    return "emailSubscription.to_emails 為必填且需為非空陣列";
+  }
+  const normalized = toEmails
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  if (normalized.length === 0) {
+    return "emailSubscription.to_emails 不可為空";
+  }
+  for (const addr of normalized) {
+    if (!looksLikeEmail(addr)) {
+      return `emailSubscription.to_emails 含有不合法的 Email：${addr}`;
+    }
+  }
   return null;
 }
 
@@ -370,11 +468,19 @@ router.get(
       rules = await alertRuleService.getAllRulesForSource(source);
     }
 
-    res.sendSuccess({ rules });
+    // 讀取端保護：規則 severity 僅允許 warning/critical；若資料庫殘留 error，視為 critical
+    const normalizedRules = (rules || []).map((r) => {
+      const s = r?.severity;
+      if (s === "warning" || s === "critical") return r;
+      if (s === "error") return { ...r, severity: "critical" };
+      return { ...r, severity: "warning" };
+    });
+
+    res.sendSuccess({ rules: normalizedRules });
   }),
 );
 
-// 批次取得多個規則的整合設定（DO / 攝影機 / Webhook）
+// 批次取得多個規則的整合設定（DO / 攝影機 / Email）
 router.post(
   "/rules/integrations/batch",
   requireAdminOrOperator,
@@ -390,15 +496,19 @@ router.post(
       return res.sendSuccess({});
     }
 
-    const [doLinkages, cameraLinkages, webhookSubs] = await Promise.all([
+    const [doLinkages, cameraLinkages, emailSubs] = await Promise.all([
       alertLinkageService.getLatestLinkagesByRuleIds(ids),
       alertCameraLinkageService.getByRuleIds(ids),
-      alertWebhookSubscriptionService.listByRuleIds(ids),
+      alertEmailSubscriptionService.getByRuleIds(ids),
     ]);
 
     const result = {};
     for (const id of ids) {
-      result[id] = { doLinkage: null, cameraLinkage: null, webhookSubscriptions: [] };
+      result[id] = {
+        doLinkage: null,
+        cameraLinkage: null,
+        emailSubscription: null,
+      };
     }
 
     for (const d of doLinkages || []) {
@@ -411,10 +521,10 @@ router.post(
       if (!rid || !result[rid]) continue;
       result[rid].cameraLinkage = c;
     }
-    for (const w of webhookSubs || []) {
-      const rid = w?.rule_id != null ? Number(w.rule_id) : null;
+    for (const e of emailSubs || []) {
+      const rid = e?.rule_id != null ? Number(e.rule_id) : null;
       if (!rid || !result[rid]) continue;
-      result[rid].webhookSubscriptions.push(w);
+      result[rid].emailSubscription = e;
     }
 
     return res.sendSuccess(result);
@@ -440,7 +550,7 @@ router.post(
   }),
 );
 
-// 取得單一規則的整合設定（連動 DO / 攝影機 / Webhook）
+// 取得單一規則的整合設定（連動 DO / 攝影機 / Email）
 router.get(
   "/rules/:id/integrations",
   requireAdminOrOperator,
@@ -451,9 +561,8 @@ router.get(
     const doLinkage =
       await alertLinkageService.getSingleLinkageByRuleId(ruleId);
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
-    const webhookSubscriptions =
-      await alertWebhookSubscriptionService.listByRuleId(ruleId);
-    res.sendSuccess({ doLinkage, cameraLinkage, webhookSubscriptions });
+    const emailSubscription = await alertEmailSubscriptionService.getByRuleId(ruleId);
+    res.sendSuccess({ doLinkage, cameraLinkage, emailSubscription });
   }),
 );
 
@@ -496,21 +605,100 @@ router.put(
       }
     }
 
-    // Webhook subscriptions (replace-all)
-    if (Object.prototype.hasOwnProperty.call(body, "webhookSubscriptions")) {
-      await alertWebhookSubscriptionService.replaceForRule(
-        ruleId,
-        body.webhookSubscriptions,
-        userId,
-      );
+    // Email subscription (upsert)
+    if (Object.prototype.hasOwnProperty.call(body, "emailSubscription")) {
+      if (!body.emailSubscription) {
+        await alertEmailSubscriptionService.deleteForRule(ruleId);
+      } else {
+        await alertEmailSubscriptionService.upsertForRule(
+          ruleId,
+          body.emailSubscription,
+          userId,
+        );
+      }
     }
 
     const doLinkage =
       await alertLinkageService.getSingleLinkageByRuleId(ruleId);
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
-    const webhookSubscriptions =
-      await alertWebhookSubscriptionService.listByRuleId(ruleId);
-    res.sendSuccess({ doLinkage, cameraLinkage, webhookSubscriptions });
+    const emailSubscription = await alertEmailSubscriptionService.getByRuleId(ruleId);
+    res.sendSuccess({ doLinkage, cameraLinkage, emailSubscription });
+  }),
+);
+
+// SMTP 測試寄信（admin/operator；不寫入 DB；可用 body.emailSubscription 覆寫設定）
+router.post(
+  "/rules/:id/email/test",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const ruleId = Number(req.params.id);
+    const body = req.body || {};
+
+    const ruleRows = await db.query(
+      "SELECT id FROM alert_rules WHERE id = ? LIMIT 1",
+      [ruleId],
+    );
+    if (!ruleRows?.[0]) {
+      return res.sendError("找不到指定的規則", 404);
+    }
+
+    const stored = await alertEmailSubscriptionService.getByRuleId(ruleId);
+    const merged = mergeEmailSubscriptionForTest(stored, body.emailSubscription);
+
+    const errMsg = validateEmailSubscriptionForSmtpTest(merged);
+    if (errMsg) return res.sendError(errMsg, 400);
+
+    const security = String(merged.smtp_security || "none").trim().toLowerCase();
+    const userRaw = merged.smtp_user != null ? String(merged.smtp_user).trim() : "";
+    const passRaw =
+      merged.smtp_password != null ? String(merged.smtp_password) : "";
+
+    const toList = Array.isArray(merged.to_emails)
+      ? merged.to_emails.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 20)
+      : [];
+
+    const subject = `[BA] SMTP 測試（rule_id=${ruleId}）`;
+    const text = [
+      "這是一封 BA 系統的 SMTP 測試信。",
+      "",
+      `rule_id: ${ruleId}`,
+      `時間: ${new Date().toISOString()}`,
+      "",
+      "若你收到此信，代表 SMTP 設定（連線/認證/寄送）可用。",
+    ].join("\n");
+
+    try {
+      const info = await sendSmtpMailAndClose(
+        {
+          host: String(merged.smtp_host || "").trim(),
+          port: Number(merged.smtp_port),
+          user: userRaw || null,
+          password: passRaw || null,
+          security,
+        },
+        { to: toList, subject, text },
+      );
+
+      return res.sendSuccess({
+        ok: true,
+        messageId: info?.messageId ?? null,
+        accepted: info?.accepted ?? null,
+        rejected: info?.rejected ?? null,
+        response: info?.response ?? null,
+      });
+    } catch (e) {
+      const code = String(e?.code || "");
+      const msg = String(e?.message || e || "SMTP_SEND_FAILED");
+      if (
+        msg.includes("SMTP_HOST_REQUIRED") ||
+        msg.includes("SMTP_PORT_REQUIRED") ||
+        msg.includes("SMTP_SECURITY_INVALID")
+      ) {
+        return res.sendError("SMTP 設定不完整或不合法", 400);
+      }
+      return res.sendError(`SMTP 測試寄送失敗：${code ? `${code} ` : ""}${msg}`, 502);
+    }
   }),
 );
 
@@ -626,7 +814,7 @@ router.post(
     const { deviceId, alertType } = req.params;
     const { source, dimension_key } = req.query; // 可選的系統來源/維度參數
 
-    const count = await alertService.unignoreAlerts(
+    const count = await alertIgnoreService.unignoreAlerts(
       parseInt(deviceId),
       alertType,
       source, // 如果未提供，默認為 device（向後兼容）

@@ -38,6 +38,7 @@ const accessControlRoutes = require("./routes/accessControlRoutes");
 const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const permissionRoutes = require("./routes/permissionRoutes");
 
@@ -59,7 +60,9 @@ const powerMonitor = require("./services/monitoring/powerMonitor");
 const fireMonitor = require("./services/monitoring/fireMonitor");
 const emergencyRescueMonitor = require("./services/monitoring/emergencyRescueMonitor");
 const diDoMonitor = require("./services/monitoring/diDoMonitor");
-// 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
+const {
+  processActiveAlertEmailResends,
+} = require("./services/alerts/alertEmailNotifier");
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
@@ -174,6 +177,7 @@ if (config.features && config.features.enableAccessControlPersonnel !== false) {
 }
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
+app.use("/api/multimedia", multimediaDashboardRoutes); // 多媒體資訊牆 API
 
 // 影像監控：前端依 POST /api/devices/:id/stream/start 取得 webrtcUrl，以 WebRTC 播放
 
@@ -232,8 +236,9 @@ async function startServer() {
     serverLogger.info(`WebSocket 服務已啟用 (Socket.IO)`);
 
     if (localIP !== "localhost") {
-      console.log(`\n💡 其他裝置可透過以下網址訪問:`);
-      console.log(`   http://${localIP}:${config.serverPort}`);
+      serverLogger.info(
+        `其他裝置可透過以下網址訪問: http://${localIP}:${config.serverPort}`,
+      );
     }
 
     // 測試資料庫連線（listen 成功後再做，避免啟動失敗時觸發一堆背景任務）
@@ -242,25 +247,6 @@ async function startServer() {
       serverLogger.warn("資料庫連線失敗，但伺服器仍會啟動");
     } else {
       serverLogger.info("資料庫連線成功");
-    }
-
-    // 可選：啟動時補齊 DB schema（CREATE TABLE IF NOT EXISTS）
-    // 預設關閉，避免在受管環境意外變更 DB。
-    if (
-      dbConnected &&
-      String(process.env.DB_INIT_SCHEMA_ON_START || "").toLowerCase() === "true"
-    ) {
-      try {
-        serverLogger.info(
-          "DB_INIT_SCHEMA_ON_START=true，開始初始化/補齊資料庫 Schema",
-        );
-        await initSchema();
-        serverLogger.info("資料庫 Schema 初始化完成");
-      } catch (err) {
-        serverLogger.warn("資料庫 Schema 初始化失敗（不影響服務啟動）", {
-          error: err?.message || String(err),
-        });
-      }
     }
 
     // 測試外部資料庫連線
@@ -302,12 +288,24 @@ async function startServer() {
         diDoMonitor.checkDiDoAlerts,
         { baseIntervalMs: 5000, minIntervalMs: 5000, maxIntervalMs: 5000 },
       );
+      backgroundMonitor.registerMonitoringTask(
+        "警報 Email 重送",
+        async () => {
+          await processActiveAlertEmailResends({ limit: 50 });
+          return { nextIntervalMs: 15_000 };
+        },
+        {
+          baseIntervalMs: 15_000,
+          minIntervalMs: 15_000,
+          maxIntervalMs: 15_000,
+        },
+      );
       // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
 
       backgroundMonitor.startMonitoring();
       serverLogger.info("背景監控服務已啟用");
     } else {
-      serverLogger.warn("背景監控服務已停用（設定 MONITORING_ENABLED=false）");
+      serverLogger.warn("背景監控服務已停用（未啟用 monitoring）");
     }
 
     // 啟動備份排程

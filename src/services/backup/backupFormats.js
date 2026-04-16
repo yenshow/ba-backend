@@ -6,6 +6,9 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const { promisify } = require("util");
+const logger = require("../../utils/logger");
+
+const backupLogger = logger.createLogger("backupFormats");
 
 const gzip = promisify(zlib.gzip);
 
@@ -202,7 +205,11 @@ async function exportData(
         );
       }
     } catch (error) {
-      console.error(`[backupFormats] 匯出 CSV 失敗:`, error);
+      backupLogger.error("匯出 CSV 失敗", {
+        tableName,
+        error: error?.message || String(error),
+        module: "backupFormats",
+      });
       results.csv = { error: error.message };
     }
   }

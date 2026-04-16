@@ -1,5 +1,8 @@
 const db = require("../../database/db");
 const { parseConfig, stringifyConfig } = require("../../utils/deviceHelpers");
+const logger = require("../../utils/logger");
+
+const deviceModelLogger = logger.createLogger("deviceModelService");
 
 /** 將表單值轉為整數或 null（undefined/null/空字串 → null） */
 function parseOptionalInt(val) {
@@ -46,7 +49,10 @@ async function getAllDeviceModels(filters = {}) {
 
 		return { device_models: modelsWithConfig };
 	} catch (error) {
-		console.error("取得設備型號失敗:", error);
+		deviceModelLogger.error("取得設備型號失敗", {
+			error: error?.message || String(error),
+			module: "deviceModelService",
+		});
 		throw new Error("取得設備型號失敗: " + error.message);
 	}
 }
@@ -81,7 +87,11 @@ async function getDeviceModelById(id) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("取得設備型號失敗:", error);
+		deviceModelLogger.error("取得設備型號失敗", {
+			id,
+			error: error?.message || String(error),
+			module: "deviceModelService",
+		});
 		throw new Error("取得設備型號失敗: " + error.message);
 	}
 }
@@ -195,7 +205,10 @@ async function createDeviceModel(data, userId) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("建立設備型號失敗:", error);
+		deviceModelLogger.error("建立設備型號失敗", {
+			error: error?.message || String(error),
+			module: "deviceModelService",
+		});
 		throw new Error("建立設備型號失敗: " + error.message);
 	}
 }
@@ -331,7 +344,11 @@ async function updateDeviceModel(id, data, userId) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("更新設備型號失敗:", error);
+		deviceModelLogger.error("更新設備型號失敗", {
+			id,
+			error: error?.message || String(error),
+			module: "deviceModelService",
+		});
 		throw new Error("更新設備型號失敗: " + error.message);
 	}
 }
@@ -363,7 +380,11 @@ async function deleteDeviceModel(id) {
 		if (error.statusCode) {
 			throw error;
 		}
-		console.error("刪除設備型號失敗:", error);
+		deviceModelLogger.error("刪除設備型號失敗", {
+			id,
+			error: error?.message || String(error),
+			module: "deviceModelService",
+		});
 		throw new Error("刪除設備型號失敗: " + error.message);
 	}
 }

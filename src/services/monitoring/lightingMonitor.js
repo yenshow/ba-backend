@@ -137,10 +137,11 @@ async function checkLightingAreas() {
           throw new Error(first?.error || "無法讀取照明設備資料");
         }
 
-        // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
-        await systemAlert.clearError("lighting", area.system_id, {
-          skipWebSocket: true,
-        });
+        await systemAlert.syncLocationSnapshotReadResult(
+          "lighting",
+          area.system_id,
+          true,
+        );
 
         // 照明系統以警報為主要紀錄方式，不進行定期資料記錄
         return {
@@ -152,11 +153,11 @@ async function checkLightingAreas() {
         // 讀取失敗，記錄錯誤（批次模式：跳過即時推送）
         // 使用 location_systems.id 作為 source_id
         const errorMessage = error.message || "無法讀取照明設備資料";
-        await systemAlert.recordError(
+        await systemAlert.syncLocationSnapshotReadResult(
           "lighting",
           area.system_id,
+          false,
           errorMessage,
-          { skipWebSocket: true },
         );
 
         return {
@@ -246,8 +247,18 @@ async function checkLightingAreas() {
       websocketService.emitBatchDeviceStatus(statusUpdates);
     }
 
-    if (successCount > 0 || failCount > 0) {
-      logger.info(`檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`, {
+    const hasMeaningfulChange = statusUpdates.length > 0 || failCount > 0;
+    const summary = `檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`;
+    if (hasMeaningfulChange) {
+      logger.info(summary, {
+        successCount,
+        failCount,
+        statusUpdates: statusUpdates.length,
+        module: "lightingMonitor",
+      });
+    } else {
+      // `logger.debug` 在 production 預設不輸出（除非 ENABLE_DEBUG_LOGS=true）
+      logger.debug(summary, {
         successCount,
         failCount,
         module: "lightingMonitor",

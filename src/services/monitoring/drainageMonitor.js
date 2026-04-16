@@ -1,7 +1,7 @@
 /**
  * 衛生排水系統監控任務
  * 定期讀取所有排水點位狀態，並推送連線狀態（monitoring:device:status:batch）
- * - 連線類警報由 statusService 內部的 recordError/clearError 處理
+ * - 連線類警報由 statusService 經 systemAlertHelper.syncLocationSnapshotReadResult 處理
  * - DI/DO（bit_state）警報統一由 diDoMonitor 處理
  */
 

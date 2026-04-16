@@ -15,26 +15,8 @@ const logger = require("../../utils/logger");
 // 追蹤最後檢查的時間戳（用於查詢新記錄）
 let lastCheckTime = new Date();
 
-// 是否已輸出過環境變數狀態（避免重複輸出）
-let hasLoggedEnvStatus = false;
-
 // 執行鎖：防止並發執行
 let isChecking = false;
-
-/**
- * 是否啟用人流監控詳細日誌
- * - 設置環境變數 ENABLE_DETAILED_LOGS=true 可啟用
- * - 目的：協助排查「WebSocket 增量更新」是否有推送/漏送
- */
-function isDetailedLogsEnabled() {
-  const enabled = process.env.ENABLE_DETAILED_LOGS === "true";
-  // 首次調用時輸出狀態（協助排查環境變數是否正確設置）
-  if (!hasLoggedEnvStatus) {
-    console.log(`[peopleCountingMonitor] 詳細日誌狀態: ${enabled ? "已啟用" : "未啟用"} (ENABLE_DETAILED_LOGS=${process.env.ENABLE_DETAILED_LOGS || "未設置"})`);
-    hasLoggedEnvStatus = true;
-  }
-  return enabled;
-}
 
 /**
  * 檢查新的刷卡記錄
@@ -58,9 +40,16 @@ async function checkPeopleCountingRecords(options = {}) {
   try {
     const now = new Date();
 
-    // 詳細日誌：記錄輪詢時間窗（每次執行都可追蹤 lastCheckTime 是否前進）
-    if (isDetailedLogsEnabled() || triggerSource === "yscp_event") {
+    // 記錄輪詢時間窗：YSCP 事件觸發用 info，其餘用 debug（避免例行輪詢刷屏）
+    if (triggerSource === "yscp_event") {
       logger.info("開始檢查人流刷卡新記錄", {
+        module: "peopleCountingMonitor",
+        triggerSource,
+        lastCheckTime: lastCheckTime.toISOString(),
+        now: now.toISOString(),
+      });
+    } else {
+      logger.debug("開始檢查人流刷卡新記錄", {
         module: "peopleCountingMonitor",
         triggerSource,
         lastCheckTime: lastCheckTime.toISOString(),
@@ -96,12 +85,11 @@ async function checkPeopleCountingRecords(options = {}) {
       // 更新最後檢查時間
       lastCheckTime = now;
 
-      if (isDetailedLogsEnabled()) {
-        logger.info("人流刷卡新記錄: 0 筆（更新 lastCheckTime）", {
-          module: "peopleCountingMonitor",
-          newLastCheckTime: lastCheckTime.toISOString(),
-        });
-      }
+      logger.debug("人流刷卡新記錄: 0 筆（更新 lastCheckTime）", {
+        module: "peopleCountingMonitor",
+        triggerSource,
+        newLastCheckTime: lastCheckTime.toISOString(),
+      });
       return;
     }
 
@@ -135,14 +123,12 @@ async function checkPeopleCountingRecords(options = {}) {
       }
     });
 
-    if (isDetailedLogsEnabled()) {
-      logger.info("取得人流統計地點配置完成", {
-        module: "peopleCountingMonitor",
-        locationsCount: Array.isArray(allLocations) ? allLocations.length : 0,
-        mappedPhysicalIds: locationConfigMap.size,
-        recordsCount: records.length,
-      });
-    }
+    logger.debug("取得人流統計地點配置完成", {
+      module: "peopleCountingMonitor",
+      locationsCount: Array.isArray(allLocations) ? allLocations.length : 0,
+      mappedPhysicalIds: locationConfigMap.size,
+      recordsCount: records.length,
+    });
 
     // 處理每筆記錄
     for (const record of records) {
@@ -157,22 +143,22 @@ async function checkPeopleCountingRecords(options = {}) {
       );
 
       // 記錄處理完成（不再推送 WebSocket，由前端收到 YSCP 事件後重新載入資料）
-      if (isDetailedLogsEnabled()) {
-        logger.info("處理人流記錄完成", {
-          module: "peopleCountingMonitor",
-          personId: record.person_id,
-          physicalId: record.physical_id,
-          swipTime: record.swip_card_rev_time,
-          eventType: eventType || "failed",
-          locationId: locationConfig?.locationId ?? null,
-          locationName: locationConfig?.locationName || null,
-        });
-      }
+      logger.debug("處理人流記錄完成", {
+        module: "peopleCountingMonitor",
+        triggerSource,
+        personId: record.person_id,
+        physicalId: record.physical_id,
+        swipTime: record.swip_card_rev_time,
+        eventType: eventType || "failed",
+        locationId: locationConfig?.locationId ?? null,
+        locationName: locationConfig?.locationName || null,
+      });
     }
 
     // 更新最後檢查時間
     lastCheckTime = now;
 
+    // 只有真正有新資料才用 INFO（有意義事件）；其餘用 debug
     if (records.length > 0) {
       logger.info(`人流統計監控完成，處理 ${records.length} 筆新記錄`, {
         module: "peopleCountingMonitor",
@@ -180,13 +166,11 @@ async function checkPeopleCountingRecords(options = {}) {
       });
     }
 
-    if (isDetailedLogsEnabled() || triggerSource === "yscp_event") {
-      logger.info("人流統計監控: 更新 lastCheckTime 完成", {
-        module: "peopleCountingMonitor",
-        triggerSource,
-        newLastCheckTime: lastCheckTime.toISOString(),
-      });
-    }
+    logger.debug("人流統計監控: 更新 lastCheckTime 完成", {
+      module: "peopleCountingMonitor",
+      triggerSource,
+      newLastCheckTime: lastCheckTime.toISOString(),
+    });
   } catch (error) {
     logger.error("人流統計監控失敗", {
       error,

@@ -9,6 +9,10 @@ const websocketService = require("../websocket/websocketService");
 const alertService = require("../alerts/alertService");
 const licenseService = require("../licenseService");
 const licenseQuotaService = require("../licenseQuotaService");
+const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
+const logger = require("../../utils/logger");
+
+const deviceLogger = logger.createLogger("deviceService");
 
 // 取得設備列表
 async function getDevices(filters = {}) {
@@ -116,7 +120,10 @@ async function getDevices(filters = {}) {
       offset: parseInt(offset),
     };
   } catch (error) {
-    console.error("取得設備列表失敗:", error);
+    deviceLogger.error("取得設備列表失敗", {
+      error: error?.message || String(error),
+      module: "deviceService",
+    });
     throw new Error("取得設備列表失敗: " + error.message);
   }
 }
@@ -172,7 +179,11 @@ async function getDeviceById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得設備失敗:", error);
+    deviceLogger.error("取得設備失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "deviceService",
+    });
     throw new Error("取得設備失敗: " + error.message);
   }
 }
@@ -464,6 +475,23 @@ async function createDevice(deviceData, userId) {
     // 取得建立的設備
     const deviceResult = await getDeviceById(result[0].id);
 
+    // 攝影機：自動套用到 MediaMTX（立即更新 + 產生 generated 檔供下次啟動）
+    try {
+      if (String(deviceResult?.device?.type_code || "").toLowerCase() === "camera") {
+        const rtspUrl = String(deviceResult?.device?.config?.rtsp_url || "").trim();
+        if (rtspUrl) {
+          await mediaMTXConfigSyncService.syncSingleCameraPath(deviceResult.device.id, rtspUrl);
+          await mediaMTXConfigSyncService.generateConfigFile();
+        }
+      }
+    } catch (e) {
+      deviceLogger.warn("同步 MediaMTX 失敗（createDevice）", {
+        deviceId: deviceResult?.device?.id,
+        error: e?.message || String(e),
+        module: "deviceService",
+      });
+    }
+
     // 推送 WebSocket 事件：設備創建
     websocketService.emitDeviceCreated({
       device: deviceResult.device,
@@ -475,7 +503,10 @@ async function createDevice(deviceData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("創建設備失敗:", error);
+    deviceLogger.error("創建設備失敗", {
+      error: error?.message || String(error),
+      module: "deviceService",
+    });
     throw new Error("創建設備失敗: " + error.message);
   }
 }
@@ -829,6 +860,23 @@ async function updateDevice(id, deviceData, userId) {
     // 取得更新後的設備
     const updatedDevice = await getDeviceById(id);
 
+    // 攝影機：若 rtsp_url 變更，立即同步到 MediaMTX + 更新 generated 檔
+    try {
+      if (String(updatedDevice?.device?.type_code || "").toLowerCase() === "camera") {
+        const rtspUrl = String(updatedDevice?.device?.config?.rtsp_url || "").trim();
+        if (rtspUrl) {
+          await mediaMTXConfigSyncService.syncSingleCameraPath(updatedDevice.device.id, rtspUrl);
+        }
+        await mediaMTXConfigSyncService.generateConfigFile();
+      }
+    } catch (e) {
+      deviceLogger.warn("同步 MediaMTX 失敗（updateDevice）", {
+        deviceId: updatedDevice?.device?.id,
+        error: e?.message || String(e),
+        module: "deviceService",
+      });
+    }
+
     // 構建變更的欄位列表
     const changes = {};
     const fields = { name, type_id, model_id, description, status, config };
@@ -882,10 +930,10 @@ async function updateDevice(id, deviceData, userId) {
             );
           }
         } catch (e) {
-          console.warn(
-            "[deviceService] 停用設備時解決警示失敗:",
-            e?.message || e,
-          );
+          deviceLogger.warn("停用設備時解決警示失敗", {
+            error: e?.message || String(e),
+            module: "deviceService",
+          });
         }
       }
 
@@ -909,7 +957,11 @@ async function updateDevice(id, deviceData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新設備失敗:", error);
+    deviceLogger.error("更新設備失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "deviceService",
+    });
     throw new Error("更新設備失敗: " + error.message);
   }
 }
@@ -918,14 +970,37 @@ async function updateDevice(id, deviceData, userId) {
 async function deleteDevice(id, userId = null) {
   try {
     // 檢查設備是否存在
-    const devices = await db.query("SELECT id FROM devices WHERE id = ?", [id]);
+    const devices = await db.query(
+      `
+      SELECT d.id, dt.code AS type_code, d.config
+      FROM devices d
+      INNER JOIN device_types dt ON d.type_id = dt.id
+      WHERE d.id = ?
+      LIMIT 1
+      `,
+      [id]
+    );
     if (devices.length === 0) {
       const error = new Error("設備不存在");
       error.statusCode = 404;
       throw error;
     }
 
+    const isCamera = String(devices[0]?.type_code || "").toLowerCase() === "camera";
     await db.query("DELETE FROM devices WHERE id = ?", [id]);
+
+    // 攝影機：刪除後更新 generated 檔（runtime 不主動 removePath，避免 reload）
+    try {
+      if (isCamera) {
+        await mediaMTXConfigSyncService.generateConfigFile();
+      }
+    } catch (e) {
+      deviceLogger.warn("同步 MediaMTX 失敗（deleteDevice）", {
+        deviceId: id,
+        error: e?.message || String(e),
+        module: "deviceService",
+      });
+    }
 
     // 推送 WebSocket 事件：設備刪除
     websocketService.emitDeviceDeleted({
@@ -938,7 +1013,11 @@ async function deleteDevice(id, userId = null) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除設備失敗:", error);
+    deviceLogger.error("刪除設備失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "deviceService",
+    });
     throw new Error("刪除設備失敗: " + error.message);
   }
 }
@@ -958,7 +1037,10 @@ async function getCameraGroups() {
     const rows = await db.query(query, ["camera"]);
     return rows.map((r) => r.group_name).filter(Boolean);
   } catch (error) {
-    console.error("取得攝影機群組失敗:", error);
+    deviceLogger.error("取得攝影機群組失敗", {
+      error: error?.message || String(error),
+      module: "deviceService",
+    });
     throw new Error("取得攝影機群組失敗: " + error.message);
   }
 }

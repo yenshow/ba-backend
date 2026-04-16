@@ -26,6 +26,9 @@ const {
 
 const RETENTION_DAYS = backupConfig.retention.databaseDays;
 const FILE_RETENTION_DAYS = backupConfig.retention.backupFileDays;
+const logger = require("../../utils/logger");
+
+const backupLogger = logger.createLogger("backupScheduler");
 
 /**
  * 執行完整備份流程（警報為狀態型：不因跨日自動結案；僅備份並刪除已解決且過保留期之資料）
@@ -48,7 +51,10 @@ async function runBackup() {
     try {
       await environmentAggregationService.computeAndSaveDayAndMonth();
     } catch (aggError) {
-      console.warn("[backup] 彙總寫入 day/month 略過:", aggError.message);
+      backupLogger.warn("彙總寫入 day/month 略過", {
+        error: aggError?.message || String(aggError),
+        module: "backupScheduler",
+      });
     }
 
     // environment_readings
@@ -134,7 +140,10 @@ async function runBackup() {
       peopleResult = peopleData;
       results.people_counting_logs = peopleResult;
     } catch (pcError) {
-      console.warn("[backup] 人流統計同步/備份略過:", pcError.message);
+      backupLogger.warn("人流統計同步/備份略過", {
+        error: pcError?.message || String(pcError),
+        module: "backupScheduler",
+      });
       results.people_counting_logs = { error: pcError.message };
     }
 
@@ -162,7 +171,10 @@ async function runBackup() {
       vehicleResult = vehicleData;
       results.vehicle_passageway_logs = vehicleResult;
     } catch (vaError) {
-      console.warn("[backup] 車輛進出同步/備份略過:", vaError.message);
+      backupLogger.warn("車輛進出同步/備份略過", {
+        error: vaError?.message || String(vaError),
+        module: "backupScheduler",
+      });
       results.vehicle_passageway_logs = { error: vaError.message };
     }
 
@@ -200,13 +212,19 @@ async function runBackup() {
       (alertResult.deletedCount || 0) +
       (peopleResult.deletedCount || 0) +
       (vehicleResult.deletedCount || 0);
-    console.log(
-      `[backup] 完成: 備份 ${totalBacked} 筆, 刪除 DB ${totalDeleted} 筆, 刪除舊檔 ${results.deletedFiles} 個`,
-    );
+    backupLogger.info("備份完成", {
+      totalBacked,
+      totalDeleted,
+      deletedFiles: results.deletedFiles,
+      module: "backupScheduler",
+    });
 
     return results;
   } catch (error) {
-    console.error("[backup] 備份失敗:", error);
+    backupLogger.error("備份失敗", {
+      error: error?.message || String(error),
+      module: "backupScheduler",
+    });
     throw error;
   }
 }
@@ -224,15 +242,23 @@ function startScheduler() {
 
   const interval = backupConfig.scheduler.interval;
   const timer = setInterval(() => {
-    runBackup().catch((err) => console.error("[backup] 定時任務失敗:", err));
+    runBackup().catch((err) =>
+      backupLogger.error("定時任務失敗", {
+        error: err?.message || String(err),
+        module: "backupScheduler",
+      }),
+    );
   }, interval);
 
-  console.log(`[backup] 已啟動，每 ${interval / 1000 / 60 / 60} 小時執行一次`);
+  backupLogger.info("備份排程已啟動", {
+    intervalHours: interval / 1000 / 60 / 60,
+    module: "backupScheduler",
+  });
 
   return {
     stop: () => {
       clearInterval(timer);
-      console.log("[backup] 已停止");
+      backupLogger.info("備份排程已停止", { module: "backupScheduler" });
     },
     runNow: () => runBackup(),
   };

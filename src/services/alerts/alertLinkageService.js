@@ -1,10 +1,11 @@
 const db = require("../../database/db");
-const { getDeviceById } = require("../devices/deviceService");
 const modbusClient = require("../devices/modbusClient");
 const modbusBatchService = require("../devices/modbusBatchService");
 const logger = require("../../utils/logger");
 
 const linkageLogger = logger.createLogger("alertLinkageService");
+
+const getDeviceService = () => require("../devices/deviceService");
 
 const nowIso = () => new Date().toISOString();
 
@@ -21,7 +22,7 @@ async function resolveDeviceConfig(deviceId) {
   const cached = deviceCfgCache.get(id);
   if (cached && Date.now() - cached.ts < DEVICE_CFG_TTL_MS) return cached.cfg;
 
-  const { device } = await getDeviceById(id);
+  const { device } = await getDeviceService().getDeviceById(id);
   const c = device?.config || {};
   if (!c.host || c.port == null) return null;
   const cfg = {

@@ -236,10 +236,11 @@ async function checkEnvironmentLocations() {
           }
         }
 
-        // 讀取成功，清除錯誤狀態（使用 location_systems.id，批次模式：跳過即時推送）
-        await systemAlert.clearError("environment", location.system_id, {
-          skipWebSocket: true,
-        });
+        await systemAlert.syncLocationSnapshotReadResult(
+          "environment",
+          location.system_id,
+          true,
+        );
 
         // 記錄設備數值（如果設備配置了 logging）
         let sensorDataForThreshold = null;
@@ -360,19 +361,15 @@ async function checkEnvironmentLocations() {
                   ? latestReading[0].data
                   : JSON.parse(latestReading[0].data || "{}");
 
-              // 調試日誌：只在需要時輸出（可通過環境變數控制）
-              // 設置 ENABLE_DETAILED_LOGS=true 來啟用詳細日誌
-              if (process.env.ENABLE_DETAILED_LOGS === "true") {
-                logger.debug(
-                  `位置 ${location.location_id} (${location.location_name}) 感測器數據`,
-                  {
-                    locationId: location.location_id,
-                    locationName: location.location_name,
-                    sensorData,
-                    module: "environmentMonitor",
-                  },
-                );
-              }
+              logger.debug(
+                `位置 ${location.location_id} (${location.location_name}) 感測器數據`,
+                {
+                  locationId: location.location_id,
+                  locationName: location.location_name,
+                  sensorData,
+                  module: "environmentMonitor",
+                },
+              );
 
               // 檢查閾值並自動解決恢復正常的警報（使用 location_systems.id）
               await checkAndResolveThresholds(location.system_id, sensorData, {
@@ -399,11 +396,11 @@ async function checkEnvironmentLocations() {
         // 讀取失敗，記錄錯誤（不檢查閾值）（批次模式：跳過即時推送）
         // 使用 location_systems.id 作為 source_id
         const errorMessage = error.message || "無法讀取感測器資料";
-        await systemAlert.recordError(
+        await systemAlert.syncLocationSnapshotReadResult(
           "environment",
           location.system_id,
+          false,
           errorMessage,
-          { skipWebSocket: true },
         );
 
         return {
@@ -470,8 +467,18 @@ async function checkEnvironmentLocations() {
       websocketService.emitBatchDeviceStatus(statusUpdates);
     }
 
-    if (successCount > 0 || failCount > 0) {
-      logger.info(`檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`, {
+    const hasMeaningfulChange = statusUpdates.length > 0 || failCount > 0;
+    const summary = `檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`;
+    if (hasMeaningfulChange) {
+      logger.info(summary, {
+        successCount,
+        failCount,
+        statusUpdates: statusUpdates.length,
+        module: "environmentMonitor",
+      });
+    } else {
+      // `logger.debug` 在 production 預設不輸出（除非 ENABLE_DEBUG_LOGS=true）
+      logger.debug(summary, {
         successCount,
         failCount,
         module: "environmentMonitor",
@@ -511,19 +518,16 @@ async function resolveThresholdAlert(
       { dimensionKey },
     );
 
-    // 只在啟用詳細日誌時輸出
-    if (process.env.ENABLE_DETAILED_LOGS === "true") {
-      logger.debug(
-        `解決警報 | 系統 ${systemId} | 參數 ${parameter} | 數值: ${value} (${reason})`,
-        {
-          systemId,
-          parameter,
-          value,
-          reason,
-          module: "environmentMonitor",
-        },
-      );
-    }
+    logger.debug(
+      `解決警報 | 系統 ${systemId} | 參數 ${parameter} | 數值: ${value} (${reason})`,
+      {
+        systemId,
+        parameter,
+        value,
+        reason,
+        module: "environmentMonitor",
+      },
+    );
   } catch (error) {
     // 如果警報不存在或已經解決，靜默處理（這在自動解決中是正常的）
     if (process.env.NODE_ENV === "development") {
@@ -605,23 +609,20 @@ async function checkAndResolveThresholds(systemId, sensorData, locationInfo) {
         value: value,
       });
 
-      // 調試日誌：只在超過閾值或啟用詳細日誌時輸出
-      if (thresholdExceeded || process.env.ENABLE_DETAILED_LOGS === "true") {
-        const status = thresholdExceeded
-          ? `超過閾值 (${matchedRule.severity})`
-          : "正常";
-        logger.debug(
-          `位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`,
-          {
-            locationName: locationInfo?.name,
-            systemId,
-            parameter,
-            value,
-            status,
-            module: "environmentMonitor",
-          },
-        );
-      }
+      const status = thresholdExceeded
+        ? `超過閾值 (${matchedRule.severity})`
+        : "正常";
+      logger.debug(
+        `位置 ${locationInfo?.name || systemId} | 參數 ${parameter} | 數值 ${value} | ${status}`,
+        {
+          locationName: locationInfo?.name,
+          systemId,
+          parameter,
+          value,
+          status,
+          module: "environmentMonitor",
+        },
+      );
     }
 
     // 第二階段：處理警報創建/更新/解決
@@ -753,16 +754,14 @@ async function resolveAllThresholdAlerts(systemId) {
         null,
       );
 
-      if (process.env.ENABLE_DETAILED_LOGS === "true") {
-        logger.debug(
-          `解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`,
-          {
-            systemId,
-            alertCount: activeAlerts.length,
-            module: "environmentMonitor",
-          },
-        );
-      }
+      logger.debug(
+        `解決所有閾值警報 | 系統 ${systemId} | 共 ${activeAlerts.length} 個警報`,
+        {
+          systemId,
+          alertCount: activeAlerts.length,
+          module: "environmentMonitor",
+        },
+      );
     }
   } catch (error) {
     // 如果警報不存在或已經解決，靜默處理

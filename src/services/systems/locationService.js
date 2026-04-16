@@ -1,5 +1,8 @@
 const db = require("../../database/db");
 const licenseService = require("../licenseService");
+const logger = require("../../utils/logger");
+
+const locationLogger = logger.createLogger("locationService");
 
 /**
  * 統一地點管理服務（多系統架構）
@@ -38,7 +41,10 @@ async function handleErrors(fn, errorMessage, handleConstraint) {
     if (handleConstraint) {
       handleConstraint(error);
     }
-    console.error(errorMessage, error);
+    locationLogger.error(errorMessage, {
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error(errorMessage + error.message);
   }
 }
@@ -517,7 +523,10 @@ async function getZones(filters = {}) {
 
     return { zones: zonesWithLocations };
   } catch (error) {
-    console.error("取得區域列表失敗:", error);
+    locationLogger.error("取得區域列表失敗", {
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("取得區域列表失敗: " + error.message);
   }
 }
@@ -545,7 +554,11 @@ async function getZoneById(id, systemTypeOrLocationType = null) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得區域失敗:", error);
+    locationLogger.error("取得區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("取得區域失敗: " + error.message);
   }
 }
@@ -681,7 +694,10 @@ async function createZone(zoneData, userId) {
       throw error;
     }
     handleUniqueConstraintError(error, "zones_name_key", "區域名稱已存在");
-    console.error("建立區域失敗:", error);
+    locationLogger.error("建立區域失敗", {
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("建立區域失敗: " + error.message);
   }
 }
@@ -927,7 +943,11 @@ async function updateZone(id, zoneData, userId) {
       throw error;
     }
     handleUniqueConstraintError(error, "zones_name_key", "區域名稱已存在");
-    console.error("更新區域失敗:", error);
+    locationLogger.error("更新區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("更新區域失敗: " + error.message);
   }
 }
@@ -960,7 +980,11 @@ async function deleteZone(id) {
       constraintError.statusCode = 400;
       throw constraintError;
     }
-    console.error("刪除區域失敗:", error);
+    locationLogger.error("刪除區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("刪除區域失敗: " + error.message);
   }
 }
@@ -992,7 +1016,11 @@ async function getLocationById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得地點失敗:", error);
+    locationLogger.error("取得地點失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("取得地點失敗: " + error.message);
   }
 }
@@ -1031,7 +1059,10 @@ async function createLocation(locationData, userId) {
       "unique_zone_location_name",
       "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。",
     );
-    console.error("建立地點失敗:", error);
+    locationLogger.error("建立地點失敗", {
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("建立地點失敗: " + error.message);
   }
 }
@@ -1086,7 +1117,11 @@ async function updateLocation(id, locationData, userId) {
       "unique_zone_location_name",
       "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。",
     );
-    console.error("更新地點失敗:", error);
+    locationLogger.error("更新地點失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("更新地點失敗: " + error.message);
   }
 }
@@ -1115,7 +1150,11 @@ async function deleteLocation(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除地點失敗:", error);
+    locationLogger.error("刪除地點失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "locationService",
+    });
     throw new Error("刪除地點失敗: " + error.message);
   }
 }

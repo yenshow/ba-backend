@@ -9,7 +9,8 @@ const fs = require("fs");
 
 const rootDir = path.resolve(__dirname, "..");
 const mediamtxDir = path.join(rootDir, "mediamtx");
-const configFile = "mediamtx.yml";
+const baseConfigFile = "mediamtx.yml";
+const generatedConfigFile = "mediamtx.generated.yml";
 
 const isWindows = process.platform === "win32";
 const exeName = isWindows ? "mediamtx.exe" : "mediamtx";
@@ -22,7 +23,27 @@ if (!fs.existsSync(binPath)) {
   process.exit(1);
 }
 
-const child = spawn(binPath, [configFile], {
+// 統一作法：啟動前一律由 DB 產生完整設定檔
+try {
+  // eslint-disable-next-line global-require
+  const { spawnSync } = require("child_process");
+  const generatorPath = path.join(rootDir, "scripts", "generate-mediamtx-config.js");
+  const res = spawnSync(process.execPath, [generatorPath], {
+    cwd: rootDir,
+    stdio: "inherit",
+    windowsHide: true,
+    env: process.env,
+  });
+  if (res.status !== 0) {
+    console.error("產生 mediamtx.generated.yml 失敗，無法啟動 MediaMTX");
+    process.exit(res.status || 1);
+  }
+} catch (e) {
+  console.error("產生 mediamtx.generated.yml 失敗:", e?.message || e);
+  process.exit(1);
+}
+
+const child = spawn(binPath, [generatedConfigFile], {
   cwd: mediamtxDir,
   stdio: "inherit",
   windowsHide: true,

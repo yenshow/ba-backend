@@ -1,11 +1,17 @@
 const db = require("../../database/db");
-const alertService = require("./alertService");
 const alertRuleService = require("./alertRuleService");
+const logger = require("../../utils/logger");
+
+const trackerLogger = logger.createLogger("errorTracker");
 
 /**
  * 統一錯誤追蹤服務（重構版）
  * 支持多系統來源，狀態持久化到資料庫
  * 整合 alert_rules 規則系統
+ *
+ * **呼叫約定**：業務層連線／快照請優先經 `systemAlertHelper`（`recordError`／`clearError`／
+ * `syncLocationSnapshotReadResult`／`notifyModbusHttpDevice*`）；本檔為計數、`error_tracking` 與
+ * incident 解決的底層實作。`alertService.unignoreAlerts` 後續僅呼叫 `reconcileTrackingAfterUnignore`。
  */
 
 const ERROR_THRESHOLD = 5; // 預設閾值（如果規則不存在時使用）
@@ -37,7 +43,7 @@ async function getCachedErrorCountRule(source, alertType) {
  * @param {Object} metadata - 額外資訊（設備名稱、位置等）
  * @returns {Promise<boolean>} 是否創建了警報
  */
-async function recordError(
+async function recordErrorDetailed(
   source,
   sourceId,
   alertType,
@@ -47,6 +53,9 @@ async function recordError(
   const startTime = Date.now();
 
   try {
+    // 延遲載入：避免與 alertService 循環依賴造成啟動期脆弱
+    const alertService = require("./alertService");
+
     // 1. 檢查是否已被忽視（優先檢查，避免不必要的資料庫操作）
     const isIgnored = await alertService.isSourceIgnored(
       source,
@@ -56,12 +65,20 @@ async function recordError(
       `${alertType}:default`,
     );
     if (isIgnored) {
-      if (process.env.NODE_ENV === "development") {
-        console.log(
-          `[errorTracker] ⏭️  來源 ${source}:${sourceId} 的 ${alertType} 警報已被忽視，跳過`,
-        );
-      }
-      return false;
+      trackerLogger.debug("來源警報已被忽視，跳過錯誤計數", {
+        source,
+        sourceId,
+        alertType,
+        module: "errorTracker",
+      });
+      return {
+        ignored: true,
+        trackingUpdated: false,
+        errorCount: 0,
+        threshold: 0,
+        thresholdReached: false,
+        alertCreated: false,
+      };
     }
 
     // 2. 使用 UPSERT 操作一次完成取得/創建和增加計數（以 source + source_id + alert_type 為維度）
@@ -87,9 +104,10 @@ async function recordError(
     // 3. 取得規則（加 TTL cache）：確保「新增/編輯警報規則」能在短時間內生效
     const rule = await getCachedErrorCountRule(source, alertType);
     const threshold = rule?.condition_config?.min_errors || ERROR_THRESHOLD;
+    const thresholdReached = tracking.error_count >= threshold;
 
     // 4. 判斷是否達到閾值並創建/更新警報
-    if (tracking.error_count >= threshold) {
+    if (thresholdReached) {
       // 使用規則定義的嚴重程度，如果沒有規則則使用預設值
       const severity = rule?.severity || alertService.SEVERITIES.WARNING;
 
@@ -107,15 +125,16 @@ async function recordError(
         if (!message) {
           message = `${sourceName} 連續 ${threshold} 次無法連接，請檢查狀態`;
         }
-
         const alertData = {
           source,
           source_id: sourceId,
           alert_type: alertType,
           dimension_key: `${alertType}:default`,
           severity,
+          // Message should be user-facing and stable; keep debug/trace in `origin`.
           message,
           rule_id: rule?.id || null,
+          origin: metadata?.origin || null,
         };
 
         await alertService.createAlert(alertData);
@@ -132,46 +151,124 @@ async function recordError(
 
         const duration = Date.now() - startTime;
         if (isFirstCreation) {
-          console.log(
-            `[errorTracker] ✅ 警報已創建 | ${source}:${sourceId} | ${alertType} | ` +
-              `錯誤次數:${tracking.error_count}/${threshold} | 嚴重程度:${severity} | 耗時:${duration}ms`,
-          );
-        } else if (process.env.NODE_ENV === "development") {
-          console.log(
-            `[errorTracker] 🔄 警報已更新 | ${source}:${sourceId} | ${alertType} | ` +
-              `錯誤次數:${tracking.error_count}/${threshold} | 耗時:${duration}ms`,
-          );
+          trackerLogger.info("警報已創建（達閾值）", {
+            source,
+            sourceId,
+            alertType,
+            errorCount: tracking.error_count,
+            threshold,
+            severity,
+            durationMs: duration,
+            module: "errorTracker",
+          });
+        } else {
+          trackerLogger.debug("警報已更新（達閾值）", {
+            source,
+            sourceId,
+            alertType,
+            errorCount: tracking.error_count,
+            threshold,
+            durationMs: duration,
+            module: "errorTracker",
+          });
         }
 
-        return true;
+        return {
+          ignored: false,
+          trackingUpdated: true,
+          errorCount: tracking.error_count,
+          threshold,
+          thresholdReached: true,
+          alertCreated: true,
+        };
       } catch (alertError) {
-        console.error(
-          `[errorTracker] ❌ 創建/更新警報失敗 | ${source}:${sourceId} | ${alertType}:`,
-          alertError.message,
-        );
-        return false;
+        trackerLogger.error("創建/更新警報失敗", {
+          source,
+          sourceId,
+          alertType,
+          error: alertError?.message || String(alertError),
+          module: "errorTracker",
+        });
+        return {
+          ignored: false,
+          trackingUpdated: true,
+          errorCount: tracking.error_count,
+          threshold,
+          thresholdReached: true,
+          alertCreated: false,
+        };
       }
     } else {
-      if (
-        process.env.NODE_ENV === "development" &&
-        tracking.error_count % 5 === 0
-      ) {
+      // 例行輪詢避免刷屏：僅用 debug，是否輸出交由 logger 層控制
+      if (tracking.error_count % 5 === 0) {
         const duration = Date.now() - startTime;
-        console.log(
-          `[errorTracker] 📊 錯誤計數更新 | ${source}:${sourceId} | ${alertType} | ` +
-            `當前:${tracking.error_count}/${threshold} | 耗時:${duration}ms`,
-        );
+        trackerLogger.debug("錯誤計數更新（未達閾值）", {
+          source,
+          sourceId,
+          alertType,
+          errorCount: tracking.error_count,
+          threshold,
+          durationMs: duration,
+          module: "errorTracker",
+        });
       }
-      return false;
+      return {
+        ignored: false,
+        trackingUpdated: true,
+        errorCount: tracking.error_count,
+        threshold,
+        thresholdReached: false,
+        alertCreated: false,
+      };
     }
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(
-      `[errorTracker] ❌ 記錄錯誤失敗 | ${source}:${sourceId} | ${alertType} | 耗時:${duration}ms:`,
-      error.message,
-    );
-    return false;
+    trackerLogger.error("記錄錯誤失敗", {
+      source,
+      sourceId,
+      alertType,
+      durationMs: duration,
+      error: error?.message || String(error),
+      module: "errorTracker",
+    });
+    return {
+      ignored: false,
+      trackingUpdated: false,
+      errorCount: 0,
+      threshold: 0,
+      thresholdReached: false,
+      alertCreated: false,
+      error: error.message,
+    };
   }
+}
+
+function buildOriginSuffix(origin) {
+  const parts = [];
+  const channel = origin?.channel ? String(origin.channel) : null;
+  if (channel) parts.push(channel);
+  if (origin?.systemKey && origin?.sourceId != null) {
+    parts.push(`${origin.systemKey}:${origin.sourceId}`);
+  }
+  if (origin?.deviceId != null) parts.push(`device:${origin.deviceId}`);
+  if (origin?.host && origin?.port != null) parts.push(`${origin.host}:${origin.port}`);
+  if (parts.length === 0) return "";
+  return `（來源:${parts.join(" / ")}）`;
+}
+
+/**
+ * 記錄錯誤（支持多系統來源）
+ * @returns {Promise<boolean>} 是否創建了警報
+ */
+async function recordError(source, sourceId, alertType, errorMessage, metadata = {}) {
+  const result = await recordErrorDetailed(
+    source,
+    sourceId,
+    alertType,
+    errorMessage,
+    metadata,
+  );
+  return Boolean(result?.alertCreated);
 }
 
 /**
@@ -182,6 +279,7 @@ async function recordError(
  * @returns {Promise<boolean>} 是否成功解決至少一筆
  */
 async function resolveActiveAlerts(source, sourceId, alertTypes) {
+  const alertService = require("./alertService");
   const types = Array.isArray(alertTypes) ? alertTypes : [alertTypes];
   let resolvedAny = false;
 
@@ -198,10 +296,13 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
     } catch (resolveError) {
       // 如果警報不存在或已解決，忽略錯誤（這是正常情況）
       if (!resolveError.message.includes("未找到可更新的警報")) {
-        console.error(
-          `[errorTracker] 自動解決警報失敗 (source: ${source}, sourceId: ${sourceId}, type: ${type}):`,
-          resolveError.message,
-        );
+        trackerLogger.error("自動解決警報失敗", {
+          source,
+          sourceId,
+          alertType: type,
+          error: resolveError?.message || String(resolveError),
+          module: "errorTracker",
+        });
       }
     }
   }
@@ -218,6 +319,7 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
  */
 async function clearError(source, sourceId, alertType = null) {
   try {
+    const alertService = require("./alertService");
     const alertTypesToResolve = alertType ? [alertType] : ["offline", "error"];
 
     // 逐一處理每種 alertType 的 tracking 記錄
@@ -259,13 +361,24 @@ async function clearError(source, sourceId, alertType = null) {
           const resolvedAny = await resolveActiveAlerts(source, sourceId, [
             type,
           ]);
-          console.log(
-            `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，已創建警報${resolvedAny ? "並自動解決" : ""}）`,
-          );
+          trackerLogger.info("來源已恢復", {
+            source,
+            sourceId,
+            alertType: type,
+            previousErrorCount: previousCount,
+            hadAlert: true,
+            resolvedAny,
+            module: "errorTracker",
+          });
         } else {
-          console.log(
-            `[errorTracker] 來源 ${source}:${sourceId} 已恢復（之前連續錯誤 ${previousCount} 次，未達警報閾值）`,
-          );
+          trackerLogger.debug("來源已恢復（未達閾值）", {
+            source,
+            sourceId,
+            alertType: type,
+            previousErrorCount: previousCount,
+            hadAlert: false,
+            module: "errorTracker",
+          });
         }
 
         clearedAny = true;
@@ -290,10 +403,12 @@ async function clearError(source, sourceId, alertType = null) {
 
     return clearedAny;
   } catch (error) {
-    console.error(
-      `[errorTracker] 清除錯誤狀態失敗 (source: ${source}, sourceId: ${sourceId}):`,
-      error,
-    );
+    trackerLogger.error("清除錯誤狀態失敗", {
+      source,
+      sourceId,
+      error: error?.message || String(error),
+      module: "errorTracker",
+    });
     return false;
   }
 }
@@ -323,7 +438,13 @@ async function getErrorTracking(source, sourceId, alertType = null) {
     );
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
-    console.error(`[errorTracker] 取得錯誤追蹤失敗:`, error);
+    trackerLogger.error("取得錯誤追蹤失敗", {
+      source,
+      sourceId,
+      alertType,
+      error: error?.message || String(error),
+      module: "errorTracker",
+    });
     return null;
   }
 }
@@ -379,13 +500,39 @@ async function updateErrorTracking(
       );
     }
   } catch (error) {
-    console.error(`[errorTracker] 更新錯誤追蹤失敗:`, error);
+    trackerLogger.error("更新錯誤追蹤失敗", {
+      source,
+      sourceId,
+      alertType: alertType || null,
+      error: error?.message || String(error),
+      module: "errorTracker",
+    });
+  }
+}
+
+/**
+ * 取消忽視後：補齊 `error_tracking` 並在已無累計錯誤時清除離線／錯誤警報
+ *（原 `alertService.unignoreAlerts` 內聯邏輯，集中於此）
+ */
+async function reconcileTrackingAfterUnignore(source, sourceId, alertType) {
+  await db.query(
+    `UPDATE error_tracking 
+      SET alert_created = TRUE, updated_at = CURRENT_TIMESTAMP
+      WHERE source = ? AND source_id = ? AND alert_created = FALSE`,
+    [source, sourceId],
+  );
+
+  const tracking = await getErrorTracking(source, sourceId, alertType);
+  if (tracking && tracking.error_count === 0) {
+    await clearError(source, sourceId, alertType);
   }
 }
 
 module.exports = {
   recordError,
+  recordErrorDetailed,
   clearError,
   getErrorTracking,
+  reconcileTrackingAfterUnignore,
   ERROR_THRESHOLD,
 };

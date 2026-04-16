@@ -4,6 +4,9 @@
  */
 
 const db = require("../../database/db");
+const logger = require("../../utils/logger");
+
+const ruleLogger = logger.createLogger("alertRuleService");
 
 /** 與前端約定：規則訊息以 canonical 模板 + 變數渲染（觸發時由 renderRuleMessage 統一處理） */
 const MESSAGE_TEMPLATE_KEYS = {
@@ -409,10 +412,12 @@ async function getAlertRules(source, alertType, enabled = true) {
     const result = await db.query(query, params);
     return result || [];
   } catch (error) {
-    console.error(
-      `[alertRuleService] 查詢規則失敗 (source: ${source}, alertType: ${alertType}):`,
-      error,
-    );
+    ruleLogger.error("查詢規則失敗", {
+      source,
+      alertType,
+      error: error?.message || String(error),
+      module: "alertRuleService",
+    });
     return [];
   }
 }
@@ -461,10 +466,12 @@ async function getThresholdRules(source, parameter = null) {
 
     return cached.rules;
   } catch (error) {
-    console.error(
-      `[alertRuleService] 查詢閾值規則失敗 (source: ${source}, parameter: ${parameter}):`,
-      error,
-    );
+    ruleLogger.error("查詢閾值規則失敗", {
+      source,
+      parameter,
+      error: error?.message || String(error),
+      module: "alertRuleService",
+    });
     return [];
   }
 }
@@ -493,10 +500,11 @@ async function getAllRulesForSource(source, enabled = true) {
     const result = await db.query(query, params);
     return result || [];
   } catch (error) {
-    console.error(
-      `[alertRuleService] 查詢來源所有規則失敗 (source: ${source}):`,
-      error,
-    );
+    ruleLogger.error("查詢來源所有規則失敗", {
+      source,
+      error: error?.message || String(error),
+      module: "alertRuleService",
+    });
     return [];
   }
 }
@@ -572,10 +580,12 @@ async function getErrorCountRule(source, alertType) {
     const result = await db.query(query, [source, alertType]);
     return result && result.length > 0 ? result[0] : null;
   } catch (error) {
-    console.error(
-      `[alertRuleService] 查詢錯誤次數規則失敗 (source: ${source}, alertType: ${alertType}):`,
-      error,
-    );
+    ruleLogger.error("查詢錯誤次數規則失敗", {
+      source,
+      alertType,
+      error: error?.message || String(error),
+      module: "alertRuleService",
+    });
     return null;
   }
 }
@@ -855,7 +865,10 @@ function evaluateThreshold(config, value) {
     case "<=":
       return value <= threshold;
     default:
-      console.warn(`[alertRuleService] 不支援的運算符: ${operator}`);
+      ruleLogger.warn("不支援的運算符", {
+        operator,
+        module: "alertRuleService",
+      });
       return false;
   }
 }
@@ -982,7 +995,10 @@ async function getEnabledDiDoRules() {
     );
     return rows || [];
   } catch (error) {
-    console.error("[alertRuleService] 查詢 DI/DO 規則失敗:", error);
+    ruleLogger.error("查詢 DI/DO 規則失敗", {
+      error: error?.message || String(error),
+      module: "alertRuleService",
+    });
     return [];
   }
 }
@@ -1008,7 +1024,10 @@ async function getAllRules(enabled = true) {
     const result = await db.query(query, params);
     return result || [];
   } catch (error) {
-    console.error("[alertRuleService] 查詢所有來源規則失敗:", error);
+    ruleLogger.error("查詢所有來源規則失敗", {
+      error: error?.message || String(error),
+      module: "alertRuleService",
+    });
     return [];
   }
 }

@@ -5,6 +5,40 @@ const normalizeId = (v) => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+const normalizeIdList = (v, maxLen = 4) => {
+  if (!Array.isArray(v)) return [];
+  const ids = v.map(normalizeId).filter(Boolean);
+  return [...new Set(ids)].slice(0, maxLen);
+};
+
+const parsePgIntArray = (v) => {
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => Number(x))
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .slice(0, 4);
+  }
+  if (typeof v !== "string") return [];
+  const s = v.trim();
+  if (!s) return [];
+  // 支援 "{1,2,3}" 或 "1,2,3"
+  const inner = s.replace(/^\s*\{|\}\s*$/g, "");
+  if (!inner.trim()) return [];
+  return inner
+    .split(",")
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .slice(0, 4);
+};
+
+const normalizeRow = (row) => {
+  if (!row) return row;
+  return {
+    ...row,
+    camera_device_ids: parsePgIntArray(row.camera_device_ids),
+  };
+};
+
 async function getByRuleId(ruleId) {
   const rid = normalizeId(ruleId);
   if (!rid) return null;
@@ -12,7 +46,7 @@ async function getByRuleId(ruleId) {
     `SELECT * FROM alert_camera_linkages WHERE rule_id = ? LIMIT 1`,
     [rid],
   );
-  return rows?.[0] || null;
+  return normalizeRow(rows?.[0] || null);
 }
 
 async function getByRuleIds(ruleIds) {
@@ -24,29 +58,37 @@ async function getByRuleIds(ruleIds) {
     `SELECT * FROM alert_camera_linkages WHERE rule_id = ANY(?)`,
     [ids],
   );
-  return rows || [];
+  return (rows || []).map(normalizeRow);
 }
 
 async function upsertForRule(ruleId, payload, userId = null) {
   const rid = normalizeId(ruleId);
   if (!rid) throw new Error("rule_id 不合法");
   const enabled = payload?.enabled !== undefined ? Boolean(payload.enabled) : true;
-  const cameraDeviceId = normalizeId(payload?.camera_device_id);
+  const cameraDeviceIds = normalizeIdList(payload?.camera_device_ids, 4);
+  const cameraDeviceId = cameraDeviceIds[0] ?? null;
 
   const rows = await db.query(
     `
-    INSERT INTO alert_camera_linkages (rule_id, enabled, camera_device_id, created_by)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO alert_camera_linkages (rule_id, enabled, camera_device_id, camera_device_ids, created_by)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (rule_id)
     DO UPDATE SET
       enabled = EXCLUDED.enabled,
       camera_device_id = EXCLUDED.camera_device_id,
+      camera_device_ids = EXCLUDED.camera_device_ids,
       updated_at = CURRENT_TIMESTAMP
     RETURNING *
     `,
-    [rid, enabled, cameraDeviceId, userId != null ? Number(userId) : null],
+    [
+      rid,
+      enabled,
+      cameraDeviceId,
+      cameraDeviceIds,
+      userId != null ? Number(userId) : null,
+    ],
   );
-  return rows?.[0] || null;
+  return normalizeRow(rows?.[0] || null);
 }
 
 async function deleteForRule(ruleId) {

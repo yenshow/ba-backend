@@ -7,6 +7,9 @@ const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const config = require("../config");
+const logger = require("../utils/logger");
+
+const routeLogger = logger.createLogger("settingsRoutes");
 
 const router = express.Router();
 
@@ -144,7 +147,11 @@ router.post("/upload", authenticate, requireAdmin, upload.single("file"), asyncH
 			try {
 				fs.unlinkSync(oldFilePath);
 			} catch (err) {
-				console.error(`[settingsRoutes] 刪除舊檔案失敗: ${oldFilePath}`, err);
+				routeLogger.warn("刪除舊檔案失敗（不中斷流程）", {
+					oldFilePath,
+					error: err?.message || String(err),
+					module: "settingsRoutes",
+				});
 				// 不中斷流程，繼續儲存新檔
 			}
 		}
@@ -185,7 +192,11 @@ router.delete("/:key", authenticate, requireAdmin, asyncHandler(async (req, res)
 				try {
 					fs.unlinkSync(filePath);
 				} catch (error) {
-					console.error(`[settingsRoutes] 刪除檔案失敗: ${filePath}`, error);
+					routeLogger.warn("刪除檔案失敗（不中斷流程）", {
+						filePath,
+						error: error?.message || String(error),
+						module: "settingsRoutes",
+					});
 					// 繼續執行，不中斷刪除設定
 				}
 			}

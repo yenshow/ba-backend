@@ -52,7 +52,7 @@ function scheduleNextRollover() {
 
 function startAlertDailyRolloverScheduler() {
   if (!config.alerts.dailyRolloverEnabled) {
-    rolloverLogger.info("警報日界線排程已停用（ALERT_DAILY_ROLLOVER_ENABLED=false）");
+    rolloverLogger.info("警報日界線排程已停用");
     return () => {};
   }
   scheduleNextRollover();

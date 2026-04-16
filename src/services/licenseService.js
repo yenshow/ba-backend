@@ -10,7 +10,7 @@ const SETTINGS_KEYS = {
   activationMethod: "license_activation_method",
   deviceFingerprint: "license_device_fingerprint",
   extensionKeys: "license_extension_keys",
-  /** JSON：`[{ licenseKey, features[] }]`，記錄各次啟用（主／副 LK）所帶入的功能，供管理介面顯示 */
+  /** JSON：`[{ licenseKey, features[], quotas }]`，記錄各次啟用（主／副 LK）所帶入的功能與 delta 配額，供管理介面顯示 */
   entitlements: "license_entitlements",
 };
 
@@ -150,6 +150,7 @@ const parseLicenseEntitlementsValue = (value) => {
       .map((x) => ({
         licenseKey: parseStringValue(x.licenseKey),
         features: normalizeFeatureArray(x.features),
+        quotas: normalizeQuotasObject(x.quotas),
       }))
       .filter((x) => x.licenseKey);
   }
@@ -163,6 +164,7 @@ const parseLicenseEntitlementsValue = (value) => {
       .map((x) => ({
         licenseKey: parseStringValue(x.licenseKey),
         features: normalizeFeatureArray(x.features),
+        quotas: normalizeQuotasObject(x.quotas),
       }))
       .filter((x) => x.licenseKey);
   } catch {
@@ -177,16 +179,24 @@ const normalizeLicenseEntitlementsInput = (entries) => {
     .map((x) => ({
       licenseKey: parseStringValue(x.licenseKey),
       features: normalizeFeatureArray(x.features),
+      quotas: normalizeQuotasObject(x.quotas),
     }))
     .filter((x) => x.licenseKey);
 };
 
-const appendLicenseEntitlementEntry = (list, { licenseKey, features } = {}) => {
+const appendLicenseEntitlementEntry = (
+  list,
+  { licenseKey, features, quotas } = {},
+) => {
   const k = parseStringValue(licenseKey);
   if (!k) return [...list];
   const feats = normalizeFeatureArray(features);
   const idx = list.findIndex((e) => e.licenseKey === k);
-  const entry = { licenseKey: k, features: feats };
+  const entry = {
+    licenseKey: k,
+    features: feats,
+    quotas: normalizeQuotasObject(quotas),
+  };
   if (idx >= 0) {
     const next = [...list];
     next[idx] = entry;
@@ -276,6 +286,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
       licenseEntitlements: (cached.licenseEntitlements ?? []).map((e) => ({
         licenseKey: e.licenseKey,
         features: [...e.features],
+        quotas: normalizeQuotasObject(e.quotas),
       })),
     };
   }
@@ -337,6 +348,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
     licenseEntitlements: licenseEntitlements.map((e) => ({
       licenseKey: e.licenseKey,
       features: [...e.features],
+      quotas: normalizeQuotasObject(e.quotas),
     })),
   };
 }
@@ -452,6 +464,7 @@ async function setLicenseState({
   let nextLicenseEntitlements = (current.licenseEntitlements ?? []).map((e) => ({
     licenseKey: e.licenseKey,
     features: [...e.features],
+    quotas: normalizeQuotasObject(e.quotas),
   }));
   if (replaceLicenseEntitlements !== undefined) {
     nextLicenseEntitlements = normalizeLicenseEntitlementsInput(

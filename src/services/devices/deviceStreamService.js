@@ -4,6 +4,10 @@
 const deviceService = require("./deviceService");
 const mediaMTXService = require("../communication/mediaMTXService");
 const logger = require("../../utils/logger").createLogger("Device Stream");
+const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
+
+// 同一台攝影機同時被多視窗/多分割要求 start 時，合併成單次啟動，避免並發 addPath 造成連續 reload
+const startInFlightByDeviceId = new Map();
 
 /**
  * 取得攝影機設備（非 camera 類型拋錯）
@@ -44,16 +48,45 @@ async function getCameraRtspUrl(deviceId) {
  * @returns {Promise<{ streamId: string, pathName: string, webrtcUrl: string, status: string }>}
  */
 async function startStream(deviceId) {
+  if (startInFlightByDeviceId.has(deviceId)) {
+    return await startInFlightByDeviceId.get(deviceId);
+  }
+
+  const task = (async () => {
   const { device, rtspUrl } = await getCameraRtspUrl(deviceId);
   const pathName = mediaMTXService.pathNameFromDeviceId(deviceId);
-  const { webrtcUrl } = await mediaMTXService.addPath(pathName, rtspUrl);
-  logger.info("攝影機串流已啟動", { deviceId, deviceName: device.name, pathName });
+  // 若 path 已存在，直接回覆 running，避免重複 addPath 造成 MediaMTX 多次 reload
+  const webrtcUrl = `${mediaMTXService.WEBRTC_BASE}/${pathName}/whep`;
+
+  const items = await mediaMTXService.listPaths();
+  if (items.some((p) => p.name === pathName)) {
+    logger.debug("攝影機串流已在運行中，略過重啟", { deviceId, deviceName: device.name, pathName });
+    return {
+      streamId: pathName,
+      pathName,
+      webrtcUrl,
+      status: "running",
+    };
+  }
+
+  // 理論上 paths 會在「新增/更新攝影機」時即同步到 MediaMTX；
+  // 這裡保留容錯：若 path 不存在則補一次（避免現場因漏同步而 WHEP 400）
+  await mediaMTXConfigSyncService.syncSingleCameraPath(deviceId, rtspUrl);
+  logger.info("攝影機串流已同步（fallback）", { deviceId, deviceName: device.name, pathName });
   return {
     streamId: pathName,
     pathName,
     webrtcUrl,
     status: "running",
   };
+  })();
+
+  startInFlightByDeviceId.set(deviceId, task);
+  try {
+    return await task;
+  } finally {
+    startInFlightByDeviceId.delete(deviceId);
+  }
 }
 
 /**
@@ -63,7 +96,9 @@ async function startStream(deviceId) {
 async function stopStream(deviceId) {
   await getCameraDevice(deviceId);
   const pathName = mediaMTXService.pathNameFromDeviceId(deviceId);
-  await mediaMTXService.removePath(pathName);
+  // 統一作法：停止不移除 path，避免頻繁 config 變更造成 reload。
+  // sourceOnDemand 會在無人觀看後自動停止拉流；path 留著以支援多視窗穩定觀看。
+  logger.debug("停止串流：略過 removePath（保留 path）", { deviceId, pathName });
   logger.info("攝影機串流已停止", { deviceId, pathName });
 }
 

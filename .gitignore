@@ -1,5 +1,6 @@
 node_modules
 .env
+.env.example
 .DS_Store
 .vscode
 backups/
@@ -17,5 +18,7 @@ mediamtx/bin/
 mediamtx/logs/
 mediamtx/mediamtx.pid
 mediamtx/mediamtx.yml
+mediamtx/mediamtx.generated.yml
+
 
 /output

@@ -1,4 +1,7 @@
 const db = require("../database/db");
+const logger = require("../utils/logger");
+
+const settingsLogger = logger.createLogger("settingsService");
 
 /**
  * 取得所有系統設定
@@ -13,7 +16,10 @@ async function getAllSettings() {
 		);
 		return result;
 	} catch (error) {
-		console.error("[settingsService] 取得所有設定失敗:", error);
+		settingsLogger.error("取得所有設定失敗", {
+			error: error?.message || String(error),
+			module: "settingsService",
+		});
 		throw new Error("取得系統設定失敗");
 	}
 }
@@ -33,7 +39,11 @@ async function getSettingByKey(key) {
 		);
 		return result.length > 0 ? result[0] : null;
 	} catch (error) {
-		console.error(`[settingsService] 取得設定失敗 (key: ${key}):`, error);
+		settingsLogger.error("取得設定失敗", {
+			key,
+			error: error?.message || String(error),
+			module: "settingsService",
+		});
 		throw new Error(`取得系統設定失敗: ${key}`);
 	}
 }
@@ -64,7 +74,10 @@ async function getSettingsByKeys(keys) {
 
 		return settingsMap;
 	} catch (error) {
-		console.error("[settingsService] 批量取得設定失敗:", error);
+		settingsLogger.error("批量取得設定失敗", {
+			error: error?.message || String(error),
+			module: "settingsService",
+		});
 		throw new Error("批量取得系統設定失敗");
 	}
 }
@@ -100,7 +113,11 @@ async function upsertSetting(key, value, description = null) {
 
 		return result[0];
 	} catch (error) {
-		console.error(`[settingsService] 建立或更新設定失敗 (key: ${key}):`, error);
+		settingsLogger.error("建立或更新設定失敗", {
+			key,
+			error: error?.message || String(error),
+			module: "settingsService",
+		});
 		throw new Error(`建立或更新系統設定失敗: ${key}`);
 	}
 }
@@ -131,7 +148,11 @@ async function updateSetting(key, value) {
 
 		return result[0];
 	} catch (error) {
-		console.error(`[settingsService] 更新設定失敗 (key: ${key}):`, error);
+		settingsLogger.error("更新設定失敗", {
+			key,
+			error: error?.message || String(error),
+			module: "settingsService",
+		});
 		throw new Error(`更新系統設定失敗: ${key}`);
 	}
 }
@@ -156,7 +177,11 @@ async function deleteSetting(key) {
 
 		return result.length > 0;
 	} catch (error) {
-		console.error(`[settingsService] 刪除設定失敗 (key: ${key}):`, error);
+		settingsLogger.error("刪除設定失敗", {
+			key,
+			error: error?.message || String(error),
+			module: "settingsService",
+		});
 		throw new Error(`刪除系統設定失敗: ${key}`);
 	}
 }

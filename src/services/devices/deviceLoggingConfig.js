@@ -5,6 +5,9 @@
 
 const db = require("../../database/db");
 const { parseConfig } = require("../../utils/deviceHelpers");
+const logger = require("../../utils/logger");
+
+const loggingCfgLogger = logger.createLogger("deviceLoggingConfig");
 
 const configCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -87,7 +90,11 @@ async function getDeviceLoggingConfig(deviceId) {
     setTimeout(() => configCache.delete(deviceId), CACHE_TTL_MS);
     return loggingConfig;
   } catch (error) {
-    console.error(`[deviceLoggingConfig] 取得設備配置失敗 (deviceId: ${deviceId}):`, error);
+    loggingCfgLogger.error("取得設備配置失敗", {
+      deviceId,
+      error: error?.message || String(error),
+      module: "deviceLoggingConfig",
+    });
     return { enabled: false, interval: 60, values: [] };
   }
 }
@@ -109,7 +116,11 @@ function applyConversion(rawValue, conversion) {
       const formula = conversion.formula.replace(/value/g, value);
       value = new Function("return " + formula)();
     } catch (error) {
-      console.error(`[deviceLoggingConfig] 公式轉換失敗 (formula: ${conversion.formula}):`, error);
+      loggingCfgLogger.warn("公式轉換失敗（回退原值）", {
+        formula: conversion.formula,
+        error: error?.message || String(error),
+        module: "deviceLoggingConfig",
+      });
       return rawValue;
     }
   }

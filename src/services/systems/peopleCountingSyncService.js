@@ -4,6 +4,9 @@
  */
 
 const externalDb = require("../../database/externalDb");
+const logger = require("../../utils/logger");
+
+const syncLogger = logger.createLogger("peopleCountingSyncService");
 const db = require("../../database/db");
 const locationService = require("./locationService");
 
@@ -182,7 +185,10 @@ async function getDoorNamesByPhysicalIds(physicalIds) {
       map.set(Number(row.id), row.dev_name ?? "");
     }
   } catch (error) {
-    console.warn("[peopleCountingSyncService] 取得門設備名稱失敗:", error.message);
+    syncLogger.warn("取得門設備名稱失敗（略過）", {
+      error: error?.message || String(error),
+      module: "peopleCountingSyncService",
+    });
   }
   return map;
 }

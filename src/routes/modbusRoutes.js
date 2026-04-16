@@ -72,18 +72,9 @@ const routeFactory = (reader) =>
     const deviceConfig = parseDeviceParams(req);
     const data = await reader(address, length, deviceConfig);
 
-    // 成功讀取資料時，清除設備錯誤狀態（設備已恢復連線）
-    systemAlert
-      .getDeviceIdFromConfig(deviceConfig)
-      .then((deviceId) => {
-        if (deviceId) {
-          return systemAlert.clearError("device", deviceId);
-        }
-      })
-      .catch((error) => {
-        // 靜默處理，不影響正常響應
-        modbusLogger.warn("清除設備錯誤狀態失敗", { error: error.message });
-      });
+    systemAlert.notifyModbusHttpDeviceRecovered(deviceConfig).catch((error) => {
+      modbusLogger.warn("清除設備錯誤狀態失敗", { error: error.message });
+    });
 
     res.sendSuccess({ address, length, data, device: deviceConfig });
   });
@@ -136,12 +127,7 @@ router.post(
       results
         .filter((r) => r && r.ok && r.device)
         .map((r) =>
-          systemAlert
-            .getDeviceIdFromConfig(r.device)
-            .then((deviceId) => {
-              if (deviceId) return systemAlert.clearError("device", deviceId);
-            })
-            .catch(() => null),
+          systemAlert.notifyModbusHttpDeviceRecovered(r.device).catch(() => null),
         ),
     ).catch(() => null);
 

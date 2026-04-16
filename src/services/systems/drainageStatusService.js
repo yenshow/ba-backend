@@ -6,6 +6,9 @@ const locationService = require("./locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
+const logger = require("../../utils/logger");
+
+const statusLogger = logger.createLogger("drainageStatusService");
 
 // deviceId -> { ts, cfg }
 const DEVICE_CFG_CACHE_TTL_MS = Number(
@@ -230,15 +233,12 @@ async function syncDrainageConnectivityAlert(
   const anyRead = pointKeys.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
-  const hasConnectionFailure = !anyRead;
-
-  if (hasConnectionFailure) {
-    const errorMessage = readError || "無法讀取排水設備資料";
-    await systemAlert.recordError("drainage", systemId, errorMessage, { skipWebSocket: true });
-    return;
-  }
-
-  await systemAlert.clearError("drainage", systemId, { skipWebSocket: true });
+  await systemAlert.syncLocationSnapshotReadResult(
+    "drainage",
+    systemId,
+    anyRead,
+    readError || "無法讀取排水設備資料",
+  );
 }
 
 async function buildItemForDrainageSystem(
@@ -295,11 +295,11 @@ async function buildItemForDrainageSystem(
         readError,
       );
     } catch (alertErr) {
-      if (process.env.NODE_ENV === "development") {
-        console.warn(
-          `[drainageStatusService] 同步警報失敗 (systemId: ${system.id}): ${alertErr.message}`,
-        );
-      }
+      statusLogger.warn("同步警報失敗（略過）", {
+        systemId: Number(system.id),
+        error: alertErr?.message || String(alertErr),
+        module: "drainageStatusService",
+      });
     }
   }
 

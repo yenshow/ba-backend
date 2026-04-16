@@ -1,4 +1,7 @@
 const locationService = require("./locationService");
+const logger = require("../../utils/logger");
+
+const rescueLogger = logger.createLogger("emergencyRescueService");
 
 const toEmergencyRescueZone = (zone) => ({ ...zone });
 
@@ -9,7 +12,10 @@ async function getZones() {
     });
     return { zones: result.zones.map(toEmergencyRescueZone) };
   } catch (error) {
-    console.error("取得緊急求救區域列表失敗:", error);
+    rescueLogger.error("取得緊急求救區域列表失敗", {
+      error: error?.message || String(error),
+      module: "emergencyRescueService",
+    });
     throw new Error("取得緊急求救區域列表失敗: " + error.message);
   }
 }
@@ -22,7 +28,11 @@ async function getZoneById(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("取得緊急求救區域失敗:", error);
+    rescueLogger.error("取得緊急求救區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "emergencyRescueService",
+    });
     throw new Error("取得緊急求救區域失敗: " + error.message);
   }
 }
@@ -60,7 +70,10 @@ async function createZone(zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("建立緊急求救區域失敗:", error);
+    rescueLogger.error("建立緊急求救區域失敗", {
+      error: error?.message || String(error),
+      module: "emergencyRescueService",
+    });
     throw new Error("建立緊急求救區域失敗: " + error.message);
   }
 }
@@ -90,7 +103,11 @@ async function updateZone(id, zoneData, userId) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("更新緊急求救區域失敗:", error);
+    rescueLogger.error("更新緊急求救區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "emergencyRescueService",
+    });
     throw new Error("更新緊急求救區域失敗: " + error.message);
   }
 }
@@ -102,7 +119,11 @@ async function deleteZone(id) {
     if (error.statusCode) {
       throw error;
     }
-    console.error("刪除緊急求救區域失敗:", error);
+    rescueLogger.error("刪除緊急求救區域失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "emergencyRescueService",
+    });
     throw new Error("刪除緊急求救區域失敗: " + error.message);
   }
 }

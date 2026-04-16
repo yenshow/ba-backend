@@ -13,8 +13,9 @@ const logger = require("../../utils/logger");
 const db = require("../../database/db");
 const alertService = require("../alerts/alertService");
 const alertRuleService = require("../alerts/alertRuleService");
-const { getDeviceById } = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
+
+const getDeviceService = () => require("../devices/deviceService");
 
 const SOURCE_TO_SYSTEM_TYPE = {
   environment: "environment",
@@ -57,7 +58,7 @@ async function resolveDeviceConfig(deviceId) {
   const cached = deviceCfgCache.get(deviceId);
   if (cached && Date.now() - cached.ts < DEVICE_CFG_TTL_MS) return cached.cfg;
   try {
-    const { device } = await getDeviceById(Number(deviceId));
+    const { device } = await getDeviceService().getDeviceById(Number(deviceId));
     const c = device?.config || {};
     if (!c.host || c.port == null) return null;
     const cfg = {

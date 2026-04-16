@@ -1,5 +1,8 @@
 const { Pool } = require("pg");
 const config = require("../config");
+const logger = require("../utils/logger");
+
+const schemaLogger = logger.createLogger("initSchema");
 
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
@@ -30,7 +33,7 @@ async function initSchema() {
   });
 
   try {
-    console.log("正在建立資料庫...");
+    schemaLogger.info("正在建立資料庫...", { module: "initSchema" });
 
     // 檢查資料庫是否存在
     const dbCheck = await pool.query(
@@ -40,9 +43,13 @@ async function initSchema() {
 
     if (dbCheck.rows.length === 0) {
       await pool.query(`CREATE DATABASE ${config.database.database}`);
-      console.log(`✅ 資料庫 ${config.database.database} 已建立`);
+      schemaLogger.info(`資料庫 ${config.database.database} 已建立`, {
+        module: "initSchema",
+      });
     } else {
-      console.log(`✅ 資料庫 ${config.database.database} 已存在`);
+      schemaLogger.info(`資料庫 ${config.database.database} 已存在`, {
+        module: "initSchema",
+      });
     }
 
     await pool.end();
@@ -136,7 +143,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 		`);
 
-    console.log("✅ users 表已建立");
+    schemaLogger.info("users 表已建立", { module: "initSchema" });
 
     // ========== 精細權限（角色 + 權限覆寫） ==========
     await targetPool.query(`
@@ -156,7 +163,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_permission_definitions_category ON permission_definitions(category);
       CREATE INDEX IF NOT EXISTS idx_permission_definitions_parent ON permission_definitions(parent_id);
     `);
-    console.log("✅ permission_definitions 表已建立");
+    schemaLogger.info("permission_definitions 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS role_default_permissions (
@@ -171,7 +178,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_role_default_permissions_role ON role_default_permissions(role);
     `);
-    console.log("✅ role_default_permissions 表已建立");
+    schemaLogger.info("role_default_permissions 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS user_permission_overrides (
@@ -186,7 +193,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_user ON user_permission_overrides(user_id);
     `);
-    console.log("✅ user_permission_overrides 表已建立");
+    schemaLogger.info("user_permission_overrides 表已建立", { module: "initSchema" });
 
     // 種子：權限定義（system = 權限設定 UI「可使用的系統」四項；其餘供後端/既有邏輯用）
     const permissionSeeds = [
@@ -297,7 +304,7 @@ async function initSchema() {
         [p.code, p.category, p.parent_id, p.name, p.sort_order],
       );
     }
-    console.log("✅ 權限定義種子已插入");
+    schemaLogger.info("權限定義種子已插入", { module: "initSchema" });
 
     // 種子：角色預設權限（admin 全開由邏輯處理；此處為 operator/viewer 預設）
     const defRows = await targetPool.query(
@@ -337,7 +344,7 @@ async function initSchema() {
         [row.id, viewerGranted.includes(row.code)],
       );
     }
-    console.log("✅ 角色預設權限種子已插入");
+    schemaLogger.info("角色預設權限種子已插入", { module: "initSchema" });
 
     // 建立 device_types 表（通用設備類型表）
     await targetPool.query(`
@@ -357,7 +364,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_device_types_code ON device_types(code);
 		`);
 
-    console.log("✅ device_types 表已建立");
+    schemaLogger.info("device_types 表已建立", { module: "initSchema" });
 
     // 建立 device_models 表（通用設備型號表）
     await targetPool.query(`
@@ -419,7 +426,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_device_models_port ON device_models(port);
 		`);
 
-    console.log("✅ device_models 表已建立");
+    schemaLogger.info("device_models 表已建立", { module: "initSchema" });
 
     // 建立 devices 表
     await targetPool.query(`
@@ -451,7 +458,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_devices_config ON devices USING GIN (config);
 		`);
 
-    console.log("✅ devices 表已建立");
+    schemaLogger.info("devices 表已建立", { module: "initSchema" });
 
     // 預設設備類型資料
     const deviceTypes = [
@@ -490,7 +497,7 @@ async function initSchema() {
         throw error;
       }
     }
-    console.log("✅ 預設設備類型資料已插入到 device_types");
+    schemaLogger.info("預設設備類型資料已插入到 device_types", { module: "initSchema" });
 
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
@@ -517,7 +524,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_people_counting_logs_location 
       ON people_counting_logs(location_id);
     `);
-    console.log("✅ people_counting_logs 表已建立");
+    schemaLogger.info("people_counting_logs 表已建立", { module: "initSchema" });
 
     // ISAPI 攝影機 PeopleCounting 事件（enter/exit 為設備累計；enter_delta/exit_delta 與前筆差）
     // 舊版曾使用 enter_abs/exit_abs 等欄位；執行 db:init 時偵測到舊表則 DROP 後重建（資料清空，請先備份）
@@ -574,7 +581,7 @@ async function initSchema() {
       ON isapi_people_counting_events(device_id, channel_id, region_id, event_time)
       WHERE region_id IS NOT NULL;
     `);
-    console.log("✅ isapi_people_counting_events 表已建立");
+    schemaLogger.info("isapi_people_counting_events 表已建立", { module: "initSchema" });
 
     // 車輛進出過車記錄快取表（同步自外部 vehiclebiz.passageway_log_data，供備份）
     await targetPool.query(`
@@ -604,7 +611,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_location
       ON vehicle_passageway_logs(location_id);
     `);
-    console.log("✅ vehicle_passageway_logs 表已建立");
+    schemaLogger.info("vehicle_passageway_logs 表已建立", { module: "initSchema" });
 
     // 建立統一警報表（支持多系統來源，精簡版）
     await targetPool.query(`
@@ -652,7 +659,7 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "alerts");
 
-    console.log("✅ alerts 表已建立（統一警報系統）");
+    schemaLogger.info("alerts 表已建立（統一警報系統）", { module: "initSchema" });
 
     // 建立錯誤追蹤表（持久化錯誤狀態）
     await targetPool.query(`
@@ -695,7 +702,7 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "error_tracking");
 
-    console.log("✅ error_tracking 表已建立（錯誤追蹤持久化）");
+    schemaLogger.info("error_tracking 表已建立（錯誤追蹤持久化）", { module: "initSchema" });
 
     // 建立警報規則參照表（alert_rules）
     await targetPool.query(`
@@ -776,7 +783,7 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "alert_rules");
 
-    console.log("✅ alert_rules 表已建立（警報規則參照表）");
+    schemaLogger.info("alert_rules 表已建立（警報規則參照表）", { module: "initSchema" });
     await targetPool.query(`
       DO $$
       BEGIN
@@ -810,7 +817,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_events_alert_id ON alert_events(alert_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_alert_events_event_type ON alert_events(event_type, created_at DESC);
     `);
-    console.log("✅ alert_events 表已建立（警報事件流）");
+    schemaLogger.info("alert_events 表已建立（警報事件流）", { module: "initSchema" });
 
     // ========== 警報連動（掛載 alert_rules） ==========
     // 舊版以 trigger_* 平行描述條件；遷移時整表重建（連動執行紀錄一併清空）
@@ -880,7 +887,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_rule_id ON alert_linkages(rule_id);
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_do_target ON alert_linkages(do_device_id, do_address);
     `);
-    console.log("✅ alert_linkages 表已建立（警報連動規則，綁定 alert_rules）");
+    schemaLogger.info("alert_linkages 表已建立（警報連動規則，綁定 alert_rules）", { module: "initSchema" });
 
     // 移除舊版 DO 人工覆寫（manual off）機制：改為「手動觸發」一次性寫入
     await targetPool.query(`
@@ -922,7 +929,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_alert ON alert_linkage_executions(alert_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_do_target ON alert_linkage_executions(do_device_id, do_address, created_at DESC);
     `);
-    console.log("✅ alert_linkage_executions 表已建立（連動執行記錄）");
+    schemaLogger.info("alert_linkage_executions 表已建立（連動執行記錄）", { module: "initSchema" });
 
     // ========== 警報攝影機連動（rule_id -> camera device） ==========
     await targetPool.query(`
@@ -931,40 +938,129 @@ async function initSchema() {
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
         camera_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        -- 新版：同一規則最多 4 台攝影機；保留 camera_device_id 做相容（取第一台）
+        camera_device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(rule_id)
       )
     `);
+    // 遷移：舊環境若無 camera_device_ids 則補欄位
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='alert_camera_linkages' AND column_name='camera_device_ids'
+        ) THEN
+          ALTER TABLE alert_camera_linkages
+            ADD COLUMN camera_device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[];
+        END IF;
+      END $$;
+    `);
+    // 注意：本專案已統一使用 camera_device_ids；舊資料請於 UI 重新設定即可。
     await createUpdatedAtTrigger(targetPool, "alert_camera_linkages");
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_enabled ON alert_camera_linkages(enabled);
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_rule_id ON alert_camera_linkages(rule_id);
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_camera ON alert_camera_linkages(camera_device_id);
     `);
-    console.log("✅ alert_camera_linkages 表已建立（攝影機連動）");
+    schemaLogger.info("alert_camera_linkages 表已建立（攝影機連動）", { module: "initSchema" });
 
     // ========== 警報外部通知（Webhook）==========
+    // 已移除：僅保留 Email(SMTP) 通知。若舊表存在則刪除。
     await targetPool.query(`
-      CREATE TABLE IF NOT EXISTS alert_webhook_subscriptions (
+      DROP TABLE IF EXISTS alert_webhook_subscriptions CASCADE;
+    `);
+
+    // ========== 警報外部通知（Email / SMTP，每規則獨立）==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_email_subscriptions (
         id SERIAL PRIMARY KEY,
-        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
         rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-        url TEXT NOT NULL,
-        secret TEXT,
-        headers_json JSONB,
+        smtp_host TEXT,
+        smtp_port INTEGER,
+        smtp_user TEXT,
+        smtp_password TEXT,
+        smtp_security VARCHAR(10) NOT NULL DEFAULT 'none' CHECK (smtp_security IN ('none', 'ssl', 'tls')),
+        to_emails TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+        repeat_min_interval_seconds INTEGER NOT NULL DEFAULT 15 CHECK (repeat_min_interval_seconds >= 15),
+        repeat_max_send_count INTEGER NOT NULL DEFAULT 10 CHECK (repeat_max_send_count >= 1 AND repeat_max_send_count <= 10),
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rule_id)
+      )
+    `);
+    // 遷移：移除已淘汰欄位
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='from_email'
+        ) THEN
+          ALTER TABLE alert_email_subscriptions DROP COLUMN from_email;
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='from_name'
+        ) THEN
+          ALTER TABLE alert_email_subscriptions DROP COLUMN from_name;
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='cc_emails'
+        ) THEN
+          ALTER TABLE alert_email_subscriptions DROP COLUMN cc_emails;
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='bcc_emails'
+        ) THEN
+          ALTER TABLE alert_email_subscriptions DROP COLUMN bcc_emails;
+        END IF;
+      END $$;
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_email_subscriptions");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_email_subscriptions_rule_id ON alert_email_subscriptions(rule_id);
+      CREATE INDEX IF NOT EXISTS idx_alert_email_subscriptions_enabled ON alert_email_subscriptions(enabled);
+    `);
+    schemaLogger.info("alert_email_subscriptions 表已建立（Email 設定）", { module: "initSchema" });
+
+    // 每筆警報（alert_id）+ 規則（rule_id）的寄送狀態（次數/時間）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_email_send_state (
+        id BIGSERIAL PRIMARY KEY,
+        alert_id INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        send_count INTEGER NOT NULL DEFAULT 0 CHECK (send_count >= 0),
+        last_sent_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(alert_id, rule_id)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_email_send_state");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_email_send_state_rule ON alert_email_send_state(rule_id, last_sent_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_alert_email_send_state_alert ON alert_email_send_state(alert_id);
+    `);
+    schemaLogger.info("alert_email_send_state 表已建立（Email 寄送狀態）", { module: "initSchema" });
+
+    // 同一 rule_id 的全域節流（兩封成功信最短間隔）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_email_rule_throttle (
+        rule_id INTEGER PRIMARY KEY REFERENCES alert_rules(id) ON DELETE CASCADE,
+        last_success_sent_at TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await createUpdatedAtTrigger(targetPool, "alert_webhook_subscriptions");
-    await targetPool.query(`
-      CREATE INDEX IF NOT EXISTS idx_alert_webhook_subscriptions_rule_id ON alert_webhook_subscriptions(rule_id);
-      CREATE INDEX IF NOT EXISTS idx_alert_webhook_subscriptions_enabled ON alert_webhook_subscriptions(enabled);
-    `);
-    console.log("✅ alert_webhook_subscriptions 表已建立（Webhook 設定）");
+    await createUpdatedAtTrigger(targetPool, "alert_email_rule_throttle");
+    schemaLogger.info("alert_email_rule_throttle 表已建立（Email 全域節流）", { module: "initSchema" });
 
     // 建立 lighting_categories 表
     await targetPool.query(`
@@ -995,7 +1091,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_lighting_categories_created_at ON lighting_categories(created_at);
 		`);
 
-    console.log("✅ lighting_categories 表已建立");
+    schemaLogger.info("lighting_categories 表已建立", { module: "initSchema" });
 
     // ========== 統一地點管理架構 ==========
 
@@ -1051,7 +1147,7 @@ async function initSchema() {
 			END $$;
 		`);
 
-    console.log("✅ zones 表已建立（統一區域表）");
+    schemaLogger.info("zones 表已建立（統一區域表）", { module: "initSchema" });
 
     // 建立統一的 locations 表（統一地點表）
     // 注意：此表只存儲物理地點的基本資訊，不包含系統相關資訊
@@ -1125,7 +1221,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_locations_zone_id ON locations(zone_id);
 		`);
 
-    console.log("✅ locations 表已建立（統一地點表）");
+    schemaLogger.info("locations 表已建立（統一地點表）", { module: "initSchema" });
 
     // 建立 location_systems 表（地點系統關聯表）
     await targetPool.query(`
@@ -1183,7 +1279,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_location_systems_config ON location_systems USING GIN(system_config);
 		`);
 
-    console.log("✅ location_systems 表已建立（地點系統關聯表）");
+    schemaLogger.info("location_systems 表已建立（地點系統關聯表）", { module: "initSchema" });
 
     // ========== 人員主檔與門禁權限（本系統） ==========
     await targetPool.query(`
@@ -1200,7 +1296,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_person_groups_name ON person_groups(name);
     `);
-    console.log("✅ person_groups 表已建立");
+    schemaLogger.info("person_groups 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS persons (
@@ -1223,7 +1319,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_persons_status ON persons(status);
       CREATE INDEX IF NOT EXISTS idx_persons_employee_no ON persons(employee_no);
     `);
-    console.log("✅ persons 表已建立");
+    schemaLogger.info("persons 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_location_access (
@@ -1238,7 +1334,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_person_location_access_location_id ON person_location_access(location_id);
       CREATE INDEX IF NOT EXISTS idx_person_location_access_person_id ON person_location_access(person_id);
     `);
-    console.log("✅ person_location_access 表已建立");
+    schemaLogger.info("person_location_access 表已建立", { module: "initSchema" });
 
     // ISAPI 監聽主機收到之門禁事件（非 heartBeat），payload 存巢狀 AccessControllerEvent；附圖存 uploads/isapi-events，路徑存 picture_path
     await targetPool.query(`
@@ -1258,7 +1354,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_device_ip ON isapi_access_events(device_ip);
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_payload ON isapi_access_events USING GIN (payload);
     `);
-    console.log("✅ isapi_access_events 表已建立");
+    schemaLogger.info("isapi_access_events 表已建立", { module: "initSchema" });
 
     // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
     await targetPool.query(`
@@ -1276,7 +1372,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_environment_readings_location_recorded ON environment_readings(location_id, recorded_at);
       CREATE INDEX IF NOT EXISTS idx_environment_readings_recorded_at ON environment_readings(recorded_at);
     `);
-    console.log("✅ environment_readings 表已建立");
+    schemaLogger.info("environment_readings 表已建立", { module: "initSchema" });
 
     // 環境讀數彙總表（時/日/月，供趨勢與報表）
     await targetPool.query(`
@@ -1293,7 +1389,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_env_agg_location_bucket ON environment_readings_aggregated(location_id, bucket_type, bucket_at);
     `);
-    console.log("✅ environment_readings_aggregated 表已建立");
+    schemaLogger.info("environment_readings_aggregated 表已建立", { module: "initSchema" });
 
     await targetPool.query("DROP TABLE IF EXISTS device_data_logs CASCADE");
 
@@ -1315,13 +1411,16 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(key);
 		`);
 
-    console.log("✅ system_settings 表已建立");
+    schemaLogger.info("system_settings 表已建立", { module: "initSchema" });
 
     await targetPool.end();
 
-    console.log("\n🎉 資料庫 Schema 初始化完成！");
+    schemaLogger.info("資料庫 Schema 初始化完成", { module: "initSchema" });
   } catch (error) {
-    console.error("❌ 初始化資料庫 Schema 失敗:", error.message);
+    schemaLogger.error("初始化資料庫 Schema 失敗", {
+      error: error?.message || String(error),
+      module: "initSchema",
+    });
     throw error;
   }
 }
@@ -1330,11 +1429,14 @@ async function initSchema() {
 if (require.main === module) {
   initSchema()
     .then(() => {
-      console.log("初始化完成");
+      schemaLogger.info("初始化完成", { module: "initSchema" });
       process.exit(0);
     })
     .catch((error) => {
-      console.error("初始化失敗:", error);
+      schemaLogger.error("初始化失敗", {
+        error: error?.message || String(error),
+        module: "initSchema",
+      });
       process.exit(1);
     });
 }

@@ -3,6 +3,10 @@ const config = require("../../config");
 const { getCalendarDateKeyInTimeZone } = require("../../utils/alertRolloverTz");
 const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");
+const { notifyNewAlertByEmail } = require("./alertEmailNotifier");
+const logger = require("../../utils/logger");
+
+const alertLogger = logger.createLogger("alertService");
 
 /** 忽視「僅當曆日」：設定時區下今日之 YYYY-MM-DD */
 function ignoreEffectiveTodayKey() {
@@ -137,7 +141,8 @@ async function findIgnoredAlert(
   alertType,
   dimensionKey = null,
 ) {
-  const dk = dimensionKey != null ? normalizeDimensionValue(dimensionKey) : "default";
+  const dk =
+    dimensionKey != null ? normalizeDimensionValue(dimensionKey) : "default";
   const rows = await db.query(
     `SELECT * FROM alerts
      WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?
@@ -237,6 +242,7 @@ async function handleAlertUpdate(
   actualSource,
   source_id,
   alert_type,
+  origin = null,
 ) {
   const currentSeverity = existingAlert.severity;
   const needsUpgrade = shouldUpgradeSeverity(currentSeverity, severity);
@@ -284,6 +290,7 @@ async function handleAlertUpdate(
       previous_severity: currentSeverity,
       new_severity: severity,
       message_changed: messageChanged,
+      ...(origin ? { origin } : {}),
     },
     null,
   );
@@ -651,7 +658,10 @@ async function getAlerts(filters = {}) {
       offset: parseInt(offset),
     };
   } catch (error) {
-    console.error("[alertService] 取得警報列表失敗:", error);
+    alertLogger.error("取得警報列表失敗", {
+      error: error?.message || String(error),
+      module: "alertService",
+    });
     throw error;
   }
 }
@@ -673,6 +683,7 @@ async function createAlert(alertData) {
       message,
       dimension_key = null,
       rule_id = null,
+      origin = null,
     } = alertData;
 
     // 如果提供了 device_id，使用 device 作為 source
@@ -754,6 +765,7 @@ async function createAlert(alertData) {
         actualSource,
         source_id,
         alert_type,
+        origin,
       );
       if (result) {
         return result;
@@ -812,6 +824,7 @@ async function createAlert(alertData) {
           alert_type,
           dimension_key: resolvedDimensionKey,
           rule_id,
+          ...(origin ? { origin } : {}),
         },
         null,
       );
@@ -829,6 +842,11 @@ async function createAlert(alertData) {
             );
           });
       });
+
+      // Email 通知：僅新 active 且具 rule_id 時評估（非阻塞）
+      if (enrichedAlert?.rule_id) {
+        setImmediate(() => void notifyNewAlertByEmail(enrichedAlert));
+      }
 
       return enrichedAlert;
     } catch (error) {
@@ -869,7 +887,10 @@ async function createAlert(alertData) {
       throw error;
     }
   } catch (error) {
-    console.error("[alertService] 創建警報失敗:", error);
+    alertLogger.error("創建警報失敗", {
+      error: error?.message || String(error),
+      module: "alertService",
+    });
     throw error;
   }
 }
@@ -935,7 +956,11 @@ async function unresolveAlert(id, userId = null) {
 
     return enrichedAlert;
   } catch (error) {
-    console.error(`[alertService] 取消解決警報 ${id} 失敗:`, error);
+    alertLogger.error("取消解決警報失敗", {
+      id,
+      error: error?.message || String(error),
+      module: "alertService",
+    });
     throw error;
   }
 }
@@ -951,6 +976,128 @@ function buildStatusScope(newStatus) {
     return [ALERT_STATUS.IGNORED];
   }
   return [ALERT_STATUS.ACTIVE, ALERT_STATUS.IGNORED, ALERT_STATUS.RESOLVED];
+}
+
+const JOINED_ALERTS_BY_IDS_SQL = `
+        SELECT 
+          a.*,
+          iu.username as ignored_by_username
+        FROM alerts a
+        LEFT JOIN users iu ON a.ignored_by = iu.id
+        WHERE a.id = ANY(?::integer[])
+      `;
+
+async function loadAlertsWithIgnoredByUser(alertIds) {
+  if (!alertIds?.length) return [];
+  const rows = await db.query(JOINED_ALERTS_BY_IDS_SQL, [alertIds]);
+  return rows || [];
+}
+
+/** 將多筆 ignored 先 batch 結為 resolved 時的事件／WS（與 updateAlertStatus 共用） */
+async function emitAlertBatchResolvedFromIgnored(
+  resolvedBatch,
+  oldStatusMap,
+  { source, sourceId, alertType, reason },
+  userId,
+) {
+  if (!resolvedBatch?.length) return;
+  for (const alert of resolvedBatch) {
+    const oldStatus = oldStatusMap.get(alert.id) || ALERT_STATUS.IGNORED;
+    const enrichedAlert = enrichAlert(alert);
+    await createAlertEvent(
+      alert.id,
+      "resolved",
+      oldStatus,
+      ALERT_STATUS.RESOLVED,
+      {
+        source,
+        source_id: sourceId,
+        alert_type: alertType,
+        dimension_key: alert.dimension_key,
+        reason,
+      },
+      userId || null,
+    );
+    websocketService.emitAlertUpdated(
+      enrichedAlert,
+      oldStatus,
+      ALERT_STATUS.RESOLVED,
+    );
+  }
+  void emitUnresolvedAlertCount();
+}
+
+/**
+ * 取消忽視 → active 前的碰撞處理（唯一索引、多筆 ignored 同鍵）
+ * @returns {{ effectiveStatus: string, finalAlertIds: number[] }}
+ */
+async function planUnignoreToActiveSafely({
+  sourceId,
+  source,
+  alertType,
+  normalizedDimensionKey,
+  currentAlerts,
+  oldStatusMap,
+  userId,
+}) {
+  let effectiveStatus = ALERT_STATUS.ACTIVE;
+  const finalAlertIds = currentAlerts.map((a) => a.id);
+
+  const existingActive = await db.query(
+    `SELECT id FROM alerts
+     WHERE source_id = ?
+       AND source = ?
+       AND alert_type = ?
+       AND status = ?
+       AND (?::varchar IS NULL OR dimension_key = ?::varchar)`,
+    [
+      sourceId,
+      source,
+      alertType,
+      ALERT_STATUS.ACTIVE,
+      normalizedDimensionKey,
+      normalizedDimensionKey,
+    ],
+  );
+
+  if (existingActive?.length > 0) {
+    return {
+      effectiveStatus: ALERT_STATUS.RESOLVED,
+      finalAlertIds,
+    };
+  }
+
+  if (currentAlerts.length <= 1) {
+    return { effectiveStatus, finalAlertIds };
+  }
+
+  const sorted = [...currentAlerts].sort((a, b) => b.id - a.id);
+  const resolveIds = sorted.slice(1).map((r) => r.id);
+  await db.query(
+    `UPDATE alerts
+     SET status = ?,
+         ignored_at = NULL,
+         ignored_by = NULL,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ANY(?::integer[])`,
+    [ALERT_STATUS.RESOLVED, resolveIds],
+  );
+  const resolvedBatch = await loadAlertsWithIgnoredByUser(resolveIds);
+  await emitAlertBatchResolvedFromIgnored(
+    resolvedBatch,
+    oldStatusMap,
+    {
+      source,
+      sourceId,
+      alertType,
+      reason: "dedupe_same_dimension",
+    },
+    userId,
+  );
+  return {
+    effectiveStatus: ALERT_STATUS.ACTIVE,
+    finalAlertIds: [sorted[0].id],
+  };
 }
 
 /**
@@ -1006,19 +1153,39 @@ async function updateAlertStatus(
     const alertIds = currentAlerts.map((a) => a.id);
     const oldStatusMap = new Map(currentAlerts.map((a) => [a.id, a.status]));
 
+    let effectiveStatus = newStatus;
+    let finalAlertIds = alertIds;
+
+    if (newStatus === ALERT_STATUS.ACTIVE) {
+      const planned = await planUnignoreToActiveSafely({
+        sourceId,
+        source,
+        alertType,
+        normalizedDimensionKey,
+        currentAlerts,
+        oldStatusMap,
+        userId,
+      });
+      effectiveStatus = planned.effectiveStatus;
+      finalAlertIds = planned.finalAlertIds;
+    }
+
     const updateFields = [];
     const params = [];
 
-    if (newStatus === ALERT_STATUS.IGNORED) {
+    if (effectiveStatus === ALERT_STATUS.IGNORED) {
       updateFields.push("ignored_at = CURRENT_TIMESTAMP", "ignored_by = ?");
       params.push(userId);
-    } else if (newStatus === ALERT_STATUS.ACTIVE) {
+    } else if (
+      effectiveStatus === ALERT_STATUS.ACTIVE ||
+      effectiveStatus === ALERT_STATUS.RESOLVED
+    ) {
       updateFields.push("ignored_at = NULL", "ignored_by = NULL");
     }
 
     updateFields.push("status = ?", "updated_at = CURRENT_TIMESTAMP");
-    params.push(newStatus);
-    params.push(alertIds);
+    params.push(effectiveStatus);
+    params.push(finalAlertIds);
 
     const query = `
 			UPDATE alerts
@@ -1037,45 +1204,41 @@ async function updateAlertStatus(
 
     const updatedCount = result.length;
 
-    if (alertIds.length > 0) {
-      const alertQuery = `
-        SELECT 
-          a.*,
-          iu.username as ignored_by_username
-        FROM alerts a
-        LEFT JOIN users iu ON a.ignored_by = iu.id
-        WHERE a.id = ANY(?::integer[])
-      `;
-      const alertResults = await db.query(alertQuery, [alertIds]);
+    if (finalAlertIds.length > 0) {
+      const alertResults = await loadAlertsWithIgnoredByUser(finalAlertIds);
 
       if (alertResults && alertResults.length > 0) {
         for (const alert of alertResults) {
-          const oldStatus = oldStatusMap.get(alert.id) || newStatus;
-          if (oldStatus === newStatus) {
+          const oldStatus = oldStatusMap.get(alert.id) || effectiveStatus;
+          if (oldStatus === effectiveStatus) {
             continue;
           }
           const enrichedAlert = enrichAlert(alert);
           await createAlertEvent(
             alert.id,
-            newStatus === ALERT_STATUS.RESOLVED
+            effectiveStatus === ALERT_STATUS.RESOLVED
               ? "resolved"
-              : newStatus === ALERT_STATUS.IGNORED
+              : effectiveStatus === ALERT_STATUS.IGNORED
                 ? "ignored"
                 : "unignored",
             oldStatus,
-            newStatus,
+            effectiveStatus,
             {
               source,
               source_id: sourceId,
               alert_type: alertType,
               dimension_key: alert.dimension_key,
+              ...(newStatus === ALERT_STATUS.ACTIVE &&
+              effectiveStatus === ALERT_STATUS.RESOLVED
+                ? { reason: "already_has_active_incident" }
+                : {}),
             },
             userId || null,
           );
           websocketService.emitAlertUpdated(
             enrichedAlert,
             oldStatus,
-            newStatus,
+            effectiveStatus,
           );
         }
 
@@ -1091,7 +1254,10 @@ async function updateAlertStatus(
       throw error; // 直接拋出，不記錄
     }
     // 其他錯誤才記錄
-    console.error(`[alertService] 更新警報狀態失敗:`, error);
+    alertLogger.error("更新警報狀態失敗", {
+      error: error?.message || String(error),
+      module: "alertService",
+    });
     throw error;
   }
 }
@@ -1145,58 +1311,6 @@ async function ignoreAlerts(
 }
 
 /**
- * 取消忽視警示（支持多系統來源）
- * @param {number} sourceId - 來源 ID（設備 ID、位置 ID 等）
- * @param {string} alertType - 警報類型
- * @param {string} source - 系統來源（可選，默認為 device）
- * @returns {Promise<number>} 取消忽視的警示數量
- */
-async function unignoreAlerts(
-  sourceId,
-  alertType,
-  source = ALERT_SOURCES.DEVICE,
-  dimensionKey = null,
-) {
-  // 更新警報狀態為 ACTIVE
-  const result = await updateAlertStatus(
-    sourceId,
-    source,
-    alertType,
-    ALERT_STATUS.ACTIVE,
-    null, // 不需要用戶 ID，因為是取消忽視
-    { dimensionKey },
-  );
-
-  // 確保 error_tracking 中的 alert_created 標記正確設置，並檢查是否需要立即解決警報
-  // 使用延遲 require 避免循環依賴
-  try {
-    const errorTracker = require("./errorTracker");
-
-    // 更新 alert_created 標記（如果為 FALSE）
-    await db.query(
-      `UPDATE error_tracking 
-      SET alert_created = TRUE, updated_at = CURRENT_TIMESTAMP
-      WHERE source = ? AND source_id = ? AND alert_created = FALSE`,
-      [source, sourceId],
-    );
-
-    // 檢查設備是否已經恢復正常（error_count = 0）
-    // 如果已恢復，立即調用 clearError 自動解決警報（統一使用 clearError 邏輯）
-    const tracking = await errorTracker.getErrorTracking(source, sourceId);
-    if (tracking && tracking.error_count === 0) {
-      await errorTracker.clearError(source, sourceId, alertType);
-    }
-  } catch (error) {
-    // 如果更新 error_tracking 失敗，不影響取消忽視操作（警報已成功恢復為 ACTIVE）
-    devLog.warn(
-      `[alertService] 更新 error_tracking 失敗（不影響取消忽視）: ${error.message}`,
-    );
-  }
-
-  return result;
-}
-
-/**
  * 檢查來源是否已被忽視
  * @param {string} source - 來源類型
  * @param {number} sourceId - 來源 ID
@@ -1237,7 +1351,10 @@ async function isSourceIgnored(
         getCalendarDateKeyInTimeZone(r.ignored_at, tz) === todayKey,
     );
   } catch (error) {
-    console.error(`[alertService] 檢查忽視狀態失敗:`, error);
+    alertLogger.error("檢查忽視狀態失敗", {
+      error: error?.message || String(error),
+      module: "alertService",
+    });
     return false;
   }
 }
@@ -1317,7 +1434,10 @@ async function getUnresolvedAlertCount(filters = {}) {
       rule_ids: row.rule_ids || [],
     };
   } catch (error) {
-    console.error("[alertService] 取得未解決警報數量失敗:", error);
+    alertLogger.error("取得未解決警報數量失敗", {
+      error: error?.message || String(error),
+      module: "alertService",
+    });
     throw error;
   }
 }
@@ -1346,7 +1466,9 @@ function emitUnresolvedAlertCount() {
           ? countResult
           : parseInt(String(countResult?.count ?? 0), 10);
       websocketService.emitAlertCount(Number.isFinite(n) ? n : 0);
-      devLog.log(`[alertService] 📢 已推送未解決警報數量（狀態型、全量 active）: ${n}`);
+      devLog.log(
+        `[alertService] 📢 已推送未解決警報數量（狀態型、全量 active）: ${n}`,
+      );
     } catch (error) {
       devLog.error(
         "[alertService] ❌ 推送未解決警報數量失敗: " + error.message,
@@ -1402,7 +1524,10 @@ async function resolveAllActiveForDailyRollover() {
         return rows[0]?.resolved_count ?? 0;
       });
     } catch (err) {
-      console.error("[alertService] 日界線批次結案失敗:", err);
+      alertLogger.error("日界線批次結案失敗", {
+        error: err?.message || String(err),
+        module: "alertService",
+      });
       throw err;
     }
     if (resolvedCount > 0) {
@@ -1549,7 +1674,6 @@ module.exports = {
   updateAllAlertTypesStatus,
   resolveAlert,
   ignoreAlerts,
-  unignoreAlerts,
   unresolveAlert,
   isSourceIgnored,
   getUnresolvedAlertCount,

@@ -32,6 +32,13 @@ function formatPrefix(level, module) {
   return `${timestamp} ${levelUpper} ${moduleName}`;
 }
 
+function stripModuleFromMeta(meta) {
+  if (!meta || typeof meta !== "object") return {};
+  if (!("module" in meta)) return meta;
+  const { module: _module, ...rest } = meta;
+  return rest;
+}
+
 /**
  * 記錄錯誤日誌
  * @param {string} message - 日誌訊息
@@ -39,9 +46,11 @@ function formatPrefix(level, module) {
  */
 function error(message, meta = {}) {
   const prefix = formatPrefix(LOG_LEVELS.ERROR, meta.module);
-  const metaStr = Object.keys(meta).length > 0 ? JSON.stringify(meta) : "";
+  const metaForPrint = stripModuleFromMeta(meta);
+  const metaStr =
+    Object.keys(metaForPrint).length > 0 ? JSON.stringify(metaForPrint) : "";
 
-  console.error(`${prefix} ${message}`, metaStr ? meta : "");
+  console.error(`${prefix} ${message}`, metaStr ? metaForPrint : "");
 
   // 在生產環境中，可以將錯誤發送到日誌服務
   if (isProduction && meta.error && meta.error.stack) {
@@ -56,9 +65,11 @@ function error(message, meta = {}) {
  */
 function warn(message, meta = {}) {
   const prefix = formatPrefix(LOG_LEVELS.WARN, meta.module);
-  const metaStr = Object.keys(meta).length > 0 ? JSON.stringify(meta) : "";
+  const metaForPrint = stripModuleFromMeta(meta);
+  const metaStr =
+    Object.keys(metaForPrint).length > 0 ? JSON.stringify(metaForPrint) : "";
 
-  console.warn(`${prefix} ${message}`, metaStr ? meta : "");
+  console.warn(`${prefix} ${message}`, metaStr ? metaForPrint : "");
 }
 
 /**
@@ -68,9 +79,11 @@ function warn(message, meta = {}) {
  */
 function info(message, meta = {}) {
   const prefix = formatPrefix(LOG_LEVELS.INFO, meta.module);
-  const metaStr = Object.keys(meta).length > 0 ? JSON.stringify(meta) : "";
+  const metaForPrint = stripModuleFromMeta(meta);
+  const metaStr =
+    Object.keys(metaForPrint).length > 0 ? JSON.stringify(metaForPrint) : "";
 
-  console.log(`${prefix} ${message}`, metaStr ? meta : "");
+  console.log(`${prefix} ${message}`, metaStr ? metaForPrint : "");
 }
 
 /**
@@ -84,9 +97,11 @@ function debug(message, meta = {}) {
   }
 
   const prefix = formatPrefix(LOG_LEVELS.DEBUG, meta.module);
-  const metaStr = Object.keys(meta).length > 0 ? JSON.stringify(meta) : "";
+  const metaForPrint = stripModuleFromMeta(meta);
+  const metaStr =
+    Object.keys(metaForPrint).length > 0 ? JSON.stringify(metaForPrint) : "";
 
-  console.log(`${prefix} ${message}`, metaStr ? meta : "");
+  console.log(`${prefix} ${message}`, metaStr ? metaForPrint : "");
 }
 
 /**
