@@ -92,7 +92,7 @@ async function queryAlerts(
   status,
   dimensionKey = null,
   dateRange = null,
-  orderBy = "created_at DESC",
+  orderBy = "updated_at DESC",
   limit = null,
 ) {
   let query = `SELECT * FROM alerts WHERE source = ? AND source_id = ? AND alert_type = ? AND status = ?`;
@@ -208,7 +208,7 @@ async function findAllActiveAlerts(
     ALERT_STATUS.ACTIVE,
     dimensionKey,
     null, // 不限日期
-    "created_at DESC", // 按創建時間倒序
+    "updated_at DESC", // 按更新時間倒序
   );
 }
 
@@ -537,7 +537,7 @@ async function getAlerts(filters = {}) {
       updated_after, // 增量查詢：只獲取更新時間在此之後的警報
       limit = 50,
       offset = 0,
-      orderBy = "created_at",
+      orderBy = "updated_at",
       order = "desc",
     } = filters;
 

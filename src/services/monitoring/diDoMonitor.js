@@ -14,6 +14,7 @@ const db = require("../../database/db");
 const alertService = require("../alerts/alertService");
 const alertRuleService = require("../alerts/alertRuleService");
 const modbusBatchService = require("../devices/modbusBatchService");
+const systemAlertHelper = require("../alerts/systemAlertHelper");
 
 const getDeviceService = () => require("../devices/deviceService");
 
@@ -233,12 +234,30 @@ async function checkDiDoAlerts() {
 
     const results = await modbusBatchService.batchRead(batchRequests);
 
+    // 依「設備（host:port:unitId）」彙整本輪讀取的成敗，統一同步 device offline tracking
+    // - 背景讀 DI/DO 走 modbusBatchService（非 HTTP 路由），原本不會觸發 notifyModbusHttpDevice*
+    //   導致 DI/DO 控制器恢復連線時，沒有任何路徑會清除「連續 N 次無法連接」警報
+    const deviceOutcome = new Map(); // deviceKey -> { config, anyOk, errorMessage }
     for (let i = 0; i < validEntries.length; i++) {
+      const entry = validEntries[i];
+      const req = batchRequests[i];
       const result = results[i];
+      const deviceCfg = { host: req.host, port: req.port, unitId: req.unitId };
+      const deviceKey = `${req.host}:${req.port}:${req.unitId}`;
+      const bucket =
+        deviceOutcome.get(deviceKey) ||
+        { config: deviceCfg, anyOk: false, errorMessage: null };
+      if (result?.ok) {
+        bucket.anyOk = true;
+      } else if (!bucket.errorMessage) {
+        bucket.errorMessage = result?.error || "無法連接 DI/DO 控制器";
+      }
+      deviceOutcome.set(deviceKey, bucket);
+
       if (!result?.ok) continue;
       const bitValue = Boolean(result.data?.[0]);
 
-      for (const task of validEntries[i].tasks) {
+      for (const task of entry.tasks) {
         try {
           await syncDiDoAlert(task.rule, task.systemId, bitValue);
         } catch (err) {
@@ -249,6 +268,32 @@ async function checkDiDoAlerts() {
         }
       }
     }
+
+    // 以「整台控制器至少一條讀取成功」判斷為連線 OK；全失敗才累計 offline
+    await Promise.allSettled(
+      [...deviceOutcome.values()].map(async ({ config, anyOk, errorMessage }) => {
+        try {
+          if (anyOk) {
+            await systemAlertHelper.notifyModbusHttpDeviceRecovered(config, {
+              skipWebSocket: true,
+            });
+          } else {
+            await systemAlertHelper.notifyModbusHttpDeviceFailed(
+              config,
+              errorMessage || "無法連接 DI/DO 控制器",
+              { skipWebSocket: true },
+            );
+          }
+        } catch (err) {
+          monitorLogger.warn("DI/DO 控制器連線狀態同步失敗", {
+            host: config?.host,
+            port: config?.port,
+            unitId: config?.unitId,
+            error: err?.message || String(err),
+          });
+        }
+      }),
+    );
   } catch (error) {
     monitorLogger.warn("DI/DO 監控執行失敗（不影響其他任務）", {
       error: error?.message || String(error),

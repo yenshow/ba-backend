@@ -30,7 +30,7 @@ router.put(
   }),
 );
 
-// ========== Upload (images) ==========
+// ========== Upload (media) ==========
 
 const uploadsDir = path.join(process.cwd(), "uploads", "multimedia");
 if (!fs.existsSync(uploadsDir)) {
@@ -48,18 +48,28 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (_req, file, cb) => {
-  const allowedMimes = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
+  const allowedMimes = [
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "video/ogg",
+  ];
   if (allowedMimes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("不支援的檔案格式，僅允許上傳圖片（JPEG, PNG, GIF, WEBP）"), false);
+    cb(new Error("不支援的檔案格式，僅允許上傳圖片或影片（JPEG, PNG, GIF, WEBP, MP4, WEBM, MOV, OGG）"), false);
   }
 };
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
 
 router.post(

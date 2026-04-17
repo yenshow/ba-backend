@@ -294,7 +294,8 @@ async function formatRuleMessageFromContext(rule, runtimeVars) {
  */
 async function renderRuleMessage(rule, runtimeVars = {}) {
   const { rendered } = await formatRuleMessageFromContext(rule, runtimeVars);
-  const suffix = rule?.message_suffix != null ? String(rule.message_suffix) : "";
+  const suffix =
+    rule?.message_suffix != null ? String(rule.message_suffix) : "";
   return rendered + suffix;
 }
 
@@ -348,7 +349,8 @@ async function previewRuleMessage(payload) {
 function resolvePersistedTemplateFields(payload) {
   const alertType = payload.alert_type;
   // 訊息模板固定：一律使用 canonical（不允許 custom 全文）
-  let key = inferDefaultTemplateKey(alertType) || MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
+  let key =
+    inferDefaultTemplateKey(alertType) || MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
   if (!CANONICAL_TEMPLATES[key]) {
     key = MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
   }
@@ -762,7 +764,9 @@ async function updateAlertRule(id, updates) {
   if (effectiveUpdates.message_suffix !== undefined) {
     fields.push("message_suffix = ?");
     params.push(
-      effectiveUpdates.message_suffix === null ? null : String(effectiveUpdates.message_suffix),
+      effectiveUpdates.message_suffix === null
+        ? null
+        : String(effectiveUpdates.message_suffix),
     );
   }
   if (effectiveUpdates.enabled !== undefined) {

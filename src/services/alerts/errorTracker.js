@@ -338,6 +338,7 @@ async function clearError(source, sourceId, alertType = null) {
         const hadAlert = tracking.alert_created;
 
         // 去重：在多個 monitor 同時 clearError 時，只有「第一個成功把 error_count 從 previousCount 變成 0」者才輸出恢復訊息
+        // 以 RETURNING 確保 `rows` 能反映是否命中（pg: UPDATE 無 RETURNING 時 rows 為空陣列）
         const updateResult = await db.query(
           `UPDATE error_tracking
            SET error_count = 0,
@@ -347,11 +348,12 @@ async function clearError(source, sourceId, alertType = null) {
            WHERE source = ?
              AND source_id = ?
              AND alert_type = ?
-             AND error_count = ?`,
+             AND error_count = ?
+           RETURNING source`,
           [source, sourceId, type, previousCount],
         );
 
-        const didUpdate = (updateResult || []).length > 0;
+        const didUpdate = (updateResult?.length ?? 0) > 0;
         if (!didUpdate) {
           // 另一個併發呼叫已先完成清除；不重複 log / 不重複推後續行為
           continue;
@@ -398,6 +400,20 @@ async function clearError(source, sourceId, alertType = null) {
           );
         }
         clearedAny = clearedAny || resolvedAny;
+        continue;
+      }
+
+      // 自癒殘留：tracking 為 error_count=0 / alert_created=false，但仍有 active 警報
+      // （過去版本曾因 UPDATE 無 RETURNING 誤判 didUpdate=false 未 resolve），需補資源復歸
+      const resolvedAny = await resolveActiveAlerts(source, sourceId, [type]);
+      if (resolvedAny) {
+        trackerLogger.info("來源已恢復（自癒殘留 active 警報）", {
+          source,
+          sourceId,
+          alertType: type,
+          module: "errorTracker",
+        });
+        clearedAny = true;
       }
     }
 

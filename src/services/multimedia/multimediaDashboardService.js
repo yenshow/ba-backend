@@ -49,14 +49,11 @@ const normalizeAnnouncement = (item, index) => {
   const it = item && typeof item === "object" ? item : {};
   const id = normalizeString(it.id, 80).trim() || `a_${Date.now()}_${index}`;
   const title = normalizeString(it.title, 120).trim();
-  const content = normalizeString(it.content, 2000).trim();
   const pinned = Boolean(it.pinned);
-  const startAt = it.startAt ? normalizeString(it.startAt, 40).trim() : "";
-  const endAt = it.endAt ? normalizeString(it.endAt, 40).trim() : "";
   const sortOrderRaw = Number(it.sortOrder);
   const sortOrder = Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : index;
 
-  return { id, title, content, pinned, startAt, endAt, sortOrder };
+  return { id, title, pinned, sortOrder };
 };
 
 const normalizeSchedule = (item, index) => {
