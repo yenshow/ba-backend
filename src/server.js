@@ -177,7 +177,11 @@ if (config.features && config.features.enableAccessControlPersonnel !== false) {
 }
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
-app.use("/api/multimedia", multimediaDashboardRoutes); // 多媒體資訊牆 API
+app.use(
+  "/api/multimedia",
+  requireFeature("multimedia"),
+  multimediaDashboardRoutes,
+); // 多媒體資訊牆 API
 
 // 影像監控：前端依 POST /api/devices/:id/stream/start 取得 webrtcUrl，以 WebRTC 播放
 
