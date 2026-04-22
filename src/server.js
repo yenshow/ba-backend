@@ -41,6 +41,7 @@ const settingsRoutes = require("./routes/settingsRoutes");
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const permissionRoutes = require("./routes/permissionRoutes");
+const moduleRegistryRoutes = require("./routes/moduleRegistryRoutes");
 
 // 授權（Feature Gate）
 const { requireFeature } = require("./middleware/licenseMiddleware");
@@ -144,6 +145,7 @@ app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/permissions", permissionRoutes);
 app.use("/api/license", licenseRoutes);
+app.use("/api/modules", moduleRegistryRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
 app.use("/api/drainage", requireFeature("drainage"), drainageRoutes);

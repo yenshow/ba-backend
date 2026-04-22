@@ -11,6 +11,34 @@ const logger = require("../../utils/logger").createLogger("PersonSyncService");
 
 const SYNC_DELAY_MS = 300;
 
+// ========== sync-all 背景工作（In-memory，重啟即失效） ==========
+// 需求：避免長時間同步造成 HTTP timeout；前端以 jobId 輪詢進度/結果。
+const syncAllJobs = new Map();
+const JOB_TTL_MS = 1000 * 60 * 30; // 30 分鐘
+
+// ========== sync-location 背景工作（In-memory，重啟即失效） ==========
+// 需求：單一地點同步也可能因設備延遲造成 HTTP timeout，改為以 jobId 輪詢。
+const syncLocationJobs = new Map();
+
+function randomJobId() {
+  return `syncall_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function cleanupOldJobs() {
+  const now = Date.now();
+  for (const [id, job] of syncAllJobs.entries()) {
+    if (!job?.createdAt || now - job.createdAt > JOB_TTL_MS) {
+      syncAllJobs.delete(id);
+    }
+  }
+
+  for (const [id, job] of syncLocationJobs.entries()) {
+    if (!job?.createdAt || now - job.createdAt > JOB_TTL_MS) {
+      syncLocationJobs.delete(id);
+    }
+  }
+}
+
 function createValidationError(message) {
   const err = new Error(message);
   err.statusCode = 400;
@@ -39,6 +67,11 @@ async function getPeopleCountingDevicesForLocation(locationId) {
     entryDeviceId: Number(entryDeviceId),
     exitDeviceId: exitDeviceId != null ? Number(exitDeviceId) : null,
   };
+}
+
+async function getLocationName(locationId) {
+  const rows = await db.query("SELECT name FROM locations WHERE id = ? LIMIT 1", [locationId]);
+  return rows?.[0]?.name ?? null;
 }
 
 /**
@@ -162,7 +195,15 @@ async function syncLocation(locationId) {
   }
 
   for (const deviceId of deviceIds) {
-    const currentEmployeeNos = new Set(await fetchAllEmployeeNosFromDevice(deviceId));
+    let currentEmployeeNos;
+    try {
+      currentEmployeeNos = new Set(await fetchAllEmployeeNosFromDevice(deviceId));
+    } catch (err) {
+      const message = toMessage(err);
+      logger.warn("ISAPI 讀取設備人員清單失敗（跳過該設備）", { deviceId, error: message });
+      warnings.push({ type: "sync", deviceId, message: `讀取設備人員清單失敗：${message}` });
+      continue;
+    }
 
     const toSync = targetList.filter((p) => currentEmployeeNos.has(p.employeeNo));
     const toAdd = targetList.filter((p) => !currentEmployeeNos.has(p.employeeNo));
@@ -174,7 +215,7 @@ async function syncLocation(locationId) {
       } catch (err) {
         const message = toMessage(err);
         logger.warn("ISAPI 新增人員失敗", { deviceId, employeeNo: p.employeeNo, error: message });
-        warnings.push({ type: "add", employeeNo: p.employeeNo, deviceId, message });
+        warnings.push({ type: "add", employeeNo: p.employeeNo, deviceId, message: `新增失敗：${message}` });
       }
     }
 
@@ -184,7 +225,7 @@ async function syncLocation(locationId) {
       } catch (err) {
         const message = toMessage(err);
         logger.warn("ISAPI 更新人員失敗", { deviceId, employeeNo: p.employeeNo, error: message });
-        warnings.push({ type: "update", employeeNo: p.employeeNo, deviceId, message });
+        warnings.push({ type: "update", employeeNo: p.employeeNo, deviceId, message: `更新失敗：${message}` });
       }
     }
 
@@ -195,13 +236,55 @@ async function syncLocation(locationId) {
       } catch (err) {
         const message = toMessage(err);
         logger.warn("ISAPI 刪除人員失敗", { deviceId, count: toDelete.length, error: message });
-        warnings.push({ type: "delete", deviceId, message });
+        warnings.push({ type: "delete", deviceId, message: `刪除失敗：${message}` });
       }
     }
   }
 
   logger.info("同步完成", { locationId, warningsCount: warnings.length });
   return { warnings };
+}
+
+function startSyncLocationJob(locationId) {
+  cleanupOldJobs();
+  const jobId = `syncloc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const job = {
+    jobId,
+    locationId: Number(locationId),
+    locationName: null,
+    status: "queued", // queued | running | completed
+    createdAt: Date.now(),
+    startedAt: null,
+    finishedAt: null,
+    result: null,
+    error: null,
+  };
+  syncLocationJobs.set(jobId, job);
+
+  (async () => {
+    job.status = "running";
+    job.startedAt = Date.now();
+    try {
+      job.locationName = await getLocationName(job.locationId);
+      const result = await syncLocation(job.locationId);
+      job.result = result;
+      job.status = "completed";
+      job.finishedAt = Date.now();
+    } catch (err) {
+      job.status = "completed";
+      job.finishedAt = Date.now();
+      job.error = { message: toMessage(err) };
+    }
+  })();
+
+  return { jobId };
+}
+
+function getSyncLocationJob(jobId) {
+  cleanupOldJobs();
+  const job = syncLocationJobs.get(String(jobId));
+  if (!job) return null;
+  return job;
 }
 
 /**
@@ -228,9 +311,81 @@ async function syncAllLocations() {
   return { synced: results.length, results };
 }
 
+function startSyncAllLocationsJob() {
+  cleanupOldJobs();
+  const jobId = randomJobId();
+  const job = {
+    jobId,
+    status: "queued", // queued | running | completed
+    createdAt: Date.now(),
+    startedAt: null,
+    finishedAt: null,
+    progress: {
+      total: 0,
+      completed: 0,
+      currentLocationId: null,
+      currentLocationName: null,
+    },
+    result: null,
+    error: null,
+  };
+  syncAllJobs.set(jobId, job);
+
+  // async run
+  (async () => {
+    job.status = "running";
+    job.startedAt = Date.now();
+    try {
+      const locations = await getSyncableLocations();
+      job.progress.total = locations.length;
+      const results = [];
+      for (const loc of locations) {
+        job.progress.currentLocationId = loc.id;
+        job.progress.currentLocationName = loc.name;
+        try {
+          const { warnings } = await syncLocation(loc.id);
+          results.push({ locationId: loc.id, locationName: loc.name, warnings });
+        } catch (err) {
+          const message = toMessage(err);
+          logger.warn("同步地點失敗，跳過", { locationId: loc.id, error: message });
+          results.push({
+            locationId: loc.id,
+            locationName: loc.name,
+            warnings: [{ type: "sync", message }],
+          });
+        } finally {
+          job.progress.completed += 1;
+        }
+      }
+      job.result = { synced: results.length, results };
+      job.status = "completed";
+      job.finishedAt = Date.now();
+      job.progress.currentLocationId = null;
+      job.progress.currentLocationName = null;
+    } catch (err) {
+      job.status = "completed";
+      job.finishedAt = Date.now();
+      job.error = { message: toMessage(err) };
+    }
+  })();
+
+  return { jobId };
+}
+
+function getSyncAllLocationsJob(jobId) {
+  cleanupOldJobs();
+  const job = syncAllJobs.get(String(jobId));
+  if (!job) return null;
+  return job;
+}
+
 module.exports = {
   getPeopleCountingDevicesForLocation,
   getSyncableLocations,
   syncLocation,
   syncAllLocations,
+  startSyncLocationJob,
+  getSyncLocationJob,
+  startSyncAllLocationsJob,
+  getSyncAllLocationsJob,
 };

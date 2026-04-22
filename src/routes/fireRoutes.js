@@ -2,57 +2,101 @@ const express = require("express");
 const router = express.Router();
 const fireService = require("../services/systems/fireService");
 const fireStatusService = require("../services/systems/fireStatusService");
-const { authenticate } = require("../middleware/authMiddleware");
+const { authenticate, requirePermission } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
-router.get("/zones", noCache, authenticate, asyncHandler(async (req, res) => {
-  const result = await fireService.getZones();
-  res.sendSuccess(result);
-}));
+// 以下路由皆需登入且具備系統權限
+router.use(authenticate, requirePermission("system.fire"));
 
-router.get("/zones/:id", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await fireService.getZoneById(parseInt(id, 10));
-  res.sendSuccess(result);
-}));
+router.get(
+  "/zones",
+  noCache,
+  asyncHandler(async (req, res) => {
+    const result = await fireService.getZones();
+    res.sendSuccess(result);
+  }),
+);
 
-router.post("/zones", authenticate, asyncHandler(async (req, res) => {
-  const result = await fireService.createZone(req.body, req.user.id);
-  res.sendSuccess(result, 201);
-}));
+router.get(
+  "/zones/:id",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await fireService.getZoneById(parseInt(id, 10));
+    res.sendSuccess(result);
+  }),
+);
 
-router.put("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await fireService.updateZone(parseInt(id, 10), req.body, req.user.id);
-  res.sendSuccess(result);
-}));
+router.post(
+  "/zones",
+  asyncHandler(async (req, res) => {
+    const result = await fireService.createZone(req.body, req.user.id);
+    res.sendSuccess(result, 201);
+  }),
+);
 
-router.delete("/zones/:id", authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await fireService.deleteZone(parseInt(id, 10));
-  res.sendSuccess(result);
-}));
+router.put(
+  "/zones/:id",
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await fireService.updateZone(
+      parseInt(id, 10),
+      req.body,
+      req.user.id,
+    );
+    res.sendSuccess(result);
+  }),
+);
 
-router.get("/status", noCache, authenticate, asyncHandler(async (req, res) => {
-  let zoneIds;
-  const raw = req.query.zoneIds;
-  if (raw != null && raw !== "") {
-    const parts = String(raw)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    zoneIds = parts.map((p) => parseInt(p, 10)).filter((n) => !Number.isNaN(n));
-  }
-  const result = await fireStatusService.getStatusSnapshot({ zoneIds, syncAlerts: false });
-  res.sendSuccess(result);
-}));
+router.delete(
+  "/zones/:id",
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await fireService.deleteZone(parseInt(id, 10));
+    res.sendSuccess(result);
+  }),
+);
 
-router.get("/zones/:id/status", noCache, authenticate, validateIntegers("id"), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const result = await fireStatusService.getZoneStatusSnapshot(parseInt(id, 10), { syncAlerts: false });
-  res.sendSuccess(result);
-}));
+router.get(
+  "/status",
+  noCache,
+  asyncHandler(async (req, res) => {
+    let zoneIds;
+    const raw = req.query.zoneIds;
+    if (raw != null && raw !== "") {
+      const parts = String(raw)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      zoneIds = parts
+        .map((p) => parseInt(p, 10))
+        .filter((n) => !Number.isNaN(n));
+    }
+    const result = await fireStatusService.getStatusSnapshot({
+      zoneIds,
+      syncAlerts: false,
+    });
+    res.sendSuccess(result);
+  }),
+);
+
+router.get(
+  "/zones/:id/status",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const result = await fireStatusService.getZoneStatusSnapshot(
+      parseInt(id, 10),
+      { syncAlerts: false },
+    );
+    res.sendSuccess(result);
+  }),
+);
 
 module.exports = router;

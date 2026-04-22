@@ -3,7 +3,7 @@ const router = express.Router();
 const handlerFactory = require("../services/externalData/handlerFactory");
 const systemMapping = require("../services/externalData/systemMapping");
 const vehicleGroupAggregateService = require("../services/externalData/vehicleGroupAggregateService");
-const { authenticate } = require("../middleware/authMiddleware");
+const { authenticate, requirePermission } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -75,7 +75,10 @@ function requireVehicleAccessIfVehicleTable(req, res, next) {
   const { schema, table } = req.params || {};
   if (!schema || !table) return next();
   if (!isVehicleTable(schema, table)) return next();
-  return requireFeature("vehicle_access")(req, res, next);
+  return requireFeature("vehicle_access")(req, res, (err) => {
+    if (err) return next(err);
+    return requirePermission("system.vehicle_access")(req, res, next);
+  });
 }
 
 /**
@@ -168,6 +171,7 @@ router.get(
   "/vehicle-access/vehicle-groups",
   authenticate,
   requireFeature("vehicle_access"),
+  requirePermission("system.vehicle_access"),
   asyncHandler(async (req, res) => {
     const result = await vehicleGroupAggregateService.getVehicleGroups();
     res.sendSuccess(result);

@@ -11,6 +11,7 @@ const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
 const {
   authenticate,
   requireAdminOrOperator,
+  requirePermission,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -105,7 +106,9 @@ function validateRuleIntegrationsPayload(body) {
         return "emailSubscription.enabled 需為布林值";
       }
       const enabled = e.enabled !== undefined ? Boolean(e.enabled) : false;
-      const security = String(e.smtp_security || "none").trim().toLowerCase();
+      const security = String(e.smtp_security || "none")
+        .trim()
+        .toLowerCase();
       if (!["none", "ssl", "tls"].includes(security)) {
         return "emailSubscription.smtp_security 僅允許 none/ssl/tls";
       }
@@ -117,7 +120,8 @@ function validateRuleIntegrationsPayload(body) {
           return "emailSubscription.smtp_port 為必填且需為正整數";
         }
         const fromEmail = String(e.smtp_user || "").trim();
-        if (!fromEmail) return "emailSubscription.smtp_user（寄件人 Email）為必填";
+        if (!fromEmail)
+          return "emailSubscription.smtp_user（寄件人 Email）為必填";
         if (!looksLikeEmail(fromEmail)) {
           return "emailSubscription.smtp_user（寄件人 Email）格式不正確";
         }
@@ -187,7 +191,9 @@ function validateEmailSubscriptionForSmtpTest(sub) {
   if (!Number.isInteger(portN) || portN <= 0) {
     return "emailSubscription.smtp_port 為必填且需為正整數";
   }
-  const security = String(e.smtp_security || "none").trim().toLowerCase();
+  const security = String(e.smtp_security || "none")
+    .trim()
+    .toLowerCase();
   if (!["none", "ssl", "tls"].includes(security)) {
     return "emailSubscription.smtp_security 僅允許 none/ssl/tls";
   }
@@ -369,6 +375,9 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
 
 // 以下路由皆需登入
 router.use(authenticate);
+
+// 警示紀錄：以系統權限碼控管（核心基礎不走 license gate）
+router.use(requirePermission("system.alert_log"));
 
 // ========== 警示 API ==========
 
@@ -561,7 +570,8 @@ router.get(
     const doLinkage =
       await alertLinkageService.getSingleLinkageByRuleId(ruleId);
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
-    const emailSubscription = await alertEmailSubscriptionService.getByRuleId(ruleId);
+    const emailSubscription =
+      await alertEmailSubscriptionService.getByRuleId(ruleId);
     res.sendSuccess({ doLinkage, cameraLinkage, emailSubscription });
   }),
 );
@@ -621,7 +631,8 @@ router.put(
     const doLinkage =
       await alertLinkageService.getSingleLinkageByRuleId(ruleId);
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
-    const emailSubscription = await alertEmailSubscriptionService.getByRuleId(ruleId);
+    const emailSubscription =
+      await alertEmailSubscriptionService.getByRuleId(ruleId);
     res.sendSuccess({ doLinkage, cameraLinkage, emailSubscription });
   }),
 );
@@ -644,18 +655,27 @@ router.post(
     }
 
     const stored = await alertEmailSubscriptionService.getByRuleId(ruleId);
-    const merged = mergeEmailSubscriptionForTest(stored, body.emailSubscription);
+    const merged = mergeEmailSubscriptionForTest(
+      stored,
+      body.emailSubscription,
+    );
 
     const errMsg = validateEmailSubscriptionForSmtpTest(merged);
     if (errMsg) return res.sendError(errMsg, 400);
 
-    const security = String(merged.smtp_security || "none").trim().toLowerCase();
-    const userRaw = merged.smtp_user != null ? String(merged.smtp_user).trim() : "";
+    const security = String(merged.smtp_security || "none")
+      .trim()
+      .toLowerCase();
+    const userRaw =
+      merged.smtp_user != null ? String(merged.smtp_user).trim() : "";
     const passRaw =
       merged.smtp_password != null ? String(merged.smtp_password) : "";
 
     const toList = Array.isArray(merged.to_emails)
-      ? merged.to_emails.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 20)
+      ? merged.to_emails
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+          .slice(0, 20)
       : [];
 
     const subject = `[BA] SMTP 測試（rule_id=${ruleId}）`;
@@ -697,7 +717,10 @@ router.post(
       ) {
         return res.sendError("SMTP 設定不完整或不合法", 400);
       }
-      return res.sendError(`SMTP 測試寄送失敗：${code ? `${code} ` : ""}${msg}`, 502);
+      return res.sendError(
+        `SMTP 測試寄送失敗：${code ? `${code} ` : ""}${msg}`,
+        502,
+      );
     }
   }),
 );

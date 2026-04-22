@@ -5,7 +5,10 @@
 const express = require("express");
 const multer = require("multer");
 const accessControlService = require("../services/accessControl/accessControlService");
-const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requireAdminOrOperator,
+} = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
@@ -35,9 +38,12 @@ router.post(
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
-    const result = await accessControlService.searchUserInfo(deviceId, req.body || {});
+    const result = await accessControlService.searchUserInfo(
+      deviceId,
+      req.body || {},
+    );
     res.sendSuccess(result);
-  })
+  }),
 );
 
 /**
@@ -60,7 +66,7 @@ router.put(
     }
     await accessControlService.updateUserInfo(deviceId, userInfo);
     res.sendSuccess({ success: true });
-  })
+  }),
 );
 
 /**
@@ -78,7 +84,7 @@ router.delete(
     const payload = req.body || {};
     await accessControlService.deleteUserInfo(deviceId, payload);
     res.sendSuccess({ success: true });
-  })
+  }),
 );
 
 /**
@@ -102,9 +108,14 @@ router.put(
     if (req.body?.faceLibType) options.faceLibType = req.body.faceLibType;
     if (req.body?.FDID) options.FDID = req.body.FDID;
     if (req.body?.faceType) options.faceType = req.body.faceType;
-    await accessControlService.updateFace(deviceId, employeeNo, req.file.buffer, options);
+    await accessControlService.updateFace(
+      deviceId,
+      employeeNo,
+      req.file.buffer,
+      options,
+    );
     res.sendSuccess({ success: true });
-  })
+  }),
 );
 
 /**
@@ -119,9 +130,12 @@ router.post(
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
-    const data = await accessControlService.captureFaceData(deviceId, req.body || {});
+    const data = await accessControlService.captureFaceData(
+      deviceId,
+      req.body || {},
+    );
     res.sendSuccess(data);
-  })
+  }),
 );
 
 module.exports = router;

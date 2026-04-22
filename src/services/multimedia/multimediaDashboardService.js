@@ -9,6 +9,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   bannerMarqueeText: "",
   envDeviceIds: [],
   envDisplayParameters: [],
+  wallAnnouncementsPerPage: 5,
+  wallSchedulesPerPage: 4,
+  wallAnnouncementsAutoPageIntervalMs: 10000,
+  wallSchedulesAutoPageIntervalMs: 10000,
   announcements: [],
   schedules: [],
 });
@@ -33,6 +37,30 @@ const normalizeUrlString = (v) => {
   return s;
 };
 
+const normalizeDateKey = (v) => {
+  const s = normalizeString(v, 20).trim(); // YYYY-MM-DD
+  if (!s) return "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+};
+
+const isValidTimeKey = (v) => {
+  if (!v || typeof v !== "string") return false;
+  if (!/^\d{2}:\d{2}$/.test(v)) return false;
+  const parts = v.split(":").map((x) => Number(x));
+  const hh = parts[0];
+  const mm = parts[1];
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return false;
+  if (hh < 0 || hh > 23) return false;
+  if (mm < 0 || mm > 59) return false;
+  return true;
+};
+
+const createBadRequestError = (message) => {
+  const err = new Error(message || "參數格式不正確");
+  err.statusCode = 400;
+  return err;
+};
+
 const normalizeDeviceIds = (v) => {
   const arr = Array.isArray(v) ? v : [];
   const out = [];
@@ -45,28 +73,59 @@ const normalizeDeviceIds = (v) => {
   return [...new Set(out)].sort((a, b) => a - b);
 };
 
+const clampInt = (v, min, max, fallback) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  const i = Math.floor(n);
+  if (i < min) return min;
+  if (i > max) return max;
+  return i;
+};
+
 const normalizeAnnouncement = (item, index) => {
   const it = item && typeof item === "object" ? item : {};
   const id = normalizeString(it.id, 80).trim() || `a_${Date.now()}_${index}`;
   const title = normalizeString(it.title, 120).trim();
   const pinned = Boolean(it.pinned);
-  const sortOrderRaw = Number(it.sortOrder);
-  const sortOrder = Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : index;
+  const enabled = it.enabled === undefined ? true : Boolean(it.enabled);
 
-  return { id, title, pinned, sortOrder };
+  const startDate = normalizeDateKey(it.startDate);
+  const endDate = normalizeDateKey(it.endDate);
+
+  if (it.startDate && !startDate) {
+    throw createBadRequestError(`公告第 ${index + 1} 筆：開始日期格式不正確`);
+  }
+  if (it.endDate && !endDate) {
+    throw createBadRequestError(`公告第 ${index + 1} 筆：結束日期格式不正確`);
+  }
+
+  // 若兩者都有且順序顛倒，直接交換，避免看板永遠顯示不到
+  if (startDate && endDate && startDate > endDate) {
+    return { id, title, pinned, enabled, startDate: endDate, endDate: startDate };
+  }
+
+  return { id, title, pinned, enabled, startDate, endDate };
 };
 
 const normalizeSchedule = (item, index) => {
   const it = item && typeof item === "object" ? item : {};
   const id = normalizeString(it.id, 80).trim() || `s_${Date.now()}_${index}`;
-  const date = normalizeString(it.date, 20).trim(); // YYYY-MM-DD
+  const enabled = it.enabled === undefined ? true : Boolean(it.enabled);
   const startTime = normalizeString(it.startTime, 10).trim(); // HH:mm
   const endTime = normalizeString(it.endTime, 10).trim(); // HH:mm
   const title = normalizeString(it.title, 200).trim();
-  const sortOrderRaw = Number(it.sortOrder);
-  const sortOrder = Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : index;
 
-  return { id, date, startTime, endTime, title, sortOrder };
+  if (!isValidTimeKey(startTime)) {
+    throw createBadRequestError(`排程第 ${index + 1} 筆：開始時間格式不正確`);
+  }
+  if (!isValidTimeKey(endTime)) {
+    throw createBadRequestError(`排程第 ${index + 1} 筆：結束時間格式不正確`);
+  }
+  if (startTime >= endTime) {
+    throw createBadRequestError(`排程第 ${index + 1} 筆：開始時間需早於結束時間`);
+  }
+
+  return { id, enabled, startTime, endTime, title };
 };
 
 const normalizeSettings = (payload) => {
@@ -84,6 +143,30 @@ const normalizeSettings = (payload) => {
     envDisplayParameters: Array.isArray(p.envDisplayParameters)
       ? p.envDisplayParameters.map((x) => normalizeString(x, 40).trim()).filter(Boolean)
       : [],
+    wallAnnouncementsPerPage: clampInt(
+      p.wallAnnouncementsPerPage,
+      1,
+      20,
+      DEFAULT_SETTINGS.wallAnnouncementsPerPage,
+    ),
+    wallSchedulesPerPage: clampInt(
+      p.wallSchedulesPerPage,
+      1,
+      20,
+      DEFAULT_SETTINGS.wallSchedulesPerPage,
+    ),
+    wallAnnouncementsAutoPageIntervalMs: clampInt(
+      p.wallAnnouncementsAutoPageIntervalMs,
+      1000,
+      120000,
+      DEFAULT_SETTINGS.wallAnnouncementsAutoPageIntervalMs,
+    ),
+    wallSchedulesAutoPageIntervalMs: clampInt(
+      p.wallSchedulesAutoPageIntervalMs,
+      1000,
+      120000,
+      DEFAULT_SETTINGS.wallSchedulesAutoPageIntervalMs,
+    ),
     announcements: announcementsRaw.map(normalizeAnnouncement),
     schedules: schedulesRaw.map(normalizeSchedule),
   };

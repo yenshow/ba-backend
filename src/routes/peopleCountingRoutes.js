@@ -5,7 +5,7 @@
 const express = require("express");
 const router = express.Router();
 const peopleCountingService = require("../services/systems/peopleCountingService");
-const { authenticate } = require("../middleware/authMiddleware");
+const { authenticate, requirePermission } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -14,7 +14,7 @@ const {
 } = require("../middleware/validation");
 
 // 以下路由皆需登入
-router.use(authenticate);
+router.use(authenticate, requirePermission("system.people_counting"));
 
 // ========== 地點管理路由 ==========
 

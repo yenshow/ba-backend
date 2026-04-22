@@ -2,7 +2,11 @@ const express = require("express");
 const router = express.Router();
 const userService = require("../services/userService");
 const permissionService = require("../services/permissionService");
-const { authenticate, requireAdmin, requireAdminOrOperator } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requireAdmin,
+  requireAdminOrOperator,
+} = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   validateRequired,
@@ -35,7 +39,11 @@ router.get(
   authenticate,
   asyncHandler(async (req, res) => {
     const user = await userService.getUserById(req.user.id);
-    const { codes: permissions } = await permissionService.getEffectivePermissionsForUser(req.user.id, user.role);
+    const { codes: permissions } =
+      await permissionService.getEffectivePermissionsForUser(
+        req.user.id,
+        user.role,
+      );
     res.sendSuccess({ user: { ...user, permissions } });
   }),
 );
@@ -47,7 +55,14 @@ router.get(
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { role, status, limit, offset, orderBy, order } = req.query;
-    const result = await userService.getUsers({ role, status, limit, offset, orderBy, order });
+    const result = await userService.getUsers({
+      role,
+      status,
+      limit,
+      offset,
+      orderBy,
+      order,
+    });
     res.sendSuccess(result);
   }),
 );
@@ -72,7 +87,9 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const overrides = Array.isArray(req.body.overrides) ? req.body.overrides : [];
+    const overrides = Array.isArray(req.body.overrides)
+      ? req.body.overrides
+      : [];
     await permissionService.setUserPermissionOverrides(userId, overrides);
     const settings = await permissionService.getUserPermissionSettings(userId);
     res.sendSuccess(settings);

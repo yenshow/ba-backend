@@ -12,6 +12,15 @@ function createValidationError(message) {
   return err;
 }
 
+async function ensurePersonGroupExists(personGroupId) {
+  if (personGroupId == null) return null;
+  const id = Number(personGroupId);
+  if (Number.isNaN(id)) throw createValidationError("群組無效");
+  const rows = await db.query("SELECT id FROM person_groups WHERE id = ? LIMIT 1", [id]);
+  if (!rows || rows.length === 0) throw createValidationError("群組不存在");
+  return id;
+}
+
 // ========== 人員群組 ==========
 
 async function getPersonGroups(filters = {}) {
@@ -114,6 +123,91 @@ async function getPersons(filters = {}) {
   return rows;
 }
 
+function clampInt(value, { min, max, fallback }) {
+  const n = Number.parseInt(String(value), 10);
+  if (Number.isNaN(n)) return fallback;
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+
+async function getPersonsPaged(filters = {}, options = {}) {
+  const limit = clampInt(options.limit, { min: 1, max: 200, fallback: 10 });
+  const offset = clampInt(options.offset, { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 });
+
+  const whereParts = ["1=1"];
+  const params = [];
+
+  if (filters.personGroupId != null) {
+    params.push(filters.personGroupId);
+    whereParts.push("p.person_group_id = ?");
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    whereParts.push("p.status = ?");
+  }
+  if (filters.employeeNo) {
+    params.push(`%${filters.employeeNo}%`);
+    whereParts.push("p.employee_no ILIKE ?");
+  }
+  if (filters.fullName) {
+    params.push(`%${filters.fullName}%`);
+    whereParts.push("p.full_name ILIKE ?");
+  }
+  if (filters.q) {
+    const q = String(filters.q).trim();
+    if (q) {
+      params.push(`%${q}%`);
+      params.push(`%${q}%`);
+      whereParts.push("(p.employee_no ILIKE ? OR p.full_name ILIKE ?)");
+    }
+  }
+
+  const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+  const countRows = await db.query(
+    `
+      SELECT COUNT(*)::int AS total
+      FROM persons p
+      ${whereSql}
+    `,
+    params,
+  );
+  const total = countRows?.[0]?.total ?? 0;
+
+  const rows = await db.query(
+    `
+      SELECT
+        p.*,
+        pg.name AS group_name,
+        COALESCE(al.access_locations, '[]'::json) AS access_locations
+      FROM persons p
+      LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'location_id', pla.location_id,
+            'zone_name', z.name,
+            'location_name', l.name,
+            'zone_id', l.zone_id
+          )
+          ORDER BY z.name, l.name
+        ) AS access_locations
+        FROM person_location_access pla
+        INNER JOIN locations l ON pla.location_id = l.id
+        INNER JOIN zones z ON l.zone_id = z.id
+        WHERE pla.person_id = p.id
+      ) al ON TRUE
+      ${whereSql}
+      ORDER BY p.employee_no ASC
+      LIMIT ? OFFSET ?
+    `,
+    [...params, limit, offset],
+  );
+
+  return { items: rows || [], total, limit, offset };
+}
+
 async function getPersonById(id) {
   const rows = await db.query(
     `SELECT p.*, pg.name AS group_name
@@ -141,8 +235,21 @@ async function getPersonByEmployeeNo(employeeNo) {
 async function createPerson(data, createdBy = null) {
   const employeeNo = (data.employeeNo || data.employee_no || "").toString().trim();
   if (!employeeNo) throw createValidationError("員工編號不能為空");
-  const fullName = data.fullName != null ? String(data.fullName).trim() : (data.full_name != null ? String(data.full_name).trim() : null);
-  const personGroupId = data.personGroupId != null ? data.personGroupId : (data.person_group_id != null ? data.person_group_id : null);
+  const fullNameRaw =
+    data.fullName != null
+      ? String(data.fullName).trim()
+      : data.full_name != null
+        ? String(data.full_name).trim()
+        : "";
+  if (!fullNameRaw) throw createValidationError("姓名為必填");
+
+  const personGroupIdRaw =
+    data.personGroupId != null
+      ? data.personGroupId
+      : data.person_group_id != null
+        ? data.person_group_id
+        : null;
+  const personGroupId = await ensurePersonGroupExists(personGroupIdRaw);
   const status = data.status && VALID_STATUSES.includes(data.status) ? data.status : "active";
   const faceUrl = data.faceUrl != null ? data.faceUrl : data.face_url;
   const config = data.config != null ? (typeof data.config === "string" ? JSON.parse(data.config) : data.config) : null;
@@ -156,8 +263,8 @@ async function createPerson(data, createdBy = null) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     [
       employeeNo,
-      fullName,
-      personGroupId || null,
+      fullNameRaw,
+      personGroupId,
       status,
       faceUrl || null,
       config ? JSON.stringify(config) : null,
@@ -181,12 +288,21 @@ async function updatePerson(id, data) {
     params.push(v);
   }
   if (data.fullName !== undefined || data.full_name !== undefined) {
+    const v = (data.fullName ?? data.full_name) != null ? String(data.fullName ?? data.full_name).trim() : "";
+    if (!v) throw createValidationError("姓名為必填");
     updates.push("full_name = ?");
-    params.push((data.fullName ?? data.full_name) != null ? String(data.fullName ?? data.full_name).trim() : null);
+    params.push(v);
   }
   if (data.personGroupId !== undefined || data.person_group_id !== undefined) {
-    updates.push("person_group_id = ?");
-    params.push(data.personGroupId ?? data.person_group_id ?? null);
+    const raw = data.personGroupId ?? data.person_group_id;
+    if (raw == null || raw === "") {
+      updates.push("person_group_id = ?");
+      params.push(null);
+    } else {
+      const gid = await ensurePersonGroupExists(raw);
+      updates.push("person_group_id = ?");
+      params.push(gid);
+    }
   }
   if (data.status !== undefined) {
     if (!VALID_STATUSES.includes(data.status)) throw createValidationError("無效的狀態");
@@ -239,7 +355,46 @@ async function getAccessLocationsByPersonId(personId) {
 
 async function setAccessLocationsForPerson(personId, locationIds) {
   await getPersonById(personId);
-  const ids = Array.isArray(locationIds) ? locationIds.map((x) => parseInt(x, 10)).filter((x) => !Number.isNaN(x)) : [];
+  const rawIds = Array.isArray(locationIds)
+    ? locationIds
+        .map((x) => parseInt(x, 10))
+        .filter((x) => !Number.isNaN(x))
+    : [];
+  const ids = Array.from(new Set(rawIds));
+
+  if (ids.length > 0) {
+    const rows = await db.query(
+      `SELECT id FROM locations WHERE id IN (${ids.map(() => "?").join(",")})`,
+      ids,
+    );
+    const existing = new Set((rows || []).map((r) => r.id));
+    const missing = ids.filter((id) => !existing.has(id));
+    if (missing.length > 0) {
+      throw createValidationError(`地點不存在：${missing.join(", ")}`);
+    }
+
+    // 僅允許寫入「可同步地點」（people_counting 且具 entry_device_id）
+    const syncableRows = await db.query(
+      `
+        SELECT l.id
+        FROM locations l
+        INNER JOIN location_systems ls
+          ON l.id = ls.location_id AND ls.system_type = 'people_counting'
+        WHERE l.id IN (${ids.map(() => "?").join(",")})
+          AND (ls.system_config->>'entry_device_id') IS NOT NULL
+          AND (ls.system_config->>'entry_device_id') != ''
+      `,
+      ids,
+    );
+    const syncable = new Set((syncableRows || []).map((r) => r.id));
+    const notSyncable = ids.filter((id) => !syncable.has(id));
+    if (notSyncable.length > 0) {
+      throw createValidationError(
+        `地點不可同步（需在人流統計設定門禁入口設備）：${notSyncable.join(", ")}`,
+      );
+    }
+  }
+
   await db.transaction(async (query) => {
     await query("DELETE FROM person_location_access WHERE person_id = ?", [personId]);
     for (const lid of ids) {
@@ -280,6 +435,7 @@ module.exports = {
   updatePersonGroup,
   deletePersonGroup,
   getPersons,
+  getPersonsPaged,
   getPersonById,
   getPersonByEmployeeNo,
   createPerson,

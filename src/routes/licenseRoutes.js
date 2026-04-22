@@ -99,12 +99,15 @@ router.post(
         });
       }
 
-      const current = await licenseService.getLicenseState({ bypassCache: true });
-      const serialEmpty = result.serialNumber == null
-        || (typeof result.serialNumber === "string" && !String(result.serialNumber).trim());
+      const current = await licenseService.getLicenseState({
+        bypassCache: true,
+      });
+      const serialEmpty =
+        result.serialNumber == null ||
+        (typeof result.serialNumber === "string" &&
+          !String(result.serialNumber).trim());
       const isExtensionActivation =
-        result.isExtension === true
-        || (serialEmpty && current.licenseKey);
+        result.isExtension === true || (serialEmpty && current.licenseKey);
 
       if (isExtensionActivation) {
         const license = await licenseService.setLicenseState({
@@ -119,9 +122,10 @@ router.post(
             features: result.features,
             quotas: result.quotas || {},
           },
-          deviceFingerprint: result.deviceFingerprint != null
-            ? result.deviceFingerprint
-            : undefined,
+          deviceFingerprint:
+            result.deviceFingerprint != null
+              ? result.deviceFingerprint
+              : undefined,
           description: `授權啟用（online 副LK, by user:${req.user?.id ?? "unknown"}）`,
         });
 
@@ -141,7 +145,11 @@ router.post(
         deviceFingerprint: result.deviceFingerprint ?? deviceFingerprint,
         extensionKeys: [],
         replaceLicenseEntitlements: [
-          { licenseKey: mainKey, features: result.features, quotas: result.quotas || {} },
+          {
+            licenseKey: mainKey,
+            features: result.features,
+            quotas: result.quotas || {},
+          },
         ],
         description: `授權啟用（online 主LK, by user:${req.user?.id ?? "unknown"}）`,
       });
@@ -204,7 +212,10 @@ router.post(
   authenticate,
   requireAdmin,
   asyncHandler(async (req, res) => {
-    const lk = typeof req.body?.licenseKey === "string" ? req.body.licenseKey.trim() : null;
+    const lk =
+      typeof req.body?.licenseKey === "string"
+        ? req.body.licenseKey.trim()
+        : null;
     if (!lk) {
       return res.status(400).json({
         success: false,
@@ -292,11 +303,14 @@ router.post(
     else if (payload.isExtension === false) isExtension = false;
     else isExtension = payload.refreshedAt != null;
 
-    const activatedKey = typeof payload.licenseKey === "string" ? payload.licenseKey.trim() : null;
+    const activatedKey =
+      typeof payload.licenseKey === "string" ? payload.licenseKey.trim() : null;
 
     if (!isExtension) {
       const mainLk =
-        typeof payload.licenseKey === "string" ? payload.licenseKey.trim() : null;
+        typeof payload.licenseKey === "string"
+          ? payload.licenseKey.trim()
+          : null;
       const license = await licenseService.setLicenseState({
         features: payload.features,
         quotas: payload.quotas || {},
@@ -306,7 +320,13 @@ router.post(
         deviceFingerprint: payload.deviceFingerprint ?? null,
         extensionKeys: [],
         replaceLicenseEntitlements: mainLk
-          ? [{ licenseKey: mainLk, features: payload.features, quotas: payload.quotas || {} }]
+          ? [
+              {
+                licenseKey: mainLk,
+                features: payload.features,
+                quotas: payload.quotas || {},
+              },
+            ]
           : [],
         description: `授權匯入（offline 首次, by user:${req.user?.id ?? "unknown"}）`,
       });
@@ -325,11 +345,16 @@ router.post(
       preserveMainLicenseKey: true,
       appendExtensionKey: activatedKey || undefined,
       appendLicenseEntitlement: activatedKey
-        ? { licenseKey: activatedKey, features: payload.features, quotas: payload.quotas || {} }
+        ? {
+            licenseKey: activatedKey,
+            features: payload.features,
+            quotas: payload.quotas || {},
+          }
         : undefined,
-      deviceFingerprint: payload.deviceFingerprint != null
-        ? payload.deviceFingerprint
-        : undefined,
+      deviceFingerprint:
+        payload.deviceFingerprint != null
+          ? payload.deviceFingerprint
+          : undefined,
       description: `授權匯入（offline 追加, by user:${req.user?.id ?? "unknown"}）`,
     });
 

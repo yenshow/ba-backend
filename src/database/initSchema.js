@@ -163,7 +163,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_permission_definitions_category ON permission_definitions(category);
       CREATE INDEX IF NOT EXISTS idx_permission_definitions_parent ON permission_definitions(parent_id);
     `);
-    schemaLogger.info("permission_definitions 表已建立", { module: "initSchema" });
+    schemaLogger.info("permission_definitions 表已建立", {
+      module: "initSchema",
+    });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS role_default_permissions (
@@ -178,7 +180,9 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_role_default_permissions_role ON role_default_permissions(role);
     `);
-    schemaLogger.info("role_default_permissions 表已建立", { module: "initSchema" });
+    schemaLogger.info("role_default_permissions 表已建立", {
+      module: "initSchema",
+    });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS user_permission_overrides (
@@ -193,10 +197,57 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_user ON user_permission_overrides(user_id);
     `);
-    schemaLogger.info("user_permission_overrides 表已建立", { module: "initSchema" });
+    schemaLogger.info("user_permission_overrides 表已建立", {
+      module: "initSchema",
+    });
 
-    // 種子：權限定義（system = 權限設定 UI「可使用的系統」四項；其餘供後端/既有邏輯用）
+    // 清理：移除已淘汰且未實作的權限碼（避免舊環境殘留造成 UI/規格漂移）
+    // - permission_definitions.id 會被 role_default_permissions / user_permission_overrides 參照，FK 設定為 ON DELETE CASCADE
+    const deprecatedPermissionCodes = [
+      // 已淘汰且未實作的權限碼（避免舊環境殘留造成 UI/規格漂移）
+      "system.user_management",
+      "system.license_management",
+      "system.access_control",
+
+      "resource_monitoring.realtime_preview",
+      "resource_monitoring.playback",
+      "resource_monitoring.export",
+      "resource_monitoring.ptz_control",
+      "configuration.devices",
+      "configuration.access_control",
+      "operation.monitoring",
+      "operation.parking",
+      "operation.alarm_center",
+      "operation.location_management",
+    ];
+    await targetPool.query(
+      `DELETE FROM permission_definitions WHERE code = ANY($1::text[])`,
+      [deprecatedPermissionCodes],
+    );
+
+    // 種子：權限定義（僅保留「系統/模組」維度，對齊前端導覽列分類與 module registry）
     const permissionSeeds = [
+      {
+        code: "system.equipment_management",
+        category: "system",
+        parent_id: null,
+        name: "設備管理",
+        sort_order: 1,
+      },
+      {
+        code: "system.personnel",
+        category: "system",
+        parent_id: null,
+        name: "人員管理",
+        sort_order: 5,
+      },
+      {
+        code: "system.alert_log",
+        category: "system",
+        parent_id: null,
+        name: "警示紀錄",
+        sort_order: 2,
+      },
       {
         code: "system.people_counting",
         category: "system",
@@ -226,74 +277,60 @@ async function initSchema() {
         sort_order: 40,
       },
       {
-        code: "resource_monitoring.realtime_preview",
-        category: "resource",
+        code: "system.lighting",
+        category: "system",
         parent_id: null,
-        name: "即時預覽",
-        sort_order: 10,
+        name: "照明系統",
+        sort_order: 50,
       },
       {
-        code: "resource_monitoring.playback",
-        category: "resource",
+        code: "system.hvac",
+        category: "system",
         parent_id: null,
-        name: "播放",
-        sort_order: 20,
+        name: "空調系統",
+        sort_order: 60,
       },
       {
-        code: "resource_monitoring.export",
-        category: "resource",
+        code: "system.drainage",
+        category: "system",
         parent_id: null,
-        name: "錄影匯出",
-        sort_order: 30,
+        name: "衛生排水系統",
+        sort_order: 70,
       },
       {
-        code: "resource_monitoring.ptz_control",
-        category: "resource",
+        code: "system.power",
+        category: "system",
         parent_id: null,
-        name: "PTZ 控制",
-        sort_order: 40,
+        name: "電力系統",
+        sort_order: 80,
       },
       {
-        code: "configuration.devices",
-        category: "configuration",
+        code: "system.fire",
+        category: "system",
         parent_id: null,
-        name: "裝置和伺服器",
-        sort_order: 10,
+        name: "消防系統",
+        sort_order: 90,
       },
       {
-        code: "configuration.access_control",
-        category: "configuration",
+        code: "system.emergency_rescue",
+        category: "system",
         parent_id: null,
-        name: "門禁裝置",
-        sort_order: 20,
+        name: "緊急求救系統",
+        sort_order: 100,
       },
       {
-        code: "operation.monitoring",
-        category: "operation",
+        code: "system.multimedia",
+        category: "system",
         parent_id: null,
-        name: "資源監測（操作）",
-        sort_order: 10,
+        name: "多媒體資訊",
+        sort_order: 110,
       },
       {
-        code: "operation.parking",
-        category: "operation",
+        code: "system.area_point_map",
+        category: "system",
         parent_id: null,
-        name: "停車場",
-        sort_order: 20,
-      },
-      {
-        code: "operation.alarm_center",
-        category: "operation",
-        parent_id: null,
-        name: "警報中心",
-        sort_order: 30,
-      },
-      {
-        code: "operation.location_management",
-        category: "operation",
-        parent_id: null,
-        name: "地點管理",
-        sort_order: 40,
+        name: "全區點位圖（含地點/區域管理）",
+        sort_order: 6,
       },
     ];
     for (const p of permissionSeeds) {
@@ -311,24 +348,26 @@ async function initSchema() {
       "SELECT id, code FROM permission_definitions",
     );
     const operatorGranted = [
+      "system.equipment_management",
+      "system.personnel",
+      "system.alert_log",
+      "system.area_point_map",
       "system.people_counting",
       "system.video_surveillance",
       "system.environment",
       "system.vehicle_access",
-      "resource_monitoring.realtime_preview",
-      "resource_monitoring.playback",
-      "operation.monitoring",
-      "operation.parking",
-      "operation.alarm_center",
-      "operation.location_management",
-      "configuration.access_control",
+      "system.lighting",
+      "system.hvac",
+      "system.drainage",
+      "system.power",
+      "system.fire",
+      "system.emergency_rescue",
+      "system.multimedia",
     ];
     const viewerGranted = [
+      "system.area_point_map",
       "system.people_counting",
       "system.video_surveillance",
-      "resource_monitoring.realtime_preview",
-      "resource_monitoring.playback",
-      "operation.monitoring",
     ];
     for (const row of defRows.rows) {
       await targetPool.query(
@@ -497,7 +536,9 @@ async function initSchema() {
         throw error;
       }
     }
-    schemaLogger.info("預設設備類型資料已插入到 device_types", { module: "initSchema" });
+    schemaLogger.info("預設設備類型資料已插入到 device_types", {
+      module: "initSchema",
+    });
 
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
@@ -524,7 +565,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_people_counting_logs_location 
       ON people_counting_logs(location_id);
     `);
-    schemaLogger.info("people_counting_logs 表已建立", { module: "initSchema" });
+    schemaLogger.info("people_counting_logs 表已建立", {
+      module: "initSchema",
+    });
 
     // ISAPI 攝影機 PeopleCounting 事件（enter/exit 為設備累計；enter_delta/exit_delta 與前筆差）
     // 舊版曾使用 enter_abs/exit_abs 等欄位；執行 db:init 時偵測到舊表則 DROP 後重建（資料清空，請先備份）
@@ -581,7 +624,9 @@ async function initSchema() {
       ON isapi_people_counting_events(device_id, channel_id, region_id, event_time)
       WHERE region_id IS NOT NULL;
     `);
-    schemaLogger.info("isapi_people_counting_events 表已建立", { module: "initSchema" });
+    schemaLogger.info("isapi_people_counting_events 表已建立", {
+      module: "initSchema",
+    });
 
     // 車輛進出過車記錄快取表（同步自外部 vehiclebiz.passageway_log_data，供備份）
     await targetPool.query(`
@@ -611,7 +656,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_location
       ON vehicle_passageway_logs(location_id);
     `);
-    schemaLogger.info("vehicle_passageway_logs 表已建立", { module: "initSchema" });
+    schemaLogger.info("vehicle_passageway_logs 表已建立", {
+      module: "initSchema",
+    });
 
     // 建立統一警報表（支持多系統來源，精簡版）
     await targetPool.query(`
@@ -659,7 +706,9 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "alerts");
 
-    schemaLogger.info("alerts 表已建立（統一警報系統）", { module: "initSchema" });
+    schemaLogger.info("alerts 表已建立（統一警報系統）", {
+      module: "initSchema",
+    });
 
     // 建立錯誤追蹤表（持久化錯誤狀態）
     await targetPool.query(`
@@ -702,7 +751,9 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "error_tracking");
 
-    schemaLogger.info("error_tracking 表已建立（錯誤追蹤持久化）", { module: "initSchema" });
+    schemaLogger.info("error_tracking 表已建立（錯誤追蹤持久化）", {
+      module: "initSchema",
+    });
 
     // 建立警報規則參照表（alert_rules）
     await targetPool.query(`
@@ -783,7 +834,9 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "alert_rules");
 
-    schemaLogger.info("alert_rules 表已建立（警報規則參照表）", { module: "initSchema" });
+    schemaLogger.info("alert_rules 表已建立（警報規則參照表）", {
+      module: "initSchema",
+    });
     await targetPool.query(`
       DO $$
       BEGIN
@@ -817,7 +870,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_events_alert_id ON alert_events(alert_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_alert_events_event_type ON alert_events(event_type, created_at DESC);
     `);
-    schemaLogger.info("alert_events 表已建立（警報事件流）", { module: "initSchema" });
+    schemaLogger.info("alert_events 表已建立（警報事件流）", {
+      module: "initSchema",
+    });
 
     // ========== 警報連動（掛載 alert_rules） ==========
     // 舊版以 trigger_* 平行描述條件；遷移時整表重建（連動執行紀錄一併清空）
@@ -887,7 +942,10 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_rule_id ON alert_linkages(rule_id);
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_do_target ON alert_linkages(do_device_id, do_address);
     `);
-    schemaLogger.info("alert_linkages 表已建立（警報連動規則，綁定 alert_rules）", { module: "initSchema" });
+    schemaLogger.info(
+      "alert_linkages 表已建立（警報連動規則，綁定 alert_rules）",
+      { module: "initSchema" },
+    );
 
     // 移除舊版 DO 人工覆寫（manual off）機制：改為「手動觸發」一次性寫入
     await targetPool.query(`
@@ -929,7 +987,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_alert ON alert_linkage_executions(alert_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_alert_linkage_executions_do_target ON alert_linkage_executions(do_device_id, do_address, created_at DESC);
     `);
-    schemaLogger.info("alert_linkage_executions 表已建立（連動執行記錄）", { module: "initSchema" });
+    schemaLogger.info("alert_linkage_executions 表已建立（連動執行記錄）", {
+      module: "initSchema",
+    });
 
     // ========== 警報攝影機連動（rule_id -> camera device） ==========
     await targetPool.query(`
@@ -966,7 +1026,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_rule_id ON alert_camera_linkages(rule_id);
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_camera ON alert_camera_linkages(camera_device_id);
     `);
-    schemaLogger.info("alert_camera_linkages 表已建立（攝影機連動）", { module: "initSchema" });
+    schemaLogger.info("alert_camera_linkages 表已建立（攝影機連動）", {
+      module: "initSchema",
+    });
 
     // ========== 警報外部通知（Webhook）==========
     // 已移除：僅保留 Email(SMTP) 通知。若舊表存在則刪除。
@@ -1029,7 +1091,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_email_subscriptions_rule_id ON alert_email_subscriptions(rule_id);
       CREATE INDEX IF NOT EXISTS idx_alert_email_subscriptions_enabled ON alert_email_subscriptions(enabled);
     `);
-    schemaLogger.info("alert_email_subscriptions 表已建立（Email 設定）", { module: "initSchema" });
+    schemaLogger.info("alert_email_subscriptions 表已建立（Email 設定）", {
+      module: "initSchema",
+    });
 
     // 每筆警報（alert_id）+ 規則（rule_id）的寄送狀態（次數/時間）
     await targetPool.query(`
@@ -1049,7 +1113,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_email_send_state_rule ON alert_email_send_state(rule_id, last_sent_at DESC);
       CREATE INDEX IF NOT EXISTS idx_alert_email_send_state_alert ON alert_email_send_state(alert_id);
     `);
-    schemaLogger.info("alert_email_send_state 表已建立（Email 寄送狀態）", { module: "initSchema" });
+    schemaLogger.info("alert_email_send_state 表已建立（Email 寄送狀態）", {
+      module: "initSchema",
+    });
 
     // 同一 rule_id 的全域節流（兩封成功信最短間隔）
     await targetPool.query(`
@@ -1060,7 +1126,9 @@ async function initSchema() {
       )
     `);
     await createUpdatedAtTrigger(targetPool, "alert_email_rule_throttle");
-    schemaLogger.info("alert_email_rule_throttle 表已建立（Email 全域節流）", { module: "initSchema" });
+    schemaLogger.info("alert_email_rule_throttle 表已建立（Email 全域節流）", {
+      module: "initSchema",
+    });
 
     // 建立 lighting_categories 表
     await targetPool.query(`
@@ -1221,7 +1289,9 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_locations_zone_id ON locations(zone_id);
 		`);
 
-    schemaLogger.info("locations 表已建立（統一地點表）", { module: "initSchema" });
+    schemaLogger.info("locations 表已建立（統一地點表）", {
+      module: "initSchema",
+    });
 
     // 建立 location_systems 表（地點系統關聯表）
     await targetPool.query(`
@@ -1279,7 +1349,9 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_location_systems_config ON location_systems USING GIN(system_config);
 		`);
 
-    schemaLogger.info("location_systems 表已建立（地點系統關聯表）", { module: "initSchema" });
+    schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
+      module: "initSchema",
+    });
 
     // ========== 人員主檔與門禁權限（本系統） ==========
     await targetPool.query(`
@@ -1334,7 +1406,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_person_location_access_location_id ON person_location_access(location_id);
       CREATE INDEX IF NOT EXISTS idx_person_location_access_person_id ON person_location_access(person_id);
     `);
-    schemaLogger.info("person_location_access 表已建立", { module: "initSchema" });
+    schemaLogger.info("person_location_access 表已建立", {
+      module: "initSchema",
+    });
 
     // ISAPI 監聽主機收到之門禁事件（非 heartBeat），payload 存巢狀 AccessControllerEvent；附圖存 uploads/isapi-events，路徑存 picture_path
     await targetPool.query(`
@@ -1372,7 +1446,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_environment_readings_location_recorded ON environment_readings(location_id, recorded_at);
       CREATE INDEX IF NOT EXISTS idx_environment_readings_recorded_at ON environment_readings(recorded_at);
     `);
-    schemaLogger.info("environment_readings 表已建立", { module: "initSchema" });
+    schemaLogger.info("environment_readings 表已建立", {
+      module: "initSchema",
+    });
 
     // 環境讀數彙總表（時/日/月，供趨勢與報表）
     await targetPool.query(`
@@ -1389,7 +1465,9 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_env_agg_location_bucket ON environment_readings_aggregated(location_id, bucket_type, bucket_at);
     `);
-    schemaLogger.info("environment_readings_aggregated 表已建立", { module: "initSchema" });
+    schemaLogger.info("environment_readings_aggregated 表已建立", {
+      module: "initSchema",
+    });
 
     await targetPool.query("DROP TABLE IF EXISTS device_data_logs CASCADE");
 

@@ -55,7 +55,7 @@ function requireAdminOrOperator(req, res, next) {
 /**
  * 檢查是否具備指定權限（精細權限）
  * 若 req.user 無 permissions 則自 DB 解析後掛上；admin 視為擁有全部權限
- * @param {string} requiredCode - 權限代碼，如 'operation.location_management'
+ * @param {string} requiredCode - 權限代碼，如 'system.area_point_map'
  */
 function requirePermission(requiredCode) {
 	return async (req, res, next) => {

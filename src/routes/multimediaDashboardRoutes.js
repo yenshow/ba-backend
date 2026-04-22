@@ -3,13 +3,17 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const asyncHandler = require("../utils/asyncHandler");
-const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requireAdminOrOperator,
+  requirePermission,
+} = require("../middleware/authMiddleware");
 const multimediaDashboardService = require("../services/multimedia/multimediaDashboardService");
 
 const router = express.Router();
 
 // 需要登入（資訊牆為獨立頁面，但仍走既有登入體系）
-router.use(authenticate);
+router.use(authenticate, requirePermission("system.multimedia"));
 
 // ========== Settings ==========
 
@@ -25,7 +29,8 @@ router.put(
   "/dashboard/settings",
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
-    const nextSettings = await multimediaDashboardService.updateDashboardSettings(req.body || {});
+    const nextSettings =
+      await multimediaDashboardService.updateDashboardSettings(req.body || {});
     res.sendSuccess({ settings: nextSettings });
   }),
 );
@@ -62,7 +67,12 @@ const fileFilter = (_req, file, cb) => {
   if (allowedMimes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("不支援的檔案格式，僅允許上傳圖片或影片（JPEG, PNG, GIF, WEBP, MP4, WEBM, MOV, OGG）"), false);
+    cb(
+      new Error(
+        "不支援的檔案格式，僅允許上傳圖片或影片（JPEG, PNG, GIF, WEBP, MP4, WEBM, MOV, OGG）",
+      ),
+      false,
+    );
   }
 };
 
@@ -93,4 +103,3 @@ router.post(
 );
 
 module.exports = router;
-
