@@ -245,11 +245,27 @@ function formatSystem(system) {
         ...baseSystem,
         config: {
           personGroupIds: config.person_group_ids || [],
-          entryDoorId: config.entry_door_id || undefined,
-          exitDoorId: config.exit_door_id || undefined,
+          entryDoorIds: Array.isArray(config.entry_door_ids)
+            ? config.entry_door_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          exitDoorIds: Array.isArray(config.exit_door_ids)
+            ? config.exit_door_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
           dataSource: config.data_source || "yscp",
-          entryDeviceId: config.entry_device_id ?? undefined,
-          exitDeviceId: config.exit_device_id ?? undefined,
+          entryDeviceIds: Array.isArray(config.entry_device_ids)
+            ? config.entry_device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          exitDeviceIds: Array.isArray(config.exit_device_ids)
+            ? config.exit_device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
           cameraDeviceIds: Array.isArray(config.camera_device_ids)
             ? config.camera_device_ids
                 .map((id) => Number(id))
@@ -1179,11 +1195,11 @@ function peopleCountingRowConfigToMergeInput(raw) {
       : raw;
   return {
     personGroupIds: c.person_group_ids,
-    entryDoorId: c.entry_door_id,
-    exitDoorId: c.exit_door_id,
+    entryDoorIds: c.entry_door_ids,
+    exitDoorIds: c.exit_door_ids,
     dataSource: c.data_source,
-    entryDeviceId: c.entry_device_id,
-    exitDeviceId: c.exit_device_id,
+    entryDeviceIds: c.entry_device_ids,
+    exitDeviceIds: c.exit_device_ids,
     cameraDeviceId: c.camera_device_id,
     cameraChannelId: c.camera_channel_id,
     preferRegion: c.prefer_region,
@@ -1299,19 +1315,19 @@ function buildSystemConfig(systemType, config) {
             ? [Number(config.cameraDeviceId)]
             : [];
         return {
-        person_group_ids: config.personGroupIds || [],
-        entry_door_id: config.entryDoorId ?? null,
-        exit_door_id: config.exitDoorId ?? null,
-        data_source: config.dataSource || "yscp",
-        entry_device_id: config.entryDeviceId ?? null,
-        exit_device_id: config.exitDeviceId ?? null,
-        // 相容欄位：僅供 fallback；以 camera_device_ids 為準
-        camera_device_id: ids[0] ?? (config.cameraDeviceId ?? null),
-        camera_device_ids: ids,
-        camera_channel_id: config.cameraChannelId ?? 1,
-        prefer_region: config.preferRegion ?? false,
-        access_control_groups: config.accessControlGroups || [], // 相容保留
-      };
+          person_group_ids: config.personGroupIds || [],
+          entry_door_ids: Array.isArray(config.entryDoorIds) ? config.entryDoorIds : [],
+          exit_door_ids: Array.isArray(config.exitDoorIds) ? config.exitDoorIds : [],
+          data_source: config.dataSource || "yscp",
+          entry_device_ids: Array.isArray(config.entryDeviceIds) ? config.entryDeviceIds : [],
+          exit_device_ids: Array.isArray(config.exitDeviceIds) ? config.exitDeviceIds : [],
+          // 相容欄位：僅供 fallback；以 camera_device_ids 為準
+          camera_device_id: ids[0] ?? (config.cameraDeviceId ?? null),
+          camera_device_ids: ids,
+          camera_channel_id: config.cameraChannelId ?? 1,
+          prefer_region: config.preferRegion ?? false,
+          access_control_groups: config.accessControlGroups || [], // 相容保留
+        };
       }
 
     case "vehicle_access":
@@ -1379,9 +1395,8 @@ async function assertControllerQuotaWithinLimit({
 
   // 僅允許綁定 controller 類型設備（避免把用量算錯）
   const deviceRows = await query(
-    `SELECT dt.code AS type_code
+    `SELECT d.type_code
      FROM devices d
-     JOIN device_types dt ON dt.id = d.type_id
      WHERE d.id = $1`,
     [Number(nextDeviceId)],
   );
@@ -1567,11 +1582,11 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       location: locationXY,
       modbus,
       personGroupIds,
-      entryDoorId,
-      exitDoorId,
+      entryDoorIds,
+      exitDoorIds,
       dataSource,
-      entryDeviceId,
-      exitDeviceId,
+      entryDeviceIds,
+      exitDeviceIds,
       accessControlGroups,
       entryLaneId,
       exitLaneId,
@@ -1645,13 +1660,14 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
         case "people_counting":
           if (personGroupIds !== undefined)
             systemConfig.personGroupIds = personGroupIds;
-          if (entryDoorId !== undefined) systemConfig.entryDoorId = entryDoorId;
-          if (exitDoorId !== undefined) systemConfig.exitDoorId = exitDoorId;
+          if (entryDoorIds !== undefined)
+            systemConfig.entryDoorIds = entryDoorIds;
+          if (exitDoorIds !== undefined) systemConfig.exitDoorIds = exitDoorIds;
           if (dataSource !== undefined) systemConfig.dataSource = dataSource;
-          if (entryDeviceId !== undefined)
-            systemConfig.entryDeviceId = entryDeviceId;
-          if (exitDeviceId !== undefined)
-            systemConfig.exitDeviceId = exitDeviceId;
+          if (entryDeviceIds !== undefined)
+            systemConfig.entryDeviceIds = entryDeviceIds;
+          if (exitDeviceIds !== undefined)
+            systemConfig.exitDeviceIds = exitDeviceIds;
           if (accessControlGroups !== undefined)
             systemConfig.accessControlGroups = accessControlGroups;
           break;

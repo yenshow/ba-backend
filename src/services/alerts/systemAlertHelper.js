@@ -8,6 +8,7 @@ const alertService = require("./alertService");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger");
+const { getDeviceTypeName } = require("../../constants/deviceTypes");
 
 const helperLogger = logger.createLogger("systemAlertHelper");
 
@@ -32,7 +33,6 @@ async function getDeviceIdFromConfig(deviceConfig) {
     const result = await db.query(
       `SELECT d.id
       FROM devices d
-      INNER JOIN device_types dt ON d.type_id = dt.id
       WHERE d.status = 'active'
         AND (
           (d.config::jsonb->>'protocol' = 'modbus'
@@ -100,13 +100,17 @@ const getEmergencyRescueInfo = (systemId) =>
 async function getDeviceInfo(deviceId) {
   try {
     const result = await db.query(
-      `SELECT d.id, d.name, d.status, dt.code as device_type_code, dt.name as device_type_name
+      `SELECT d.id, d.name, d.status, d.type_code as device_type_code
       FROM devices d
-      INNER JOIN device_types dt ON d.type_id = dt.id
       WHERE d.id = ?`,
       [deviceId],
     );
-    return result && result.length > 0 ? result[0] : null;
+    if (!result || result.length === 0) return null;
+    const row = result[0];
+    return {
+      ...row,
+      device_type_name: getDeviceTypeName(row.device_type_code),
+    };
   } catch (error) {
     helperLogger.error("獲取設備資訊失敗", {
       deviceId,

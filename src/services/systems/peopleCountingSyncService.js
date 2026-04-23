@@ -20,12 +20,18 @@ async function getPhysicalIdToLocationMap() {
   for (const zone of result.zones || []) {
     for (const loc of zone.locations || []) {
       const sys = (loc.systems || []).find((s) => s.systemType === "people_counting");
-      const entryId = sys?.config?.entryDoorId;
-      const exitId = sys?.config?.exitDoorId;
+      const entryIds = Array.isArray(sys?.config?.entryDoorIds) ? sys.config.entryDoorIds : [];
+      const exitIds = Array.isArray(sys?.config?.exitDoorIds) ? sys.config.exitDoorIds : [];
       const locId = loc.id;
 
-      if (entryId != null) map.set(Number(entryId), locId);
-      if (exitId != null) map.set(Number(exitId), locId);
+      for (const id of entryIds) {
+        const n = Number(id);
+        if (Number.isFinite(n) && n > 0) map.set(n, locId);
+      }
+      for (const id of exitIds) {
+        const n = Number(id);
+        if (Number.isFinite(n) && n > 0) map.set(n, locId);
+      }
     }
   }
 
@@ -153,10 +159,16 @@ async function getPhysicalIdToDirectionMap() {
   for (const zone of result.zones || []) {
     for (const loc of zone.locations || []) {
       const sys = (loc.systems || []).find((s) => s.systemType === "people_counting");
-      const entryId = sys?.config?.entryDoorId;
-      const exitId = sys?.config?.exitDoorId;
-      if (entryId != null) map.set(Number(entryId), "entry");
-      if (exitId != null) map.set(Number(exitId), "exit");
+      const entryIds = Array.isArray(sys?.config?.entryDoorIds) ? sys.config.entryDoorIds : [];
+      const exitIds = Array.isArray(sys?.config?.exitDoorIds) ? sys.config.exitDoorIds : [];
+      for (const id of entryIds) {
+        const n = Number(id);
+        if (Number.isFinite(n) && n > 0) map.set(n, "entry");
+      }
+      for (const id of exitIds) {
+        const n = Number(id);
+        if (Number.isFinite(n) && n > 0) map.set(n, "exit");
+      }
     }
   }
   return map;

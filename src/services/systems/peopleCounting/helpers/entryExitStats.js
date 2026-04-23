@@ -6,15 +6,20 @@
 /**
  * 依 physical_id 判斷進場/出場（YSCP 用）
  * @param {Object} record - 記錄，含 person_id, physical_id
- * @param {number} entryDoorId - 入口設備 ID（physical_id）
- * @param {number} exitDoorId - 出口設備 ID（physical_id）
+ * @param {number[]} entryDoorIds - 入口設備 IDs（physical_id）
+ * @param {number[]} exitDoorIds - 出口設備 IDs（physical_id）
  * @returns {string|null} "entry" | "exit" | null（null 表示失敗/未註冊）
  */
-function parseEventType(record, entryDoorId, exitDoorId) {
+function parseEventType(record, entryDoorIds, exitDoorIds) {
   if (record.person_id === -1) return null;
   const physicalId = record.physical_id;
-  if (physicalId && entryDoorId && Number(physicalId) === Number(entryDoorId)) return "entry";
-  if (physicalId && exitDoorId && Number(physicalId) === Number(exitDoorId)) return "exit";
+  if (physicalId == null) return null;
+  const pid = Number(physicalId);
+  if (!Number.isFinite(pid)) return null;
+  if (Array.isArray(entryDoorIds) && entryDoorIds.some((id) => Number(id) === pid))
+    return "entry";
+  if (Array.isArray(exitDoorIds) && exitDoorIds.some((id) => Number(id) === pid))
+    return "exit";
   return null;
 }
 
@@ -57,24 +62,24 @@ function countEntryExitFromSorted(sortedRecords, getDirection) {
 /**
  * 計算今日統計（進場/出場人數，基於 physical_id）
  */
-function calculateTodayStatsByPhysicalId(records, entryDoorId, exitDoorId) {
+function calculateTodayStatsByPhysicalId(records, entryDoorIds, exitDoorIds) {
   if (records.length === 0) return { entryCount: 0, exitCount: 0 };
   const sortedRecords = sortRecordsByTime(records);
-  const getDirection = (r) => parseEventType(r, entryDoorId, exitDoorId);
+  const getDirection = (r) => parseEventType(r, entryDoorIds, exitDoorIds);
   return countEntryExitFromSorted(sortedRecords, getDirection);
 }
 
 /**
  * 計算當前在場人數（基於 physical_id）：當日最後一筆為進場的人數。
  */
-function calculateCurrentCount(records, entryDoorId, exitDoorId) {
+function calculateCurrentCount(records, entryDoorIds, exitDoorIds) {
   if (records.length === 0) return 0;
   const personStatus = new Map();
   const sortedRecords = sortRecordsByTime(records);
   sortedRecords.forEach((record) => {
     const personId = record.person_id;
     if (personId === -1) return;
-    const eventType = parseEventType(record, entryDoorId, exitDoorId);
+    const eventType = parseEventType(record, entryDoorIds, exitDoorIds);
     if (eventType === null) return;
     const recordTime = new Date(record.swip_card_rev_time);
     const current = personStatus.get(personId);

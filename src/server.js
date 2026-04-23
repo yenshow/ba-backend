@@ -139,6 +139,8 @@ app.use(responseHandler);
 
 // 靜態檔案服務（用於提供上傳的檔案）
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+// 若前端僅反代 /api（未反代 /uploads），仍可透過 /api/uploads 取用同一批靜態檔案
+app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // 註冊路由（授權僅控：人流、照明、排水、消防、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
 app.use("/api/modbus", modbusRoutes);

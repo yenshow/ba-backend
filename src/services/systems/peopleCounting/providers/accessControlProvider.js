@@ -60,27 +60,25 @@ function currentCountFromAccessControlLogs(logs) {
  */
 async function getAccessControlSiteLogs(siteId, options = {}) {
   const {
-    entryDeviceId,
-    exitDeviceId,
+    entryDeviceIds,
+    exitDeviceIds,
     limit = 50,
     offset = 0,
     startTime: optStart,
     endTime: optEnd,
   } = options;
 
-  const entryId =
-    entryDeviceId != null && !Number.isNaN(Number(entryDeviceId))
-      ? Number(entryDeviceId)
-      : null;
-  const exitId =
-    exitDeviceId != null && !Number.isNaN(Number(exitDeviceId))
-      ? Number(exitDeviceId)
-      : null;
-  if (entryId == null && exitId == null) return [];
+  const entryIds = Array.isArray(entryDeviceIds)
+    ? entryDeviceIds.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  const exitIds = Array.isArray(exitDeviceIds)
+    ? exitDeviceIds.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  if (entryIds.length === 0 && exitIds.length === 0) return [];
 
   const entryIps = new Set();
   const exitIps = new Set();
-  const allIps = [];
+  const allIps = new Set();
   const ipToDeviceName = new Map();
 
   const addDevice = async (deviceId, isEntry) => {
@@ -89,7 +87,7 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
       const host = device?.config?.host;
       const ip = normalizeDeviceHost(host);
       if (ip) {
-        allIps.push(ip);
+        allIps.add(ip);
         ipToDeviceName.set(ip, device?.name || ip);
         if (isEntry) entryIps.add(ip);
         else exitIps.add(ip);
@@ -102,18 +100,22 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
     }
   };
 
-  if (entryId != null) await addDevice(entryId, true);
-  if (exitId != null && exitId !== entryId) await addDevice(exitId, false);
-  if (allIps.length === 0) return [];
+  const entryIdSet = new Set(entryIds);
+  for (const id of entryIdSet) await addDevice(id, true);
+  for (const id of new Set(exitIds)) {
+    if (!entryIdSet.has(id)) await addDevice(id, false);
+  }
+  const allIpsArray = [...allIps];
+  if (allIpsArray.length === 0) return [];
 
   const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
   const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
   const limitNum = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const offsetNum = Math.max(Number(offset) || 0, 0);
 
-  const placeholders = allIps.map(() => "?").join(",");
+  const placeholders = allIpsArray.map(() => "?").join(",");
   const params = [
-    ...allIps,
+    ...allIpsArray,
     start.toISOString(),
     end.toISOString(),
     limitNum,
@@ -200,8 +202,8 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
  * 單一工地完整資料（統計 + 單位列表）
  */
 async function getSiteData(siteId, config) {
-  const entryDeviceId = config.entryDeviceId ?? null;
-  const exitDeviceId = config.exitDeviceId ?? null;
+  const entryDeviceIds = Array.isArray(config.entryDeviceIds) ? config.entryDeviceIds : [];
+  const exitDeviceIds = Array.isArray(config.exitDeviceIds) ? config.exitDeviceIds : [];
   let units = [];
   let entryCount = 0;
   let exitCount = 0;
@@ -217,10 +219,10 @@ async function getSiteData(siteId, config) {
     }
     const { start, end } = getTodayTimeRange();
     const todayLogs =
-      entryDeviceId != null || exitDeviceId != null
+      entryDeviceIds.length > 0 || exitDeviceIds.length > 0
         ? await getAccessControlSiteLogs(siteId, {
-            entryDeviceId,
-            exitDeviceId,
+            entryDeviceIds,
+            exitDeviceIds,
             startTime: start.toISOString(),
             endTime: end.toISOString(),
             limit: 2000,
@@ -258,8 +260,8 @@ async function getSiteData(siteId, config) {
  */
 async function getSiteLogs(siteId, config, options = {}) {
   const accessControlLogs = await getAccessControlSiteLogs(siteId, {
-    entryDeviceId: config.entryDeviceId,
-    exitDeviceId: config.exitDeviceId,
+    entryDeviceIds: config.entryDeviceIds,
+    exitDeviceIds: config.exitDeviceIds,
     limit: options.limit ?? 50,
     offset: options.offset ?? 0,
     startTime: options.startTime,
@@ -289,8 +291,8 @@ async function getUnitPersonnel(unitId, siteId, config) {
 
   const { start: todayStart, end: todayEnd } = getTodayTimeRange();
   const todayLogs = await getAccessControlSiteLogs(siteId, {
-    entryDeviceId: config.entryDeviceId,
-    exitDeviceId: config.exitDeviceId,
+    entryDeviceIds: config.entryDeviceIds,
+    exitDeviceIds: config.exitDeviceIds,
     startTime: todayStart.toISOString(),
     endTime: todayEnd.toISOString(),
     limit: 500,

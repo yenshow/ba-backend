@@ -61,8 +61,7 @@ const listCameraRtspItems = async () => {
     `
     SELECT d.id, d.config
     FROM devices d
-    JOIN device_types t ON t.id = d.type_id
-    WHERE LOWER(COALESCE(t.code, '')) = 'camera'
+    WHERE LOWER(COALESCE(d.type_code, '')) = 'camera'
     ORDER BY d.id ASC
     `,
     []

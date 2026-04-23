@@ -1,6 +1,10 @@
 const db = require("../../database/db");
 const { parseConfig, stringifyConfig } = require("../../utils/deviceHelpers");
 const logger = require("../../utils/logger");
+const {
+	normalizeDeviceTypeCode,
+	getDeviceTypeName
+} = require("../../constants/deviceTypes");
 
 const deviceModelLogger = logger.createLogger("deviceModelService");
 
@@ -14,26 +18,18 @@ function parseOptionalInt(val) {
 // 取得所有設備型號（支援按類型篩選）
 async function getAllDeviceModels(filters = {}) {
 	try {
-		const { type_id, type_code } = filters;
+		const { type_code } = filters;
 
 		let query = `
 			SELECT 
-				dm.*,
-				dt.name as type_name,
-				dt.code as type_code
+				dm.*
 			FROM device_models dm
-			INNER JOIN device_types dt ON dm.type_id = dt.id
 			WHERE 1=1
 		`;
 		const params = [];
 
-		if (type_id) {
-			query += " AND dm.type_id = ?";
-			params.push(type_id);
-		}
-
 		if (type_code) {
-			query += " AND dt.code = ?";
+			query += " AND dm.type_code = ?";
 			params.push(type_code);
 		}
 
@@ -44,6 +40,7 @@ async function getAllDeviceModels(filters = {}) {
 		// 解析 config JSON（如果存在）
 		const modelsWithConfig = models.map((model) => ({
 			...model,
+			type_name: getDeviceTypeName(model.type_code),
 			config: parseConfig(model.config)
 		}));
 
@@ -63,11 +60,8 @@ async function getDeviceModelById(id) {
 		const models = await db.query(
 			`
 			SELECT 
-				dm.*,
-				dt.name as type_name,
-				dt.code as type_code
+				dm.*
 			FROM device_models dm
-			INNER JOIN device_types dt ON dm.type_id = dt.id
 			WHERE dm.id = ?
 		`,
 			[id]
@@ -80,6 +74,7 @@ async function getDeviceModelById(id) {
 		}
 
 		const model = models[0];
+		model.type_name = getDeviceTypeName(model.type_code);
 		model.config = parseConfig(model.config);
 
 		return { device_model: model };
@@ -134,15 +129,16 @@ function validateSensorParametersConfig(config) {
 // 建立設備型號
 async function createDeviceModel(data, userId) {
 	try {
-		const { name, type_id, port, unit_id, description, config } = data;
+		const { name, type_code, port, unit_id, description, config } = data;
 
 		// 驗證必填欄位
 		if (!name || name.trim().length === 0) {
 			throw new Error("設備型號名稱不能為空");
 		}
 
-		if (!type_id) {
-			throw new Error("設備類型 ID 不能為空");
+		const inputTypeCode = normalizeDeviceTypeCode(type_code);
+		if (!inputTypeCode) {
+			throw new Error("設備類型不能為空");
 		}
 
 		// 驗證端口與 unit_id（選填）
@@ -155,14 +151,10 @@ async function createDeviceModel(data, userId) {
 			throw new Error("Unit ID 必須是 1-255 之間的整數");
 		}
 
-		// 驗證設備類型是否存在
-		const types = await db.query("SELECT id, code FROM device_types WHERE id = ?", [type_id]);
-		if (types.length === 0) {
-			throw new Error("設備類型不存在");
-		}
+		const resolvedTypeCode = inputTypeCode;
 
 		// 如果是感測器類型，驗證 sensorParameters 配置
-		if (config && types[0].code === "sensor") {
+		if (config && resolvedTypeCode === "sensor") {
 			validateSensorParametersConfig(config);
 		}
 
@@ -177,24 +169,22 @@ async function createDeviceModel(data, userId) {
 
 		// 插入到 device_models
 		const result = await db.query(
-			"INSERT INTO device_models (name, type_id, port, unit_id, description, config) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-			[name.trim(), type_id, finalPort, finalUnitId, description || null, stringifyConfig(config)]
+			"INSERT INTO device_models (name, type_code, port, unit_id, description, config) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+			[name.trim(), resolvedTypeCode, finalPort, finalUnitId, description || null, stringifyConfig(config)]
 		);
 
 		const models = await db.query(
 			`
 			SELECT 
-				dm.*,
-				dt.name as type_name,
-				dt.code as type_code
+				dm.*
 			FROM device_models dm
-			INNER JOIN device_types dt ON dm.type_id = dt.id
 			WHERE dm.id = ?
 		`,
 			[result[0].id]
 		);
 
 		const model = models[0];
+		model.type_name = getDeviceTypeName(model.type_code);
 		model.config = parseConfig(model.config);
 
 		return {
@@ -216,7 +206,7 @@ async function createDeviceModel(data, userId) {
 // 更新設備型號
 async function updateDeviceModel(id, data, userId) {
 	try {
-		const { name, type_id, port, unit_id, description, config } = data;
+		const { name, type_code, port, unit_id, description, config } = data;
 
 		// 檢查設備型號是否存在
 		const existing = await db.query("SELECT * FROM device_models WHERE id = ?", [id]);
@@ -242,16 +232,15 @@ async function updateDeviceModel(id, data, userId) {
 		}
 
 		const existingModel = existing[0];
-		const currentTypeId = existingModel.type_id;
+		const currentTypeCode = String(existingModel.type_code || "");
 
-		// 驗證設備類型是否存在（如果提供且與現有值不同）
-		if (type_id !== undefined && type_id !== currentTypeId) {
-			const types = await db.query("SELECT id, code FROM device_types WHERE id = ?", [type_id]);
-			if (types.length === 0) {
-				throw new Error("設備類型不存在");
-			}
-
-			// 只有在實際更改類型時才檢查是否有設備使用此型號
+		// 支援改 type_code（但若有設備使用則禁止）
+		const inputTypeCode = type_code !== undefined ? normalizeDeviceTypeCode(type_code) : null;
+		if (type_code !== undefined && !inputTypeCode) {
+			throw new Error("設備類型代碼不正確");
+		}
+		const wantsChangeType = inputTypeCode && inputTypeCode !== currentTypeCode;
+		if (wantsChangeType) {
 			const devices = await db.query("SELECT id FROM devices WHERE model_id = ? LIMIT 1", [id]);
 			if (devices.length > 0) {
 				throw new Error("無法更改類型：仍有設備使用此型號");
@@ -260,10 +249,8 @@ async function updateDeviceModel(id, data, userId) {
 
 		// 驗證 config（如果是感測器類型）
 		if (config !== undefined) {
-			// 確定當前的設備類型（優先使用新的 type_id，否則使用現有的）
-			const targetTypeId = type_id !== undefined ? type_id : currentTypeId;
-			const types = await db.query("SELECT code FROM device_types WHERE id = ?", [targetTypeId]);
-			if (types.length > 0 && types[0].code === "sensor") {
+			const targetTypeCode = inputTypeCode || currentTypeCode;
+			if (targetTypeCode === "sensor") {
 				validateSensorParametersConfig(config);
 			}
 
@@ -288,9 +275,9 @@ async function updateDeviceModel(id, data, userId) {
 			params.push(name.trim());
 		}
 
-		if (type_id !== undefined) {
-			updates.push("type_id = ?");
-			params.push(type_id);
+		if (type_code !== undefined) {
+			updates.push("type_code = ?");
+			params.push(inputTypeCode || currentTypeCode);
 		}
 
 		if (port !== undefined) {
@@ -323,17 +310,15 @@ async function updateDeviceModel(id, data, userId) {
 		const models = await db.query(
 			`
 			SELECT 
-				dm.*,
-				dt.name as type_name,
-				dt.code as type_code
+				dm.*
 			FROM device_models dm
-			INNER JOIN device_types dt ON dm.type_id = dt.id
 			WHERE dm.id = ?
 		`,
 			[id]
 		);
 
 		const model = models[0];
+		model.type_name = getDeviceTypeName(model.type_code);
 		model.config = parseConfig(model.config);
 
 		return {

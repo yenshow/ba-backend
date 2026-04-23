@@ -385,39 +385,55 @@ async function initSchema() {
     }
     schemaLogger.info("角色預設權限種子已插入", { module: "initSchema" });
 
-    // 建立 device_types 表（通用設備類型表）
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS device_types (
-				id SERIAL PRIMARY KEY,
-				name VARCHAR(50) NOT NULL UNIQUE,
-				code VARCHAR(20) NOT NULL UNIQUE,
-				description TEXT,
-				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-			)
-		`);
-
-    await createUpdatedAtTrigger(targetPool, "device_types");
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_device_types_code ON device_types(code);
-		`);
-
-    schemaLogger.info("device_types 表已建立", { module: "initSchema" });
-
     // 建立 device_models 表（通用設備型號表）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS device_models (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
-				type_id INTEGER NOT NULL,
+				type_code VARCHAR(20) NOT NULL,
 				description TEXT,
 				config JSONB,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				CONSTRAINT fk_device_model_type FOREIGN KEY (type_id) REFERENCES device_types(id) ON DELETE RESTRICT
+				CONSTRAINT ck_device_models_type_code CHECK (type_code IN ('camera','sensor','controller','access_control'))
 			)
 		`);
+
+    // 遷移：舊版 device_models.type_id -> type_code
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'device_models' AND column_name = 'type_id'
+        ) THEN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'device_models' AND column_name = 'type_code'
+          ) THEN
+            ALTER TABLE device_models ADD COLUMN type_code VARCHAR(20);
+          END IF;
+
+          -- 盡力回填（若仍存在 device_types）
+          IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema='public' AND table_name='device_types'
+          ) THEN
+            UPDATE device_models dm
+            SET type_code = dt.code
+            FROM device_types dt
+            WHERE dm.type_code IS NULL AND dm.type_id = dt.id;
+          END IF;
+
+          -- 若仍回填不到，給一個保守預設（避免卡住遷移；後續可由管理者修正）
+          UPDATE device_models SET type_code = COALESCE(type_code, 'controller');
+
+          -- 移除舊 FK 與欄位
+          ALTER TABLE device_models DROP CONSTRAINT IF EXISTS fk_device_model_type;
+          ALTER TABLE device_models DROP COLUMN IF EXISTS type_id;
+        END IF;
+      END $$;
+    `);
 
     // 如果表已存在但沒有 port 欄位，添加它（可為 NULL，無預設值）
     await targetPool.query(`
@@ -461,7 +477,7 @@ async function initSchema() {
 
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_device_models_name ON device_models(name);
-			CREATE INDEX IF NOT EXISTS idx_device_models_type_id ON device_models(type_id);
+			CREATE INDEX IF NOT EXISTS idx_device_models_type_code ON device_models(type_code);
 			CREATE INDEX IF NOT EXISTS idx_device_models_port ON device_models(port);
 		`);
 
@@ -473,7 +489,7 @@ async function initSchema() {
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
 				model_id INTEGER NOT NULL,
-				type_id INTEGER NOT NULL,
+				type_code VARCHAR(20) NOT NULL,
 				location VARCHAR(255),
 				description TEXT,
 				status device_status NOT NULL DEFAULT 'inactive',
@@ -484,61 +500,59 @@ async function initSchema() {
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				CONSTRAINT fk_devices_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
 				CONSTRAINT fk_devices_model FOREIGN KEY (model_id) REFERENCES device_models(id) ON DELETE RESTRICT,
-				CONSTRAINT fk_devices_type FOREIGN KEY (type_id) REFERENCES device_types(id) ON DELETE RESTRICT
+				CONSTRAINT ck_devices_type_code CHECK (type_code IN ('camera','sensor','controller','access_control'))
 			)
 		`);
+
+    // 遷移：舊版 devices.type_id -> type_code
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'devices' AND column_name = 'type_id'
+        ) THEN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'devices' AND column_name = 'type_code'
+          ) THEN
+            ALTER TABLE devices ADD COLUMN type_code VARCHAR(20);
+          END IF;
+
+          -- 盡力回填（若仍存在 device_types）
+          IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema='public' AND table_name='device_types'
+          ) THEN
+            UPDATE devices d
+            SET type_code = dt.code
+            FROM device_types dt
+            WHERE d.type_code IS NULL AND d.type_id = dt.id;
+          END IF;
+
+          UPDATE devices SET type_code = COALESCE(type_code, 'controller');
+
+          ALTER TABLE devices DROP CONSTRAINT IF EXISTS fk_devices_type;
+          ALTER TABLE devices DROP COLUMN IF EXISTS type_id;
+        END IF;
+      END $$;
+    `);
 
     await createUpdatedAtTrigger(targetPool, "devices");
 
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
-			CREATE INDEX IF NOT EXISTS idx_devices_type_id ON devices(type_id);
+			CREATE INDEX IF NOT EXISTS idx_devices_type_code ON devices(type_code);
 			CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
 			CREATE INDEX IF NOT EXISTS idx_devices_config ON devices USING GIN (config);
 		`);
 
     schemaLogger.info("devices 表已建立", { module: "initSchema" });
 
-    // 預設設備類型資料
-    const deviceTypes = [
-      {
-        name: "攝影機",
-        code: "camera",
-        description: "影像監控、車牌辨識、人流統計",
-      },
-      { name: "感測器", code: "sensor", description: "感測器設備" },
-      { name: "控制器", code: "controller", description: "modbus" },
-      {
-        name: "門禁設備",
-        code: "access_control",
-        description: "ISAPI 門禁／人臉設備",
-      },
-    ];
-
-    // 插入預設的設備類型資料到 device_types 表
-    for (const type of deviceTypes) {
-      try {
-        await targetPool.query(
-          `INSERT INTO device_types (name, code, description) 
-					 VALUES ($1, $2, $3) 
-					 ON CONFLICT (code) DO NOTHING`,
-          [type.name, type.code, type.description],
-        );
-      } catch (error) {
-        // 如果因為 name 衝突而失敗，嘗試使用 code 衝突處理
-        if (
-          error.code === "23505" &&
-          error.constraint === "device_types_name_key"
-        ) {
-          // 名稱已存在，跳過
-          continue;
-        }
-        throw error;
-      }
-    }
-    schemaLogger.info("預設設備類型資料已插入到 device_types", {
-      module: "initSchema",
-    });
+    // 清理：若舊表 device_types 仍存在則移除（設備類型不入 DB）
+    await targetPool.query(`
+      DROP TABLE IF EXISTS device_types CASCADE;
+    `);
 
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
@@ -1407,6 +1421,58 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_person_location_access_person_id ON person_location_access(person_id);
     `);
     schemaLogger.info("person_location_access 表已建立", {
+      module: "initSchema",
+    });
+
+    // 人員 × 門禁設備：同步狀態（用於差異同步與 UI 顯示已同步/失敗）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_device_sync_states (
+        id BIGSERIAL PRIMARY KEY,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        employee_no VARCHAR(64) NOT NULL,
+
+        user_info_hash TEXT,
+        user_info_status VARCHAR(16),
+        user_info_synced_at TIMESTAMPTZ,
+
+        face_hash TEXT,
+        face_status VARCHAR(16),
+        face_synced_at TIMESTAMPTZ,
+
+        card_hash TEXT,
+        card_status VARCHAR(16),
+        card_synced_at TIMESTAMPTZ,
+
+        fingerprint_hash TEXT,
+        fingerprint_status VARCHAR(16),
+        fingerprint_synced_at TIMESTAMPTZ,
+        fingerprint_detail JSONB,
+
+        last_error_message TEXT,
+
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(device_id, employee_no)
+      )
+    `);
+    // 遷移：舊環境補齊 fingerprint_detail 欄位
+    await targetPool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='person_device_sync_states' AND column_name='fingerprint_detail'
+        ) THEN
+          ALTER TABLE person_device_sync_states ADD COLUMN fingerprint_detail JSONB;
+        END IF;
+      END $$;
+    `);
+    await createUpdatedAtTrigger(targetPool, "person_device_sync_states");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_device_sync_states_device ON person_device_sync_states(device_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_device_sync_states_employee ON person_device_sync_states(employee_no);
+    `);
+    schemaLogger.info("person_device_sync_states 表已建立（門禁同步狀態）", {
       module: "initSchema",
     });
 

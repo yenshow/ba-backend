@@ -6,6 +6,7 @@
 const db = require("../../database/db");
 const { parseConfig } = require("../../utils/deviceHelpers");
 const logger = require("../../utils/logger");
+const { getDeviceTypeName } = require("../../constants/deviceTypes");
 
 const loggingCfgLogger = logger.createLogger("deviceLoggingConfig");
 
@@ -50,10 +51,9 @@ async function getDeviceLoggingConfig(deviceId) {
 
   try {
     const rows = await db.query(
-      `SELECT d.config, dm.config as model_config, dt.code as type_code
+      `SELECT d.config, dm.config as model_config, d.type_code as type_code
        FROM devices d
        LEFT JOIN device_models dm ON d.model_id = dm.id
-       LEFT JOIN device_types dt ON d.type_id = dt.id
        WHERE d.id = $1`,
       [deviceId]
     );

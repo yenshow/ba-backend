@@ -106,11 +106,11 @@ function validateLocationData(locationData, isUpdate = false) {
     name,
     zoneId,
     personGroupIds,
-    entryDoorId,
-    exitDoorId,
+    entryDoorIds,
+    exitDoorIds,
     dataSource = "yscp",
-    entryDeviceId,
-    exitDeviceId,
+    entryDeviceIds,
+    exitDeviceIds,
     cameraDeviceId,
     cameraDeviceIds,
     cameraChannelId,
@@ -136,11 +136,11 @@ function validateLocationData(locationData, isUpdate = false) {
       if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
         throw createValidationError("至少需要選擇一個進場單位");
       }
-      if (!entryDoorId) {
-        throw createValidationError("入口設備 ID 不能為空");
+      if (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0) {
+        throw createValidationError("至少需要選擇一個入口設備");
       }
-      if (!exitDoorId) {
-        throw createValidationError("出口設備 ID 不能為空");
+      if (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0) {
+        throw createValidationError("至少需要選擇一個出口設備");
       }
     }
     if (isUpdate && personGroupIds !== undefined) {
@@ -148,25 +148,55 @@ function validateLocationData(locationData, isUpdate = false) {
         throw createValidationError("至少需要選擇一個進場單位");
       }
     }
-    const finalEntry =
-      entryDoorId !== undefined
-        ? entryDoorId
-        : locationData.currentEntry || null;
-    const finalExit =
-      exitDoorId !== undefined ? exitDoorId : locationData.currentExit || null;
-    if (finalEntry && finalExit && finalEntry === finalExit) {
-      throw createValidationError("入口和出口不能是同一個設備");
+    if (entryDoorIds !== undefined && (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0)) {
+      throw createValidationError("至少需要選擇一個入口設備");
+    }
+    if (exitDoorIds !== undefined && (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0)) {
+      throw createValidationError("至少需要選擇一個出口設備");
+    }
+    const entrySet = new Set(
+      (Array.isArray(entryDoorIds) ? entryDoorIds : [])
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    );
+    const exitSet = new Set(
+      (Array.isArray(exitDoorIds) ? exitDoorIds : [])
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    );
+    for (const id of entrySet) {
+      if (exitSet.has(id)) {
+        throw createValidationError("入口和出口不能包含同一個設備");
+      }
     }
   } else {
     if (effectiveDataSource === "access_control") {
-      if (!isUpdate && !entryDeviceId) {
-        throw createValidationError("門禁入口設備 ID 不能為空");
+      if (!isUpdate && (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)) {
+        throw createValidationError("至少需要選擇一個門禁入口設備");
       }
-      if (isUpdate && entryDeviceId !== undefined && !entryDeviceId) {
-        throw createValidationError("門禁入口設備 ID 不能為空");
+      if (!isUpdate && (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)) {
+        throw createValidationError("至少需要選擇一個門禁出口設備");
       }
-      if (entryDeviceId && exitDeviceId && entryDeviceId === exitDeviceId) {
-        throw createValidationError("入口和出口不能是同一個設備");
+      if (isUpdate && entryDeviceIds !== undefined && (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)) {
+        throw createValidationError("至少需要選擇一個門禁入口設備");
+      }
+      if (isUpdate && exitDeviceIds !== undefined && (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)) {
+        throw createValidationError("至少需要選擇一個門禁出口設備");
+      }
+      const entrySet = new Set(
+        (Array.isArray(entryDeviceIds) ? entryDeviceIds : [])
+          .map((id) => Number(id))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      );
+      const exitSet = new Set(
+        (Array.isArray(exitDeviceIds) ? exitDeviceIds : [])
+          .map((id) => Number(id))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      );
+      for (const id of entrySet) {
+        if (exitSet.has(id)) {
+          throw createValidationError("入口和出口不能包含同一個設備");
+        }
       }
     }
     if (effectiveDataSource === "isapi_camera") {
@@ -287,11 +317,11 @@ async function createPeopleCountingLocation(locationData, userId) {
         name,
         zoneId,
         personGroupIds = [],
-        entryDoorId,
-        exitDoorId,
+        entryDoorIds = [],
+        exitDoorIds = [],
         dataSource = "yscp",
-        entryDeviceId,
-        exitDeviceId,
+        entryDeviceIds = [],
+        exitDeviceIds = [],
         cameraDeviceId,
         cameraChannelId,
         preferRegion,
@@ -307,11 +337,11 @@ async function createPeopleCountingLocation(locationData, userId) {
           locationType: "people_counting",
           config: {
             personGroupIds,
-            entryDoorId,
-            exitDoorId,
+            entryDoorIds,
+            exitDoorIds,
             dataSource,
-            entryDeviceId,
-            exitDeviceId,
+            entryDeviceIds,
+            exitDeviceIds,
             cameraDeviceId,
             cameraChannelId,
             preferRegion,
@@ -340,11 +370,11 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       const {
         name,
         personGroupIds,
-        entryDoorId,
-        exitDoorId,
+        entryDoorIds,
+        exitDoorIds,
         dataSource,
-        entryDeviceId,
-        exitDeviceId,
+        entryDeviceIds,
+        exitDeviceIds,
         cameraDeviceId,
         cameraChannelId,
         preferRegion,
@@ -352,15 +382,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       } = locationData;
 
       const existing = await getPeopleCountingLocationById(id);
-      const pcForValidation = ensureArray(existing.location.systems).find(
-        (s) => s.systemType === "people_counting",
-      );
-      const validationData = {
-        ...locationData,
-        currentEntry: pcForValidation?.config?.entryDoorId,
-        currentExit: pcForValidation?.config?.exitDoorId,
-      };
-      validateLocationData(validationData, true);
+      validateLocationData(locationData, true);
 
       const updates = {};
       if (name !== undefined) {
@@ -373,11 +395,19 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       const existingConfig = pcSystem?.config || {};
       const currentConfig = {
         person_group_ids: existingConfig.personGroupIds || [],
-        entry_door_id: existingConfig.entryDoorId ?? null,
-        exit_door_id: existingConfig.exitDoorId ?? null,
+        entry_door_ids: Array.isArray(existingConfig.entryDoorIds)
+          ? existingConfig.entryDoorIds
+          : [],
+        exit_door_ids: Array.isArray(existingConfig.exitDoorIds)
+          ? existingConfig.exitDoorIds
+          : [],
         data_source: existingConfig.dataSource || "yscp",
-        entry_device_id: existingConfig.entryDeviceId ?? null,
-        exit_device_id: existingConfig.exitDeviceId ?? null,
+        entry_device_ids: Array.isArray(existingConfig.entryDeviceIds)
+          ? existingConfig.entryDeviceIds
+          : [],
+        exit_device_ids: Array.isArray(existingConfig.exitDeviceIds)
+          ? existingConfig.exitDeviceIds
+          : [],
         camera_device_id: existingConfig.cameraDeviceId ?? null,
         camera_device_ids: Array.isArray(existingConfig.cameraDeviceIds)
           ? existingConfig.cameraDeviceIds
@@ -394,14 +424,14 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         ...(personGroupIds !== undefined && {
           person_group_ids: personGroupIds,
         }),
-        ...(entryDoorId !== undefined && { entry_door_id: entryDoorId }),
-        ...(exitDoorId !== undefined && { exit_door_id: exitDoorId }),
+        ...(entryDoorIds !== undefined && { entry_door_ids: entryDoorIds }),
+        ...(exitDoorIds !== undefined && { exit_door_ids: exitDoorIds }),
         ...(dataSource !== undefined && { data_source: dataSource }),
-        ...(entryDeviceId !== undefined && {
-          entry_device_id: entryDeviceId,
+        ...(entryDeviceIds !== undefined && {
+          entry_device_ids: entryDeviceIds,
         }),
-        ...(exitDeviceId !== undefined && {
-          exit_device_id: exitDeviceId,
+        ...(exitDeviceIds !== undefined && {
+          exit_device_ids: exitDeviceIds,
         }),
         ...(cameraDeviceId !== undefined && {
           camera_device_id: cameraDeviceId,
@@ -434,11 +464,11 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
             systemType: "people_counting",
             config: {
               personGroupIds: config.person_group_ids,
-              entryDoorId: config.entry_door_id,
-              exitDoorId: config.exit_door_id,
+              entryDoorIds: config.entry_door_ids,
+              exitDoorIds: config.exit_door_ids,
               dataSource: config.data_source,
-              entryDeviceId: config.entry_device_id,
-              exitDeviceId: config.exit_device_id,
+              entryDeviceIds: config.entry_device_ids,
+              exitDeviceIds: config.exit_device_ids,
               cameraDeviceId: config.camera_device_id,
               cameraDeviceIds: config.camera_device_ids,
               cameraChannelId: config.camera_channel_id,
@@ -633,8 +663,8 @@ async function getSiteLogs(siteId, options = {}) {
  * 協調層：依 data_source 委派 provider.getUnitPersonnel
  */
 const YSCP_FALLBACK_CONFIG = {
-  entryDoorId: null,
-  exitDoorId: null,
+  entryDoorIds: [],
+  exitDoorIds: [],
   personGroupIds: [],
 };
 
@@ -676,7 +706,7 @@ async function getUnitPersonnel(unitId, siteId = null) {
 /**
  * 從地點取得人流統計系統配置
  * @param {Object} location - 地點物件
- * @returns {Object} { peopleCountingSystem, entryDoorId, exitDoorId, personGroupIds, dataSource, entryDeviceId, exitDeviceId, accessControlGroups }
+ * @returns {Object} { peopleCountingSystem, entryDoorIds, exitDoorIds, personGroupIds, dataSource, entryDeviceIds, exitDeviceIds, accessControlGroups }
  * @deprecated accessControlGroups 僅相容保留；門禁流程之可進出人員改由 personnelService.getPersonsWithAccessByLocationId 取得
  */
 function getPeopleCountingConfig(location) {
@@ -685,12 +715,12 @@ function getPeopleCountingConfig(location) {
   );
   return {
     peopleCountingSystem,
-    entryDoorId: peopleCountingSystem?.config?.entryDoorId || null,
-    exitDoorId: peopleCountingSystem?.config?.exitDoorId || null,
+    entryDoorIds: ensureArray(peopleCountingSystem?.config?.entryDoorIds),
+    exitDoorIds: ensureArray(peopleCountingSystem?.config?.exitDoorIds),
     personGroupIds: ensureArray(peopleCountingSystem?.config?.personGroupIds),
     dataSource: peopleCountingSystem?.config?.dataSource || "yscp",
-    entryDeviceId: peopleCountingSystem?.config?.entryDeviceId ?? null,
-    exitDeviceId: peopleCountingSystem?.config?.exitDeviceId ?? null,
+    entryDeviceIds: ensureArray(peopleCountingSystem?.config?.entryDeviceIds),
+    exitDeviceIds: ensureArray(peopleCountingSystem?.config?.exitDeviceIds),
     cameraDeviceId: peopleCountingSystem?.config?.cameraDeviceId ?? null,
     cameraChannelId: peopleCountingSystem?.config?.cameraChannelId ?? 1,
     preferRegion: peopleCountingSystem?.config?.preferRegion ?? false,
@@ -703,7 +733,7 @@ function getPeopleCountingConfig(location) {
 /**
  * 取得工地配置（統一處理地點取得和配置解析）
  * @param {number} siteId - 工地 ID
- * @returns {Promise<Object>} { location, personGroupIds, entryDoorId, exitDoorId, dataSource, entryDeviceId, exitDeviceId, accessControlGroups }
+ * @returns {Promise<Object>} { location, personGroupIds, entryDoorIds, exitDoorIds, dataSource, entryDeviceIds, exitDeviceIds, accessControlGroups }
  * @deprecated accessControlGroups 僅相容保留
  */
 async function getSiteConfig(siteId) {
@@ -713,11 +743,11 @@ async function getSiteConfig(siteId) {
   return {
     location,
     personGroupIds: config.personGroupIds,
-    entryDoorId: config.entryDoorId,
-    exitDoorId: config.exitDoorId,
+    entryDoorIds: config.entryDoorIds,
+    exitDoorIds: config.exitDoorIds,
     dataSource: config.dataSource,
-    entryDeviceId: config.entryDeviceId,
-    exitDeviceId: config.exitDeviceId,
+    entryDeviceIds: config.entryDeviceIds,
+    exitDeviceIds: config.exitDeviceIds,
     cameraDeviceId: config.cameraDeviceId,
     cameraChannelId: config.cameraChannelId,
     preferRegion: config.preferRegion,

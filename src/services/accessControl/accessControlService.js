@@ -13,6 +13,10 @@ const ISAPI_PATHS = {
     "/ISAPI/AccessControl/UserInfoDetail/Delete?format=json",
   fdSetUp: "/ISAPI/Intelligent/FDLib/FDSetUp?format=json",
   captureFaceData: "/ISAPI/AccessControl/CaptureFaceData",
+  captureCardInfo: "/ISAPI/AccessControl/CaptureCardInfo?format=json",
+  cardInfoSetUp: "/ISAPI/AccessControl/CardInfo/SetUp?format=json",
+  fingerPrintSetUp: "/ISAPI/AccessControl/FingerPrint/SetUp?format=json",
+  captureFingerPrint: "/ISAPI/AccessControl/CaptureFingerPrint",
 };
 
 /** 從 UserInfo 中只保留文檔指定欄位 */
@@ -31,6 +35,93 @@ function formatIsapiTime(date = new Date()) {
   return new Date(date).toISOString().replace(/\.\d{3}Z$/, "");
 }
 
+const CRLF = Buffer.from("\r\n");
+const CRLFCRLF = Buffer.from("\r\n\r\n");
+
+/**
+ * 部分 ISAPI 端點（如 CaptureFaceData）會回傳 multipart，內含 JSON + 圖片。
+ * 這裡僅取第一個 image/* part，避免把整包 multipart 當成 jpg 寫入。
+ */
+function extractFirstImageFromMultipart(buffer, contentTypeHeader) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) return null;
+  const ct = String(contentTypeHeader || "");
+  const boundaryMatch = ct.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
+  const boundaryRaw = boundaryMatch
+    ? (boundaryMatch[1] || boundaryMatch[2] || "").trim()
+    : "";
+  const boundary = boundaryRaw.replace(/^["']|["']$/g, "");
+  if (!boundary) return null;
+
+  const sep = Buffer.from(`--${boundary}`, "utf8");
+  const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
+
+  let offset = 0;
+  const findNextBoundary = (from) => {
+    const a = buffer.indexOf(sepWithCRLF, from);
+    const b = buffer.indexOf(sep, from);
+    if (a === -1) return b;
+    if (b === -1) return a;
+    return Math.min(a, b);
+  };
+
+  while (offset < buffer.length) {
+    let start = buffer.indexOf(sepWithCRLF, offset);
+    let boundaryLen = sepWithCRLF.length;
+    if (start === -1) {
+      start = buffer.indexOf(sep, offset);
+      boundaryLen = sep.length;
+    }
+    if (start === -1) break;
+
+    const after = start + boundaryLen;
+    // 結束 boundary: --boundary--
+    if (buffer.slice(after, after + 2).equals(Buffer.from("--"))) break;
+
+    // part 可能緊接 CRLF
+    let partStart = after;
+    if (buffer.slice(partStart, partStart + CRLF.length).equals(CRLF)) {
+      partStart += CRLF.length;
+    }
+
+    const headEnd = buffer.indexOf(CRLFCRLF, partStart);
+    if (headEnd === -1) break;
+    const headerStr = buffer.slice(partStart, headEnd).toString("utf8");
+    const ctPart =
+      (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+
+    const bodyStart = headEnd + CRLFCRLF.length;
+    const lenMatch = headerStr.match(/Content-Length:\s*(\d+)/i);
+    const contentLength = lenMatch ? parseInt(lenMatch[1], 10) : 0;
+    let bodyEnd = 0;
+
+    if (contentLength > 0) {
+      bodyEnd = bodyStart + contentLength;
+      if (bodyEnd > buffer.length) break;
+    } else {
+      const next = findNextBoundary(bodyStart);
+      if (next === -1) break;
+      bodyEnd = next;
+      // 去掉 part 結尾的 CRLF
+      if (
+        bodyEnd - 2 >= bodyStart &&
+        buffer[bodyEnd - 2] === 0x0d &&
+        buffer[bodyEnd - 1] === 0x0a
+      ) {
+        bodyEnd -= 2;
+      }
+    }
+
+    if (/^image\//i.test(ctPart.trim())) {
+      const img = buffer.slice(bodyStart, bodyEnd);
+      if (img.length > 0) return { buffer: img, contentType: ctPart.trim() };
+    }
+
+    offset = bodyEnd;
+  }
+
+  return null;
+}
+
 /**
  * 補齊設備常見必填欄位，避免僅送 employeeNo/name 導致設備回 400
  * 注意：僅在欄位缺失時填入預設，不覆蓋呼叫端提供的值。
@@ -41,27 +132,28 @@ function applyUserInfoDefaults(userInfo) {
 
   if (!u.userType) u.userType = "normal";
 
-  if (!u.Valid || typeof u.Valid !== "object") {
-    u.Valid = {
-      enable: true,
-      beginTime: formatIsapiTime(new Date()),
-      endTime: "2035-12-31T23:59:59",
-    };
-  } else {
-    if (u.Valid.enable === undefined) u.Valid.enable = true;
-    if (!u.Valid.beginTime) u.Valid.beginTime = formatIsapiTime(new Date());
-    if (!u.Valid.endTime) u.Valid.endTime = "2035-12-31T23:59:59";
-  }
-
   if (!u.doorRight) u.doorRight = "1";
+
+  // ISAPI 的 Valid.enable 在多數型號為 boolean（true/false）。
+  // 若送入的是字串/數字，這裡僅做安全正規化，避免 badJsonContent / wrong.enable。
+  if (
+    u.Valid &&
+    typeof u.Valid === "object" &&
+    Object.prototype.hasOwnProperty.call(u.Valid, "enable")
+  ) {
+    const raw = u.Valid.enable;
+    const enabled =
+      raw === true ||
+      raw === "true" ||
+      raw === "TRUE" ||
+      raw === 1 ||
+      raw === "1";
+    u.Valid.enable = Boolean(enabled);
+  }
 
   if (!Array.isArray(u.RightPlan) || u.RightPlan.length === 0) {
     u.RightPlan = [{ doorNo: 1, planTemplateNo: "1" }];
   }
-
-  // 依文檔建議：讓設備接受最小可用值（如設備不需要，仍可忽略）
-  if (!u.userVerifyMode) u.userVerifyMode = "faceOrFpOrCardOrPw";
-  if (!u.password) u.password = "123456";
 
   return u;
 }
@@ -222,7 +314,8 @@ async function updateFace(deviceId, employeeNo, imageBuffer, options = {}) {
 async function captureFaceData(deviceId, overrides = {}) {
   const { client, model } = await getDeviceAndClient(deviceId);
   const isapiConfig = model.config?.isapi?.captureFaceData || {};
-  const dataType = overrides.dataType ?? isapiConfig.dataType ?? "url";
+  // 平台僅支援 binary 截圖（回傳 base64，供前端儲存/預覽/後續人臉同步使用）
+  const dataType = "binary";
   const captureInfrared =
     overrides.captureInfrared ?? isapiConfig.captureInfrared ?? true;
   const readerID = overrides.readerID ?? isapiConfig.readerID ?? 1;
@@ -236,7 +329,7 @@ async function captureFaceData(deviceId, overrides = {}) {
     "</CaptureFaceDataCond>",
   ].join("\n");
 
-  const responseType = dataType === "binary" ? "arraybuffer" : "text";
+  const responseType = "arraybuffer";
   const res = await client.request({
     method: "POST",
     path: ISAPI_PATHS.captureFaceData,
@@ -244,7 +337,167 @@ async function captureFaceData(deviceId, overrides = {}) {
     headers: { "Content-Type": "application/xml" },
     responseType,
   });
+  const rawContentType =
+    res.headers?.["content-type"] ||
+    res.headers?.["Content-Type"] ||
+    "image/jpeg";
+  const normalizedContentType = String(rawContentType)
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  const isMultipart = normalizedContentType.startsWith("multipart/");
+  const fallbackContentType = normalizedContentType.startsWith("image/")
+    ? normalizedContentType
+    : "image/jpeg";
+  const rawBuffer = Buffer.isBuffer(res.data) ? res.data : Buffer.from(res.data);
+  const extracted = isMultipart
+    ? extractFirstImageFromMultipart(rawBuffer, rawContentType)
+    : null;
+  const buffer = extracted?.buffer || rawBuffer;
+  const contentType = extracted?.contentType || fallbackContentType;
+  return {
+    dataType: "binary",
+    contentType,
+    base64: buffer.toString("base64"),
+    size: buffer.length,
+  };
+}
+
+/**
+ * 讀取卡片資訊（CaptureCardInfo）
+ * 由設備端讀卡後回傳卡號等資訊（JSON）。
+ * @param {number} deviceId
+ * @returns {Promise<object>}
+ */
+async function captureCardInfo(deviceId) {
+  const { client } = await getDeviceAndClient(deviceId);
+  const res = await client.request({
+    method: "GET",
+    path: ISAPI_PATHS.captureCardInfo,
+  });
   return res.data;
+}
+
+/**
+ * 設定卡片資料（CardInfo/SetUp）
+ * 目的：把 employeeNo 綁定到 cardNo，讓刷卡能通行。
+ * @param {number} deviceId
+ * @param {object} cardInfo - { employeeNo, cardNo, cardType? }
+ */
+async function setCardInfo(deviceId, cardInfo) {
+  const { client } = await getDeviceAndClient(deviceId);
+  const employeeNo = cardInfo?.employeeNo != null ? String(cardInfo.employeeNo) : "";
+  const cardNo = cardInfo?.cardNo != null ? String(cardInfo.cardNo) : "";
+  const cardType = cardInfo?.cardType || "normalCard";
+
+  if (!employeeNo.trim()) {
+    const err = new Error("請提供 employeeNo");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!cardNo.trim()) {
+    const err = new Error("請提供 cardNo");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await client.request({
+    method: "PUT",
+    path: ISAPI_PATHS.cardInfoSetUp,
+    data: {
+      CardInfo: {
+        employeeNo,
+        cardNo,
+        cardType,
+      },
+    },
+  });
+  return { success: true };
+}
+
+/**
+ * 讀取指紋模板（CaptureFingerPrint）
+ * @param {number} deviceId
+ * @param {object} options - { fingerNo }
+ * @returns {Promise<{ contentType: string, bodyText: string, base64: string, size: number }>}
+ */
+async function captureFingerPrint(deviceId, options = {}) {
+  const { client } = await getDeviceAndClient(deviceId);
+  const fingerNoRaw = options.fingerNo ?? options.fingerPrintID ?? 1;
+  const fingerNo = Number(fingerNoRaw) || 1;
+
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<CaptureFingerPrintCond version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">',
+    `  <fingerNo>${fingerNo}</fingerNo>`,
+    "</CaptureFingerPrintCond>",
+  ].join("\n");
+
+  const res = await client.request({
+    method: "POST",
+    path: ISAPI_PATHS.captureFingerPrint,
+    data: xml,
+    headers: { "Content-Type": "application/xml" },
+    responseType: "arraybuffer",
+  });
+
+  const rawContentType =
+    res.headers?.["content-type"] || res.headers?.["Content-Type"] || "application/xml";
+  const contentType = String(rawContentType).split(";")[0].trim().toLowerCase();
+  const buffer = Buffer.isBuffer(res.data) ? res.data : Buffer.from(res.data);
+  const bodyText = buffer.toString("utf8");
+
+  return {
+    contentType: contentType || "application/xml",
+    bodyText,
+    base64: buffer.toString("base64"),
+    size: buffer.length,
+  };
+}
+
+/**
+ * 上傳指紋模板並綁定 employeeNo（FingerPrint/SetUp）
+ * @param {number} deviceId
+ * @param {object} fingerPrintCfg - { employeeNo, fingerPrintID, fingerType, fingerData, enableCardReader? }
+ */
+async function setFingerPrint(deviceId, fingerPrintCfg) {
+  const { client } = await getDeviceAndClient(deviceId);
+  const employeeNo =
+    fingerPrintCfg?.employeeNo != null ? String(fingerPrintCfg.employeeNo) : "";
+  const fingerPrintID =
+    fingerPrintCfg?.fingerPrintID != null ? Number(fingerPrintCfg.fingerPrintID) : 1;
+  const fingerType = fingerPrintCfg?.fingerType || "normalFP";
+  const fingerData =
+    fingerPrintCfg?.fingerData != null ? String(fingerPrintCfg.fingerData) : "";
+  const enableCardReader = Array.isArray(fingerPrintCfg?.enableCardReader)
+    ? fingerPrintCfg.enableCardReader
+    : undefined;
+
+  if (!employeeNo.trim()) {
+    const err = new Error("請提供 employeeNo");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!fingerData.trim()) {
+    const err = new Error("請提供 fingerData");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await client.request({
+    method: "POST",
+    path: ISAPI_PATHS.fingerPrintSetUp,
+    data: {
+      FingerPrintCfg: {
+        employeeNo,
+        fingerPrintID: Number.isFinite(fingerPrintID) ? fingerPrintID : 1,
+        fingerType,
+        fingerData,
+        ...(enableCardReader ? { enableCardReader } : {}),
+      },
+    },
+  });
+  return { success: true };
 }
 
 module.exports = {
@@ -254,4 +507,8 @@ module.exports = {
   deleteUserInfo,
   updateFace,
   captureFaceData,
+  captureCardInfo,
+  setCardInfo,
+  captureFingerPrint,
+  setFingerPrint,
 };

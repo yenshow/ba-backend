@@ -6,7 +6,6 @@ const deviceModelService = require("../services/devices/deviceModelService");
 const deviceStreamService = require("../services/devices/deviceStreamService");
 const {
   authenticate,
-  requireAdmin,
   requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
@@ -31,68 +30,7 @@ router.get(
   }),
 );
 
-// 根據代碼取得設備類型
-router.get(
-  "/types/code/:code",
-  noCache,
-  asyncHandler(async (req, res) => {
-    const { code } = req.params;
-    const result = await deviceTypeService.getDeviceTypeByCode(code);
-    res.sendSuccess(result);
-  }),
-);
-
-// 取得單一設備類型
-router.get(
-  "/types/:id",
-  noCache,
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const result = await deviceTypeService.getDeviceTypeById(parseInt(id));
-    res.sendSuccess(result);
-  }),
-);
-
-// 建立設備類型（管理員或操作員）
-router.post(
-  "/types",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
-  asyncHandler(async (req, res) => {
-    const result = await deviceTypeService.createDeviceType(req.body);
-    res.sendSuccess(result, 201);
-  }),
-);
-
-// 更新設備類型（管理員或操作員）
-router.put(
-  "/types/:id",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const result = await deviceTypeService.updateDeviceType(
-      parseInt(id),
-      req.body,
-    );
-    res.sendSuccess(result);
-  }),
-);
-
-// 刪除設備類型（管理員或操作員）
-router.delete(
-  "/types/:id",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const result = await deviceTypeService.deleteDeviceType(parseInt(id));
-    res.sendSuccess(result);
-  }),
-);
+// 設備類型固定：只提供列表（GET /types）
 
 // ========== 設備型號 API ==========
 // 注意：必須放在 /:id 之前，避免路由衝突
@@ -102,9 +40,8 @@ router.get(
   "/models",
   noCache,
   asyncHandler(async (req, res) => {
-    const { type_id, type_code } = req.query;
+    const { type_code } = req.query;
     const result = await deviceModelService.getAllDeviceModels({
-      type_id: type_id ? parseInt(type_id) : undefined,
       type_code,
     });
     res.sendSuccess(result);
@@ -174,10 +111,8 @@ router.get(
   "/",
   noCache,
   asyncHandler(async (req, res) => {
-    const { type_id, type_code, status, group, limit, offset, orderBy, order } =
-      req.query;
+    const { type_code, status, group, limit, offset, orderBy, order } = req.query;
     const result = await deviceService.getDevices({
-      type_id: type_id ? parseInt(type_id) : undefined,
       type_code,
       status,
       group: group && String(group).trim() ? String(group).trim() : undefined,

@@ -28,12 +28,11 @@ async function checkLightingAreas() {
 				COALESCE(ls.system_config->>'device_id', ls.system_config->>'deviceId') as device_id,
 				ls.system_config->'modbus_config' as modbus_config,
 				d.config as device_config,
-				dt.code as device_type_code
+				d.type_code as device_type_code
 			FROM locations l
 			INNER JOIN zones z ON l.zone_id = z.id
 			INNER JOIN location_systems ls ON l.id = ls.location_id
 			INNER JOIN devices d ON COALESCE((ls.system_config->>'device_id')::integer, (ls.system_config->>'deviceId')::integer) = d.id
-			LEFT JOIN device_types dt ON d.type_id = dt.id
 			WHERE ls.system_type = 'lighting'
 				AND (ls.system_config->>'device_id' IS NOT NULL OR ls.system_config->>'deviceId' IS NOT NULL)
 				AND d.status = 'active'

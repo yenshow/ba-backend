@@ -150,7 +150,7 @@ async function batchGetGroupPersonIds(groupIds) {
   );
 }
 
-async function getUnitsByGroupIds(groupIds, records, entryDoorId, exitDoorId) {
+async function getUnitsByGroupIds(groupIds, records, entryDoorIds, exitDoorIds) {
   if (groupIds.length === 0) return [];
   const groupMap = await batchGetGroups(groupIds);
   const groupPersonMap = await batchGetGroupPersonIds(groupIds);
@@ -164,8 +164,8 @@ async function getUnitsByGroupIds(groupIds, records, entryDoorId, exitDoorId) {
     );
     const currentCount = calculateCurrentCount(
       unitRecords,
-      entryDoorId,
-      exitDoorId,
+      entryDoorIds,
+      exitDoorIds,
     );
     units.push({
       id: group.id,
@@ -216,7 +216,7 @@ async function batchGetSitesData(locations, getPeopleCountingConfig) {
   return siteDataMap;
 }
 
-async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
+async function getLatestEntryExitRecords(personIds, entryDoorIds, exitDoorIds) {
   if (personIds.length === 0) return new Map();
   const placeholders = generatePlaceholders(personIds);
   const sql = `
@@ -232,7 +232,7 @@ async function getLatestEntryExitRecords(personIds, entryDoorId, exitDoorId) {
   allRecords.forEach((record) => {
     const personId = record.person_id;
     if (personId === -1) return;
-    const eventType = parseEventType(record, entryDoorId, exitDoorId);
+    const eventType = parseEventType(record, entryDoorIds, exitDoorIds);
     if (eventType === null) return;
     const pr = personRecords.get(personId);
     if (eventType === "entry" && !pr.lastEntry) pr.lastEntry = record;
@@ -291,7 +291,7 @@ function generateRecordId(personId, timestamp) {
  * 單一工地完整資料（統計 + 單位列表），供 getSites / getSiteStats 使用
  */
 async function getSiteData(siteId, config) {
-  const { personGroupIds, entryDoorId, exitDoorId } = config;
+  const { personGroupIds, entryDoorIds, exitDoorIds } = config;
   if (personGroupIds.length === 0) {
     return { entryCount: 0, exitCount: 0, currentCount: 0, units: [] };
   }
@@ -302,19 +302,19 @@ async function getSiteData(siteId, config) {
   const todayRecords = await getTodayRecordsOnly(personIds);
   const stats = calculateTodayStatsByPhysicalId(
     todayRecords,
-    entryDoorId,
-    exitDoorId,
+    entryDoorIds,
+    exitDoorIds,
   );
   const currentCount = calculateCurrentCount(
     todayRecords,
-    entryDoorId,
-    exitDoorId,
+    entryDoorIds,
+    exitDoorIds,
   );
   const units = await getUnitsByGroupIds(
     personGroupIds,
     todayRecords,
-    entryDoorId,
-    exitDoorId,
+    entryDoorIds,
+    exitDoorIds,
   );
   return {
     entryCount: stats.entryCount,
@@ -345,22 +345,22 @@ async function getSitesData(locations, getPeopleCountingConfig) {
     if (!data || cfg.personGroupIds.length === 0) continue;
     const stats = calculateTodayStatsByPhysicalId(
       data.records,
-      cfg.entryDoorId,
-      cfg.exitDoorId,
+      cfg.entryDoorIds,
+      cfg.exitDoorIds,
     );
     const units = await getUnitsByGroupIds(
       cfg.personGroupIds,
       data.records,
-      cfg.entryDoorId,
-      cfg.exitDoorId,
+      cfg.entryDoorIds,
+      cfg.exitDoorIds,
     );
     result.set(locationId, {
       entryCount: stats.entryCount,
       exitCount: stats.exitCount,
       currentCount: calculateCurrentCount(
         data.records,
-        cfg.entryDoorId,
-        cfg.exitDoorId,
+        cfg.entryDoorIds,
+        cfg.exitDoorIds,
       ),
       units,
     });
@@ -372,12 +372,11 @@ async function getSitesData(locations, getPeopleCountingConfig) {
  * 進出紀錄
  */
 async function getSiteLogs(siteId, config, options = {}, context = {}) {
-  const { entryDoorId, exitDoorId } = config;
+  const { entryDoorIds, exitDoorIds } = config;
   const generateRecordIdFn = context.generateRecordId || generateRecordId;
-  const allowedPhysicalIds = [entryDoorId, exitDoorId]
-    .filter((v) => v != null && v !== undefined)
+  const allowedPhysicalIds = [...new Set([...(entryDoorIds || []), ...(exitDoorIds || [])])]
     .map((v) => Number(v))
-    .filter((v) => !Number.isNaN(v));
+    .filter((v) => Number.isFinite(v) && v > 0);
   if (allowedPhysicalIds.length === 0) return { logs: [] };
   const records = await getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, {
     limit: options.limit ?? 50,
@@ -401,7 +400,7 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
   const doorNameMap =
     await peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds);
   const logs = sortedRecords.map((record) => {
-    const eventType = parseEventType(record, entryDoorId, exitDoorId);
+    const eventType = parseEventType(record, entryDoorIds, exitDoorIds);
     const physicalId =
       record.physical_id != null ? Number(record.physical_id) : null;
     const deviceName =
@@ -429,7 +428,7 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
  * 單位人員列表
  */
 async function getUnitPersonnel(unitId, siteId, config) {
-  const { entryDoorId, exitDoorId } = config;
+  const { entryDoorIds, exitDoorIds } = config;
   const sql = `
     SELECT id, person_group_id, person_type, full_name, person_code
     FROM platform.person
@@ -444,8 +443,8 @@ async function getUnitPersonnel(unitId, siteId, config) {
   const todayRecords = await getTodayRecordsOnly(personIds);
   const todayStats = calculateTodayStatsByPhysicalId(
     todayRecords,
-    entryDoorId,
-    exitDoorId,
+    entryDoorIds,
+    exitDoorIds,
   );
   const { start: todayStart, end: todayEnd } = getTodayTimeRange();
   const personTodayRecordsMap = new Map();
@@ -458,8 +457,8 @@ async function getUnitPersonnel(unitId, siteId, config) {
   });
   const latestRecords = await getLatestEntryExitRecords(
     personIds,
-    entryDoorId,
-    exitDoorId,
+    entryDoorIds,
+    exitDoorIds,
   );
   const personnel = persons.map((person) => {
     const headPic = headPicMap.get(person.id);
@@ -489,7 +488,7 @@ async function getUnitPersonnel(unitId, siteId, config) {
         : null;
       const todayExitRecord = personTodayRecords.find((r) => {
         const recordTime = new Date(r.swip_card_rev_time);
-        const et = parseEventType(r, entryDoorId, exitDoorId);
+        const et = parseEventType(r, entryDoorIds, exitDoorIds);
         return et === "exit" && recordTime > entryTime;
       });
       if (todayExitRecord)

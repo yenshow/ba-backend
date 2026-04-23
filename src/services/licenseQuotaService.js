@@ -2,7 +2,7 @@ const db = require("../database/db");
 
 /**
  * v1 quota 計數策略（避免先做 schema migration）：
- * - camera -> surveillance（依 device_types.code）
+ * - camera -> surveillance（依 devices.type_code）
  * - sensor -> environment
  * - access_control -> people_counting
  * - controller（lighting/drainage/fire/emergency_rescue）-> 以 location_systems 綁定為準（系統內 DISTINCT 去重）
@@ -32,8 +32,7 @@ const countByDeviceTypeCode = async (typeCode) => {
   const rows = await db.query(
     `SELECT COUNT(*)::int AS count
      FROM devices d
-     INNER JOIN device_types dt ON d.type_id = dt.id
-     WHERE dt.code = ?`,
+     WHERE d.type_code = ?`,
     [typeCode],
   );
   return Number(rows?.[0]?.count ?? 0);
@@ -56,8 +55,7 @@ const countControllersBySystemBinding = async (systemType) => {
          )
      ) x
      INNER JOIN devices d ON d.id = x.device_id
-     INNER JOIN device_types dt ON dt.id = d.type_id
-     WHERE dt.code = 'controller'`,
+     WHERE d.type_code = 'controller'`,
     [systemType],
   );
   return Number(rows?.[0]?.count ?? 0);

@@ -100,40 +100,11 @@ function buildAuthHeader(challenge, method, uri, username, password) {
  * @returns {object} - { request(options) }
  */
 function createIsapiClient(deviceConfig) {
-  // devices.config.host 在資料上常見混用：
-  // - "192.168.2.31"
-  // - "192.168.2.31:80"
-  // - "http://192.168.2.31" / "http://192.168.2.31:80"
-  // 這裡統一正規化，避免拼出 http://http://... 或重複 port 導致 timeout。
-  const rawHost = String(deviceConfig.host || "").trim();
-  let normalizedHost = rawHost;
-  let hostPortFromHost = null;
-
-  if (/^https?:\/\//i.test(normalizedHost)) {
-    try {
-      const parsed = new URL(normalizedHost);
-      normalizedHost = parsed.hostname;
-      if (parsed.port) hostPortFromHost = Number(parsed.port) || null;
-    } catch {
-      // ignore; fall back to rawHost parsing below
-    }
-  }
-
-  // 允許 host 以 "ip:port" 或 "hostname:port" 形式輸入（排除 IPv6）
-  if (!/^https?:\/\//i.test(rawHost) && normalizedHost.includes(":")) {
-    const parts = normalizedHost.split(":");
-    if (parts.length === 2 && parts[0] && parts[1] && /^\d+$/.test(parts[1])) {
-      normalizedHost = parts[0];
-      hostPortFromHost = Number(parts[1]) || null;
-    }
-  }
-
-  const host = normalizedHost;
-  const portRaw =
+  const host = deviceConfig.host;
+  const port =
     deviceConfig.port === undefined || deviceConfig.port === null
-      ? undefined
-      : Number(deviceConfig.port);
-  const port = portRaw || hostPortFromHost || 80;
+      ? 80
+      : Number(deviceConfig.port) || 80;
   const username = deviceConfig.username;
   const password = deviceConfig.password;
   const baseURL = port === 80 ? `http://${host}` : `http://${host}:${port}`;
@@ -143,23 +114,12 @@ function createIsapiClient(deviceConfig) {
     const url = path.startsWith("http") ? path : `${baseURL}${path}`;
     const uri = new URL(url).pathname + new URL(url).search;
 
-    let probeRes;
-    try {
-      probeRes = await axios({
-        method: "GET",
-        url: baseURL + "/ISAPI/System/deviceInfo",
-        validateStatus: () => true,
-        timeout: 10000,
-        // 避免環境變數 HTTP(S)_PROXY 造成內網設備走代理而 timeout
-        proxy: false,
-      });
-    } catch (err) {
-      const urlHint = `${baseURL}/ISAPI/System/deviceInfo`;
-      const code = err?.code ? ` (${err.code})` : "";
-      const e = new Error(`ISAPI 連線失敗${code}：${err?.message || String(err)} [${urlHint}]`);
-      e.cause = err;
-      throw e;
-    }
+    const probeRes = await axios({
+      method: "GET",
+      url: baseURL + "/ISAPI/System/deviceInfo",
+      validateStatus: () => true,
+      timeout: 10000,
+    });
     if (probeRes.status !== 401 || !probeRes.headers["www-authenticate"]) {
       throw new Error("預期設備回傳 401 Digest 挑戰");
     }
@@ -183,18 +143,9 @@ function createIsapiClient(deviceConfig) {
       validateStatus: (status) => status < 500,
       maxRedirects: 0,
       timeout: 60000,
-      proxy: false,
     };
     if (responseType) config.responseType = responseType;
-    let res;
-    try {
-      res = await axios(config);
-    } catch (err) {
-      const code = err?.code ? ` (${err.code})` : "";
-      const e = new Error(`ISAPI 請求失敗${code}：${err?.message || String(err)} [${url}]`);
-      e.cause = err;
-      throw e;
-    }
+    const res = await axios(config);
     throwIfBadStatus(res);
     return res;
   }
@@ -226,24 +177,14 @@ function createIsapiClient(deviceConfig) {
       headers: { "Content-Type": contentType, ...headers },
       validateStatus: (status) => status < 500,
       maxRedirects: 0,
-      timeout: 60000,
-      // 避免環境變數 HTTP(S)_PROXY 造成內網設備走代理而 timeout
-      proxy: false,
+      timeout: 1000000,
     };
     if (data !== undefined) {
       config.data = typeof data === "string" ? data : JSON.stringify(data);
     }
     if (responseType) config.responseType = responseType;
 
-    let res;
-    try {
-      res = await axios(config);
-    } catch (err) {
-      const code = err?.code ? ` (${err.code})` : "";
-      const e = new Error(`ISAPI 請求失敗${code}：${err?.message || String(err)} [${url}]`);
-      e.cause = err;
-      throw e;
-    }
+    let res = await axios(config);
     if (res.status === 401 && res.headers["www-authenticate"]) {
       const authHeader = res.headers["www-authenticate"];
       if (!authHeader.toLowerCase().startsWith("digest ")) {
@@ -258,17 +199,10 @@ function createIsapiClient(deviceConfig) {
         username,
         password,
       );
-      try {
-        res = await axios({
-          ...config,
-          headers: { ...config.headers, Authorization: digestAuth },
-        });
-      } catch (err) {
-        const code = err?.code ? ` (${err.code})` : "";
-        const e = new Error(`ISAPI Digest 重試失敗${code}：${err?.message || String(err)} [${url}]`);
-        e.cause = err;
-        throw e;
-      }
+      res = await axios({
+        ...config,
+        headers: { ...config.headers, Authorization: digestAuth },
+      });
     }
     throwIfBadStatus(res);
     return res;
@@ -286,22 +220,12 @@ function createIsapiClient(deviceConfig) {
     const method = "POST";
     const uri = path;
 
-    let probeRes;
-    try {
-      probeRes = await axios({
-        method: "GET",
-        url: baseURL + "/ISAPI/System/deviceInfo",
-        validateStatus: () => true,
-        timeout: 10000,
-        proxy: false,
-      });
-    } catch (err) {
-      const urlHint = `${baseURL}/ISAPI/System/deviceInfo`;
-      const code = err?.code ? ` (${err.code})` : "";
-      const e = new Error(`ISAPI 連線失敗${code}：${err?.message || String(err)} [${urlHint}]`);
-      e.cause = err;
-      throw e;
-    }
+    const probeRes = await axios({
+      method: "GET",
+      url: baseURL + "/ISAPI/System/deviceInfo",
+      validateStatus: () => true,
+      timeout: 10000,
+    });
     if (probeRes.status !== 401 || !probeRes.headers["www-authenticate"]) {
       throw new Error("預期設備回傳 401 Digest 挑戰");
     }
@@ -318,28 +242,20 @@ function createIsapiClient(deviceConfig) {
       password,
     );
 
-    try {
-      const res = await axios({
-        method,
-        url,
-        headers: {
-          "Content-Type": "application/xml",
-          Authorization: digestAuth,
-        },
-        data: xmlBody,
-        responseType: "stream",
-        validateStatus: (status) => status >= 200 && status < 400,
-        maxRedirects: 0,
-        timeout: 0,
-        proxy: false,
-      });
-      return res;
-    } catch (err) {
-      const code = err?.code ? ` (${err.code})` : "";
-      const e = new Error(`ISAPI 訂閱失敗${code}：${err?.message || String(err)} [${url}]`);
-      e.cause = err;
-      throw e;
-    }
+    const res = await axios({
+      method,
+      url,
+      headers: {
+        "Content-Type": "application/xml",
+        Authorization: digestAuth,
+      },
+      data: xmlBody,
+      responseType: "stream",
+      validateStatus: (status) => status >= 200 && status < 400,
+      maxRedirects: 0,
+      timeout: 0,
+    });
+    return res;
   }
 
   return {

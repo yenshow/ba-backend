@@ -100,25 +100,31 @@ async function checkPeopleCountingRecords(options = {}) {
     // 建立地點配置映射（用於判斷事件類型和關聯地點）
     const locationConfigMap = new Map();
     allLocations.forEach((location) => {
-      const { entryDoorId, exitDoorId } = getPeopleCountingConfig(location);
+      const { entryDoorIds, exitDoorIds } = getPeopleCountingConfig(location);
       // 統一 ID 型別：前端/WS event 期望 number，避免字串造成 === 比對失敗
       const locationId = location?.id != null ? Number(location.id) : null;
 
       // 為每個 physical_id 建立映射
-      if (entryDoorId) {
-        locationConfigMap.set(entryDoorId, {
+      const entryIds = Array.isArray(entryDoorIds) ? entryDoorIds : [];
+      const exitIds = Array.isArray(exitDoorIds) ? exitDoorIds : [];
+      for (const id of entryIds) {
+        const n = Number(id);
+        if (!Number.isFinite(n) || n <= 0) continue;
+        locationConfigMap.set(n, {
           locationId,
           locationName: location.name,
-          entryDoorId,
-          exitDoorId,
+          entryDoorIds: entryIds,
+          exitDoorIds: exitIds,
         });
       }
-      if (exitDoorId) {
-        locationConfigMap.set(exitDoorId, {
+      for (const id of exitIds) {
+        const n = Number(id);
+        if (!Number.isFinite(n) || n <= 0) continue;
+        locationConfigMap.set(n, {
           locationId,
           locationName: location.name,
-          entryDoorId,
-          exitDoorId,
+          entryDoorIds: entryIds,
+          exitDoorIds: exitIds,
         });
       }
     });
@@ -138,8 +144,8 @@ async function checkPeopleCountingRecords(options = {}) {
       // 判斷事件類型（entry/exit）- 重用 peopleCountingService 的邏輯
       const eventType = parseEventType(
         record,
-        locationConfig?.entryDoorId,
-        locationConfig?.exitDoorId
+        locationConfig?.entryDoorIds,
+        locationConfig?.exitDoorIds
       );
 
       // 記錄處理完成（不再推送 WebSocket，由前端收到 YSCP 事件後重新載入資料）

@@ -31,22 +31,28 @@ function ensureUploadsDir() {
 }
 
 /**
- * 取得需訂閱的門禁設備 ID 列表（people_counting 地點的 entry_device_id、exit_device_id 去重）
+ * 取得需訂閱的門禁設備 ID 列表（people_counting 地點的 entry_device_ids、exit_device_ids 去重）
  */
 async function getDeviceIdsToSubscribe() {
   const rows = await db.query(
-    `SELECT DISTINCT (ls.system_config->>'entry_device_id') AS id FROM location_systems ls
-     WHERE ls.system_type = 'people_counting'
-       AND (ls.system_config->>'entry_device_id') IS NOT NULL AND (ls.system_config->>'entry_device_id') != ''
-     UNION
-     SELECT DISTINCT (ls.system_config->>'exit_device_id') AS id FROM location_systems ls
-     WHERE ls.system_type = 'people_counting'
-       AND (ls.system_config->>'exit_device_id') IS NOT NULL AND (ls.system_config->>'exit_device_id') != ''`,
+    `
+      SELECT DISTINCT (jsonb_array_elements_text(ls.system_config->'entry_device_ids'))::int AS id
+      FROM location_systems ls
+      WHERE ls.system_type = 'people_counting'
+        AND COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+
+      UNION
+
+      SELECT DISTINCT (jsonb_array_elements_text(ls.system_config->'exit_device_ids'))::int AS id
+      FROM location_systems ls
+      WHERE ls.system_type = 'people_counting'
+        AND COALESCE(jsonb_array_length(ls.system_config->'exit_device_ids'), 0) > 0
+    `,
     [],
   );
   const ids = new Set();
   for (const r of rows || []) {
-    const n = r.id != null ? parseInt(r.id, 10) : NaN;
+    const n = r.id != null ? parseInt(String(r.id), 10) : NaN;
     if (Number.isFinite(n)) ids.add(n);
   }
   return Array.from(ids);

@@ -102,7 +102,9 @@ router.put(
     const deviceId = parseInt(req.params.deviceId);
     const employeeNo = req.params.employeeNo;
     if (!req.file || !req.file.buffer) {
-      return res.status(400).json({ error: "請上傳人臉圖片（欄位名：img）" });
+      const err = new Error("請上傳人臉圖片（欄位名：img）");
+      err.statusCode = 400;
+      throw err;
     }
     const options = {};
     if (req.body?.faceLibType) options.faceLibType = req.body.faceLibType;
@@ -121,7 +123,7 @@ router.put(
 /**
  * 呼叫設備截圖（捕獲人臉資料）
  * POST /api/access-control/devices/:deviceId/capture-face
- * Body（可選）: { dataType?, captureInfrared?, readerID? } 覆寫型號預設
+ * Body（可選）: { captureInfrared?, readerID? }
  */
 router.post(
   "/devices/:deviceId/capture-face",
@@ -135,6 +137,75 @@ router.post(
       req.body || {},
     );
     res.sendSuccess(data);
+  }),
+);
+
+/**
+ * 呼叫設備讀卡（CaptureCardInfo）
+ * GET /api/access-control/devices/:deviceId/capture-card
+ */
+router.get(
+  "/devices/:deviceId/capture-card",
+  authenticate,
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const data = await accessControlService.captureCardInfo(deviceId);
+    res.sendSuccess(data);
+  }),
+);
+
+/**
+ * 綁定卡片（CardInfo/SetUp）
+ * PUT /api/access-control/devices/:deviceId/card-info
+ * Body: { CardInfo: { employeeNo, cardNo, cardType } } 或直接傳 CardInfo 欄位
+ */
+router.put(
+  "/devices/:deviceId/card-info",
+  authenticate,
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const cardInfo = req.body.CardInfo || req.body;
+    const result = await accessControlService.setCardInfo(deviceId, cardInfo);
+    res.sendSuccess(result);
+  }),
+);
+
+/**
+ * 呼叫設備讀取指紋模板（CaptureFingerPrint）
+ * POST /api/access-control/devices/:deviceId/capture-fingerprint
+ * Body: { fingerNo }（預設 1）
+ */
+router.post(
+  "/devices/:deviceId/capture-fingerprint",
+  authenticate,
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const data = await accessControlService.captureFingerPrint(deviceId, req.body || {});
+    res.sendSuccess(data);
+  }),
+);
+
+/**
+ * 上傳指紋模板並綁定 employeeNo（FingerPrint/SetUp）
+ * POST /api/access-control/devices/:deviceId/fingerprint
+ * Body: { FingerPrintCfg: {...} } 或直接傳 FingerPrintCfg 欄位
+ */
+router.post(
+  "/devices/:deviceId/fingerprint",
+  authenticate,
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const cfg = req.body.FingerPrintCfg || req.body;
+    const result = await accessControlService.setFingerPrint(deviceId, cfg);
+    res.sendSuccess(result);
   }),
 );
 

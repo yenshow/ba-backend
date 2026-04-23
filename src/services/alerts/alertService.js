@@ -5,6 +5,7 @@ const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");
 const { notifyNewAlertByEmail } = require("./alertEmailNotifier");
 const logger = require("../../utils/logger");
+const { getDeviceTypeName } = require("../../constants/deviceTypes");
 
 const alertLogger = logger.createLogger("alertService");
 
@@ -483,13 +484,8 @@ function buildAlertSelectQuery() {
       a.updated_at,
       iu.username as ignored_by_username,
       CASE 
-        WHEN a.source = 'device' THEN dt.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN dt_system.name
-        ELSE NULL
-      END as device_type_name,
-      CASE 
-        WHEN a.source = 'device' THEN dt.code
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN dt_system.code
+        WHEN a.source = 'device' THEN d.type_code
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN d_system.type_code
         ELSE NULL
       END as device_type_code,
       CASE 
@@ -510,12 +506,11 @@ function buildAlertSelectQuery() {
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-    LEFT JOIN device_types dt ON d.type_id = dt.id
     LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
-    LEFT JOIN device_types dt_system ON d_system.type_id = dt_system.id`;
+    `;
 }
 
 /**
@@ -649,7 +644,12 @@ async function getAlerts(filters = {}) {
     const total = parseInt(countResult[0]?.total || 0);
 
     // 正規化回傳（含相容欄位）
-    const enrichedAlerts = (alerts || []).map(enrichAlert);
+    const enrichedAlerts = (alerts || []).map((row) =>
+      enrichAlert({
+        ...row,
+        device_type_name: getDeviceTypeName(row.device_type_code),
+      }),
+    );
 
     return {
       alerts: enrichedAlerts,
@@ -1556,15 +1556,10 @@ async function getAlertById(id) {
       SELECT 
         a.*,
         iu.username as ignored_by_username,
-        -- 設備類型資訊（適用於設備來源和系統的關聯設備）
+        -- 設備類型資訊（type_code 固定映射；不查 deviceTypes 表）
         CASE 
-          WHEN a.source = 'device' THEN dt.name
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN dt_system.name
-          ELSE NULL
-        END as device_type_name,
-        CASE 
-          WHEN a.source = 'device' THEN dt.code
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN dt_system.code
+          WHEN a.source = 'device' THEN d.type_code
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN d_system.type_code
           ELSE NULL
         END as device_type_code,
         -- 來源名稱（統一欄位，適用於所有來源類型）
@@ -1588,13 +1583,11 @@ async function getAlertById(id) {
       FROM alerts a
       LEFT JOIN users iu ON a.ignored_by = iu.id
       LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-      LEFT JOIN device_types dt ON d.type_id = dt.id
       -- 使用新架構：location_systems 關聯到 locations 和 zones
       LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
       LEFT JOIN zones z ON l.zone_id = z.id
       LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
-      LEFT JOIN device_types dt_system ON d_system.type_id = dt_system.id
       WHERE a.id = ?
     `;
     const result = await db.query(query, [id]);
@@ -1603,7 +1596,11 @@ async function getAlertById(id) {
       throw new Error(`警報 ID ${id} 不存在`);
     }
 
-    return enrichAlert(result[0]);
+    const row = result[0];
+    return enrichAlert({
+      ...row,
+      device_type_name: getDeviceTypeName(row.device_type_code),
+    });
   } catch (error) {
     devLog.error(`[alertService] 取得警報失敗 (ID: ${id}): ` + error.message);
     throw error;
@@ -1631,10 +1628,10 @@ async function getResolvedAlertsForBackup(beforeDate) {
       a.updated_at,
       iu.username as ignored_by_username,
       CASE 
-        WHEN a.source = 'device' THEN dt.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN dt_system.name
+        WHEN a.source = 'device' THEN d.type_code
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN d_system.type_code
         ELSE NULL
-      END as device_type_name,
+      END as device_type_code,
       CASE 
         WHEN a.source = 'device' THEN d.name
         WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN l.name
@@ -1652,17 +1649,20 @@ async function getResolvedAlertsForBackup(beforeDate) {
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-    LEFT JOIN device_types dt ON d.type_id = dt.id
     LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
-    LEFT JOIN device_types dt_system ON d_system.type_id = dt_system.id
     WHERE a.status = 'resolved' AND a.updated_at < ?
     ORDER BY a.updated_at ASC
   `;
   const result = await db.query(query, [beforeDate]);
-  return result || [];
+  return (result || []).map((row) =>
+    enrichAlert({
+      ...row,
+      device_type_name: getDeviceTypeName(row.device_type_code),
+    }),
+  );
 }
 
 module.exports = {

@@ -11,6 +11,10 @@ const licenseService = require("../licenseService");
 const licenseQuotaService = require("../licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const logger = require("../../utils/logger");
+const {
+  normalizeDeviceTypeCode,
+  getDeviceTypeName,
+} = require("../../constants/deviceTypes");
 
 const deviceLogger = logger.createLogger("deviceService");
 
@@ -18,7 +22,6 @@ const deviceLogger = logger.createLogger("deviceService");
 async function getDevices(filters = {}) {
   try {
     const {
-      type_id,
       type_code,
       status,
       group,
@@ -31,23 +34,15 @@ async function getDevices(filters = {}) {
     let query = `
 			SELECT 
 				d.*,
-				dt.name as type_name,
-				dt.code as type_code,
 				dm.name as model_name
 			FROM devices d
-			INNER JOIN device_types dt ON d.type_id = dt.id
 			LEFT JOIN device_models dm ON d.model_id = dm.id
 			WHERE 1=1
 		`;
     const params = [];
 
-    if (type_id) {
-      query += " AND d.type_id = ?";
-      params.push(type_id);
-    }
-
     if (type_code) {
-      query += " AND dt.code = ?";
+      query += " AND d.type_code = ?";
       params.push(type_code);
     }
 
@@ -79,18 +74,12 @@ async function getDevices(filters = {}) {
     let countQuery = `
 			SELECT COUNT(*) as total
 			FROM devices d
-			INNER JOIN device_types dt ON d.type_id = dt.id
 			WHERE 1=1
 		`;
     const countParams = [];
 
-    if (type_id) {
-      countQuery += " AND d.type_id = ?";
-      countParams.push(type_id);
-    }
-
     if (type_code) {
-      countQuery += " AND dt.code = ?";
+      countQuery += " AND d.type_code = ?";
       countParams.push(type_code);
     }
 
@@ -110,6 +99,7 @@ async function getDevices(filters = {}) {
     // 解析 config JSON
     const devicesWithConfig = devices.map((device) => ({
       ...device,
+      type_name: getDeviceTypeName(device.type_code),
       config: parseConfig(device.config),
     }));
 
@@ -135,14 +125,11 @@ async function getDeviceById(id) {
       `
 			SELECT 
 				d.*,
-				dt.name as type_name,
-				dt.code as type_code,
 				dm.id as model_id,
 				dm.name as model_name,
 				dm.port as model_port,
 				dm.config as model_config
 			FROM devices d
-			INNER JOIN device_types dt ON d.type_id = dt.id
 			LEFT JOIN device_models dm ON d.model_id = dm.id
 			WHERE d.id = ?
 		`,
@@ -156,6 +143,7 @@ async function getDeviceById(id) {
     }
 
     const device = devices[0];
+    device.type_name = getDeviceTypeName(device.type_code);
     device.config = parseConfig(device.config);
 
     // 如果設備有 model_id，包含完整的 model 資訊（含 config）
@@ -191,7 +179,7 @@ async function getDeviceById(id) {
 // 創建設備
 async function createDevice(deviceData, userId) {
   try {
-    const { name, type_id, model_id, description, status, config } = deviceData;
+    const { name, type_code, model_id, description, status, config } = deviceData;
 
     // 驗證必填欄位
     if (!name || name.trim().length === 0) {
@@ -202,24 +190,16 @@ async function createDevice(deviceData, userId) {
       throw new Error("設備名稱長度不能超過 100 字元");
     }
 
-    if (!type_id) {
-      throw new Error("設備類型 ID 不能為空");
+    const inputTypeCode = normalizeDeviceTypeCode(type_code);
+    if (!inputTypeCode) {
+      throw new Error("設備類型不能為空");
     }
 
     if (!config) {
       throw new Error("設備配置不能為空");
     }
 
-    // 驗證設備類型是否存在
-    const types = await db.query(
-      "SELECT id, code FROM device_types WHERE id = ?",
-      [type_id],
-    );
-    if (types.length === 0) {
-      throw new Error("設備類型不存在");
-    }
-
-    const typeCode = types[0].code;
+    const typeCode = inputTypeCode;
 
     // Quota/授權：決定此設備歸屬的 feature key（若可判定）
     const inputSystemType =
@@ -289,14 +269,14 @@ async function createDevice(deviceData, userId) {
 
     // 驗證設備型號是否存在且類型匹配
     const models = await db.query(
-      "SELECT id, type_id, port, unit_id FROM device_models WHERE id = ?",
+      "SELECT id, type_code, port, unit_id FROM device_models WHERE id = ?",
       [model_id],
     );
     if (models.length === 0) {
       throw new Error("設備型號不存在");
     }
 
-    if (models[0].type_id !== type_id) {
+    if (String(models[0].type_code || "") !== typeCode) {
       throw new Error("設備型號的類型與設備類型不匹配");
     }
 
@@ -337,10 +317,10 @@ async function createDevice(deviceData, userId) {
           // 查詢相同 host + port 的設備，找出已使用的 unitId
           const existingDevices = await db.query(
             `SELECT config FROM devices 
-					WHERE type_id = ? 
+					WHERE type_code = ? 
 					AND config->>'host' = ? 
 					AND (config->>'port')::integer = ?`,
-            [type_id, config.host, finalPort],
+            [typeCode, config.host, finalPort],
           );
 
           // 找出已使用的 unitId
@@ -369,11 +349,11 @@ async function createDevice(deviceData, userId) {
       // 檢查是否已有相同連接配置的設備（host + port + unitId）
       const existing = await db.query(
         `SELECT id FROM devices 
-				WHERE type_id = ? 
+				WHERE type_code = ? 
 				AND config->>'host' = ? 
 				AND (config->>'port')::integer = ? 
 				AND (config->>'unitId')::integer = ?`,
-        [type_id, config.host, finalPort, config.unitId],
+        [typeCode, config.host, finalPort, config.unitId],
       );
 
       if (existing.length > 0) {
@@ -406,11 +386,11 @@ async function createDevice(deviceData, userId) {
           // 查詢相同 host + port 的設備，找出已使用的 unitId
           const existingDevices = await db.query(
             `SELECT config FROM devices 
-					WHERE type_id = ? 
+					WHERE type_code = ? 
 					AND config->>'protocol' = 'modbus'
 					AND config->>'host' = ? 
 					AND (config->>'port')::integer = ?`,
-            [type_id, config.host, finalPort],
+            [typeCode, config.host, finalPort],
           );
 
           // 找出已使用的 unitId
@@ -443,12 +423,12 @@ async function createDevice(deviceData, userId) {
       // 檢查是否已有相同連接配置的設備（host + port + unitId）
       const existing = await db.query(
         `SELECT id FROM devices 
-				WHERE type_id = ? 
+				WHERE type_code = ? 
 				AND config->>'protocol' = 'modbus'
 				AND config->>'host' = ? 
 				AND (config->>'port')::integer = ? 
 				AND (config->>'unitId')::integer = ?`,
-        [type_id, config.host, finalPort, config.unitId],
+        [typeCode, config.host, finalPort, config.unitId],
       );
 
       if (existing.length > 0) {
@@ -460,10 +440,10 @@ async function createDevice(deviceData, userId) {
 
     // 建立設備
     const result = await db.query(
-      "INSERT INTO devices (name, type_id, model_id, description, status, config, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+      "INSERT INTO devices (name, type_code, model_id, description, status, config, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
       [
         name.trim(),
-        type_id,
+        typeCode,
         model_id,
         description || null,
         status || "inactive",
@@ -514,7 +494,7 @@ async function createDevice(deviceData, userId) {
 // 更新設備
 async function updateDevice(id, deviceData, userId) {
   try {
-    const { name, type_id, model_id, description, status, config } = deviceData;
+    const { name, model_id, description, status, config, type_code } = deviceData;
 
     // 檢查設備是否存在
     const existing = await db.query("SELECT * FROM devices WHERE id = ?", [id]);
@@ -541,17 +521,13 @@ async function updateDevice(id, deviceData, userId) {
       params.push(name.trim());
     }
 
-    if (type_id !== undefined) {
-      // 驗證設備類型是否存在
-      const types = await db.query(
-        "SELECT id, code FROM device_types WHERE id = ?",
-        [type_id],
-      );
-      if (types.length === 0) {
-        throw new Error("設備類型不存在");
+    if (type_code !== undefined) {
+      const normalized = normalizeDeviceTypeCode(type_code);
+      if (!normalized) {
+        throw new Error("設備類型代碼不正確");
       }
-      updates.push("type_id = ?");
-      params.push(type_id);
+      updates.push("type_code = ?");
+      params.push(normalized);
     }
 
     if (model_id !== undefined) {
@@ -562,7 +538,7 @@ async function updateDevice(id, deviceData, userId) {
 
       // 驗證設備型號是否存在
       const models = await db.query(
-        "SELECT id, type_id, port FROM device_models WHERE id = ?",
+        "SELECT id, type_code, port, unit_id FROM device_models WHERE id = ?",
         [model_id],
       );
       if (models.length === 0) {
@@ -570,9 +546,9 @@ async function updateDevice(id, deviceData, userId) {
       }
 
       // 驗證類型匹配
-      const currentTypeId =
-        type_id !== undefined ? type_id : existingDevice.type_id;
-      if (models[0].type_id !== currentTypeId) {
+      const currentTypeCode =
+        normalizeDeviceTypeCode(type_code) || String(existingDevice.type_code || "");
+      if (String(models[0].type_code || "") !== String(currentTypeCode || "")) {
         throw new Error("設備型號的類型與設備類型不匹配");
       }
 
@@ -595,13 +571,8 @@ async function updateDevice(id, deviceData, userId) {
 
     if (config !== undefined) {
       // 取得當前或新的類型代碼
-      let currentTypeId =
-        type_id !== undefined ? type_id : existingDevice.type_id;
-      const types = await db.query(
-        "SELECT code FROM device_types WHERE id = ?",
-        [currentTypeId],
-      );
-      const typeCode = types[0].code;
+      const typeCode =
+        normalizeDeviceTypeCode(type_code) || String(existingDevice.type_code || "");
 
       // 驗證配置
       validateDeviceConfig(config, typeCode);
@@ -652,11 +623,11 @@ async function updateDevice(id, deviceData, userId) {
               // 查詢相同 host + port 的設備，找出已使用的 unitId（排除當前設備）
               const existingDevices = await db.query(
                 `SELECT config FROM devices 
-							WHERE type_id = ? 
+							WHERE type_code = ? 
 							AND id != ?
 							AND config->>'host' = ? 
 							AND (config->>'port')::integer = ?`,
-                [currentTypeId, id, finalHost, finalPort],
+                [typeCode, id, finalHost, finalPort],
               );
 
               // 找出已使用的 unitId
@@ -706,12 +677,12 @@ async function updateDevice(id, deviceData, userId) {
         ) {
           const existing = await db.query(
             `SELECT id FROM devices 
-						WHERE type_id = ? 
+						WHERE type_code = ? 
 						AND id != ?
 						AND config->>'host' = ? 
 						AND (config->>'port')::integer = ? 
 						AND (config->>'unitId')::integer = ?`,
-            [currentTypeId, id, config.host, config.port, config.unitId],
+            [typeCode, id, config.host, config.port, config.unitId],
           );
 
           if (existing.length > 0) {
@@ -760,12 +731,12 @@ async function updateDevice(id, deviceData, userId) {
               // 查詢相同 host + port 的設備，找出已使用的 unitId（排除當前設備）
               const existingDevices = await db.query(
                 `SELECT config FROM devices 
-							WHERE type_id = ? 
+							WHERE type_code = ? 
 							AND id != ?
 							AND config->>'protocol' = 'modbus'
 							AND config->>'host' = ? 
 							AND (config->>'port')::integer = ?`,
-                [currentTypeId, id, finalHost, finalPort],
+                [typeCode, id, finalHost, finalPort],
               );
 
               // 找出已使用的 unitId
@@ -823,12 +794,12 @@ async function updateDevice(id, deviceData, userId) {
         ) {
           const existing = await db.query(
             `SELECT id FROM devices 
-						WHERE type_id = ? 
+						WHERE type_code = ? 
 						AND id != ?
 						AND config->>'host' = ? 
 						AND (config->>'port')::integer = ? 
 						AND (config->>'unitId')::integer = ?`,
-            [currentTypeId, id, config.host, config.port, config.unitId],
+            [typeCode, id, config.host, config.port, config.unitId],
           );
 
           if (existing.length > 0) {
@@ -879,7 +850,7 @@ async function updateDevice(id, deviceData, userId) {
 
     // 構建變更的欄位列表
     const changes = {};
-    const fields = { name, type_id, model_id, description, status, config };
+    const fields = { name, type_code, model_id, description, status, config };
     Object.keys(fields).forEach((key) => {
       if (fields[key] !== undefined) {
         changes[key] = true;
@@ -972,9 +943,8 @@ async function deleteDevice(id, userId = null) {
     // 檢查設備是否存在
     const devices = await db.query(
       `
-      SELECT d.id, dt.code AS type_code, d.config
+      SELECT d.id, d.type_code, d.config
       FROM devices d
-      INNER JOIN device_types dt ON d.type_id = dt.id
       WHERE d.id = ?
       LIMIT 1
       `,
@@ -1028,8 +998,7 @@ async function getCameraGroups() {
     const query = `
       SELECT DISTINCT d.config->>'group' AS group_name
       FROM devices d
-      INNER JOIN device_types dt ON d.type_id = dt.id
-      WHERE dt.code = ?
+      WHERE d.type_code = ?
         AND d.config->>'group' IS NOT NULL
         AND TRIM(d.config->>'group') != ''
       ORDER BY 1

@@ -246,10 +246,9 @@ async function checkEnvironmentLocations() {
         : await db.query(
             `SELECT d.id, d.config as device_config
              FROM devices d
-             INNER JOIN device_types dt ON d.type_id = dt.id
              WHERE d.id = ANY($1::int[])
                AND d.status = 'active'
-               AND dt.code = 'sensor'
+               AND d.type_code = 'sensor'
                AND d.config->>'protocol' = 'modbus'`,
             [deviceIdList],
           );
