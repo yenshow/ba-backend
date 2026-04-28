@@ -11,10 +11,10 @@ const MODULES = [
   {
     id: 1,
     name: "設備管理",
-    icon: "equipment-management",
+    icon: "device",
     description: "設備管理系統",
     category: "core",
-    routePrefix: "/core/equipment-management",
+    routePrefix: "/core/device",
     featureKey: null,
     permissionCode: "system.equipment_management",
   },

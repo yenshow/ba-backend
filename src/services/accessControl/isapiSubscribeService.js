@@ -23,6 +23,13 @@ const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 const RE_CONNECT_DELAY_MS = 10000;
 const UPLOADS_ISAPI_DIR = path.join(process.cwd(), "uploads", "isapi-events");
 
+/**
+ * 目前各設備的訂閱迴圈控制器（用於 refresh/stop 中止串流並停止重連）
+ * key: deviceId(number)
+ * value: { controller: AbortController, startedAt: number }
+ */
+const deviceLoopControllers = new Map();
+
 /** 確保 uploads/isapi-events 存在 */
 function ensureUploadsDir() {
   if (!fs.existsSync(UPLOADS_ISAPI_DIR)) {
@@ -77,18 +84,31 @@ function parseEventJson(jsonStr) {
     AccessControllerEvent: {},
   };
   const alert = obj.eventNotificationAlert || obj.EventNotificationAlert || obj;
-  const ac = alert.AccessControllerEvent || alert.accessControllerEvent || alert;
-  result.eventType = alert.eventType ?? ac.eventType ?? obj.eventType ?? result.eventType;
+  const ac =
+    alert.AccessControllerEvent || alert.accessControllerEvent || alert;
+  result.eventType =
+    alert.eventType ?? ac.eventType ?? obj.eventType ?? result.eventType;
   result.ipAddress = alert.ipAddress ?? ac.ipAddress ?? obj.ipAddress ?? "";
   result.dateTime = alert.dateTime ?? ac.dateTime ?? obj.dateTime ?? "";
   const major = ac.majorEventType ?? alert.majorEventType ?? obj.majorEventType;
   const sub = ac.subEventType ?? alert.subEventType ?? obj.subEventType;
-  if (major != null) result.AccessControllerEvent.majorEventType = parseInt(major, 10);
-  if (sub != null) result.AccessControllerEvent.subEventType = parseInt(sub, 10);
-  result.employeeNoString = alert.employeeNoString ?? ac.employeeNoString ?? obj.employeeNoString ?? "";
+  if (major != null)
+    result.AccessControllerEvent.majorEventType = parseInt(major, 10);
+  if (sub != null)
+    result.AccessControllerEvent.subEventType = parseInt(sub, 10);
+  result.employeeNoString =
+    alert.employeeNoString ?? ac.employeeNoString ?? obj.employeeNoString ?? "";
   result.employeeNo = alert.employeeNo ?? ac.employeeNo ?? obj.employeeNo ?? "";
-  result.personName = alert.personName ?? alert.name ?? ac.personName ?? ac.name ?? obj.personName ?? obj.name ?? "";
-  if (!result.eventType && (obj.ipAddress || obj.portNo || obj.macAddress)) result.eventType = "heartBeat";
+  result.personName =
+    alert.personName ??
+    alert.name ??
+    ac.personName ??
+    ac.name ??
+    obj.personName ??
+    obj.name ??
+    "";
+  if (!result.eventType && (obj.ipAddress || obj.portNo || obj.macAddress))
+    result.eventType = "heartBeat";
   return result;
 }
 
@@ -124,6 +144,7 @@ async function consumeEventStreamIncremental(
   contentType,
   deviceIp,
   deviceId,
+  abortSignal,
 ) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
   const rawBoundary = boundaryMatch
@@ -156,15 +177,28 @@ async function consumeEventStreamIncremental(
 
   const processPart = (headerStr, body) => {
     const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
-    const name = (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) || [])[1] || "";
-    const rawBody = body.toString("utf8").replace(/^\uFEFF/, "").trim();
-    if (/application\/json/i.test(ct) || (rawBody.length > 0 && rawBody[0] === "{")) {
+    const name =
+      (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) || [])[1] ||
+      "";
+    const rawBody = body
+      .toString("utf8")
+      .replace(/^\uFEFF/, "")
+      .trim();
+    if (
+      /application\/json/i.test(ct) ||
+      (rawBody.length > 0 && rawBody[0] === "{")
+    ) {
       const parsed = parseEventJson(rawBody);
       if (parsed) processParsedEvent(parsed).catch(() => {});
       return;
     }
-    if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name) && lastWrittenEventId != null) {
-      attachPictureToEvent(lastWrittenEventId, body, UPLOADS_ISAPI_DIR).catch(() => {});
+    if (
+      /image/i.test(ct) ||
+      (/\.(jpg|jpeg|png)$/i.test(name) && lastWrittenEventId != null)
+    ) {
+      attachPictureToEvent(lastWrittenEventId, body, UPLOADS_ISAPI_DIR).catch(
+        () => {},
+      );
       lastWrittenEventId = null;
     }
   };
@@ -225,6 +259,17 @@ async function consumeEventStreamIncremental(
   };
 
   return new Promise((resolve, reject) => {
+    const abortHandler = () => {
+      try {
+        // 強制關閉 stream，讓 consume 結束並觸發重連迴圈退出
+        stream.destroy(new Error("ABORTED"));
+      } catch (_e) {}
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) abortHandler();
+      else abortSignal.addEventListener("abort", abortHandler, { once: true });
+    }
+
     stream.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       while (buffer.length > 0 && tryConsumeOnePart()) {}
@@ -239,7 +284,12 @@ async function consumeEventStreamIncremental(
 /**
  * 處理單一設備訂閱：發送訂閱、長連線增量解析事件，連線斷開後拋出以便重連
  */
-async function runSubscribeForDevice(deviceId) {
+async function runSubscribeForDevice(deviceId, abortSignal) {
+  if (abortSignal?.aborted) {
+    const err = new Error("ABORTED");
+    err.code = "ABORTED";
+    throw err;
+  }
   const { device, client } =
     await accessControlService.getDeviceAndClient(deviceId);
   const deviceIp = device.config?.host || "";
@@ -247,17 +297,30 @@ async function runSubscribeForDevice(deviceId) {
   const res = await client.requestSubscribeStream(SUBSCRIBE_XML);
   const contentType = res.headers["content-type"] || "";
   const stream = res.data;
-  await consumeEventStreamIncremental(stream, contentType, deviceIp, deviceId);
+  await consumeEventStreamIncremental(
+    stream,
+    contentType,
+    deviceIp,
+    deviceId,
+    abortSignal,
+  );
 }
 
 /**
  * 單一設備訂閱迴圈：連線 → 讀取 → 結束後延遲重連
  */
-async function subscribeLoop(deviceId) {
+async function subscribeLoop(deviceId, abortSignal) {
   for (;;) {
+    if (abortSignal?.aborted) return;
     try {
-      await runSubscribeForDevice(deviceId);
-    } catch (_e) {}
+      await runSubscribeForDevice(deviceId, abortSignal);
+    } catch (e) {
+      if (abortSignal?.aborted) return;
+      // 被 destroy 的 stream 會拋錯；這裡只做降噪
+      if (e && (e.code === "ABORTED" || String(e.message).includes("ABORTED")))
+        return;
+    }
+    if (abortSignal?.aborted) return;
     await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
   }
 }
@@ -266,29 +329,73 @@ let started = false;
 /** 目前訂閱中的設備 ID 列表（start 時寫入，供狀態查詢） */
 let subscribedDeviceIds = [];
 
+function startLoopForDevice(deviceId) {
+  if (deviceLoopControllers.has(deviceId)) return;
+  const controller = new AbortController();
+  deviceLoopControllers.set(deviceId, {
+    controller,
+    startedAt: Date.now(),
+  });
+  subscribeLoop(deviceId, controller.signal); // 各設備獨立迴圈，不 await
+}
+
+function stopLoopForDevice(deviceId) {
+  const entry = deviceLoopControllers.get(deviceId);
+  if (!entry) return;
+  try {
+    entry.controller.abort();
+  } catch (_e) {}
+  deviceLoopControllers.delete(deviceId);
+}
+
 /**
  * 啟動佈防訂閱服務：對所有需訂閱的門禁設備建立訂閱迴圈
  */
 async function start() {
   if (started) return;
   ensureUploadsDir();
-  const deviceIds = await getDeviceIdsToSubscribe();
-  if (deviceIds.length === 0) {
-    started = true;
-    subscribedDeviceIds = [];
-    return;
-  }
-  logger.info("[ISAPI] 佈防訂閱啟動", { deviceIds: deviceIds.join(","), count: deviceIds.length });
   started = true;
-  subscribedDeviceIds = deviceIds;
-  for (const deviceId of deviceIds) {
-    subscribeLoop(deviceId); // 各設備獨立迴圈，不 await
-  }
+  await refresh();
 }
 
 function stop() {
   started = false;
   subscribedDeviceIds = [];
+  for (const deviceId of [...deviceLoopControllers.keys()]) {
+    stopLoopForDevice(deviceId);
+  }
+}
+
+/**
+ * 重新計算需要訂閱的設備，增量啟停訂閱迴圈
+ * - 新增的設備：啟動訂閱
+ * - 被移除的設備：中止串流並停止重連
+ */
+async function refresh() {
+  if (!started) return { started: false, deviceIds: [] };
+  ensureUploadsDir();
+  const deviceIds = await getDeviceIdsToSubscribe();
+  const nextSet = new Set(deviceIds);
+  const prevSet = new Set(subscribedDeviceIds);
+
+  const toStart = deviceIds.filter((id) => !prevSet.has(id));
+  const toStop = subscribedDeviceIds.filter((id) => !nextSet.has(id));
+
+  if (toStart.length === 0 && toStop.length === 0) {
+    subscribedDeviceIds = deviceIds;
+    return { started: true, deviceIds: [...subscribedDeviceIds] };
+  }
+
+  for (const id of toStop) stopLoopForDevice(id);
+  for (const id of toStart) startLoopForDevice(id);
+
+  subscribedDeviceIds = deviceIds;
+  logger.info("[ISAPI] 訂閱刷新完成", {
+    start: toStart.join(",") || "",
+    stop: toStop.join(",") || "",
+    count: subscribedDeviceIds.length,
+  });
+  return { started: true, deviceIds: [...subscribedDeviceIds] };
 }
 
 /**
@@ -302,6 +409,7 @@ function getSubscribeStatus() {
 module.exports = {
   start,
   stop,
+  refresh,
   getSubscribeStatus,
   getDeviceIdsToSubscribe,
   SUBSCRIBE_XML,

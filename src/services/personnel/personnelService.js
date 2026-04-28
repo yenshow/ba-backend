@@ -8,6 +8,7 @@ const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
 
 const VALID_STATUSES = ["active", "inactive", "deleted"];
+const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
 
 function createValidationError(message) {
   const err = new Error(message);
@@ -20,21 +21,73 @@ async function ensurePersonGroupExists(personGroupId) {
   const id = Number(personGroupId);
   if (Number.isNaN(id)) throw createValidationError("群組無效");
   const rows = await db.query(
-    "SELECT id FROM person_groups WHERE id = ? LIMIT 1",
+    "SELECT id, parent_id FROM person_groups WHERE id = ? LIMIT 1",
     [id],
   );
   if (!rows || rows.length === 0) throw createValidationError("群組不存在");
-  return id;
+  return rows[0];
 }
 
 // ========== 人員群組 ==========
 
+function normalizeBoolean(value) {
+  const s = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!s) return false;
+  return s === "1" || s === "true" || s === "yes" || s === "y" || s === "on";
+}
+
+function normalizeOptionalInt(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const n = Number.parseInt(s, 10);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+async function ensureMainGroupIdOrNull(parentId) {
+  if (parentId == null) return null;
+  const row = await ensurePersonGroupExists(parentId);
+  // 二層規則：主群組的 parent_id 必須為 null
+  if (row.parent_id != null)
+    throw createValidationError("主群組無效：不可選擇子群組作為主群組");
+  return row.id;
+}
+
 async function getPersonGroups(filters = {}) {
+  const tree = normalizeBoolean(filters.tree);
+  const parentId = normalizeOptionalInt(filters.parentId);
+
   let sql = "SELECT * FROM person_groups WHERE 1=1";
   const params = [];
   if (filters.name) {
     params.push(`%${filters.name}%`);
     sql += " AND name ILIKE ?";
+  }
+  if (parentId != null) {
+    params.push(parentId);
+    sql += " AND parent_id = ?";
+  }
+  if (tree) {
+    sql += " ORDER BY parent_id NULLS FIRST, name ASC";
+    const rows = await db.query(sql, params);
+    const list = Array.isArray(rows) ? rows : [];
+    const mainGroups = list.filter((g) => g.parent_id == null);
+    const childrenByParentId = new Map();
+    for (const g of list) {
+      if (g.parent_id == null) continue;
+      const arr = childrenByParentId.get(g.parent_id) || [];
+      arr.push(g);
+      childrenByParentId.set(g.parent_id, arr);
+    }
+    return mainGroups.map((g) => ({
+      ...g,
+      children: (childrenByParentId.get(g.id) || []).sort((a, b) =>
+        String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant"),
+      ),
+    }));
   }
   sql += " ORDER BY name ASC";
   const rows = await db.query(sql, params);
@@ -55,15 +108,18 @@ async function createPersonGroup(data, createdBy = null) {
   const name = (data.name || "").trim();
   if (!name) throw createValidationError("群組名稱不能為空");
   const description = data.description ? String(data.description).trim() : null;
+  const parentId = await ensureMainGroupIdOrNull(
+    data.parentId ?? data.parent_id,
+  );
   const rows = await db.query(
-    "INSERT INTO person_groups (name, description, created_by) VALUES (?, ?, ?) RETURNING *",
-    [name, description, createdBy],
+    "INSERT INTO person_groups (name, parent_id, description, created_by) VALUES (?, ?, ?, ?) RETURNING *",
+    [name, parentId, description, createdBy],
   );
   return rows[0];
 }
 
 async function updatePersonGroup(id, data) {
-  await getPersonGroupById(id);
+  const existing = await getPersonGroupById(id);
   const updates = [];
   const params = [];
   if (data.name !== undefined) {
@@ -71,6 +127,16 @@ async function updatePersonGroup(id, data) {
     if (!name) throw createValidationError("群組名稱不能為空");
     updates.push("name = ?");
     params.push(name);
+  }
+  if (data.parentId !== undefined || data.parent_id !== undefined) {
+    const nextParentId = await ensureMainGroupIdOrNull(
+      data.parentId ?? data.parent_id,
+    );
+    if (nextParentId != null && nextParentId === existing.id) {
+      throw createValidationError("主群組無效：不可選擇自己");
+    }
+    updates.push("parent_id = ?");
+    params.push(nextParentId);
   }
   if (data.description !== undefined) {
     updates.push("description = ?");
@@ -87,6 +153,13 @@ async function updatePersonGroup(id, data) {
 
 async function deletePersonGroup(id) {
   await getPersonGroupById(id);
+  const child = await db.query(
+    "SELECT id FROM person_groups WHERE parent_id = ? LIMIT 1",
+    [id],
+  );
+  if (child && child.length > 0) {
+    throw createValidationError("該主群組下尚有子群組，無法刪除");
+  }
   const refs = await db.query(
     "SELECT id FROM persons WHERE person_group_id = ? LIMIT 1",
     [id],
@@ -123,15 +196,13 @@ async function ensureLocationIsSyncable(locationId) {
     [id],
   );
   if (!rows || rows.length === 0) {
-    throw createValidationError(
-      "地點不可同步（需在人流統計設定門禁入口設備）",
-    );
+    throw createValidationError("地點不可同步（需在人流統計設定門禁入口設備）");
   }
   return id;
 }
 
 async function getPersonsByGroupId(personGroupId, options = {}) {
-  const id = await ensurePersonGroupExists(personGroupId);
+  const group = await ensurePersonGroupExists(personGroupId);
   const limit = clampInt(options.limit, { min: 1, max: 500, fallback: 200 });
   const offset = clampInt(options.offset, {
     min: 0,
@@ -139,12 +210,18 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
     fallback: 0,
   });
   const status = options.status ? String(options.status).trim() : "";
+  const q = options.q != null ? String(options.q).trim() : "";
 
   const whereParts = ["p.person_group_id = ?"];
-  const params = [id];
+  const params = [group.id];
   if (status) {
     params.push(status);
     whereParts.push("p.status = ?");
+  }
+  if (q) {
+    params.push(`%${q}%`);
+    params.push(`%${q}%`);
+    whereParts.push("(p.employee_no ILIKE ? OR p.full_name ILIKE ?)");
   }
 
   const countRows = await db.query(
@@ -171,8 +248,35 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
   return { items: rows || [], total, limit, offset };
 }
 
+async function getPersonGroupMemberIds(personGroupId) {
+  const group = await ensurePersonGroupExists(personGroupId);
+  const rows = await db.query(
+    `SELECT id
+     FROM persons
+     WHERE person_group_id = ?
+     ORDER BY employee_no ASC`,
+    [group.id],
+  );
+  return (rows || []).map((r) => r.id);
+}
+
+async function getChildGroupIdsByMainGroupId(mainGroupId) {
+  const row = await ensurePersonGroupExists(mainGroupId);
+  // 二層規則：主群組的 parent_id 必須為 null
+  if (row.parent_id != null) throw createValidationError("主群組無效");
+  const rows = await db.query(
+    "SELECT id FROM person_groups WHERE parent_id = ?",
+    [row.id],
+  );
+  return (rows || []).map((r) => r.id);
+}
+
 async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
-  const id = await ensurePersonGroupExists(personGroupId);
+  const group = await ensurePersonGroupExists(personGroupId);
+  if (group.parent_id == null) {
+    throw createValidationError("主群組不可直接設定成員，請操作子群組");
+  }
+  const id = group.id;
 
   const rawIds = Array.isArray(memberPersonIds)
     ? memberPersonIds
@@ -180,6 +284,11 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
         .filter((x) => Number.isFinite(x))
     : [];
   const nextIds = Array.from(new Set(rawIds));
+  if (nextIds.length > MAX_PERSON_GROUP_MEMBER_IDS) {
+    throw createValidationError(
+      `群組成員人數上限為 ${MAX_PERSON_GROUP_MEMBER_IDS} 人（目前 ${nextIds.length} 人）`,
+    );
+  }
 
   if (nextIds.length > 0) {
     const rows = await db.query(
@@ -196,9 +305,10 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
   await db.transaction(async (query) => {
     // 移出原本在此群組但不在 nextIds 的人
     if (nextIds.length === 0) {
-      await query("UPDATE persons SET person_group_id = NULL WHERE person_group_id = ?", [
-        id,
-      ]);
+      await query(
+        "UPDATE persons SET person_group_id = NULL WHERE person_group_id = ?",
+        [id],
+      );
     } else {
       await query(
         `UPDATE persons
@@ -298,11 +408,15 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
   }
 
   await db.transaction(async (query) => {
-    await query("DELETE FROM person_location_access WHERE location_id = ?", [id]);
-    for (const pid of nextIds) {
+    await query("DELETE FROM person_location_access WHERE location_id = ?", [
+      id,
+    ]);
+    if (nextIds.length > 0) {
+      const valuesSql = nextIds.map(() => "(?, ?)").join(", ");
+      const params = nextIds.flatMap((pid) => [pid, id]);
       await query(
-        "INSERT INTO person_location_access (person_id, location_id) VALUES (?, ?)",
-        [pid, id],
+        `INSERT INTO person_location_access (person_id, location_id) VALUES ${valuesSql}`,
+        params,
       );
     }
   });
@@ -358,7 +472,8 @@ async function getPersonsPaged(filters = {}, options = {}) {
   });
 
   const sortByRaw = options.sortBy != null ? String(options.sortBy).trim() : "";
-  const sortOrderRaw = options.sortOrder != null ? String(options.sortOrder).trim() : "";
+  const sortOrderRaw =
+    options.sortOrder != null ? String(options.sortOrder).trim() : "";
   const sortBy = sortByRaw || "employeeNo";
   const sortOrder = ["asc", "desc"].includes(sortOrderRaw.toLowerCase())
     ? sortOrderRaw.toLowerCase()
@@ -369,14 +484,56 @@ async function getPersonsPaged(filters = {}, options = {}) {
     employee_no: "p.employee_no",
   };
   const orderColumn = SORT_COLUMNS[sortBy] || SORT_COLUMNS.employeeNo;
-  const orderSql = `${orderColumn} ${sortOrder.toUpperCase()}`;
+  const orderSql = `${orderColumn} ${sortOrder.toUpperCase()}, p.id ASC`;
 
   const whereParts = ["1=1"];
   const params = [];
 
-  if (filters.personGroupId != null) {
+  const hasMainGroupFilter = filters.mainGroupId != null;
+  // 若指定 mainGroupId，則忽略 personGroupId / personGroupIds，避免互相疊加造成「意外變成交集」的隱性行為
+  if (!hasMainGroupFilter && filters.personGroupId != null) {
     params.push(filters.personGroupId);
     whereParts.push("p.person_group_id = ?");
+  }
+  // mainGroupId：避免前端把所有子群組 ID 攤平成 personGroupIds（有 200 隱性上限）
+  if (filters.mainGroupId != null) {
+    const childIds = await getChildGroupIdsByMainGroupId(filters.mainGroupId);
+    // 人員理論上只會掛在子群組，但仍允許包含 mainGroupId 以防資料異常或舊資料
+    const ids = Array.from(
+      new Set(
+        [Number(filters.mainGroupId), ...childIds].filter((x) =>
+          Number.isFinite(Number(x)),
+        ),
+      ),
+    );
+    if (ids.length > 0) {
+      whereParts.push(`p.person_group_id IN (${ids.map(() => "?").join(",")})`);
+      params.push(...ids);
+    }
+  }
+  if (!hasMainGroupFilter && filters.personGroupIds != null) {
+    const raw = Array.isArray(filters.personGroupIds)
+      ? filters.personGroupIds
+      : String(filters.personGroupIds || "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean);
+    const ids = raw
+      .map((x) => Number.parseInt(String(x), 10))
+      .filter((x) => Number.isFinite(x));
+    const uniqueIds = Array.from(new Set(ids));
+    // 避免 silent truncate（會造成查詢結果「少人但不報錯」），改成明確限制
+    if (uniqueIds.length > 5000) {
+      throw createValidationError(
+        `personGroupIds 過多（最多 5000 筆），請改用 mainGroupId 或縮小範圍`,
+      );
+    }
+    if (uniqueIds.length > 0) {
+      whereParts.push(
+        `p.person_group_id IN (${uniqueIds.map(() => "?").join(",")})`,
+      );
+      params.push(...uniqueIds);
+    }
   }
   if (filters.status) {
     params.push(filters.status);
@@ -570,14 +727,25 @@ async function updatePerson(id, data) {
     updates.push("face_url = ?");
     params.push(nextFaceUrl);
 
-    // 若清空 face_url，刪除 uploads/personnel 內舊檔，避免幽靈檔案
-    // 僅處理平台本機路徑（/uploads/personnel/...），外部 URL 不處理
+    // face_url 檔案清理（共通邏輯）：
+    // - 僅處理平台本機路徑（/uploads/personnel/...），外部 URL 不處理
+    // - 清空 face_url：刪舊檔
+    // - 替換 face_url：刪舊檔（避免孤兒檔）
     const prev = existingPerson?.face_url;
     const prevStr = typeof prev === "string" ? prev.trim() : "";
-    if (nextFaceUrl == null && prevStr.startsWith("/uploads/personnel/")) {
+    const nextStr = typeof nextFaceUrl === "string" ? nextFaceUrl.trim() : "";
+    const shouldDeletePrev =
+      prevStr.startsWith("/uploads/personnel/") &&
+      (nextFaceUrl == null || (nextStr && nextStr !== prevStr));
+    if (shouldDeletePrev) {
       const filename = path.basename(prevStr);
       if (filename && !filename.includes("..")) {
-        const filePath = path.join(process.cwd(), "uploads", "personnel", filename);
+        const filePath = path.join(
+          process.cwd(),
+          "uploads",
+          "personnel",
+          filename,
+        );
         fs.unlink(filePath).catch(() => null);
       }
     }
@@ -634,7 +802,9 @@ function upsertFingerPrint(list, params = {}) {
   if (Number.isNaN(fpId) || fpId < 1 || fpId > 10) {
     throw createValidationError("fingerPrintID 無效（允許範圍 1~10）");
   }
-  const next = Array.isArray(list) ? list.filter((x) => x && Number(x.fingerPrintID) !== fpId) : [];
+  const next = Array.isArray(list)
+    ? list.filter((x) => x && Number(x.fingerPrintID) !== fpId)
+    : [];
   if (!fingerData) return next;
   next.push({
     fingerPrintID: fpId,
@@ -647,15 +817,13 @@ function upsertFingerPrint(list, params = {}) {
 
 function buildValidityPayload(params = {}) {
   const longTerm =
-    params.longTerm !== undefined
-      ? Boolean(params.longTerm)
-      : true;
+    params.longTerm !== undefined ? Boolean(params.longTerm) : true;
   const beginTimeRaw = params.beginTime ?? null;
   const endTimeRaw = params.endTime ?? null;
   let beginTime = normalizeIsapiTimeString(beginTimeRaw);
   let endTime = normalizeIsapiTimeString(endTimeRaw);
 
-  // 長期授權：允許未提供日期，後端自動補齊避免同步工作失敗（常見於批次匯入/外部資料來源）
+  // 永久授權：允許未提供日期，後端自動補齊避免同步工作失敗（常見於批次匯入/外部資料來源）
   if (longTerm && (!beginTime || !endTime)) {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
@@ -663,9 +831,12 @@ function buildValidityPayload(params = {}) {
     endTime = "2035-12-31T23:59:59";
   }
 
-  if (!beginTime || !endTime) throw createValidationError("請提供有效期限（beginTime / endTime）");
+  if (!beginTime || !endTime)
+    throw createValidationError("請提供有效期限（beginTime / endTime）");
   if (!isBeginBeforeEnd(beginTime, endTime)) {
-    throw createValidationError("有效期限起訖不正確（beginTime 必須小於等於 endTime）");
+    throw createValidationError(
+      "有效期限起訖不正確（beginTime 必須小於等於 endTime）",
+    );
   }
   return { longTerm, beginTime, endTime };
 }
@@ -676,8 +847,16 @@ async function setPersonAccessControlConfig(personId, params = {}) {
   config.access_control = config.access_control || {};
 
   // validity（必填：同步 UserInfo 需要）
-  if (params.validity != null || params.beginTime != null || params.endTime != null || params.longTerm != null) {
-    const v = params.validity && typeof params.validity === "object" ? params.validity : params;
+  if (
+    params.validity != null ||
+    params.beginTime != null ||
+    params.endTime != null ||
+    params.longTerm != null
+  ) {
+    const v =
+      params.validity && typeof params.validity === "object"
+        ? params.validity
+        : params;
     config.access_control.validity = buildValidityPayload(v);
   }
 
@@ -695,7 +874,8 @@ async function setPersonAccessControlConfig(personId, params = {}) {
     if (pw != null) {
       if (!pw) throw createValidationError("密碼不能為空");
       if (!/^\d+$/.test(pw)) throw createValidationError("密碼僅允許數字");
-      if (pw.length < 4 || pw.length > 12) throw createValidationError("密碼長度需為 4~12 碼");
+      if (pw.length < 4 || pw.length > 12)
+        throw createValidationError("密碼長度需為 4~12 碼");
     }
     if (pw == null) delete config.access_control.password;
     else config.access_control.password = pw;
@@ -704,8 +884,13 @@ async function setPersonAccessControlConfig(personId, params = {}) {
   // fingerData（允許 null/"" 代表清除 fingerPrintID=1）
   if (Object.prototype.hasOwnProperty.call(params, "fingerData")) {
     const fingerData = String(params.fingerData ?? "").trim();
-    const list = Array.isArray(config.access_control.fingerprints) ? config.access_control.fingerprints : [];
-    config.access_control.fingerprints = upsertFingerPrint(list, { fingerData, fingerPrintID: 1 });
+    const list = Array.isArray(config.access_control.fingerprints)
+      ? config.access_control.fingerprints
+      : [];
+    config.access_control.fingerprints = upsertFingerPrint(list, {
+      fingerData,
+      fingerPrintID: 1,
+    });
   }
 
   await db.query("UPDATE persons SET config = ? WHERE id = ?", [
@@ -732,6 +917,19 @@ async function getPersonIdsByLocationId(locationId) {
   return (rows || []).map((r) => r.person_id);
 }
 
+async function getLocationMemberIds(locationId) {
+  const id = await ensureLocationIsSyncable(locationId);
+  const ids = await getPersonIdsByLocationId(id);
+  return Array.from(
+    new Set(
+      (ids || [])
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  );
+}
+
 async function getPersonsWithAccessByLocationId(locationId) {
   const rows = await db.query(
     `SELECT p.id, p.employee_no, p.full_name, p.status, p.face_url, p.config, pg.name AS group_name
@@ -752,6 +950,7 @@ module.exports = {
   updatePersonGroup,
   deletePersonGroup,
   getPersonsByGroupId,
+  getPersonGroupMemberIds,
   replacePersonGroupMembers,
   getPersonsByLocationIdPaged,
   replaceLocationMembers,
@@ -763,6 +962,7 @@ module.exports = {
   updatePerson,
   deletePerson,
   getPersonIdsByLocationId,
+  getLocationMemberIds,
   getPersonsWithAccessByLocationId,
   setPersonAccessControlConfig,
 };

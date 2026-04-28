@@ -349,7 +349,9 @@ async function captureFaceData(deviceId, overrides = {}) {
   const fallbackContentType = normalizedContentType.startsWith("image/")
     ? normalizedContentType
     : "image/jpeg";
-  const rawBuffer = Buffer.isBuffer(res.data) ? res.data : Buffer.from(res.data);
+  const rawBuffer = Buffer.isBuffer(res.data)
+    ? res.data
+    : Buffer.from(res.data);
   const extracted = isMultipart
     ? extractFirstImageFromMultipart(rawBuffer, rawContentType)
     : null;
@@ -386,7 +388,8 @@ async function captureCardInfo(deviceId) {
  */
 async function setCardInfo(deviceId, cardInfo) {
   const { client } = await getDeviceAndClient(deviceId);
-  const employeeNo = cardInfo?.employeeNo != null ? String(cardInfo.employeeNo) : "";
+  const employeeNo =
+    cardInfo?.employeeNo != null ? String(cardInfo.employeeNo) : "";
   const cardNo = cardInfo?.cardNo != null ? String(cardInfo.cardNo) : "";
   const cardType = cardInfo?.cardType || "normalCard";
 
@@ -442,7 +445,9 @@ async function captureFingerPrint(deviceId, options = {}) {
   });
 
   const rawContentType =
-    res.headers?.["content-type"] || res.headers?.["Content-Type"] || "application/xml";
+    res.headers?.["content-type"] ||
+    res.headers?.["Content-Type"] ||
+    "application/xml";
   const contentType = String(rawContentType).split(";")[0].trim().toLowerCase();
   const buffer = Buffer.isBuffer(res.data) ? res.data : Buffer.from(res.data);
   const bodyText = buffer.toString("utf8");
@@ -465,7 +470,9 @@ async function setFingerPrint(deviceId, fingerPrintCfg) {
   const employeeNo =
     fingerPrintCfg?.employeeNo != null ? String(fingerPrintCfg.employeeNo) : "";
   const fingerPrintID =
-    fingerPrintCfg?.fingerPrintID != null ? Number(fingerPrintCfg.fingerPrintID) : 1;
+    fingerPrintCfg?.fingerPrintID != null
+      ? Number(fingerPrintCfg.fingerPrintID)
+      : 1;
   const fingerType = fingerPrintCfg?.fingerType || "normalFP";
   const fingerData =
     fingerPrintCfg?.fingerData != null ? String(fingerPrintCfg.fingerData) : "";

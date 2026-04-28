@@ -69,10 +69,14 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
   } = options;
 
   const entryIds = Array.isArray(entryDeviceIds)
-    ? entryDeviceIds.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+    ? entryDeviceIds
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
     : [];
   const exitIds = Array.isArray(exitDeviceIds)
-    ? exitDeviceIds.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
+    ? exitDeviceIds
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
     : [];
   if (entryIds.length === 0 && exitIds.length === 0) return [];
 
@@ -172,7 +176,7 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
     const sub =
       payload.subEventType != null ? Number(payload.subEventType) : null;
     const eventType =
-      sub === 76
+      sub === 9 || sub === 39 || sub === 76 || sub === 2078 || sub === 2079
         ? "failed"
         : entryIps.has(row.device_ip)
           ? "entry"
@@ -202,8 +206,12 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
  * 單一工地完整資料（統計 + 單位列表）
  */
 async function getSiteData(siteId, config) {
-  const entryDeviceIds = Array.isArray(config.entryDeviceIds) ? config.entryDeviceIds : [];
-  const exitDeviceIds = Array.isArray(config.exitDeviceIds) ? config.exitDeviceIds : [];
+  const entryDeviceIds = Array.isArray(config.entryDeviceIds)
+    ? config.entryDeviceIds
+    : [];
+  const exitDeviceIds = Array.isArray(config.exitDeviceIds)
+    ? config.exitDeviceIds
+    : [];
   let units = [];
   let entryCount = 0;
   let exitCount = 0;

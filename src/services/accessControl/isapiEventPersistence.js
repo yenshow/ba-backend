@@ -7,7 +7,7 @@ const fs = require("fs");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 
-const SUB_TYPES_PROCESS = new Set([75, 76, 2077, 2078, 2079]); // 人臉辨識成功/失敗、酒精檢測正常/飲酒/醉酒
+const SUB_TYPES_PROCESS = new Set([1, 9, 38, 39, 75, 76, 2077, 2078, 2079]); // 人臉辨識成功/失敗、酒精檢測正常/飲酒/醉酒
 
 /**
  * 是否為要寫入 DB 的門禁事件（major=5 且 sub 為上述五種）
@@ -53,7 +53,13 @@ async function persistIsapiEvent(options) {
  * 檔名與原監聽模式一致：設備IP_時間.jpg（如 192.168.2.34_2026-03-02T17-43.jpg）
  */
 async function attachPictureToEvent(eventId, pictureBuffer, uploadsDir) {
-  if (eventId == null || !Buffer.isBuffer(pictureBuffer) || pictureBuffer.length === 0 || !uploadsDir) return;
+  if (
+    eventId == null ||
+    !Buffer.isBuffer(pictureBuffer) ||
+    pictureBuffer.length === 0 ||
+    !uploadsDir
+  )
+    return;
   const rows = await db.query(
     `SELECT device_ip, event_time FROM isapi_access_events WHERE id = ?`,
     [eventId],

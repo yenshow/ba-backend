@@ -18,6 +18,12 @@ const DEVICE_ERROR_COOLDOWN_MS = Number(
 const lastDevice503LogAt = new Map(); // key -> timestamp(ms)
 const lastDeviceErrorAlertAt = new Map(); // key -> timestamp(ms)
 
+const isPersonnelApiRequest = (req) => {
+  const orig = String(req.originalUrl || req.url || "");
+  const pathJoined = `${req.baseUrl || ""}${req.path || ""}`;
+  return orig.startsWith("/api/personnel") || pathJoined.startsWith("/api/personnel");
+};
+
 const getDeviceErrorKey = (req, errorMessage) => {
   const host = req.query?.host ? String(req.query.host) : "";
   const port =
@@ -196,6 +202,22 @@ async function errorHandler(err, req, res, next) {
       method: req.method,
       statusCode,
     });
+  }
+
+  if (isPersonnelApiRequest(req)) {
+    const response = {
+      success: false,
+      error: {
+        code: `HTTP_${statusCode}`,
+        message: errorMessage,
+        details: errorMessage,
+      },
+      timestamp: new Date().toISOString(),
+    };
+    if (process.env.NODE_ENV === "development" && statusCode >= 500) {
+      response.error.stack = err.stack;
+    }
+    return res.status(statusCode).json(response);
   }
 
   // 統一錯誤響應格式

@@ -39,7 +39,7 @@ async function getSiteConfigOrThrow(siteId, config) {
   const deviceId = ensureInt(config.cameraDeviceId);
   const effectiveDeviceIds =
     deviceIds.length > 0 ? deviceIds : deviceId ? [deviceId] : [];
-  const channelId = ensureInt(config.cameraChannelId) ?? 1;
+  const channelId = 1;
   if (effectiveDeviceIds.length === 0) {
     const err = new Error("未設定攝影機設備（cameraDeviceId）");
     err.statusCode = 400;

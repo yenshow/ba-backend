@@ -11,6 +11,7 @@ const logger = require("../../utils/logger");
 const yscpProvider = require("./peopleCounting/providers/yscpProvider");
 const accessControlProvider = require("./peopleCounting/providers/accessControlProvider");
 const isapiCameraProvider = require("./peopleCounting/providers/isapiCameraProvider");
+const isapiSubscribeService = require("../accessControl/isapiSubscribeService");
 const {
   parseEventType,
   countEntryExitFromSorted,
@@ -113,7 +114,6 @@ function validateLocationData(locationData, isUpdate = false) {
     exitDeviceIds,
     cameraDeviceId,
     cameraDeviceIds,
-    cameraChannelId,
     preferRegion,
   } = locationData;
 
@@ -222,14 +222,6 @@ function validateLocationData(locationData, isUpdate = false) {
         // 向後相容：若只傳 cameraDeviceId（未傳 cameraDeviceIds），仍允許以單值更新
         throw createValidationError("攝影機設備 ID 不能為空");
       }
-      if (
-        cameraChannelId !== undefined &&
-        cameraChannelId != null &&
-        (!Number.isFinite(Number(cameraChannelId)) ||
-          Number(cameraChannelId) <= 0)
-      ) {
-        throw createValidationError("攝影機 channelId 必須為正整數");
-      }
     }
   }
 }
@@ -323,7 +315,6 @@ async function createPeopleCountingLocation(locationData, userId) {
         entryDeviceIds = [],
         exitDeviceIds = [],
         cameraDeviceId,
-        cameraChannelId,
         preferRegion,
         accessControlGroups = [], // 相容保留；門禁人員改由人員管理 person_location_access 處理
       } = locationData;
@@ -343,13 +334,18 @@ async function createPeopleCountingLocation(locationData, userId) {
             entryDeviceIds,
             exitDeviceIds,
             cameraDeviceId,
-            cameraChannelId,
+            cameraChannelId: 1,
             preferRegion,
             accessControlGroups,
           },
         },
         userId,
       );
+
+      // 地點配置變更後，刷新門禁佈防訂閱（增量啟停）
+      try {
+        await isapiSubscribeService.refresh();
+      } catch (_e) {}
 
       return {
         message: "人流統計地點建立成功",
@@ -376,7 +372,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         entryDeviceIds,
         exitDeviceIds,
         cameraDeviceId,
-        cameraChannelId,
         preferRegion,
         accessControlGroups,
       } = locationData;
@@ -414,7 +409,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               .map((id) => Number(id))
               .filter((n) => Number.isFinite(n) && n > 0)
           : [],
-        camera_channel_id: existingConfig.cameraChannelId ?? 1,
+        camera_channel_id: 1,
         prefer_region: existingConfig.preferRegion ?? false,
         access_control_groups: existingConfig.accessControlGroups || [],
       };
@@ -443,9 +438,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
         }),
-        ...(cameraChannelId !== undefined && {
-          camera_channel_id: cameraChannelId,
-        }),
         ...(preferRegion !== undefined && {
           prefer_region: preferRegion,
         }),
@@ -471,7 +463,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               exitDeviceIds: config.exit_device_ids,
               cameraDeviceId: config.camera_device_id,
               cameraDeviceIds: config.camera_device_ids,
-              cameraChannelId: config.camera_channel_id,
+              cameraChannelId: 1,
               preferRegion: config.prefer_region,
               accessControlGroups: config.access_control_groups,
             },
@@ -484,6 +476,11 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         updateData,
         userId,
       );
+
+      // 地點配置變更後，刷新門禁佈防訂閱（增量啟停）
+      try {
+        await isapiSubscribeService.refresh();
+      } catch (_e) {}
 
       return {
         message: "人流統計地點更新成功",
@@ -505,7 +502,14 @@ async function deletePeopleCountingLocation(id) {
       await getPeopleCountingLocationById(id);
 
       // 使用統一服務刪除地點
-      return await locationService.deleteLocation(id);
+      const result = await locationService.deleteLocation(id);
+
+      // 地點配置變更後，刷新門禁佈防訂閱（增量啟停）
+      try {
+        await isapiSubscribeService.refresh();
+      } catch (_e) {}
+
+      return result;
     },
     "刪除人流統計地點失敗",
     { id },
@@ -722,7 +726,7 @@ function getPeopleCountingConfig(location) {
     entryDeviceIds: ensureArray(peopleCountingSystem?.config?.entryDeviceIds),
     exitDeviceIds: ensureArray(peopleCountingSystem?.config?.exitDeviceIds),
     cameraDeviceId: peopleCountingSystem?.config?.cameraDeviceId ?? null,
-    cameraChannelId: peopleCountingSystem?.config?.cameraChannelId ?? 1,
+    cameraChannelId: 1,
     preferRegion: peopleCountingSystem?.config?.preferRegion ?? false,
     accessControlGroups: ensureArray(
       peopleCountingSystem?.config?.accessControlGroups,
@@ -749,7 +753,7 @@ async function getSiteConfig(siteId) {
     entryDeviceIds: config.entryDeviceIds,
     exitDeviceIds: config.exitDeviceIds,
     cameraDeviceId: config.cameraDeviceId,
-    cameraChannelId: config.cameraChannelId,
+    cameraChannelId: 1,
     preferRegion: config.preferRegion,
     accessControlGroups: config.accessControlGroups,
   };

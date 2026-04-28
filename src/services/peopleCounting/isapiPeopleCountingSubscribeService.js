@@ -52,8 +52,7 @@ async function getCameraSubscriptions() {
     `SELECT
        ls.location_id AS location_id,
        (ls.system_config->>'camera_device_id') AS device_id,
-       (ls.system_config->'camera_device_ids') AS device_ids,
-       (ls.system_config->>'camera_channel_id') AS channel_id
+       (ls.system_config->'camera_device_ids') AS device_ids
      FROM location_systems ls
      WHERE ls.system_type = 'people_counting'
        AND (ls.system_config->>'data_source') = 'isapi_camera'
@@ -66,7 +65,7 @@ async function getCameraSubscriptions() {
   const subs = [];
   for (const r of rows || []) {
     const locationId = ensureInt(r.location_id);
-    const channelId = ensureInt(r.channel_id) ?? 1;
+    const channelId = 1;
     if (!locationId) continue;
 
     const deviceIdsFromArray = Array.isArray(r.device_ids)

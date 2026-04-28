@@ -1042,6 +1042,95 @@ async function getLocationById(id) {
 }
 
 /**
+ * 取得「人流統計（門禁來源）」可同步地點 + 入口/出口門禁設備（含名稱）
+ * - syncable 定義：people_counting 且 entry_device_ids 長度 > 0
+ * - 目的：前端不再對 /api/locations/:id 做 N 次請求
+ * @returns {{ locations: Array<{ id: number, name: string, zone_name: string, entry_devices: Array<{id:number,name:string}>, exit_devices: Array<{id:number,name:string}> }> }}
+ */
+async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
+  // 1) 先找可同步地點 + entry/exit device ids（JSONB）
+  const rows = await db.query(
+    `
+      SELECT
+        l.id,
+        l.name,
+        z.name AS zone_name,
+        COALESCE(ls.system_config->'entry_device_ids', '[]'::jsonb) AS entry_device_ids,
+        COALESCE(ls.system_config->'exit_device_ids', '[]'::jsonb) AS exit_device_ids
+      FROM locations l
+      INNER JOIN zones z ON l.zone_id = z.id
+      INNER JOIN location_systems ls
+        ON l.id = ls.location_id AND ls.system_type = 'people_counting'
+      WHERE COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+      ORDER BY z.name, l.name
+    `,
+    [],
+  );
+
+  const toIntList = (jsonbArr) => {
+    const arr = Array.isArray(jsonbArr) ? jsonbArr : [];
+    return Array.from(
+      new Set(
+        arr
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n) && n > 0)
+          .map((n) => Math.trunc(n)),
+      ),
+    );
+  };
+
+  const entryIdsByLoc = new Map();
+  const exitIdsByLoc = new Map();
+  const allDeviceIds = new Set();
+
+  for (const r of rows || []) {
+    const locId = Number(r.id);
+    const entry = toIntList(r.entry_device_ids);
+    const exit = toIntList(r.exit_device_ids);
+    entryIdsByLoc.set(locId, entry);
+    exitIdsByLoc.set(locId, exit);
+    for (const id of entry) allDeviceIds.add(id);
+    for (const id of exit) allDeviceIds.add(id);
+  }
+
+  // 2) 批次把 device id -> name 拉回來（只抓 access_control）
+  const deviceIdList = Array.from(allDeviceIds);
+  const deviceNameById = new Map();
+  if (deviceIdList.length > 0) {
+    const devRows = await db.query(
+      `
+        SELECT id, name
+        FROM devices
+        WHERE id = ANY($1::int[])
+          AND type_code = 'access_control'
+      `,
+      [deviceIdList],
+    );
+    for (const d of devRows || []) {
+      deviceNameById.set(Number(d.id), String(d.name || "").trim() || `#${d.id}`);
+    }
+  }
+
+  const mapDevices = (ids) =>
+    (ids || []).map((id) => ({ id, name: deviceNameById.get(id) || `#${id}` }));
+
+  const locations = (rows || []).map((r) => {
+    const id = Number(r.id);
+    const entryIds = entryIdsByLoc.get(id) || [];
+    const exitIds = exitIdsByLoc.get(id) || [];
+    return {
+      id,
+      name: r.name,
+      zone_name: r.zone_name,
+      entry_devices: mapDevices(entryIds),
+      exit_devices: mapDevices(exitIds),
+    };
+  });
+
+  return { locations };
+}
+
+/**
  * 建立地點（含系統）
  */
 async function createLocation(locationData, userId) {
@@ -1324,7 +1413,7 @@ function buildSystemConfig(systemType, config) {
           // 相容欄位：僅供 fallback；以 camera_device_ids 為準
           camera_device_id: ids[0] ?? (config.cameraDeviceId ?? null),
           camera_device_ids: ids,
-          camera_channel_id: config.cameraChannelId ?? 1,
+          camera_channel_id: 1,
           prefer_region: config.preferRegion ?? false,
           access_control_groups: config.accessControlGroups || [], // 相容保留
         };
@@ -1906,6 +1995,7 @@ module.exports = {
   formatLocation,
   // 地點管理 API
   getLocationById,
+  getPeopleCountingSyncableLocationsWithAccessControlDevices,
   createLocation,
   updateLocation,
   deleteLocation,

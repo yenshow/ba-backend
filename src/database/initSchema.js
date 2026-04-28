@@ -1372,15 +1372,29 @@ async function initSchema() {
       CREATE TABLE IF NOT EXISTS person_groups (
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
+        parent_id INTEGER REFERENCES person_groups(id) ON DELETE CASCADE,
         description TEXT,
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // 遷移：舊環境補齊 parent_id 欄位（主群組/子群組）
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='person_groups' AND column_name='parent_id'
+        ) THEN
+          ALTER TABLE person_groups ADD COLUMN parent_id INTEGER REFERENCES person_groups(id) ON DELETE CASCADE;
+        END IF;
+      END $$;
+    `);
     await createUpdatedAtTrigger(targetPool, "person_groups");
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_person_groups_name ON person_groups(name);
+      CREATE INDEX IF NOT EXISTS idx_person_groups_parent_id ON person_groups(parent_id);
     `);
     schemaLogger.info("person_groups 表已建立", { module: "initSchema" });
 
@@ -1473,6 +1487,125 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_person_device_sync_states_employee ON person_device_sync_states(employee_no);
     `);
     schemaLogger.info("person_device_sync_states 表已建立（門禁同步狀態）", {
+      module: "initSchema",
+    });
+
+    // 人員門禁同步 job（持久化：取代 in-memory Map；供輪詢/稽核/重啟恢復）
+    // 若舊庫殘留與目前欄位不一致的 person_sync_jobs，IF NOT EXISTS 不會修正，子表 FK 會失敗
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = 'person_sync_jobs'
+        ) THEN
+          IF NOT (
+            EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'job_id'
+            )
+            AND EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'job_type'
+            )
+            AND EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'status'
+            )
+          ) THEN
+            DROP TABLE IF EXISTS person_sync_job_warnings CASCADE;
+            DROP TABLE IF EXISTS person_sync_job_items CASCADE;
+            DROP TABLE IF EXISTS person_sync_jobs CASCADE;
+          END IF;
+        END IF;
+      END $$;
+    `);
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_sync_jobs (
+        job_id VARCHAR(80) PRIMARY KEY,
+        job_type VARCHAR(24) NOT NULL CHECK (job_type IN ('sync_location', 'sync_all_locations')),
+        location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+        status VARCHAR(16) NOT NULL CHECK (status IN ('queued','running','completed')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ,
+        progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+        items_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        result JSONB,
+        error JSONB
+      )
+    `);
+    // 遷移：舊庫曾以不完整欄位建表，IF NOT EXISTS 不會補欄位，建索引時會出現 column "job_type" does not exist
+    await targetPool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'job_type'
+        ) THEN
+          ALTER TABLE person_sync_jobs ADD COLUMN job_type VARCHAR(24);
+          UPDATE person_sync_jobs SET job_type = 'sync_location' WHERE job_type IS NULL;
+          ALTER TABLE person_sync_jobs ALTER COLUMN job_type SET NOT NULL;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint c
+            JOIN pg_class t ON c.conrelid = t.oid
+            JOIN pg_namespace n ON t.relnamespace = n.oid
+            WHERE n.nspname = 'public' AND t.relname = 'person_sync_jobs' AND c.conname = 'person_sync_jobs_job_type_check'
+          ) THEN
+            ALTER TABLE person_sync_jobs
+              ADD CONSTRAINT person_sync_jobs_job_type_check
+              CHECK (job_type IN ('sync_location', 'sync_all_locations'));
+          END IF;
+        END IF;
+      END $$;
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_sync_jobs_type_created
+      ON person_sync_jobs(job_type, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_sync_jobs_location_created
+      ON person_sync_jobs(location_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_sync_jobs_status_created
+      ON person_sync_jobs(status, created_at DESC);
+    `);
+    schemaLogger.info("person_sync_jobs 表已建立（同步 job 持久化）", {
+      module: "initSchema",
+    });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_sync_job_items (
+        id BIGSERIAL PRIMARY KEY,
+        job_id VARCHAR(80) NOT NULL REFERENCES person_sync_jobs(job_id) ON DELETE CASCADE,
+        item_type VARCHAR(16) NOT NULL CHECK (item_type IN ('issues','tail')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        payload JSONB NOT NULL
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_sync_job_items_job_type_id
+      ON person_sync_job_items(job_id, item_type, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_sync_job_items_created_at
+      ON person_sync_job_items(created_at DESC);
+    `);
+    schemaLogger.info("person_sync_job_items 表已建立（同步事件流）", {
+      module: "initSchema",
+    });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_sync_job_warnings (
+        id BIGSERIAL PRIMARY KEY,
+        job_id VARCHAR(80) NOT NULL REFERENCES person_sync_jobs(job_id) ON DELETE CASCADE,
+        location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        payload JSONB NOT NULL
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_sync_job_warnings_job_id
+      ON person_sync_job_warnings(job_id, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_person_sync_job_warnings_location_id
+      ON person_sync_job_warnings(location_id, created_at DESC);
+    `);
+    schemaLogger.info("person_sync_job_warnings 表已建立（同步 warnings）", {
       module: "initSchema",
     });
 

@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const db = require("../../database/db");
 
 const STEP_COLUMNS = {
@@ -7,25 +9,6 @@ const STEP_COLUMNS = {
   card: { hash: "card_hash", status: "card_status", at: "card_synced_at" },
   fingerprint: { hash: "fingerprint_hash", status: "fingerprint_status", at: "fingerprint_synced_at" },
 };
-
-async function ensureFingerprintDetailColumn() {
-  await db.query(`
-    DO $$ 
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='person_device_sync_states' AND column_name='fingerprint_detail'
-      ) THEN
-        ALTER TABLE person_device_sync_states ADD COLUMN fingerprint_detail JSONB;
-      END IF;
-    END $$;
-  `);
-}
-
-function isMissingFingerprintDetailColumnError(err) {
-  const msg = err && typeof err === "object" ? String(err.message || "") : "";
-  return msg.includes('column "fingerprint_detail"') && msg.includes("does not exist");
-}
 
 function sha256Hex(input) {
   const h = crypto.createHash("sha256");
@@ -91,9 +74,29 @@ function hashFingerprintTemplate({ fingerPrintID, fingerType, fingerData }) {
 }
 
 function hashFace({ faceBuffer, faceUrl }) {
-  if (Buffer.isBuffer(faceBuffer) && faceBuffer.length > 0) return sha256Hex(faceBuffer);
+  if (Buffer.isBuffer(faceBuffer) && faceBuffer.length > 0) {
+    return sha256Hex(faceBuffer);
+  }
   const u = faceUrl != null ? String(faceUrl).trim() : "";
-  return u ? sha256Hex(`faceUrl:${u}`) : null;
+  if (!u) return null;
+
+  // 對本機檔案（/uploads/...），避免僅用 URL 字串造成誤判：
+  // - URL 不變但檔案內容被覆寫：應視為變更
+  // - 不在此讀完整內容（避免前端/查詢端點爆 IO）；用 mtime/size 當作保守內容指紋
+  if (u.startsWith("/uploads/")) {
+    try {
+      const fullPath = path.join(process.cwd(), u.replace(/^\//, ""));
+      const st = fs.statSync(fullPath);
+      const size = Number(st.size) || 0;
+      const mtimeMs = Number(st.mtimeMs) || 0;
+      return sha256Hex(`faceFileMeta:${u}|size:${size}|mtimeMs:${mtimeMs}`);
+    } catch {
+      // 檔案不存在/無法 stat：退回以 URL 當 hash，至少維持穩定
+      return sha256Hex(`faceUrl:${u}`);
+    }
+  }
+
+  return sha256Hex(`faceUrl:${u}`);
 }
 
 async function getStatesForDevice(deviceId, employeeNos) {
@@ -168,8 +171,7 @@ async function upsertFingerprintDetailState(params) {
   const h = hash != null ? String(hash) : null;
   const payload = JSON.stringify({ hash: h, status: st, at: syncedAt });
 
-  const run = async () =>
-    db.query(
+  await db.query(
       `INSERT INTO person_device_sync_states (
          device_id, employee_no,
          fingerprint_detail,
@@ -182,14 +184,6 @@ async function upsertFingerprintDetailState(params) {
          updated_at = CURRENT_TIMESTAMP`,
       [did, eno, id, payload, lastErrorMessage, id, payload],
     );
-
-  try {
-    await run();
-  } catch (err) {
-    if (!isMissingFingerprintDetailColumnError(err)) throw err;
-    await ensureFingerprintDetailColumn();
-    await run();
-  }
 }
 
 module.exports = {

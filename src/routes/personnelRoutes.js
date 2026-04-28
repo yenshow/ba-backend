@@ -7,10 +7,15 @@ const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
-const XLSX = require("xlsx");
-const AdmZip = require("adm-zip");
 const personnelService = require("../services/personnel/personnelService");
 const personSyncJobService = require("../services/personnel/personSyncJobService");
+const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadService");
+const personImportService = require("../services/personnel/personImportService");
+const {
+  PERSONNEL_FACE_MAX_BYTES,
+  PERSONNEL_FACE_ALLOWED_MIME,
+  getPersonnelUploadsDir,
+} = require("../services/personnel/personnelFileHelpers");
 const {
   authenticate,
   requireAdminOrOperator,
@@ -28,53 +33,7 @@ const uploadsBase = path.join(process.cwd(), "uploads");
   const full = path.join(uploadsBase, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
-const personnelUploadsDir = path.join(uploadsBase, "personnel");
-
-const PERSONNEL_FACE_MAX_BYTES = 200 * 1024; // 與前端一致（設備限制）
-const PERSONNEL_FACE_ALLOWED_MIME = new Set(["image/jpeg", "image/jpg"]);
-
-/** 將人員姓名、員工編號等組成安全的檔案名稱（僅保留安全字元，最長 120 字元） */
-function buildPersonnelFilename(fullName, employeeNo, ext) {
-  const safe = (s) =>
-    String(s == null ? "" : s)
-      .trim()
-      .replace(/[/\\:*?"<>|]/g, "_")
-      .replace(/\s+/g, "_")
-      .slice(0, 60);
-  const namePart = safe(fullName);
-  const noPart = safe(employeeNo);
-  const parts = [noPart, namePart].filter(Boolean);
-  const base = parts.length
-    ? parts.join("_")
-    : `face_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
-  return `${base.slice(0, 120)}${ext}`;
-}
-
-function readFileHeaderBytes(filePath, maxBytes = 32) {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const buf = Buffer.alloc(maxBytes);
-    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
-    return buf.slice(0, Math.max(0, bytesRead));
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch (_e) {}
-  }
-}
-
-function isJpegByMagicBytes(header) {
-  if (!Buffer.isBuffer(header) || header.length < 3) return false;
-  // JPEG: FF D8 FF
-  return header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
-}
-
-function safeUnlink(filePath) {
-  if (!filePath) return;
-  try {
-    fs.unlinkSync(filePath);
-  } catch (_e) {}
-}
+const personnelUploadsDir = getPersonnelUploadsDir();
 
 const personnelUpload = multer({
   storage: multer.diskStorage({
@@ -86,7 +45,7 @@ const personnelUpload = multer({
       ),
   }),
   fileFilter: (_req, file, cb) => {
-    if (PERSONNEL_FACE_ALLOWED_MIME.has(String(file.mimetype).toLowerCase())) {
+    if (PERSONNEL_FACE_ALLOWED_MIME.has(String(file.mimetype || "").toLowerCase())) {
       cb(null, true);
       return;
     }
@@ -163,7 +122,7 @@ router.delete(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     await personnelService.deletePersonGroup(parseInt(req.params.id, 10));
-    res.sendSuccess({ success: true });
+    res.sendSuccess({ ok: true });
   }),
 );
 
@@ -186,12 +145,26 @@ router.get(
         : 0;
     const status =
       req.query.status != null ? String(req.query.status) : undefined;
+    const q = req.query.q != null ? String(req.query.q) : undefined;
     const result = await personnelService.getPersonsByGroupId(id, {
       limit,
       offset,
       status,
+      q,
     });
     res.sendSuccess(result);
+  }),
+);
+
+router.get(
+  "/groups/:id/member-ids",
+  authenticate,
+  requirePermission("system.personnel"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const ids = await personnelService.getPersonGroupMemberIds(id);
+    res.sendSuccess({ ids });
   }),
 );
 
@@ -227,6 +200,10 @@ router.get(
     const filters = {};
     if (req.query.personGroupId != null)
       filters.personGroupId = parseInt(req.query.personGroupId, 10);
+    if (req.query.personGroupIds != null)
+      filters.personGroupIds = String(req.query.personGroupIds);
+    if (req.query.mainGroupId != null)
+      filters.mainGroupId = parseInt(req.query.mainGroupId, 10);
     if (req.query.status) filters.status = req.query.status;
     if (req.query.employeeNo) filters.employeeNo = req.query.employeeNo;
     if (req.query.fullName) filters.fullName = req.query.fullName;
@@ -332,7 +309,7 @@ router.put(
       personId,
       req.body || {},
     );
-    res.sendSuccess({ success: true, person });
+    res.sendSuccess({ person });
   }),
 );
 
@@ -344,7 +321,7 @@ router.delete(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     await personnelService.deletePerson(parseInt(req.params.id, 10));
-    res.sendSuccess({ success: true });
+    res.sendSuccess({ ok: true });
   }),
 );
 
@@ -367,93 +344,16 @@ router.post(
     }
 
     const tempPath = path.join(personnelUploadsDir, req.file.filename);
-
-    // 後端防呆：設備限制（避免僅靠前端驗證）
-    if (
-      req.file.size != null &&
-      Number(req.file.size) > PERSONNEL_FACE_MAX_BYTES
-    ) {
-      safeUnlink(tempPath);
-      const err = new Error("大頭照需小於等於 200KB（設備限制）");
-      err.statusCode = 400;
-      throw err;
-    }
-
-    // 後端防呆：magic bytes 驗證（避免偽造 mimetype/錯誤內容寫成 jpg）
-    const header = readFileHeaderBytes(tempPath, 32);
-    if (!isJpegByMagicBytes(header)) {
-      safeUnlink(tempPath);
-      const err = new Error("圖片格式不正確：僅允許 JPEG（JPG）");
-      err.statusCode = 400;
-      throw err;
-    }
-
     const personId = parseInt(req.params.personId, 10);
-    const person = await personnelService.getPersonById(personId);
-    // 門禁設備人臉同步以 JPEG 最穩定，後端統一以 .jpg 存檔
-    const ext = ".jpg";
-    const fullName = person.full_name ?? "";
-    const employeeNo = person.employee_no ?? "";
-    const desiredName = buildPersonnelFilename(fullName, employeeNo, ext);
 
-    const oldPath = tempPath;
-    let finalFilename = desiredName;
-    let newPath = path.join(personnelUploadsDir, finalFilename);
-    let n = 0;
-    while (fs.existsSync(newPath) && newPath !== oldPath) {
-      n += 1;
-      const base = path.basename(desiredName, ext);
-      finalFilename = `${base}_${n}${ext}`;
-      newPath = path.join(personnelUploadsDir, finalFilename);
-    }
-    if (oldPath !== newPath) fs.renameSync(oldPath, newPath);
-    const faceUrl = `/uploads/personnel/${finalFilename}`;
+    const payload = await finalizeFaceUpload({
+      tempPath,
+      personnelUploadsDir,
+      personId,
+      warnLogger: (msg, meta) => isapiEventLogger.warn(msg, meta),
+    });
 
-    const existingFaceUrl = person.face_url;
-    const oldBase =
-      existingFaceUrl && typeof existingFaceUrl === "string"
-        ? path.basename(existingFaceUrl.trim().replace(/^\//, ""))
-        : "";
-    const oldFilePath =
-      oldBase && !oldBase.includes("..")
-        ? path.join(personnelUploadsDir, oldBase)
-        : null;
-
-    try {
-      const updated = await personnelService.updatePerson(personId, {
-        faceUrl,
-      });
-
-      // DB 更新成功後再刪除舊檔，降低失敗時不一致風險
-      if (
-        oldFilePath &&
-        oldBase &&
-        oldBase !== finalFilename &&
-        fs.existsSync(oldFilePath)
-      ) {
-        try {
-          fs.unlinkSync(oldFilePath);
-        } catch (err) {
-          isapiEventLogger.warn("刪除舊大頭照失敗", {
-            path: oldFilePath,
-            error: err?.message,
-          });
-        }
-      }
-
-      res.sendSuccess({ faceUrl, person: updated }, 201);
-    } catch (err) {
-      // 若 DB 更新失敗，移除新檔避免孤兒檔
-      try {
-        if (fs.existsSync(newPath)) fs.unlinkSync(newPath);
-      } catch (cleanupErr) {
-        isapiEventLogger.warn("清理新上傳大頭照失敗", {
-          path: newPath,
-          error: cleanupErr?.message,
-        });
-      }
-      throw err;
-    }
+    res.sendSuccess(payload, 201);
   }),
 );
 
@@ -507,13 +407,28 @@ router.get(
       req.query.status != null ? String(req.query.status) : undefined;
     const q = req.query.q != null ? String(req.query.q) : undefined;
 
-    const result = await personnelService.getPersonsByLocationIdPaged(locationId, {
-      limit,
-      offset,
-      status,
-      q,
-    });
+    const result = await personnelService.getPersonsByLocationIdPaged(
+      locationId,
+      {
+        limit,
+        offset,
+        status,
+        q,
+      },
+    );
     res.sendSuccess(result);
+  }),
+);
+
+router.get(
+  "/locations/:locationId/member-ids",
+  authenticate,
+  requirePermission("system.personnel"),
+  validateIntegers("locationId"),
+  asyncHandler(async (req, res) => {
+    const locationId = parseInt(req.params.locationId, 10);
+    const ids = await personnelService.getLocationMemberIds(locationId);
+    res.sendSuccess({ ids });
   }),
 );
 
@@ -551,7 +466,7 @@ router.post(
     const { warnings } = await personSyncJobService.syncLocation(
       parseInt(req.params.locationId, 10),
     );
-    res.sendSuccess({ success: true, warnings });
+    res.sendSuccess({ warnings });
   }),
 );
 
@@ -578,13 +493,65 @@ router.get(
   authenticate,
   requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
-    const job = personSyncJobService.getSyncLocationJob(req.params.jobId);
+    const includeIssues = String(req.query.includeIssues || "").trim() === "1";
+    const includeTail = String(req.query.includeTail || "").trim() === "1";
+    const issuesLimit =
+      req.query.issuesLimit != null && String(req.query.issuesLimit).trim() !== ""
+        ? parseInt(String(req.query.issuesLimit), 10)
+        : undefined;
+    const tailLimit =
+      req.query.tailLimit != null && String(req.query.tailLimit).trim() !== ""
+        ? parseInt(String(req.query.tailLimit), 10)
+        : undefined;
+
+    const job = await personSyncJobService.getSyncLocationJobView(req.params.jobId, {
+      includeIssues,
+      includeTail,
+      issuesLimit,
+      tailLimit,
+    });
     if (!job) {
       const err = new Error("同步工作不存在");
       err.statusCode = 404;
       throw err;
     }
     res.sendSuccess(job);
+  }),
+);
+
+/**
+ * 同步 job 明細（分頁）
+ * GET /api/personnel/sync-location/jobs/:jobId/items?type=issues|tail&limit=200&offset=0
+ *
+ * - type=issues：僅保留 failed/skipped（用於查錯）
+ * - type=tail：最後 N 筆事件（用於前端即時 UI；小 payload）
+ */
+router.get(
+  "/sync-location/jobs/:jobId/items",
+  authenticate,
+  requirePermission("system.personnel"),
+  asyncHandler(async (req, res) => {
+    const typeRaw = String(req.query.type || "").trim();
+    const type = typeRaw === "tail" ? "tail" : "issues";
+    const limit =
+      req.query.limit != null && String(req.query.limit).trim() !== ""
+        ? parseInt(String(req.query.limit), 10)
+        : 200;
+    const offset =
+      req.query.offset != null && String(req.query.offset).trim() !== ""
+        ? parseInt(String(req.query.offset), 10)
+        : 0;
+
+    const result = await personSyncJobService.getSyncLocationJobItems(req.params.jobId, type, {
+      limit,
+      offset,
+    });
+    if (!result) {
+      const err = new Error("同步工作不存在");
+      err.statusCode = 404;
+      throw err;
+    }
+    res.sendSuccess(result);
   }),
 );
 
@@ -604,7 +571,7 @@ router.get(
   authenticate,
   requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
-    const job = personSyncJobService.getSyncAllLocationsJob(req.params.jobId);
+    const job = await personSyncJobService.getSyncAllLocationsJob(req.params.jobId);
     if (!job) {
       const err = new Error("同步工作不存在");
       err.statusCode = 404;
@@ -623,40 +590,7 @@ router.get(
   requirePermission("system.personnel"),
   asyncHandler(async (_req, res) => {
     const filename = "personnel_import_template.xlsx";
-
-    const rows = [
-      {
-        工號: "A0001",
-        姓名: "王小明",
-        有效起始日: "2026-01-01",
-        有效結束日: "2030-12-31",
-        門禁密碼: "1234",
-        卡號: "0000123456",
-      },
-      {
-        工號: "A0002",
-        姓名: "林小華",
-        有效起始日: "",
-        有效結束日: "",
-        門禁密碼: "",
-        卡號: "",
-      },
-    ];
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows, {
-      header: [
-        "工號",
-        "姓名",
-        "有效起始日",
-        "有效結束日",
-        "門禁密碼",
-        "卡號",
-      ],
-    });
-    XLSX.utils.book_append_sheet(wb, ws, "template");
-
-    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    const buffer = personImportService.getImportTemplateXlsxBuffer();
 
     res.setHeader(
       "Content-Type",
@@ -684,231 +618,20 @@ router.post(
       throw err;
     }
     const zipFile = req.files?.imagesZip?.[0] ?? null;
-
-    const workbook = XLSX.read(excelFile.buffer, {
-      type: "buffer",
-      cellDates: true,
-    });
-    const firstSheetName = workbook.SheetNames?.[0];
-    if (!firstSheetName) {
-      const err = new Error("Excel 無工作表");
-      err.statusCode = 400;
-      throw err;
-    }
-    const sheet = workbook.Sheets[firstSheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-
-    const zipIndex = new Map();
-    if (zipFile) {
-      try {
-        const zip = new AdmZip(zipFile.buffer);
-        for (const entry of zip.getEntries()) {
-          if (entry.isDirectory) continue;
-          const base = path.basename(entry.entryName);
-          if (!base) continue;
-          zipIndex.set(base.toLowerCase(), entry);
-        }
-      } catch {
-        const err = new Error("圖片 zip 解析失敗");
-        err.statusCode = 400;
-        throw err;
-      }
-    }
-
-    const normalizeKey = (k) =>
-      String(k || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, "");
-    const pick = (obj, keys) => {
-      for (const k of keys) {
-        if (obj[k] !== undefined) return obj[k];
-      }
-      const entries = Object.entries(obj || {});
-      for (const k of keys) {
-        const nk = normalizeKey(k);
-        const hit = entries.find(([kk]) => normalizeKey(kk) === nk);
-        if (hit) return hit[1];
-      }
-      return undefined;
-    };
-
-    const getEmployeeNoFromRow = (row) =>
-      pick(row, ["工號", "員工編號", "employeeNo"]);
-    const getFullNameFromRow = (row) =>
-      pick(row, ["姓名", "fullName", "名字"]);
-
-    const getValidBeginFromRow = (row) =>
-      pick(row, [
-        "有效起始日",
-        "有效起",
-        "有效起始",
-        "beginTime",
-      ]);
-    const getValidEndFromRow = (row) =>
-      pick(row, [
-        "有效結束日",
-        "有效迄",
-        "有效結束",
-        "endTime",
-      ]);
-    const getPasswordFromRow = (row) =>
-      pick(row, ["門禁密碼", "password", "密碼"]);
-    const getCardNoFromRow = (row) => pick(row, ["卡號", "cardNo", "card_no"]);
-
-    // 已改為「地點中心」管理門禁名單：批次匯入不再處理地點權限
-
     const createdBy = req.user?.id ?? null;
-    const created = [];
-    const errors = [];
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i] || {};
-      const employeeNoRaw = getEmployeeNoFromRow(row);
-      const employeeNo =
-        employeeNoRaw != null ? String(employeeNoRaw).trim() : "";
-      const fullNameRaw = getFullNameFromRow(row);
-      const fullName =
-        fullNameRaw != null && String(fullNameRaw).trim() !== ""
-          ? String(fullNameRaw).trim()
-          : null;
-
-      const validBeginRaw = getValidBeginFromRow(row);
-      const validEndRaw = getValidEndFromRow(row);
-      const passwordRaw = getPasswordFromRow(row);
-      const cardNoRaw = getCardNoFromRow(row);
-
-      if (!employeeNo) {
-        errors.push({ row: i + 2, message: "員工編號不能為空" }); // +2：含 header
-        continue;
-      }
-      if (!fullName) {
-        errors.push({ row: i + 2, employeeNo, message: "姓名為必填" });
-        continue;
-      }
-
-      try {
-        const existing =
-          await personnelService.getPersonByEmployeeNo(employeeNo);
-        const isUpdate = Boolean(existing && existing.id);
-
-        const person = isUpdate
-          ? await personnelService.updatePerson(existing.id, {
-              fullName,
-            })
-          : await personnelService.createPerson(
-              {
-                employeeNo,
-                fullName,
-              },
-              createdBy,
-            );
-
-        created.push({ id: person.id, employeeNo: person.employee_no });
-
-        // 門禁設定（整合寫入：validity/card/fingerprint/password）
-        // 規則：
-        // - 兩者皆有值：寫入指定有效期限（longTerm=false）
-        // - 兩者皆空：若為「新建立」人員，預設寫入長期授權（longTerm=true，由後端補齊 begin/end），避免同步 ISAPI 時缺少有效期限
-        //             若為「更新」人員，維持既有 validity（不觸碰既有值）
-        {
-          const beginStr =
-            validBeginRaw != null ? String(validBeginRaw).trim() : "";
-          const endStr = validEndRaw != null ? String(validEndRaw).trim() : "";
-          const hasBegin = Boolean(beginStr);
-          const hasEnd = Boolean(endStr);
-          if ((hasBegin && !hasEnd) || (!hasBegin && hasEnd)) {
-            const err = new Error(
-              "有效期限需同時提供「有效起始日」與「有效結束日」",
-            );
-            err.statusCode = 400;
-            throw err;
-          }
-
-          const password =
-            passwordRaw != null && String(passwordRaw).trim() !== ""
-              ? String(passwordRaw).trim()
-              : null;
-          const cardNo =
-            cardNoRaw != null && String(cardNoRaw).trim() !== ""
-              ? String(cardNoRaw).trim()
-              : null;
-
-          const shouldDefaultLongTerm = !isUpdate && !hasBegin && !hasEnd;
-
-          const shouldWriteAnything =
-            password || cardNo || (hasBegin && hasEnd) || shouldDefaultLongTerm;
-          if (shouldWriteAnything) {
-            const payload = {
-              validity:
-                hasBegin && hasEnd
-                  ? { longTerm: false, beginTime: beginStr, endTime: endStr }
-                  : shouldDefaultLongTerm
-                    ? { longTerm: true }
-                    : undefined,
-              password,
-              cardNo,
-            };
-            await personnelService.setPersonAccessControlConfig(
-              person.id,
-              payload,
-            );
-          }
-        }
-
-        // 圖片：以工號檔名（employeeNo.jpg/jpeg）嘗試（≤200KB，且需為 JPEG）
-        if (zipIndex.size > 0) {
-          const candidateNames = [];
-          ["jpg", "jpeg"].forEach((ext) =>
-            candidateNames.push(`${employeeNo}.${ext}`),
-          );
-          const entry =
-            candidateNames
-              .map((n) => zipIndex.get(String(n).toLowerCase()))
-              .find(Boolean) || null;
-
-          if (entry) {
-            const buffer = entry.getData();
-            if (!buffer || buffer.length <= 0) {
-              // 單一人的圖片異常不應中斷整批匯入
-              continue;
-            }
-            if (buffer.length > PERSONNEL_FACE_MAX_BYTES) {
-              const err = new Error("圖片檔案過大（需 ≤ 200KB）");
-              err.statusCode = 400;
-              throw err;
-            }
-            if (!isJpegByMagicBytes(buffer.slice(0, 32))) {
-              const err = new Error("圖片格式不正確：僅允許 JPEG（JPG）");
-              err.statusCode = 400;
-              throw err;
-            }
-
-            const desiredName = buildPersonnelFilename(
-              fullName ?? "",
-              employeeNo,
-              ".jpg",
-            );
-            const finalPath = path.join(personnelUploadsDir, desiredName);
-            await fs.promises.writeFile(finalPath, buffer);
-            const faceUrl = `/uploads/personnel/${desiredName}`;
-            await personnelService.updatePerson(person.id, { faceUrl });
-          }
-        }
-      } catch (err) {
-        errors.push({
-          row: i + 2,
-          employeeNo,
-          message: err.message || String(err),
-        });
-      }
-    }
+    const result = await personImportService.executeBatchImport({
+      excelBuffer: excelFile.buffer,
+      zipBuffer: zipFile?.buffer,
+      createdBy,
+      personnelUploadsDir,
+    });
 
     res.sendSuccess(
       {
-        created: created.length,
-        createdIds: created,
-        errors: errors.length > 0 ? errors : undefined,
+        created: result.created,
+        createdIds: result.createdIds,
+        errors: result.errors,
       },
       201,
     );

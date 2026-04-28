@@ -79,6 +79,17 @@ router.delete(
 
 // ========== 地點管理路由 ==========
 
+// people_counting（門禁來源）可同步地點 + 入口/出口門禁設備（含名稱）
+router.get(
+  "/people-counting/syncable-locations",
+  noCache,
+  asyncHandler(async (_req, res) => {
+    const result =
+      await locationService.getPeopleCountingSyncableLocationsWithAccessControlDevices();
+    res.sendSuccess(result);
+  }),
+);
+
 // 取得單一地點（含所有系統）
 router.get(
   "/:id",
