@@ -1,6 +1,7 @@
 /**
- * 緊急求救：依 location_systems 讀取 Modbus（DI/DO 回授），不寫入控制。
- * 狀態鍵建議：sos / trigger / running（觸發＝警報）、fault（故障＝異常）。
+ * 空氣循環：依 location_systems 設定讀取 Modbus 並合成 uiStatus
+ * - 以 statusPoints 為主要狀態來源（可含 holding/input/coil/discrete）
+ * - 若無可用控制器連線或讀值全失敗 → offline / warning
  */
 
 const locationService = require("./locationService");
@@ -9,7 +10,7 @@ const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const logger = require("../../utils/logger");
 
-const statusLogger = logger.createLogger("emergencyRescueStatusService");
+const statusLogger = logger.createLogger("airCirculationStatusService");
 
 const DEVICE_CFG_CACHE_TTL_MS = Number(
   process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
@@ -65,7 +66,7 @@ async function resolveDeviceConfig(deviceId, modbus) {
         return cfg;
       }
     } catch (_) {
-      /* ignore */
+      /* fallback inline */
     }
   }
   return parseInlineModbus(modbus);
@@ -82,9 +83,7 @@ function normalizeRegisterType(pointDef) {
 
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
-  if (!statusPoints || typeof statusPoints !== "object") {
-    return raw;
-  }
+  if (!statusPoints || typeof statusPoints !== "object") return raw;
 
   const reqs = [];
   for (const key of Object.keys(statusPoints)) {
@@ -93,7 +92,12 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     const registerType = normalizeRegisterType(def);
     const address = Number(def.address);
     const length = def.length != null ? Number(def.length) : 1;
+
     if (!Number.isFinite(address) || address < 0) {
+      raw[key] = undefined;
+      continue;
+    }
+    if (!Number.isFinite(length) || length <= 0) {
       raw[key] = undefined;
       continue;
     }
@@ -111,7 +115,6 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     } catch (_) {
       pointDeviceConfig = null;
     }
-
     if (!pointDeviceConfig) {
       raw[key] = undefined;
       continue;
@@ -128,9 +131,7 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     });
   }
 
-  if (reqs.length === 0) {
-    return raw;
-  }
+  if (reqs.length === 0) return raw;
 
   const results = await modbusBatchService.batchRead(reqs);
   for (const r of results) {
@@ -138,14 +139,11 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     if (!k) continue;
     if (r.ok) {
       const v = r.data?.[0];
-      if (typeof v === "boolean") raw[k] = v;
-      else if (typeof v === "number") raw[k] = v !== 0;
-      else raw[k] = Boolean(v);
+      raw[k] = v;
     } else {
       raw[k] = undefined;
     }
   }
-
   return raw;
 }
 
@@ -180,11 +178,8 @@ async function hasResolvableDeviceForPoints(
   return false;
 }
 
-/**
- * 求救觸發（sos / trigger / running 任一为 true）→ alarm
- * fault → warning（異常）
- */
-function deriveEmergencyRescueUiStatus(
+function deriveUiStatus(
+  equipmentKind,
   raw,
   hadDeviceConfig,
   pointKeysConfigured,
@@ -193,52 +188,66 @@ function deriveEmergencyRescueUiStatus(
   if (!pointKeysConfigured || pointKeysConfigured.length === 0)
     return "unknown";
 
+  const kind = equipmentKind === "tank" ? "tank" : "pump";
   const anyRead = pointKeysConfigured.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (raw.sos === true || raw.trigger === true || raw.running === true) {
-    return "alarm";
+  if (kind === "pump") {
+    if (raw.fault === true) return "alarm";
+    if (raw.running === true) return "alarm";
+    return "normal";
   }
-  if (raw.fault === true) return "warning";
+
+  if (raw.coverAlarm === true || raw.highLevel === true) return "alarm";
+  if (raw.levelOk === false) return "alarm";
+  if (raw.lowLevel === true) return "alarm";
   return "normal";
 }
 
-async function syncEmergencyRescueConnectivityAlert(
+async function syncConnectivityAlert(
   systemId,
   hadDeviceConfig,
   pointKeys,
   raw,
   readError,
 ) {
-  if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) {
-    return;
-  }
-
+  if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) return;
   const anyRead = pointKeys.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   await systemAlert.syncLocationSnapshotReadResult(
-    "emergency_rescue",
+    "air_circulation",
     systemId,
     anyRead,
-    readError || "無法讀取緊急求救設備資料",
+    readError || "無法讀取空氣循環設備資料",
   );
 }
 
-async function buildItemForEmergencyRescueSystem(
-  zone,
-  location,
-  system,
-  options = {},
-) {
+function collectItemsFromZones(zones) {
+  const items = [];
+  for (const zone of zones) {
+    const locs = zone.locations || [];
+    for (const loc of locs) {
+      const systems = loc.systems || [];
+      for (const sys of systems) {
+        if (sys.systemType === "air_circulation") {
+          items.push({ zone, location: loc, system: sys });
+        }
+      }
+    }
+  }
+  return items;
+}
+
+async function buildItem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
   const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "sos";
+  const viewCategory = cfg.viewCategory || "air_circulation";
   const statusPoints = cfg.statusPoints || {};
 
   const pointKeys = Object.keys(statusPoints).filter(
@@ -250,6 +259,7 @@ async function buildItemForEmergencyRescueSystem(
     deviceId,
     modbus,
   );
+
   let raw = {};
   let readError = null;
   if (pointKeys.length > 0) {
@@ -264,7 +274,8 @@ async function buildItemForEmergencyRescueSystem(
     readError = "無可用控制器連線設定（deviceId 或 modbus.host/port）";
   }
 
-  const uiStatus = deriveEmergencyRescueUiStatus(
+  const uiStatus = deriveUiStatus(
+    equipmentKind,
     raw,
     hadDeviceConfig,
     pointKeys,
@@ -272,7 +283,7 @@ async function buildItemForEmergencyRescueSystem(
 
   if (syncAlerts) {
     try {
-      await syncEmergencyRescueConnectivityAlert(
+      await syncConnectivityAlert(
         Number(system.id),
         hadDeviceConfig,
         pointKeys,
@@ -283,7 +294,7 @@ async function buildItemForEmergencyRescueSystem(
       statusLogger.warn("同步警報失敗（略過）", {
         systemId: Number(system.id),
         error: alertErr?.message || String(alertErr),
-        module: "emergencyRescueStatusService",
+        module: "airCirculationStatusService",
       });
     }
   }
@@ -302,53 +313,36 @@ async function buildItemForEmergencyRescueSystem(
   };
 }
 
-function collectEmergencyRescueItemsFromZones(zones) {
-  const items = [];
-  for (const zone of zones) {
-    const locs = zone.locations || [];
-    for (const loc of locs) {
-      const systems = loc.systems || [];
-      for (const sys of systems) {
-        if (sys.systemType === "emergency_rescue") {
-          items.push({ zone, location: loc, system: sys });
-        }
-      }
-    }
-  }
-  return items;
-}
-
 async function getStatusSnapshot(query = {}) {
-  const zoneIdsFilter = query.zoneIds;
+  const zoneIdsFilter = Array.isArray(query.zoneIds) ? query.zoneIds : [];
   const syncAlerts = query.syncAlerts !== false;
+
   const result = await locationService.getZones({
-    locationType: "emergency_rescue",
+    locationType: "air_circulation",
   });
   let zones = result.zones || [];
-
-  if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
+  if (zoneIdsFilter.length > 0) {
     const want = new Set(zoneIdsFilter.map((id) => String(id)));
     zones = zones.filter((z) => want.has(String(z.id)));
   }
 
-  const triples = collectEmergencyRescueItemsFromZones(zones);
+  const triples = collectItemsFromZones(zones);
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForEmergencyRescueSystem(zone, location, system, { syncAlerts }),
+      buildItem(zone, location, system, { syncAlerts }),
     ),
   );
-
   return { items };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZoneById(zoneId, "emergency_rescue");
+  const result = await locationService.getZoneById(zoneId, "air_circulation");
   const zone = result.zone;
-  const triples = collectEmergencyRescueItemsFromZones([zone]);
+  const triples = collectItemsFromZones([zone]);
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForEmergencyRescueSystem(z, location, system, { syncAlerts }),
+      buildItem(z, location, system, { syncAlerts }),
     ),
   );
   return { zoneId: String(zone.id), items };

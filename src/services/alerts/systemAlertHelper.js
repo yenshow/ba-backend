@@ -89,6 +89,9 @@ const getAreaInfo = (systemId) => getSourceInfoByType(systemId, "lighting");
 const getDrainageInfo = (systemId) => getSourceInfoByType(systemId, "drainage");
 const getPowerInfo = (systemId) => getSourceInfoByType(systemId, "power");
 const getFireInfo = (systemId) => getSourceInfoByType(systemId, "fire");
+const getHvacInfo = (systemId) => getSourceInfoByType(systemId, "hvac");
+const getAirCirculationInfo = (systemId) =>
+  getSourceInfoByType(systemId, "air_circulation");
 const getEmergencyRescueInfo = (systemId) =>
   getSourceInfoByType(systemId, "emergency_rescue");
 
@@ -248,6 +251,10 @@ const getDeviceIdFromPower = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "power");
 const getDeviceIdFromFire = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "fire");
+const getDeviceIdFromHvac = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "hvac");
+const getDeviceIdFromAirCirculation = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "air_circulation");
 const getDeviceIdFromEmergencyRescue = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "emergency_rescue");
 
@@ -322,6 +329,16 @@ const SYSTEM_CONFIGS = {
     source: alertService.ALERT_SOURCES.FIRE,
     getSourceInfo: getFireInfo,
     getDeviceId: getDeviceIdFromFire,
+  },
+  hvac: {
+    source: alertService.ALERT_SOURCES.HVAC,
+    getSourceInfo: getHvacInfo,
+    getDeviceId: getDeviceIdFromHvac,
+  },
+  air_circulation: {
+    source: alertService.ALERT_SOURCES.AIR_CIRCULATION,
+    getSourceInfo: getAirCirculationInfo,
+    getDeviceId: getDeviceIdFromAirCirculation,
   },
   emergency_rescue: {
     source: alertService.ALERT_SOURCES.EMERGENCY_RESCUE,

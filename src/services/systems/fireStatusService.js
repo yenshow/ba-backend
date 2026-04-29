@@ -241,12 +241,7 @@ async function syncFireConnectivityAlert(
   );
 }
 
-async function buildItemForFireSystem(
-  zone,
-  location,
-  system,
-  options = {},
-) {
+async function buildItemForFireSystem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;

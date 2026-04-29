@@ -374,6 +374,7 @@ const ALERT_SOURCES = {
   DRAINAGE: "drainage",
   POWER: "power",
   HVAC: "hvac",
+  AIR_CIRCULATION: "air_circulation",
   FIRE: "fire",
   EMERGENCY_RESCUE: "emergency_rescue",
   SECURITY: "security",
@@ -485,28 +486,28 @@ function buildAlertSelectQuery() {
       iu.username as ignored_by_username,
       CASE 
         WHEN a.source = 'device' THEN d.type_code
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN d_system.type_code
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN d_system.type_code
         ELSE NULL
       END as device_type_code,
       CASE 
         WHEN a.source = 'device' THEN d.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN l.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN l.name
         ELSE NULL
       END as source_name,
       CASE WHEN a.source = 'device' THEN d.name END as device_name,
       CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN z.name 
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN z.name 
         ELSE NULL 
       END as zone_name,
       CASE 
         WHEN a.source = 'device' THEN d.config
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN d_system.config
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN d_system.config
         ELSE NULL
       END as device_config
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') AND a.source_id = ls.id
+    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
@@ -1559,32 +1560,32 @@ async function getAlertById(id) {
         -- 設備類型資訊（type_code 固定映射；不查 deviceTypes 表）
         CASE 
           WHEN a.source = 'device' THEN d.type_code
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN d_system.type_code
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN d_system.type_code
           ELSE NULL
         END as device_type_code,
         -- 來源名稱（統一欄位，適用於所有來源類型）
         CASE 
           WHEN a.source = 'device' THEN d.name
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN l.name
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN l.name
           ELSE NULL
         END as source_name,
         -- 相容欄位：device_name（當 source = 'device'）
         CASE WHEN a.source = 'device' THEN d.name END as device_name,
         -- 區域名稱（統一使用 zones 表）
         CASE 
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN z.name 
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN z.name 
           ELSE NULL 
         END as zone_name,
         CASE 
           WHEN a.source = 'device' THEN d.config
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') THEN d_system.config
+          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') THEN d_system.config
           ELSE NULL
         END as device_config
       FROM alerts a
       LEFT JOIN users iu ON a.ignored_by = iu.id
       LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
       -- 使用新架構：location_systems 關聯到 locations 和 zones
-      LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire', 'emergency_rescue') AND a.source_id = ls.id
+      LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue') AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
       LEFT JOIN zones z ON l.zone_id = z.id
       LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
@@ -1629,27 +1630,27 @@ async function getResolvedAlertsForBackup(beforeDate) {
       iu.username as ignored_by_username,
       CASE 
         WHEN a.source = 'device' THEN d.type_code
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN d_system.type_code
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire') THEN d_system.type_code
         ELSE NULL
       END as device_type_code,
       CASE 
         WHEN a.source = 'device' THEN d.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN l.name
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire') THEN l.name
         ELSE NULL
       END as source_name,
       CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN z.name 
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire') THEN z.name 
         ELSE NULL 
       END as zone_name,
       CASE 
         WHEN a.source = 'device' THEN d.config
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') THEN d_system.config
+        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire') THEN d_system.config
         ELSE NULL
       END as device_config
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'fire') AND a.source_id = ls.id
+    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id

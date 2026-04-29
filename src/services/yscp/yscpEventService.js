@@ -3,10 +3,10 @@ const websocketService = require("../websocket/websocketService");
 
 const serviceLogger = logger.createLogger("YSCP Event Service");
 
-/** OnEventNotify 依 params.ability 對應的 WebSocket 事件名稱與類型 */
+/** OnEventNotify 依 params.ability 對應的事件類型（實際 emit 由 websocketService 統一處理） */
 const ABILITY_WS_MAP = {
-  event_veh: { event: "yscp:event:vehicle", type: "vehicle_access" },
-  event_acs: { event: "yscp:event:acs", type: "acs" },
+  event_veh: { type: "vehicle_access" },
+  event_acs: { type: "acs" },
 };
 
 /**
@@ -17,16 +17,12 @@ const ABILITY_WS_MAP = {
 class YscpEventService {
   async handleEvent(eventData) {
     try {
-      const io = websocketService.getIO();
       const ability =
         eventData.method === "OnEventNotify" ? eventData.params?.ability : null;
       const mapped = ability ? ABILITY_WS_MAP[ability] : null;
 
-      if (io && mapped) {
-        io.emit(mapped.event, {
-          type: mapped.type,
-          timestamp: new Date().toISOString(),
-        });
+      if (mapped) {
+        websocketService.emitYscpEvent(mapped.type);
         return { processed: true, eventType: mapped.type };
       }
 

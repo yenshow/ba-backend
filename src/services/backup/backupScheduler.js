@@ -233,13 +233,6 @@ async function runBackup() {
  * 啟動定時備份（伺服器啟動時呼叫）
  */
 function startScheduler() {
-  if (!backupConfig.scheduler.enabled) {
-    return {
-      stop: () => {},
-      runNow: () => Promise.resolve({ message: "備份排程未啟用" }),
-    };
-  }
-
   const interval = backupConfig.scheduler.interval;
   const timer = setInterval(() => {
     runBackup().catch((err) =>

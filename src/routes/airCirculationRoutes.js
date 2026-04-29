@@ -1,65 +1,68 @@
 const express = require("express");
-const router = express.Router();
-const locationService = require("../services/systems/locationService");
-const lightingStatusService = require("../services/systems/lightingStatusService");
 const {
   authenticate,
+  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
+const locationService = require("../services/systems/locationService");
+const airCirculationStatusService = require("../services/systems/airCirculationStatusService");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
-// 以下路由皆需登入且具備系統權限
-router.use(authenticate, requirePermission("system.lighting"));
+const router = express.Router();
 
-// ========== 區域管理路由 ==========
+// 皆需登入（系統頁）
+router.use(authenticate, requirePermission("system.air_circulation"));
 
-// 取得區域列表
+// Zones CRUD（沿用統一 location/zones 模型，但對外暴露獨立前綴）
 router.get(
   "/zones",
   noCache,
   asyncHandler(async (req, res) => {
-    const result = await locationService.getZones({ locationType: "lighting" });
+    const result = await locationService.getZones({
+      locationType: "air_circulation",
+    });
     res.sendSuccess(result);
   }),
 );
 
-// 取得單一區域
 router.get(
   "/zones/:id",
   noCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await locationService.getZoneById(id, "lighting");
+    const result = await locationService.getZoneById(id, "air_circulation");
     res.sendSuccess(result);
   }),
 );
 
-// 建立區域（需要認證）
 router.post(
   "/zones",
+  requireAdminOrOperator,
   asyncHandler(async (req, res) => {
-    const result = await locationService.createZone(req.body, req.user.id);
-    res.sendSuccess(result, 201);
-  }),
-);
-
-// 更新區域（需要認證）
-router.put(
-  "/zones/:id",
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const result = await locationService.updateZone(id, req.body, req.user.id);
+    const userId = req.user?.id ?? null;
+    const result = await locationService.createZone(req.body, userId);
     res.sendSuccess(result);
   }),
 );
 
-// 刪除區域（需要認證）
+router.put(
+  "/zones/:id",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user?.id ?? null;
+    const result = await locationService.updateZone(id, req.body, userId);
+    res.sendSuccess(result);
+  }),
+);
+
 router.delete(
   "/zones/:id",
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -68,6 +71,7 @@ router.delete(
   }),
 );
 
+// Status snapshot（模仿 drainage/power：後端讀取 statusPoints 合成 uiStatus）
 router.get(
   "/status",
   noCache,
@@ -75,16 +79,18 @@ router.get(
     let zoneIds;
     const raw = req.query.zoneIds;
     if (raw != null && raw !== "") {
-      zoneIds = String(raw)
+      const parts = String(raw)
         .split(",")
         .map((s) => s.trim())
-        .filter(Boolean)
-        .map((v) => parseInt(v, 10))
-        .filter((v) => !Number.isNaN(v));
+        .filter(Boolean);
+      zoneIds = parts
+        .map((p) => parseInt(p, 10))
+        .filter((n) => !Number.isNaN(n));
     }
-    const result = await lightingStatusService.getStatusSnapshot({
+    const syncAlerts = String(req.query.syncAlerts ?? "true") !== "false";
+    const result = await airCirculationStatusService.getStatusSnapshot({
       zoneIds,
-      syncAlerts: false,
+      syncAlerts,
     });
     res.sendSuccess(result);
   }),
@@ -96,11 +102,10 @@ router.get(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await lightingStatusService.getZoneStatusSnapshot(
+    const syncAlerts = String(req.query.syncAlerts ?? "true") !== "false";
+    const result = await airCirculationStatusService.getZoneStatusSnapshot(
       parseInt(id, 10),
-      {
-        syncAlerts: false,
-      },
+      { syncAlerts },
     );
     res.sendSuccess(result);
   }),

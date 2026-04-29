@@ -1,6 +1,9 @@
 /**
- * 緊急求救：依 location_systems 讀取 Modbus（DI/DO 回授），不寫入控制。
- * 狀態鍵建議：sos / trigger / running（觸發＝警報）、fault（故障＝異常）。
+ * HVAC：依 location_systems 設定讀取 Modbus 並合成 uiStatus（與排水/電力同風格：獨立檔案、共用底層）
+ *
+ * 主要用途：提供 `/api/hvac/status` 與 `/api/hvac/zones/:id/status` 的後端快照彙總。
+ * - HVAC 的 location_systems.config 允許 `statusPoints`（holding/input 等數值點位）
+ * - `modbus_config`（DI/DO）主要供控制回路使用；本服務以 statusPoints 為狀態快照主體
  */
 
 const locationService = require("./locationService");
@@ -9,7 +12,7 @@ const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const logger = require("../../utils/logger");
 
-const statusLogger = logger.createLogger("emergencyRescueStatusService");
+const statusLogger = logger.createLogger("hvacStatusService");
 
 const DEVICE_CFG_CACHE_TTL_MS = Number(
   process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
@@ -47,6 +50,41 @@ function parseInlineModbus(modbus) {
   return { host, port: Number(port), unitId: Number(unitId) };
 }
 
+function extractPrimaryBitPoint(modbus) {
+  if (!modbus || typeof modbus !== "object") return null;
+
+  const points = Array.isArray(modbus.points) ? modbus.points : [];
+  if (points.length > 0) {
+    const di = points.find((p) => String(p?.type || "").toLowerCase() === "di");
+    if (di && Number.isFinite(Number(di.address))) {
+      return { registerType: "discrete", address: Number(di.address) };
+    }
+    const dO = points.find((p) => String(p?.type || "").toLowerCase() === "do");
+    if (dO && Number.isFinite(Number(dO.address))) {
+      return { registerType: "coil", address: Number(dO.address) };
+    }
+  }
+
+  // fallback: compact schema
+  if (
+    modbus.diAddress !== undefined &&
+    Number.isFinite(Number(modbus.diAddress))
+  ) {
+    return { registerType: "discrete", address: Number(modbus.diAddress) };
+  }
+  if (
+    modbus.doAddress !== undefined &&
+    Number.isFinite(Number(modbus.doAddress))
+  ) {
+    return { registerType: "coil", address: Number(modbus.doAddress) };
+  }
+  if (modbus.address !== undefined && Number.isFinite(Number(modbus.address))) {
+    return { registerType: "coil", address: Number(modbus.address) };
+  }
+
+  return null;
+}
+
 async function resolveDeviceConfig(deviceId, modbus) {
   if (deviceId != null && deviceId !== "") {
     try {
@@ -65,7 +103,7 @@ async function resolveDeviceConfig(deviceId, modbus) {
         return cfg;
       }
     } catch (_) {
-      /* ignore */
+      /* fallback inline */
     }
   }
   return parseInlineModbus(modbus);
@@ -80,11 +118,39 @@ function normalizeRegisterType(pointDef) {
   return registerType;
 }
 
+async function readPrimaryBitPoint(modbus, cfgDeviceId) {
+  const primary = extractPrimaryBitPoint(modbus);
+  if (!primary) return { ok: false, error: "未配置 DI/DO 點位" };
+
+  const conn = await resolveDeviceConfig(cfgDeviceId, modbus);
+  if (!conn)
+    return {
+      ok: false,
+      error: "無可用控制器連線設定（deviceId 或 modbus.host/port）",
+    };
+
+  const results = await modbusBatchService.batchRead([
+    {
+      host: conn.host,
+      port: conn.port,
+      unitId: conn.unitId,
+      registerType: primary.registerType,
+      address: primary.address,
+      length: 1,
+      meta: { pointKey: "isOn" },
+    },
+  ]);
+
+  const first = results?.[0];
+  if (!first || first.ok !== true) {
+    return { ok: false, error: first?.error || "無法讀取空調 DI/DO 狀態" };
+  }
+  return { ok: true, value: Boolean(first.data?.[0]) };
+}
+
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
-  if (!statusPoints || typeof statusPoints !== "object") {
-    return raw;
-  }
+  if (!statusPoints || typeof statusPoints !== "object") return raw;
 
   const reqs = [];
   for (const key of Object.keys(statusPoints)) {
@@ -93,7 +159,12 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     const registerType = normalizeRegisterType(def);
     const address = Number(def.address);
     const length = def.length != null ? Number(def.length) : 1;
+
     if (!Number.isFinite(address) || address < 0) {
+      raw[key] = undefined;
+      continue;
+    }
+    if (!Number.isFinite(length) || length <= 0) {
       raw[key] = undefined;
       continue;
     }
@@ -111,7 +182,6 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     } catch (_) {
       pointDeviceConfig = null;
     }
-
     if (!pointDeviceConfig) {
       raw[key] = undefined;
       continue;
@@ -128,24 +198,14 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     });
   }
 
-  if (reqs.length === 0) {
-    return raw;
-  }
+  if (reqs.length === 0) return raw;
 
   const results = await modbusBatchService.batchRead(reqs);
   for (const r of results) {
     const k = r?.meta?.pointKey;
     if (!k) continue;
-    if (r.ok) {
-      const v = r.data?.[0];
-      if (typeof v === "boolean") raw[k] = v;
-      else if (typeof v === "number") raw[k] = v !== 0;
-      else raw[k] = Boolean(v);
-    } else {
-      raw[k] = undefined;
-    }
+    raw[k] = r.ok ? r.data?.[0] : undefined;
   }
-
   return raw;
 }
 
@@ -180,16 +240,8 @@ async function hasResolvableDeviceForPoints(
   return false;
 }
 
-/**
- * 求救觸發（sos / trigger / running 任一为 true）→ alarm
- * fault → warning（異常）
- */
-function deriveEmergencyRescueUiStatus(
-  raw,
-  hadDeviceConfig,
-  pointKeysConfigured,
-) {
-  if (!hadDeviceConfig) return "warning";
+function deriveUiStatus(raw, hadDeviceConfig, pointKeysConfigured) {
+  if (!hadDeviceConfig) return "offline";
   if (!pointKeysConfigured || pointKeysConfigured.length === 0)
     return "unknown";
 
@@ -197,85 +249,91 @@ function deriveEmergencyRescueUiStatus(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   if (!anyRead) return "warning";
-
-  if (raw.sos === true || raw.trigger === true || raw.running === true) {
-    return "alarm";
-  }
-  if (raw.fault === true) return "warning";
+  // HVAC 對齊 lighting：只做連線/可讀性健康判定，不在此層做 alarm 分級
   return "normal";
 }
 
-async function syncEmergencyRescueConnectivityAlert(
+async function syncConnectivityAlert(
   systemId,
   hadDeviceConfig,
   pointKeys,
   raw,
   readError,
 ) {
-  if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) {
-    return;
-  }
-
+  if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) return;
   const anyRead = pointKeys.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   await systemAlert.syncLocationSnapshotReadResult(
-    "emergency_rescue",
+    "hvac",
     systemId,
     anyRead,
-    readError || "無法讀取緊急求救設備資料",
+    readError || "無法讀取空調設備資料",
   );
 }
 
-async function buildItemForEmergencyRescueSystem(
-  zone,
-  location,
-  system,
-  options = {},
-) {
+function collectItemsFromZones(zones) {
+  const items = [];
+  for (const zone of zones) {
+    const locs = zone.locations || [];
+    for (const loc of locs) {
+      const systems = loc.systems || [];
+      for (const sys of systems) {
+        if (sys.systemType === "hvac") {
+          items.push({ zone, location: loc, system: sys });
+        }
+      }
+    }
+  }
+  return items;
+}
+
+async function buildItem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
-  const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "sos";
   const statusPoints = cfg.statusPoints || {};
 
   const pointKeys = Object.keys(statusPoints).filter(
     (k) => statusPoints[k] && typeof statusPoints[k] === "object",
   );
 
-  const hadDeviceConfig = await hasResolvableDeviceForPoints(
-    statusPoints,
-    deviceId,
-    modbus,
-  );
+  const hadDeviceConfig =
+    Boolean(await resolveDeviceConfig(deviceId, modbus)) ||
+    (await hasResolvableDeviceForPoints(statusPoints, deviceId, modbus));
+
   let raw = {};
   let readError = null;
-  if (pointKeys.length > 0) {
-    try {
+  try {
+    if (pointKeys.length > 0) {
       raw = await readAllPoints(statusPoints, deviceId, modbus);
-    } catch (err) {
-      readError = err.message || String(err);
-      raw = {};
     }
+    if (modbus && typeof modbus === "object") {
+      const on = await readPrimaryBitPoint(modbus, deviceId);
+      if (on.ok) {
+        raw.isOn = on.value;
+      } else if (!readError) {
+        readError = on.error;
+      }
+    }
+  } catch (err) {
+    readError = err?.message || String(err);
+    raw = {};
   }
-  if (!hadDeviceConfig) {
+  if (!hadDeviceConfig && !readError) {
     readError = "無可用控制器連線設定（deviceId 或 modbus.host/port）";
   }
 
-  const uiStatus = deriveEmergencyRescueUiStatus(
-    raw,
-    hadDeviceConfig,
-    pointKeys,
-  );
+  const configuredKeys = [...pointKeys, ...(modbus ? ["isOn"] : [])];
+  const uiStatus = deriveUiStatus(raw, hadDeviceConfig, configuredKeys);
 
   if (syncAlerts) {
     try {
-      await syncEmergencyRescueConnectivityAlert(
+      await syncConnectivityAlert(
         Number(system.id),
         hadDeviceConfig,
-        pointKeys,
+        configuredKeys,
         raw,
         readError,
       );
@@ -283,7 +341,7 @@ async function buildItemForEmergencyRescueSystem(
       statusLogger.warn("同步警報失敗（略過）", {
         systemId: Number(system.id),
         error: alertErr?.message || String(alertErr),
-        module: "emergencyRescueStatusService",
+        module: "hvacStatusService",
       });
     }
   }
@@ -294,61 +352,40 @@ async function buildItemForEmergencyRescueSystem(
     locationId: String(location.id),
     locationName: location.name,
     systemId: String(system.id),
-    equipmentKind,
-    viewCategory,
     uiStatus,
     raw,
     ...(readError ? { error: readError } : {}),
   };
 }
 
-function collectEmergencyRescueItemsFromZones(zones) {
-  const items = [];
-  for (const zone of zones) {
-    const locs = zone.locations || [];
-    for (const loc of locs) {
-      const systems = loc.systems || [];
-      for (const sys of systems) {
-        if (sys.systemType === "emergency_rescue") {
-          items.push({ zone, location: loc, system: sys });
-        }
-      }
-    }
-  }
-  return items;
-}
-
 async function getStatusSnapshot(query = {}) {
-  const zoneIdsFilter = query.zoneIds;
+  const zoneIdsFilter = Array.isArray(query.zoneIds) ? query.zoneIds : [];
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZones({
-    locationType: "emergency_rescue",
-  });
-  let zones = result.zones || [];
 
-  if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
+  const result = await locationService.getZones({ locationType: "hvac" });
+  let zones = result.zones || [];
+  if (zoneIdsFilter.length > 0) {
     const want = new Set(zoneIdsFilter.map((id) => String(id)));
     zones = zones.filter((z) => want.has(String(z.id)));
   }
 
-  const triples = collectEmergencyRescueItemsFromZones(zones);
+  const triples = collectItemsFromZones(zones);
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForEmergencyRescueSystem(zone, location, system, { syncAlerts }),
+      buildItem(zone, location, system, { syncAlerts }),
     ),
   );
-
   return { items };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZoneById(zoneId, "emergency_rescue");
+  const result = await locationService.getZoneById(zoneId, "hvac");
   const zone = result.zone;
-  const triples = collectEmergencyRescueItemsFromZones([zone]);
+  const triples = collectItemsFromZones([zone]);
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForEmergencyRescueSystem(z, location, system, { syncAlerts }),
+      buildItem(z, location, system, { syncAlerts }),
     ),
   );
   return { zoneId: String(zone.id), items };

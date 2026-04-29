@@ -28,6 +28,8 @@ const lightingRoutes = require("./routes/lightingRoutes");
 const drainageRoutes = require("./routes/drainageRoutes");
 const powerRoutes = require("./routes/powerRoutes");
 const fireRoutes = require("./routes/fireRoutes");
+const hvacRoutes = require("./routes/hvacRoutes");
+const airCirculationRoutes = require("./routes/airCirculationRoutes");
 const emergencyRescueRoutes = require("./routes/emergencyRescueRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
@@ -54,16 +56,7 @@ const initSchema = require("./database/initSchema");
 
 // 背景監控服務
 const backgroundMonitor = require("./services/monitoring/backgroundMonitor");
-const environmentMonitor = require("./services/monitoring/environmentMonitor");
-const lightingMonitor = require("./services/monitoring/lightingMonitor");
-const drainageMonitor = require("./services/monitoring/drainageMonitor");
-const powerMonitor = require("./services/monitoring/powerMonitor");
-const fireMonitor = require("./services/monitoring/fireMonitor");
-const emergencyRescueMonitor = require("./services/monitoring/emergencyRescueMonitor");
-const diDoMonitor = require("./services/monitoring/diDoMonitor");
-const {
-  processActiveAlertEmailResends,
-} = require("./services/alerts/alertEmailNotifier");
+const monitoringTaskRegistry = require("./services/monitoring/monitoringTaskRegistry");
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
@@ -151,6 +144,12 @@ app.use("/api/modules", moduleRegistryRoutes);
 app.use("/api/devices", deviceRoutes);
 app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
 app.use("/api/drainage", requireFeature("drainage"), drainageRoutes);
+app.use("/api/hvac", requireFeature("hvac"), hvacRoutes);
+app.use(
+  "/api/air-circulation",
+  requireFeature("air_circulation"),
+  airCirculationRoutes,
+);
 app.use("/api/power", requireFeature("power"), powerRoutes);
 app.use("/api/fire", requireFeature("fire"), fireRoutes);
 app.use(
@@ -265,56 +264,18 @@ async function startServer() {
       serverLogger.info("外部資料庫連線成功");
     }
 
-    // 註冊並啟動背景監控任務（如果啟用）
-    if (serverConfig.monitoring.enabled) {
+    // 註冊並啟動背景監控任務（固定啟用）
+    for (const task of monitoringTaskRegistry) {
       backgroundMonitor.registerMonitoringTask(
-        "環境系統",
-        environmentMonitor.checkEnvironmentLocations,
+        task.systemName,
+        task.taskFunction,
+        task.options,
       );
-      backgroundMonitor.registerMonitoringTask(
-        "照明系統",
-        lightingMonitor.checkLightingAreas,
-      );
-      backgroundMonitor.registerMonitoringTask(
-        "衛生排水系統",
-        drainageMonitor.checkDrainageSystems,
-      );
-      backgroundMonitor.registerMonitoringTask(
-        "電力系統",
-        powerMonitor.checkPowerSystems,
-      );
-      backgroundMonitor.registerMonitoringTask(
-        "消防系統",
-        fireMonitor.checkFireSystems,
-      );
-      backgroundMonitor.registerMonitoringTask(
-        "緊急求救系統",
-        emergencyRescueMonitor.checkEmergencyRescueSystems,
-      );
-      backgroundMonitor.registerMonitoringTask(
-        "DI/DO 泛用警報",
-        diDoMonitor.checkDiDoAlerts,
-        { baseIntervalMs: 5000, minIntervalMs: 5000, maxIntervalMs: 5000 },
-      );
-      backgroundMonitor.registerMonitoringTask(
-        "警報 Email 重送",
-        async () => {
-          await processActiveAlertEmailResends({ limit: 50 });
-          return { nextIntervalMs: 15_000 };
-        },
-        {
-          baseIntervalMs: 15_000,
-          minIntervalMs: 15_000,
-          maxIntervalMs: 15_000,
-        },
-      );
-      // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
-
-      backgroundMonitor.startMonitoring();
-      serverLogger.info("背景監控服務已啟用");
-    } else {
-      serverLogger.warn("背景監控服務已停用（未啟用 monitoring）");
     }
+    // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
+
+    backgroundMonitor.startMonitoring();
+    serverLogger.info("背景監控服務已啟用");
 
     // 啟動備份排程
     backupScheduler.startScheduler();

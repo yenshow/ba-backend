@@ -142,10 +142,20 @@ const MODULES = [
     featureKey: "drainage",
     permissionCode: "system.drainage",
   },
+  {
+    id: 14,
+    name: "空氣循環系統",
+    icon: "air-circulation",
+    description: "空氣循環監控與管理",
+    category: "infrastructure",
+    routePrefix: "/infrastructure/air-circulation",
+    featureKey: "air_circulation",
+    permissionCode: "system.air_circulation",
+  },
 
   // ========== security ==========
   {
-    id: 14,
+    id: 15,
     name: "消防系統",
     icon: "fire",
     description: "消防設備監控與管理",
@@ -155,7 +165,7 @@ const MODULES = [
     permissionCode: "system.fire",
   },
   {
-    id: 15,
+    id: 16,
     name: "門禁保全系統",
     icon: "security",
     description: "門禁與保全系統管理",
@@ -165,7 +175,7 @@ const MODULES = [
     permissionCode: null,
   },
   {
-    id: 16,
+    id: 17,
     name: "緊急求救系統",
     icon: "emergency",
     description: "緊急求救與通報系統",
@@ -174,10 +184,20 @@ const MODULES = [
     featureKey: "emergency_rescue",
     permissionCode: "system.emergency_rescue",
   },
+  {
+    id: 18,
+    name: "煙霧警報系統",
+    icon: "smoke-alarm",
+    description: "煙霧警報監控與管理",
+    category: "security",
+    routePrefix: "/security/smoke-alarm",
+    featureKey: "smoke_alarm",
+    permissionCode: "system.smoke_alarm",
+  },
 
   // ========== business ==========
   {
-    id: 18,
+    id: 19,
     name: "訪客系統",
     icon: "visitor",
     description: "訪客登記與管理",
@@ -187,7 +207,7 @@ const MODULES = [
     permissionCode: null,
   },
   {
-    id: 19,
+    id: 20,
     name: "寄物管理",
     icon: "locker-management",
     description: "寄物櫃管理系統",
@@ -199,7 +219,7 @@ const MODULES = [
 
   // ========== multimedia ==========
   {
-    id: 20,
+    id: 21,
     name: "多媒體資訊",
     icon: "video-wall",
     description: "整合電視牆模組、多媒體伺服器、資訊平台",

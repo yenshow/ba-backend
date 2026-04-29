@@ -22,6 +22,7 @@ const FEATURE_KEYS_CENTRAL = [
   "people_counting",
   "lighting",
   "hvac",
+  "air_circulation",
   "drainage",
   "power",
   "fire",

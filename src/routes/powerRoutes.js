@@ -1,8 +1,11 @@
 const express = require("express");
 const router = express.Router();
-const powerService = require("../services/systems/powerService");
 const powerStatusService = require("../services/systems/powerStatusService");
-const { authenticate, requirePermission } = require("../middleware/authMiddleware");
+const locationService = require("../services/systems/locationService");
+const {
+  authenticate,
+  requirePermission,
+} = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -14,7 +17,7 @@ router.get(
   "/zones",
   noCache,
   asyncHandler(async (req, res) => {
-    const result = await powerService.getZones();
+    const result = await locationService.getZones({ locationType: "power" });
     res.sendSuccess(result);
   }),
 );
@@ -25,7 +28,7 @@ router.get(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await powerService.getZoneById(parseInt(id, 10));
+    const result = await locationService.getZoneById(id, "power");
     res.sendSuccess(result);
   }),
 );
@@ -33,7 +36,7 @@ router.get(
 router.post(
   "/zones",
   asyncHandler(async (req, res) => {
-    const result = await powerService.createZone(req.body, req.user.id);
+    const result = await locationService.createZone(req.body, req.user.id);
     res.sendSuccess(result, 201);
   }),
 );
@@ -43,11 +46,7 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await powerService.updateZone(
-      parseInt(id, 10),
-      req.body,
-      req.user.id,
-    );
+    const result = await locationService.updateZone(id, req.body, req.user.id);
     res.sendSuccess(result);
   }),
 );
@@ -57,7 +56,7 @@ router.delete(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await powerService.deleteZone(parseInt(id, 10));
+    const result = await locationService.deleteZone(id);
     res.sendSuccess(result);
   }),
 );

@@ -132,6 +132,33 @@ function formatSystem(system) {
       };
     }
 
+    case "air_circulation": {
+      const sp = config.status_points;
+      return {
+        ...baseSystem,
+        config: {
+          deviceId: config.device_id || undefined,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus:
+            config.modbus_config && Object.keys(config.modbus_config).length > 0
+              ? config.modbus_config
+              : undefined,
+          equipmentKind: config.equipment_kind || "pump",
+          viewCategory:
+            config.view_category === null || config.view_category === undefined
+              ? "air_circulation"
+              : String(config.view_category),
+          statusPoints:
+            sp && typeof sp === "object" && Object.keys(sp).length > 0
+              ? sp
+              : undefined,
+        },
+      };
+    }
+
     case "drainage": {
       const sp = config.status_points;
       return {
@@ -1338,6 +1365,20 @@ function buildSystemConfig(systemType, config) {
         status_points: config.statusPoints || {},
       };
 
+    case "air_circulation":
+      return {
+        device_id: config.deviceId || null,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: config.modbus || {},
+        equipment_kind: config.equipmentKind || "pump",
+        view_category:
+          config.viewCategory === undefined || config.viewCategory === null
+            ? "air_circulation"
+            : config.viewCategory,
+        status_points: config.statusPoints || {},
+      };
+
     case "drainage":
       return {
         device_id: config.deviceId || null,
@@ -1433,6 +1474,7 @@ function buildSystemConfig(systemType, config) {
 const CONTROLLER_QUOTA_SYSTEM_TYPES = new Set([
   "lighting",
   "hvac",
+  "air_circulation",
   "drainage",
   "power",
   "fire",
@@ -1550,6 +1592,7 @@ async function createSystem(query, locationId, system) {
       "environment",
       "lighting",
       "hvac",
+      "air_circulation",
       "people_counting",
       "vehicle_access",
       "drainage",
@@ -1616,6 +1659,7 @@ async function updateSystem(query, systemId, system) {
       "environment",
       "lighting",
       "hvac",
+      "air_circulation",
       "people_counting",
       "vehicle_access",
       "drainage",
