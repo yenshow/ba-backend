@@ -94,6 +94,8 @@ const getAirCirculationInfo = (systemId) =>
   getSourceInfoByType(systemId, "air_circulation");
 const getEmergencyRescueInfo = (systemId) =>
   getSourceInfoByType(systemId, "emergency_rescue");
+const getSmokeAlarmInfo = (systemId) =>
+  getSourceInfoByType(systemId, "smoke_alarm");
 
 /**
  * 獲取設備資訊
@@ -257,6 +259,8 @@ const getDeviceIdFromAirCirculation = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "air_circulation");
 const getDeviceIdFromEmergencyRescue = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "emergency_rescue");
+const getDeviceIdFromSmokeAlarm = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "smoke_alarm");
 
 /**
  * 依設備 ID 與系統類型取得所有對應的 location_systems.id
@@ -344,6 +348,11 @@ const SYSTEM_CONFIGS = {
     source: alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
     getSourceInfo: getEmergencyRescueInfo,
     getDeviceId: getDeviceIdFromEmergencyRescue,
+  },
+  smoke_alarm: {
+    source: alertService.ALERT_SOURCES.SMOKE_ALARM,
+    getSourceInfo: getSmokeAlarmInfo,
+    getDeviceId: getDeviceIdFromSmokeAlarm,
   },
   device: {
     source: alertService.ALERT_SOURCES.DEVICE,
@@ -646,9 +655,310 @@ async function clearError(system, sourceId, options = {}) {
   await clearErrorDetailed(system, sourceId, options);
 }
 
+const manualAlarmDimensionKey = () => "manual_alarm:default";
+
+async function loadLocationSystemScope(systemKey, sourceId) {
+  const systemType = String(systemKey || "").trim();
+  const sid = Number(sourceId);
+  if (!systemType || !Number.isFinite(sid)) return null;
+  const rows = await db.query(
+    `SELECT ls.id AS system_id, ls.location_id, l.zone_id
+     FROM location_systems ls
+     JOIN locations l ON l.id = ls.location_id
+     WHERE ls.id = ? AND ls.system_type = ?
+     LIMIT 1`,
+    [sid, systemType],
+  );
+  const r = rows?.[0];
+  if (!r) return null;
+  return {
+    systemId: Number(r.system_id),
+    locationId: Number(r.location_id),
+    zoneId: Number(r.zone_id),
+  };
+}
+
+function ruleAppliesToScope(rule, scope) {
+  if (!rule || !scope) return false;
+  const t = String(rule.target_type ?? "").trim().toLowerCase();
+  const tid = rule.target_id != null ? Number(rule.target_id) : null;
+  if (!t) return true; // 全域
+  if (!Number.isFinite(tid)) return false;
+  if (t === "location") return Number(scope.locationId) === tid;
+  if (t === "zone") return Number(scope.zoneId) === tid;
+  return true;
+}
+
+function ruleSpecificityScore(rule) {
+  const t = String(rule?.target_type ?? "").trim().toLowerCase();
+  if (t === "location") return 3;
+  if (t === "zone") return 2;
+  if (!t) return 1;
+  return 1;
+}
+
+function severityRank(sev) {
+  const s = String(sev || "").trim().toLowerCase();
+  if (s === "critical") return 3;
+  if (s === "error") return 2;
+  if (s === "warning") return 1;
+  return 0;
+}
+
+async function recordRuleBitStateAlarm(
+  systemKey,
+  sourceId,
+  { alertType, bitKey, origin } = {},
+) {
+  const config = SYSTEM_CONFIGS[systemKey];
+  if (!config) {
+    throw new Error(`未知的系統: ${systemKey}`);
+  }
+
+  const at = String(alertType || "").trim().toLowerCase();
+  if (at !== "di" && at !== "do") {
+    throw new Error("rule alertType 必須為 di 或 do");
+  }
+  const bk = String(bitKey || "").trim().toLowerCase();
+  if (!/^(di|do|discrete|coil):\d+$/.test(bk)) {
+    throw new Error("rule bitKey 格式需為 di:0 / do:3 / discrete:10 / coil:5");
+  }
+
+  const scope = await loadLocationSystemScope(systemKey, sourceId);
+  if (!scope) {
+    throw new Error("來源 ID 不存在");
+  }
+
+  const alertRuleService = require("./alertRuleService");
+  const rules = await alertRuleService.getEnabledDiDoRules();
+  const candidates = (rules || []).filter((r) => {
+    if (String(r.source) !== String(config.source)) return false;
+    if (String(r.alert_type) !== at) return false;
+    if (String(r.condition_type) !== "bit_state") return false;
+    const rk = String(r.condition_config?.bit_key || "").trim().toLowerCase();
+    if (rk !== bk) return false;
+    return ruleAppliesToScope(r, scope);
+  });
+
+  if (candidates.length === 0) {
+    throw new Error(
+      `找不到可用的規則（source=${config.source}, alert_type=${at}, bit_key=${bk}）`,
+    );
+  }
+
+  // 優先：location > zone > global，再看 severity，最後 id 新者優先
+  candidates.sort((a, b) => {
+    const sa = ruleSpecificityScore(a);
+    const sb = ruleSpecificityScore(b);
+    if (sa !== sb) return sb - sa;
+    const ra = severityRank(a.severity);
+    const rb = severityRank(b.severity);
+    if (ra !== rb) return rb - ra;
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
+  const rule = candidates[0];
+
+  const dimensionKey =
+    rule.dimension_key ||
+    alertRuleService.deriveRuleDimensionKey({
+      alert_type: rule.alert_type,
+      condition_type: rule.condition_type,
+      condition_config: rule.condition_config,
+    });
+
+  let message = "";
+  try {
+    message = await alertRuleService.renderRuleMessage(rule, {
+      source_id: Number(scope.systemId),
+    });
+  } catch (_) {
+    // ignore
+  }
+  if (!message) {
+    message = `${config.source}:${scope.systemId} ${at.toUpperCase()} ${bk} 觸發`;
+  }
+
+  await alertService.createAlert({
+    source: rule.source,
+    source_id: Number(scope.systemId),
+    alert_type: rule.alert_type,
+    severity: rule.severity || alertService.SEVERITIES.WARNING,
+    message,
+    dimension_key: dimensionKey,
+    rule_id: rule.id,
+    origin: origin || null,
+  });
+
+  return {
+    ruleId: rule.id,
+    alertType: rule.alert_type,
+    dimensionKey,
+  };
+}
+
+async function clearRuleBitStateAlarm(
+  systemKey,
+  sourceId,
+  { alertType, bitKey, origin } = {},
+) {
+  const config = SYSTEM_CONFIGS[systemKey];
+  if (!config) {
+    throw new Error(`未知的系統: ${systemKey}`);
+  }
+
+  const at = String(alertType || "").trim().toLowerCase();
+  if (at !== "di" && at !== "do") {
+    throw new Error("rule alertType 必須為 di 或 do");
+  }
+  const bk = String(bitKey || "").trim().toLowerCase();
+  if (!/^(di|do|discrete|coil):\d+$/.test(bk)) {
+    throw new Error("rule bitKey 格式需為 di:0 / do:3 / discrete:10 / coil:5");
+  }
+
+  const scope = await loadLocationSystemScope(systemKey, sourceId);
+  if (!scope) {
+    throw new Error("來源 ID 不存在");
+  }
+
+  const alertRuleService = require("./alertRuleService");
+  const rules = await alertRuleService.getEnabledDiDoRules();
+  const candidates = (rules || []).filter((r) => {
+    if (String(r.source) !== String(config.source)) return false;
+    if (String(r.alert_type) !== at) return false;
+    if (String(r.condition_type) !== "bit_state") return false;
+    const rk = String(r.condition_config?.bit_key || "").trim().toLowerCase();
+    if (rk !== bk) return false;
+    return ruleAppliesToScope(r, scope);
+  });
+
+  if (candidates.length === 0) {
+    throw new Error(
+      `找不到可用的規則（source=${config.source}, alert_type=${at}, bit_key=${bk}）`,
+    );
+  }
+
+  candidates.sort((a, b) => {
+    const sa = ruleSpecificityScore(a);
+    const sb = ruleSpecificityScore(b);
+    if (sa !== sb) return sb - sa;
+    const ra = severityRank(a.severity);
+    const rb = severityRank(b.severity);
+    if (ra !== rb) return rb - ra;
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
+  const rule = candidates[0];
+
+  const dimensionKey =
+    rule.dimension_key ||
+    alertRuleService.deriveRuleDimensionKey({
+      alert_type: rule.alert_type,
+      condition_type: rule.condition_type,
+      condition_config: rule.condition_config,
+    });
+
+  try {
+    const n = await alertService.resolveAlert(
+      Number(scope.systemId),
+      rule.alert_type,
+      rule.source,
+      dimensionKey,
+    );
+    return { resolved: n, ruleId: rule.id, alertType: rule.alert_type, dimensionKey };
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (msg.includes("未找到可更新的警報")) {
+      return { resolved: 0, ruleId: rule.id, alertType: rule.alert_type, dimensionKey };
+    }
+    helperLogger.warn("規則警報清除失敗", {
+      systemKey,
+      sourceId: Number(scope.systemId),
+      alertType: rule.alert_type,
+      dimensionKey,
+      origin: origin || null,
+      error: msg || String(err),
+      module: "systemAlertHelper",
+    });
+    throw err;
+  }
+}
+
+/**
+ * 手動建立「警報」（直接建立 Incident，跳過 error_count 閾值）
+ * - 對齊既有 alerts 表結構：alert_type 使用 ERROR（不新增 enum）
+ * - severity 固定 critical（代表警報）
+ * - message 盡量沿用規則 message（若存在），否則 fallback 為「<name> 手動觸發警報」
+ */
+async function recordManualAlarm(systemKey, sourceId, options = {}) {
+  const config = SYSTEM_CONFIGS[systemKey];
+  if (!config) {
+    throw new Error(`未知的系統: ${systemKey}`);
+  }
+
+  const sourceInfo = await config.getSourceInfo(sourceId);
+  if (!sourceInfo) {
+    throw new Error("來源 ID 不存在");
+  }
+
+  let message = "";
+  try {
+    const alertRuleService = require("./alertRuleService");
+    const rule = await alertRuleService.getErrorCountRule(
+      config.source,
+      alertService.ALERT_TYPES.ERROR,
+    );
+    if (rule) {
+      message = await alertRuleService.renderRuleMessage(rule, {
+        source_id: sourceId,
+        error_count: 1,
+      });
+    }
+  } catch (_) {
+    // ignore
+  }
+  if (!message) {
+    message = `${sourceInfo.name} 手動觸發警報`;
+  }
+
+  await alertService.createAlert({
+    source: config.source,
+    source_id: sourceId,
+    alert_type: alertService.ALERT_TYPES.ERROR,
+    severity: alertService.SEVERITIES.CRITICAL,
+    message,
+    dimension_key: manualAlarmDimensionKey(),
+    origin: options?.origin || null,
+  });
+}
+
+async function clearManualAlarm(systemKey, sourceId, options = {}) {
+  const config = SYSTEM_CONFIGS[systemKey];
+  if (!config) {
+    throw new Error(`未知的系統: ${systemKey}`);
+  }
+  try {
+    const n = await alertService.resolveAlert(
+      sourceId,
+      alertService.ALERT_TYPES.ERROR,
+      config.source,
+      manualAlarmDimensionKey(),
+    );
+    return { resolved: n };
+  } catch (err) {
+    const msg = String(err?.message || "");
+    if (msg.includes("未找到可更新的警報")) {
+      return { resolved: 0 };
+    }
+    throw err;
+  }
+}
+
 module.exports = {
   recordError,
   clearError,
+  recordManualAlarm,
+  clearManualAlarm,
+  recordRuleBitStateAlarm,
+  clearRuleBitStateAlarm,
   getDeviceIdFromConfig,
   notifyModbusHttpDeviceRecovered,
   notifyModbusHttpDeviceFailed,

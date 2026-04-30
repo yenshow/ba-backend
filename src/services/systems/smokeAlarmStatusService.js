@@ -1,5 +1,8 @@
 /**
- * 衛生排水：依 location_systems 設定讀取 Modbus 並合成 uiStatus（單點失敗不影響其他設備）
+ * 煙霧警報：依 location_systems 設定讀取 Modbus（DI/DO/Registers）並合成 uiStatus
+ * 建議狀態鍵：
+ * - smoke / alarm / trigger（觸發＝警報）
+ * - fault / trouble（故障＝異常）
  */
 
 const locationService = require("./locationService");
@@ -7,11 +10,11 @@ const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
+const db = require("../../database/db");
 const logger = require("../../utils/logger");
 
-const statusLogger = logger.createLogger("drainageStatusService");
+const statusLogger = logger.createLogger("smokeAlarmStatusService");
 
-// deviceId -> { ts, cfg }
 const DEVICE_CFG_CACHE_TTL_MS = Number(
   process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
 );
@@ -66,7 +69,7 @@ async function resolveDeviceConfig(deviceId, modbus) {
         return cfg;
       }
     } catch (_) {
-      /* 設備不存在或離線時改試 inline */
+      /* ignore */
     }
   }
   return parseInlineModbus(modbus);
@@ -81,16 +84,12 @@ function normalizeRegisterType(pointDef) {
   return registerType;
 }
 
-/**
- * 讀取 statusPoints 物件中每個鍵對應的點位（可每點獨立 deviceId），失敗的鍵略過
- */
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
   if (!statusPoints || typeof statusPoints !== "object") {
     return raw;
   }
 
-  // 以 batch-read 讀取：同 device+registerType 自動合併範圍，且共用後端 snapshot cache
   const reqs = [];
   for (const key of Object.keys(statusPoints)) {
     const def = statusPoints[key];
@@ -154,11 +153,7 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   return raw;
 }
 
-async function hasResolvableDeviceForPoints(
-  statusPoints,
-  cfgDeviceId,
-  cfgModbus,
-) {
+async function hasResolvableDeviceForPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const keys = Object.keys(statusPoints || {}).filter(
     (k) => statusPoints[k] && typeof statusPoints[k] === "object",
   );
@@ -186,74 +181,50 @@ async function hasResolvableDeviceForPoints(
 }
 
 /**
- * 產品語意（馬達／液位一致方向）：
- * - 串接點「觸發」警報條件（例如 running=true、highLevel=true）→ alarm（警報）
- * - 無法取得控制器連線或已設定點位但讀值全失敗 → warning（異常：視為未連線／通訊失敗）
- * - 其餘有成功讀值且無警報 → normal
+ * 與 emergencyRescueStatusService 的狀態規則對齊：
+ * - 觸發（smoke / alarm / trigger 任一为 true）→ alarm
+ * - fault → warning（異常）
  */
-function deriveUiStatus(
-  equipmentKind,
-  raw,
-  hadDeviceConfig,
-  pointKeysConfigured,
-) {
+function deriveSmokeAlarmUiStatus(raw, hadDeviceConfig, pointKeysConfigured) {
   if (!hadDeviceConfig) return "warning";
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0)
-    return "unknown";
-
-  const kind = equipmentKind === "tank" ? "tank" : "pump";
+  if (!pointKeysConfigured || pointKeysConfigured.length === 0) return "unknown";
 
   const anyRead = pointKeysConfigured.some(
     (k) => raw[k] !== undefined && raw[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (kind === "pump") {
-    if (raw.fault === true) return "alarm";
-    if (raw.running === true) return "alarm";
-    return "normal";
+  if (raw.smoke === true || raw.alarm === true || raw.trigger === true) {
+    return "alarm";
   }
-
-  if (raw.coverAlarm === true || raw.highLevel === true) return "alarm";
-  if (raw.levelOk === false) return "alarm";
-  if (raw.lowLevel === true) return "alarm";
+  if (raw.fault === true) return "warning";
   return "normal";
 }
 
-async function syncDrainageConnectivityAlert(
+async function syncSmokeAlarmConnectivityAlert(
   systemId,
   hadDeviceConfig,
   pointKeys,
   raw,
   readError,
 ) {
-  if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) {
-    return;
-  }
-
-  const anyRead = pointKeys.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
-  );
+  if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) return;
+  const anyRead = pointKeys.some((k) => raw[k] !== undefined && raw[k] !== null);
   await systemAlert.syncLocationSnapshotReadResult(
-    "drainage",
+    "smoke_alarm",
     systemId,
     anyRead,
-    readError || "無法讀取排水設備資料",
+    readError || "無法讀取煙霧警報設備資料",
   );
 }
 
-async function buildItemForDrainageSystem(
-  zone,
-  location,
-  system,
-  options = {},
-) {
+async function buildItemForSmokeAlarmSystem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
-  const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "drainage";
+  const equipmentKind = cfg.equipmentKind || "detector";
+  const viewCategory = cfg.viewCategory || "smoke";
   const statusPoints = cfg.statusPoints || {};
 
   const pointKeys = Object.keys(statusPoints).filter(
@@ -276,16 +247,11 @@ async function buildItemForDrainageSystem(
     }
   }
 
-  const uiStatus = deriveUiStatus(
-    equipmentKind,
-    raw,
-    hadDeviceConfig,
-    pointKeys,
-  );
+  const uiStatus = deriveSmokeAlarmUiStatus(raw, hadDeviceConfig, pointKeys);
 
   if (syncAlerts) {
     try {
-      await syncDrainageConnectivityAlert(
+      await syncSmokeAlarmConnectivityAlert(
         Number(system.id),
         hadDeviceConfig,
         pointKeys,
@@ -296,7 +262,7 @@ async function buildItemForDrainageSystem(
       statusLogger.warn("同步警報失敗（略過）", {
         systemId: Number(system.id),
         error: alertErr?.message || String(alertErr),
-        module: "drainageStatusService",
+        module: "smokeAlarmStatusService",
       });
     }
   }
@@ -315,14 +281,14 @@ async function buildItemForDrainageSystem(
   };
 }
 
-function collectDrainageItemsFromZones(zones) {
+function collectSmokeAlarmItemsFromZones(zones) {
   const items = [];
   for (const zone of zones) {
     const locs = zone.locations || [];
     for (const loc of locs) {
       const systems = loc.systems || [];
       for (const sys of systems) {
-        if (sys.systemType === "drainage") {
+        if (sys.systemType === "smoke_alarm") {
           items.push({ zone, location: loc, system: sys });
         }
       }
@@ -331,57 +297,10 @@ function collectDrainageItemsFromZones(zones) {
   return items;
 }
 
-function computeSeverityUiStatus(severity) {
-  const s = String(severity || "").trim().toLowerCase();
-  if (s === "critical") return "alarm";
-  if (s === "error") return "warning";
-  if (s === "warning") return "warning";
-  return "warning";
-}
-
-async function loadActiveAlertsUiBySystemIds(systemIds) {
-  const ids = (systemIds || [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  if (ids.length === 0) return new Map();
-
-  // 只用於 UI 合併：取目前 active 的告警，依 systemId 彙總最嚴重者
-  const rows = await require("../../database/db").query(
-    `SELECT source_id, severity
-     FROM alerts
-     WHERE source = ?
-       AND status = 'active'::alert_status
-       AND source_id = ANY(?::integer[])`,
-    [alertService.ALERT_SOURCES.DRAINAGE, ids],
-  );
-
-  const rank = (sev) => {
-    const s = String(sev || "").trim().toLowerCase();
-    if (s === "critical") return 3;
-    if (s === "error") return 2;
-    if (s === "warning") return 1;
-    return 0;
-  };
-
-  const out = new Map(); // systemId -> { severity, uiStatus }
-  for (const r of rows || []) {
-    const sid = Number(r.source_id);
-    if (!Number.isFinite(sid)) continue;
-    const prev = out.get(sid);
-    if (!prev || rank(r.severity) > rank(prev.severity)) {
-      out.set(sid, {
-        severity: r.severity,
-        uiStatus: computeSeverityUiStatus(r.severity),
-      });
-    }
-  }
-  return out;
-}
-
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZones({ locationType: "drainage" });
+  const result = await locationService.getZones({ locationType: "smoke_alarm" });
   let zones = result.zones || [];
 
   if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
@@ -389,67 +308,95 @@ async function getStatusSnapshot(query = {}) {
     zones = zones.filter((z) => want.has(String(z.id)));
   }
 
-  const triples = collectDrainageItemsFromZones(zones);
-  const systemIds = triples.map((t) => Number(t.system?.id)).filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(systemIds);
+  const triples = collectSmokeAlarmItemsFromZones(zones);
+  const systemIds = triples
+    .map((t) => Number(t.system?.id))
+    .filter((n) => Number.isFinite(n));
+  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+    alertService.ALERT_SOURCES.SMOKE_ALARM,
+    systemIds,
+  );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForDrainageSystem(zone, location, system, { syncAlerts }),
+      buildItemForSmokeAlarmSystem(zone, location, system, { syncAlerts }),
     ),
   );
 
-  const merged = items.map((it) => {
-    const sid = Number(it.systemId);
-    const alertUi = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!alertUi) return it;
-    if (alertUi.uiStatus === "alarm") {
-      return {
-        ...it,
-        uiStatus: "alarm",
-        raw: { ...(it.raw || {}), runningAlarm: true },
-      };
-    }
-    if (it.uiStatus === "normal") {
-      return { ...it, uiStatus: "warning" };
-    }
-    return it;
-  });
-
-  return { items: merged };
+  return { items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZoneById(zoneId, "drainage");
+  const result = await locationService.getZoneById(zoneId, "smoke_alarm");
   const zone = result.zone;
-  const triples = collectDrainageItemsFromZones([zone]);
-  const systemIds = triples.map((t) => Number(t.system?.id)).filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(systemIds);
+  const triples = collectSmokeAlarmItemsFromZones([zone]);
+  const systemIds = triples
+    .map((t) => Number(t.system?.id))
+    .filter((n) => Number.isFinite(n));
+  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+    alertService.ALERT_SOURCES.SMOKE_ALARM,
+    systemIds,
+  );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForDrainageSystem(z, location, system, { syncAlerts }),
+      buildItemForSmokeAlarmSystem(z, location, system, { syncAlerts }),
     ),
   );
-  const merged = items.map((it) => {
+  return {
+    zoneId: String(zone.id),
+    items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId),
+  };
+}
+
+function severityRank(sev) {
+  const s = String(sev || "").trim().toLowerCase();
+  if (s === "critical") return 3;
+  if (s === "error") return 2;
+  if (s === "warning") return 1;
+  return 0;
+}
+
+async function loadActiveAlertsUiBySystemIds(source, systemIds) {
+  const ids = (systemIds || [])
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n));
+  if (ids.length === 0) return new Map();
+
+  const rows = await db.query(
+    `SELECT source_id, severity
+     FROM alerts
+     WHERE source = ?
+       AND status = 'active'::alert_status
+       AND source_id = ANY(?::integer[])`,
+    [source, ids],
+  );
+
+  const out = new Map(); // systemId -> { rank }
+  for (const r of rows || []) {
+    const sid = Number(r.source_id);
+    if (!Number.isFinite(sid)) continue;
+    const rk = severityRank(r.severity);
+    const prev = out.get(sid);
+    if (!prev || rk > prev.rank) out.set(sid, { rank: rk });
+  }
+  return out;
+}
+
+function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
+  return (items || []).map((it) => {
     const sid = Number(it.systemId);
-    const alertUi = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!alertUi) return it;
-    if (alertUi.uiStatus === "alarm") {
-      return {
-        ...it,
-        uiStatus: "alarm",
-        raw: { ...(it.raw || {}), runningAlarm: true },
-      };
+    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
+    if (!hit) return it;
+    if (hit.rank >= 3) {
+      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
     }
-    if (it.uiStatus === "normal") {
-      return { ...it, uiStatus: "warning" };
-    }
+    if (it.uiStatus === "normal") return { ...it, uiStatus: "warning" };
     return it;
   });
-  return { zoneId: String(zone.id), items: merged };
 }
 
 module.exports = {
   getStatusSnapshot,
   getZoneStatusSnapshot,
 };
+

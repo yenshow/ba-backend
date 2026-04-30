@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const fireStatusService = require("../services/systems/fireStatusService");
 const locationService = require("../services/systems/locationService");
+const smokeAlarmStatusService = require("../services/systems/smokeAlarmStatusService");
 const {
   authenticate,
   requireAdminOrOperator,
@@ -13,13 +13,13 @@ const { validateIntegers } = require("../middleware/validation");
 const systemAlert = require("../services/alerts/systemAlertHelper");
 
 // 以下路由皆需登入且具備系統權限
-router.use(authenticate, requirePermission("system.fire"));
+router.use(authenticate, requirePermission("system.smoke_alarm"));
 
 router.get(
   "/zones",
   noCache,
   asyncHandler(async (req, res) => {
-    const result = await locationService.getZones({ locationType: "fire" });
+    const result = await locationService.getZones({ locationType: "smoke_alarm" });
     res.sendSuccess(result);
   }),
 );
@@ -30,7 +30,7 @@ router.get(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const result = await locationService.getZoneById(id, "fire");
+    const result = await locationService.getZoneById(id, "smoke_alarm");
     res.sendSuccess(result);
   }),
 );
@@ -79,7 +79,7 @@ router.get(
         .filter((n) => !Number.isNaN(n));
     }
     const syncAlerts = String(req.query.syncAlerts ?? "false") === "true";
-    const result = await fireStatusService.getStatusSnapshot({
+    const result = await smokeAlarmStatusService.getStatusSnapshot({
       zoneIds,
       syncAlerts,
     });
@@ -94,10 +94,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const { id } = req.params;
     const syncAlerts = String(req.query.syncAlerts ?? "false") === "true";
-    const result = await fireStatusService.getZoneStatusSnapshot(
-      parseInt(id, 10),
-      { syncAlerts },
-    );
+    const result = await smokeAlarmStatusService.getZoneStatusSnapshot(parseInt(id, 10), {
+      syncAlerts,
+    });
     res.sendSuccess(result);
   }),
 );
@@ -108,8 +107,12 @@ router.post(
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { systemId } = req.params;
-    await systemAlert.recordError("fire", Number(systemId), "手動警報測試", {
-      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    const message = String(req.body?.message ?? req.body?.error ?? "").trim();
+    if (!message) {
+      return res.status(400).json({ success: false, error: "message 為必填" });
+    }
+    await systemAlert.recordError("smoke_alarm", Number(systemId), message, {
+      origin: { channel: "manual_error_api", actorUserId: req.user?.id ?? null },
     });
     res.sendSuccess({ ok: true });
   }),
@@ -127,16 +130,20 @@ router.post(
     if (mode === "rule") {
       const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
       const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
-      const detail = await systemAlert.recordRuleBitStateAlarm("fire", Number(systemId), {
-        alertType: ruleAlertType,
-        bitKey,
-        origin,
-      });
+      const detail = await systemAlert.recordRuleBitStateAlarm(
+        "smoke_alarm",
+        Number(systemId),
+        {
+          alertType: ruleAlertType,
+          bitKey,
+          origin,
+        },
+      );
       res.sendSuccess({ ok: true, mode: "rule", ...detail });
       return;
     }
 
-    await systemAlert.recordManualAlarm("fire", Number(systemId), { origin });
+    await systemAlert.recordManualAlarm("smoke_alarm", Number(systemId), { origin });
     res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );
@@ -147,8 +154,8 @@ router.delete(
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { systemId } = req.params;
-    await systemAlert.clearError("fire", Number(systemId), {
-      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    await systemAlert.clearError("smoke_alarm", Number(systemId), {
+      origin: { channel: "manual_error_api", actorUserId: req.user?.id ?? null },
     });
     res.sendSuccess({ ok: true });
   }),
@@ -166,18 +173,23 @@ router.delete(
     if (mode === "rule") {
       const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
       const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
-      const detail = await systemAlert.clearRuleBitStateAlarm("fire", Number(systemId), {
-        alertType: ruleAlertType,
-        bitKey,
-        origin,
-      });
+      const detail = await systemAlert.clearRuleBitStateAlarm(
+        "smoke_alarm",
+        Number(systemId),
+        {
+          alertType: ruleAlertType,
+          bitKey,
+          origin,
+        },
+      );
       res.sendSuccess({ ok: true, mode: "rule", ...detail });
       return;
     }
 
-    await systemAlert.clearManualAlarm("fire", Number(systemId), { origin });
+    await systemAlert.clearManualAlarm("smoke_alarm", Number(systemId), { origin });
     res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );
 
 module.exports = router;
+

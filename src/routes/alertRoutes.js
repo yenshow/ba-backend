@@ -395,6 +395,7 @@ router.get(
       status,
       start_date,
       end_date,
+      time_field,
       updated_after, // 增量查詢：只獲取更新時間在此之後的警報
       limit,
       offset,
@@ -411,6 +412,7 @@ router.get(
       status,
       start_date,
       end_date,
+      time_field,
       updated_after, // 增量查詢：只獲取更新時間在此之後的警報
       limit: limit ? parseInt(limit) : undefined,
       offset: offset ? parseInt(offset) : undefined,
@@ -435,6 +437,7 @@ router.get(
       severity,
       start_date,
       end_date,
+      time_field,
     } = req.query;
 
     const countResult = await alertService.getUnresolvedAlertCount({
@@ -445,6 +448,7 @@ router.get(
       severity,
       start_date,
       end_date,
+      time_field,
     });
 
     res.sendSuccess(countResult);

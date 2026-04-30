@@ -10,6 +10,8 @@ const locationService = require("./locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
+const alertService = require("../alerts/alertService");
+const db = require("../../database/db");
 const logger = require("../../utils/logger");
 
 const statusLogger = logger.createLogger("hvacStatusService");
@@ -123,11 +125,7 @@ async function readPrimaryBitPoint(modbus, cfgDeviceId) {
   if (!primary) return { ok: false, error: "未配置 DI/DO 點位" };
 
   const conn = await resolveDeviceConfig(cfgDeviceId, modbus);
-  if (!conn)
-    return {
-      ok: false,
-      error: "無可用控制器連線設定（deviceId 或 modbus.host/port）",
-    };
+  if (!conn) return { ok: false, error: null };
 
   const results = await modbusBatchService.batchRead([
     {
@@ -321,9 +319,6 @@ async function buildItem(zone, location, system, options = {}) {
     readError = err?.message || String(err);
     raw = {};
   }
-  if (!hadDeviceConfig && !readError) {
-    readError = "無可用控制器連線設定（deviceId 或 modbus.host/port）";
-  }
 
   const configuredKeys = [...pointKeys, ...(modbus ? ["isOn"] : [])];
   const uiStatus = deriveUiStatus(raw, hadDeviceConfig, configuredKeys);
@@ -370,12 +365,19 @@ async function getStatusSnapshot(query = {}) {
   }
 
   const triples = collectItemsFromZones(zones);
+  const systemIds = triples
+    .map((t) => Number(t.system?.id))
+    .filter((n) => Number.isFinite(n));
+  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+    alertService.ALERT_SOURCES.HVAC,
+    systemIds,
+  );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
       buildItem(zone, location, system, { syncAlerts }),
     ),
   );
-  return { items };
+  return { items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
@@ -383,12 +385,73 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   const result = await locationService.getZoneById(zoneId, "hvac");
   const zone = result.zone;
   const triples = collectItemsFromZones([zone]);
+  const systemIds = triples
+    .map((t) => Number(t.system?.id))
+    .filter((n) => Number.isFinite(n));
+  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+    alertService.ALERT_SOURCES.HVAC,
+    systemIds,
+  );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
       buildItem(z, location, system, { syncAlerts }),
     ),
   );
-  return { zoneId: String(zone.id), items };
+  return {
+    zoneId: String(zone.id),
+    items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId),
+  };
+}
+
+function severityRank(sev) {
+  const s = String(sev || "").trim().toLowerCase();
+  if (s === "critical") return 3;
+  if (s === "error") return 2;
+  if (s === "warning") return 1;
+  return 0;
+}
+
+async function loadActiveAlertsUiBySystemIds(source, systemIds) {
+  const ids = (systemIds || [])
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n));
+  if (ids.length === 0) return new Map();
+
+  const rows = await db.query(
+    `SELECT source_id, severity
+     FROM alerts
+     WHERE source = ?
+       AND status = 'active'::alert_status
+       AND source_id = ANY(?::integer[])`,
+    [source, ids],
+  );
+
+  const out = new Map(); // systemId -> { severity, rank }
+  for (const r of rows || []) {
+    const sid = Number(r.source_id);
+    if (!Number.isFinite(sid)) continue;
+    const rk = severityRank(r.severity);
+    const prev = out.get(sid);
+    if (!prev || rk > prev.rank) {
+      out.set(sid, { severity: r.severity, rank: rk });
+    }
+  }
+  return out;
+}
+
+function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
+  return (items || []).map((it) => {
+    const sid = Number(it.systemId);
+    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
+    if (!hit) return it;
+    if (hit.rank >= 3) {
+      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
+    }
+    if (it.uiStatus === "normal") {
+      return { ...it, uiStatus: "warning" };
+    }
+    return it;
+  });
 }
 
 module.exports = {

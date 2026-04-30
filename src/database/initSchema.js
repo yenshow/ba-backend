@@ -327,6 +327,13 @@ async function initSchema() {
         sort_order: 100,
       },
       {
+        code: "system.smoke_alarm",
+        category: "system",
+        parent_id: null,
+        name: "煙霧警報系統",
+        sort_order: 105,
+      },
+      {
         code: "system.multimedia",
         category: "system",
         parent_id: null,
@@ -371,6 +378,7 @@ async function initSchema() {
       "system.power",
       "system.fire",
       "system.emergency_rescue",
+      "system.smoke_alarm",
       "system.multimedia",
     ];
     const viewerGranted = [
@@ -1321,7 +1329,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1333,7 +1341,7 @@ async function initSchema() {
     await targetPool.query(`
 			ALTER TABLE location_systems DROP CONSTRAINT IF EXISTS location_systems_system_type_check;
 			ALTER TABLE location_systems ADD CONSTRAINT location_systems_system_type_check
-				CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue'));
+				CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm'));
 		`);
 
     // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
@@ -1344,6 +1352,7 @@ async function initSchema() {
       "air_circulation",
       "fire",
       "emergency_rescue",
+      "smoke_alarm",
     ]) {
       try {
         await targetPool.query(`ALTER TYPE alert_source ADD VALUE '${source}'`);

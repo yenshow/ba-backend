@@ -32,9 +32,12 @@ const LOCATION_SYSTEM_SOURCES = new Set([
   "lighting",
   "drainage",
   "power",
+  "hvac",
+  "air_circulation",
   "people_counting",
   "fire",
   "emergency_rescue",
+  "smoke_alarm",
 ]);
 
 /** 環境參數代碼 → 訊息／列表顯示名（與前端 getAlertParameterDisplayName 對齊） */

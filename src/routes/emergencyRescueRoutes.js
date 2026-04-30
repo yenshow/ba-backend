@@ -4,11 +4,13 @@ const locationService = require("../services/systems/locationService");
 const emergencyRescueStatusService = require("../services/systems/emergencyRescueStatusService");
 const {
   authenticate,
+  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
+const systemAlert = require("../services/alerts/systemAlertHelper");
 
 // 以下路由皆需登入且具備系統權限
 router.use(authenticate, requirePermission("system.emergency_rescue"));
@@ -78,9 +80,10 @@ router.get(
         .map((p) => parseInt(p, 10))
         .filter((n) => !Number.isNaN(n));
     }
+    const syncAlerts = String(req.query.syncAlerts ?? "false") === "true";
     const result = await emergencyRescueStatusService.getStatusSnapshot({
       zoneIds,
-      syncAlerts: false,
+      syncAlerts,
     });
     res.sendSuccess(result);
   }),
@@ -92,11 +95,98 @@ router.get(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const syncAlerts = String(req.query.syncAlerts ?? "false") === "true";
     const result = await emergencyRescueStatusService.getZoneStatusSnapshot(
       parseInt(id, 10),
-      { syncAlerts: false },
+      { syncAlerts },
     );
     res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/systems/:systemId/errors",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    await systemAlert.recordError("emergency_rescue", Number(systemId), "手動警報測試", {
+      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess({ ok: true });
+  }),
+);
+
+router.post(
+  "/systems/:systemId/alarms",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
+    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+
+    if (mode === "rule") {
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
+      const detail = await systemAlert.recordRuleBitStateAlarm(
+        "emergency_rescue",
+        Number(systemId),
+        {
+          alertType: ruleAlertType,
+          bitKey,
+          origin,
+        },
+      );
+      res.sendSuccess({ ok: true, mode: "rule", ...detail });
+      return;
+    }
+
+    await systemAlert.recordManualAlarm("emergency_rescue", Number(systemId), { origin });
+    res.sendSuccess({ ok: true, mode: "manual" });
+  }),
+);
+
+router.delete(
+  "/systems/:systemId/errors",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    await systemAlert.clearError("emergency_rescue", Number(systemId), {
+      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess({ ok: true });
+  }),
+);
+
+router.delete(
+  "/systems/:systemId/alarms",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
+    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+
+    if (mode === "rule") {
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
+      const detail = await systemAlert.clearRuleBitStateAlarm(
+        "emergency_rescue",
+        Number(systemId),
+        {
+          alertType: ruleAlertType,
+          bitKey,
+          origin,
+        },
+      );
+      res.sendSuccess({ ok: true, mode: "rule", ...detail });
+      return;
+    }
+
+    await systemAlert.clearManualAlarm("emergency_rescue", Number(systemId), { origin });
+    res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );
 

@@ -27,6 +27,7 @@ const FEATURE_KEYS_CENTRAL = [
   "power",
   "fire",
   "emergency_rescue",
+  "smoke_alarm",
   "environment",
   "surveillance",
   "vehicle_access",

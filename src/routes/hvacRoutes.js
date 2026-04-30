@@ -6,6 +6,7 @@ const {
 } = require("../middleware/authMiddleware");
 const locationService = require("../services/systems/locationService");
 const hvacStatusService = require("../services/systems/hvacStatusService");
+const systemAlert = require("../services/alerts/systemAlertHelper");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -111,6 +112,84 @@ router.get(
       },
     );
     res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/systems/:systemId/errors",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    await systemAlert.recordError("hvac", Number(systemId), "手動警報測試", {
+      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess({ ok: true });
+  }),
+);
+
+router.post(
+  "/systems/:systemId/alarms",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
+    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+
+    if (mode === "rule") {
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
+      const detail = await systemAlert.recordRuleBitStateAlarm("hvac", Number(systemId), {
+        alertType: ruleAlertType,
+        bitKey,
+        origin,
+      });
+      res.sendSuccess({ ok: true, mode: "rule", ...detail });
+      return;
+    }
+
+    await systemAlert.recordManualAlarm("hvac", Number(systemId), { origin });
+    res.sendSuccess({ ok: true, mode: "manual" });
+  }),
+);
+
+router.delete(
+  "/systems/:systemId/errors",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    await systemAlert.clearError("hvac", Number(systemId), {
+      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess({ ok: true });
+  }),
+);
+
+router.delete(
+  "/systems/:systemId/alarms",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
+    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+
+    if (mode === "rule") {
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
+      const detail = await systemAlert.clearRuleBitStateAlarm("hvac", Number(systemId), {
+        alertType: ruleAlertType,
+        bitKey,
+        origin,
+      });
+      res.sendSuccess({ ok: true, mode: "rule", ...detail });
+      return;
+    }
+
+    await systemAlert.clearManualAlarm("hvac", Number(systemId), { origin });
+    res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );
 

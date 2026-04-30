@@ -31,6 +31,7 @@ const fireRoutes = require("./routes/fireRoutes");
 const hvacRoutes = require("./routes/hvacRoutes");
 const airCirculationRoutes = require("./routes/airCirculationRoutes");
 const emergencyRescueRoutes = require("./routes/emergencyRescueRoutes");
+const smokeAlarmRoutes = require("./routes/smokeAlarmRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
@@ -156,6 +157,11 @@ app.use(
   "/api/emergency-rescue",
   requireFeature("emergency_rescue"),
   emergencyRescueRoutes,
+);
+app.use(
+  "/api/smoke-alarm",
+  requireFeature("smoke_alarm"),
+  smokeAlarmRoutes,
 );
 app.use("/api/environment", requireFeature("environment"), environmentRoutes);
 app.use("/api/locations", locationRoutes); // 統一地點管理 API

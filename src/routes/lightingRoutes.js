@@ -4,11 +4,13 @@ const locationService = require("../services/systems/locationService");
 const lightingStatusService = require("../services/systems/lightingStatusService");
 const {
   authenticate,
+  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
+const systemAlert = require("../services/alerts/systemAlertHelper");
 
 // 以下路由皆需登入且具備系統權限
 router.use(authenticate, requirePermission("system.lighting"));
@@ -103,6 +105,84 @@ router.get(
       },
     );
     res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/systems/:systemId/errors",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    await systemAlert.recordError("lighting", Number(systemId), "手動警報測試", {
+      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess({ ok: true });
+  }),
+);
+
+router.post(
+  "/systems/:systemId/alarms",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
+    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+
+    if (mode === "rule") {
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
+      const detail = await systemAlert.recordRuleBitStateAlarm("lighting", Number(systemId), {
+        alertType: ruleAlertType,
+        bitKey,
+        origin,
+      });
+      res.sendSuccess({ ok: true, mode: "rule", ...detail });
+      return;
+    }
+
+    await systemAlert.recordManualAlarm("lighting", Number(systemId), { origin });
+    res.sendSuccess({ ok: true, mode: "manual" });
+  }),
+);
+
+router.delete(
+  "/systems/:systemId/errors",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    await systemAlert.clearError("lighting", Number(systemId), {
+      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess({ ok: true });
+  }),
+);
+
+router.delete(
+  "/systems/:systemId/alarms",
+  validateIntegers("systemId"),
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const { systemId } = req.params;
+    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
+    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+
+    if (mode === "rule") {
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
+      const detail = await systemAlert.clearRuleBitStateAlarm("lighting", Number(systemId), {
+        alertType: ruleAlertType,
+        bitKey,
+        origin,
+      });
+      res.sendSuccess({ ok: true, mode: "rule", ...detail });
+      return;
+    }
+
+    await systemAlert.clearManualAlarm("lighting", Number(systemId), { origin });
+    res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );
 
