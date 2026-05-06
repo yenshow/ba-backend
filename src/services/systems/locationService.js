@@ -80,7 +80,9 @@ function formatSystem(system) {
   switch (system.system_type) {
     case "environment": {
       const deviceIds = Array.isArray(config.device_ids)
-        ? config.device_ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n))
+        ? config.device_ids
+            .map((id) => Number(id))
+            .filter((n) => !Number.isNaN(n))
         : config.device_id != null && config.device_id !== ""
           ? [Number(config.device_id)]
           : [];
@@ -125,7 +127,9 @@ function formatSystem(system) {
               ? config.modbus_config
               : undefined,
           statusPoints:
-            spHvac && typeof spHvac === "object" && Object.keys(spHvac).length > 0
+            spHvac &&
+            typeof spHvac === "object" &&
+            Object.keys(spHvac).length > 0
               ? spHvac
               : undefined,
         },
@@ -233,7 +237,9 @@ function formatSystem(system) {
               ? "sprinkler"
               : String(config.view_category),
           statusPoints:
-            spFire && typeof spFire === "object" && Object.keys(spFire).length > 0
+            spFire &&
+            typeof spFire === "object" &&
+            Object.keys(spFire).length > 0
               ? spFire
               : undefined,
         },
@@ -287,7 +293,9 @@ function formatSystem(system) {
               ? "smoke"
               : String(config.view_category),
           statusPoints:
-            spSmoke && typeof spSmoke === "object" && Object.keys(spSmoke).length > 0
+            spSmoke &&
+            typeof spSmoke === "object" &&
+            Object.keys(spSmoke).length > 0
               ? spSmoke
               : undefined,
         },
@@ -382,8 +390,7 @@ function formatLocation(location, systems = []) {
  * 格式化區域資料為前端格式
  */
 function formatZone(zone, locations = []) {
-  const sortOrder =
-    zone.sort_order != null ? Number(zone.sort_order) : 0;
+  const sortOrder = zone.sort_order != null ? Number(zone.sort_order) : 0;
   return {
     id: String(zone.id),
     name: zone.name,
@@ -1161,7 +1168,10 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
       [deviceIdList],
     );
     for (const d of devRows || []) {
-      deviceNameById.set(Number(d.id), String(d.name || "").trim() || `#${d.id}`);
+      deviceNameById.set(
+        Number(d.id),
+        String(d.name || "").trim() || `#${d.id}`,
+      );
     }
   }
 
@@ -1362,12 +1372,55 @@ function shallowMergePeopleCountingConfig(baseline, incoming) {
   return out;
 }
 
+/**
+ * drainage / fire / power：status_points 的 SSOT key 驗證（避免 UI/快照語意漂移）
+ * - tank: coverAlarm/highLevel/lowLevel
+ * - pump: running
+ * - power.generator: fault/highOil/lowOil
+ * - power.oil_level: running
+ */
+function assertStatusPointsKeys(systemType, equipmentKind, statusPoints) {
+  const sys = String(systemType || "").trim();
+  if (sys !== "drainage" && sys !== "fire" && sys !== "power") return;
+
+  const sp =
+    statusPoints && typeof statusPoints === "object" ? statusPoints : {};
+  const keys = Object.keys(sp);
+  if (keys.length === 0) return;
+
+  const kind = String(equipmentKind || "").trim().toLowerCase();
+
+  let allowed = null;
+  if (sys === "drainage" || sys === "fire") {
+    allowed = kind === "tank" ? ["coverAlarm", "highLevel", "lowLevel"] : ["running"];
+  } else if (sys === "power") {
+    allowed = kind === "oil_level" ? ["running"] : ["fault", "highOil", "lowOil"];
+  }
+
+  if (!allowed) return;
+  const allowSet = new Set(allowed);
+  const invalid = keys.filter((k) => !allowSet.has(k));
+  if (invalid.length === 0) return;
+
+  const err = new Error(
+    `statusPoints 鍵不符合規範：不允許 [${invalid.join(
+      ", ",
+    )}]；此系統僅允許 [${allowed.join(", ")}]`,
+  );
+  err.statusCode = 400;
+  throw err;
+}
+
 function buildSystemConfig(systemType, config) {
   switch (systemType) {
     case "environment": {
       const ids = Array.isArray(config.deviceIds)
-        ? config.deviceIds.filter((id) => id != null && !Number.isNaN(Number(id)))
-        : config.deviceId != null ? [config.deviceId] : [];
+        ? config.deviceIds.filter(
+            (id) => id != null && !Number.isNaN(Number(id)),
+          )
+        : config.deviceId != null
+          ? [config.deviceId]
+          : [];
       return {
         device_id: ids[0] ?? null,
         device_ids: ids,
@@ -1407,6 +1460,7 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "drainage":
+      assertStatusPointsKeys("drainage", config.equipmentKind || "pump", config.statusPoints);
       return {
         device_id: config.deviceId || null,
         location_x: config.location?.x || 50.0,
@@ -1421,6 +1475,7 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "power":
+      assertStatusPointsKeys("power", config.equipmentKind || "generator", config.statusPoints);
       return {
         device_id: config.deviceId || null,
         location_x: config.location?.x || 50.0,
@@ -1435,6 +1490,7 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "fire":
+      assertStatusPointsKeys("fire", config.equipmentKind || "pump", config.statusPoints);
       return {
         device_id: config.deviceId || null,
         location_x: config.location?.x || 50.0,
@@ -1476,30 +1532,37 @@ function buildSystemConfig(systemType, config) {
         status_points: config.statusPoints || {},
       };
 
-    case "people_counting":
-      {
-        const ids = Array.isArray(config.cameraDeviceIds)
-          ? config.cameraDeviceIds
-              .map((id) => Number(id))
-              .filter((n) => Number.isFinite(n) && n > 0)
-          : config.cameraDeviceId != null
-            ? [Number(config.cameraDeviceId)]
-            : [];
-        return {
-          person_group_ids: config.personGroupIds || [],
-          entry_door_ids: Array.isArray(config.entryDoorIds) ? config.entryDoorIds : [],
-          exit_door_ids: Array.isArray(config.exitDoorIds) ? config.exitDoorIds : [],
-          data_source: config.dataSource || "yscp",
-          entry_device_ids: Array.isArray(config.entryDeviceIds) ? config.entryDeviceIds : [],
-          exit_device_ids: Array.isArray(config.exitDeviceIds) ? config.exitDeviceIds : [],
-          // 相容欄位：僅供 fallback；以 camera_device_ids 為準
-          camera_device_id: ids[0] ?? (config.cameraDeviceId ?? null),
-          camera_device_ids: ids,
-          camera_channel_id: 1,
-          prefer_region: config.preferRegion ?? false,
-          access_control_groups: config.accessControlGroups || [], // 相容保留
-        };
-      }
+    case "people_counting": {
+      const ids = Array.isArray(config.cameraDeviceIds)
+        ? config.cameraDeviceIds
+            .map((id) => Number(id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : config.cameraDeviceId != null
+          ? [Number(config.cameraDeviceId)]
+          : [];
+      return {
+        person_group_ids: config.personGroupIds || [],
+        entry_door_ids: Array.isArray(config.entryDoorIds)
+          ? config.entryDoorIds
+          : [],
+        exit_door_ids: Array.isArray(config.exitDoorIds)
+          ? config.exitDoorIds
+          : [],
+        data_source: config.dataSource || "yscp",
+        entry_device_ids: Array.isArray(config.entryDeviceIds)
+          ? config.entryDeviceIds
+          : [],
+        exit_device_ids: Array.isArray(config.exitDeviceIds)
+          ? config.exitDeviceIds
+          : [],
+        // 相容欄位：僅供 fallback；以 camera_device_ids 為準
+        camera_device_id: ids[0] ?? config.cameraDeviceId ?? null,
+        camera_device_ids: ids,
+        camera_channel_id: 1,
+        prefer_region: config.preferRegion ?? false,
+        access_control_groups: config.accessControlGroups || [], // 相容保留
+      };
+    }
 
     case "vehicle_access":
       return {
@@ -1554,7 +1617,8 @@ async function assertControllerQuotaWithinLimit({
 } = {}) {
   if (!CONTROLLER_QUOTA_SYSTEM_TYPES.has(systemType)) return;
   if (!nextDeviceId) return;
-  if (currentDeviceId && Number(nextDeviceId) === Number(currentDeviceId)) return;
+  if (currentDeviceId && Number(nextDeviceId) === Number(currentDeviceId))
+    return;
 
   const license = await licenseService.getLicenseState();
   const openAll = license?.activationMethod === "open_all";
@@ -1715,7 +1779,11 @@ async function updateSystem(query, systemId, system) {
   }
 
   let effectiveConfig = config;
-  if (targetSystemType === "people_counting" && config && typeof config === "object") {
+  if (
+    targetSystemType === "people_counting" &&
+    config &&
+    typeof config === "object"
+  ) {
     const baseline = peopleCountingRowConfigToMergeInput(
       existing[0]?.system_config,
     );
@@ -1729,7 +1797,8 @@ async function updateSystem(query, systemId, system) {
     query,
     systemType: targetSystemType,
     nextDeviceId: systemConfig?.device_id ?? null,
-    currentDeviceId: targetSystemType === currentSystemType ? currentDeviceId : null,
+    currentDeviceId:
+      targetSystemType === currentSystemType ? currentDeviceId : null,
     excludeSystemId: systemId,
   });
 

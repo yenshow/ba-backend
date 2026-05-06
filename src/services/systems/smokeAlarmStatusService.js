@@ -1,8 +1,6 @@
 /**
  * 煙霧警報：依 location_systems 設定讀取 Modbus（DI/DO/Registers）並合成 uiStatus
- * 建議狀態鍵：
- * - smoke / alarm / trigger（觸發＝警報）
- * - fault / trouble（故障＝異常）
+ * API `raw`：觸發（含舊鍵與 fault）合併為 **running**；fault 不再單獨表示「異常」層級
  */
 
 const locationService = require("./locationService");
@@ -10,8 +8,12 @@ const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
-const db = require("../../database/db");
+const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
+  systemAlert;
 const logger = require("../../utils/logger");
+const {
+  normalizeSmokeEmergencySnapshotRaw,
+} = require("../monitoring/systemSnapshotMonitorFactory");
 
 const statusLogger = logger.createLogger("smokeAlarmStatusService");
 
@@ -22,6 +24,13 @@ const DEVICE_CFG_CACHE_TTL = Number.isFinite(DEVICE_CFG_CACHE_TTL_MS)
   ? Math.max(1000, Math.floor(DEVICE_CFG_CACHE_TTL_MS))
   : 60_000;
 const deviceCfgCache = new Map();
+
+const RAW_STATUS_TIMEOUT_MS = Number(
+  process.env.STATUS_SNAPSHOT_ITEM_TIMEOUT_MS || 4000,
+);
+const STATUS_SNAPSHOT_ITEM_TIMEOUT_MS = Number.isFinite(RAW_STATUS_TIMEOUT_MS)
+  ? Math.max(500, Math.floor(RAW_STATUS_TIMEOUT_MS))
+  : 4000;
 
 function getCachedDeviceCfg(deviceId) {
   const hit = deviceCfgCache.get(String(deviceId));
@@ -153,7 +162,11 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   return raw;
 }
 
-async function hasResolvableDeviceForPoints(statusPoints, cfgDeviceId, cfgModbus) {
+async function hasResolvableDeviceForPoints(
+  statusPoints,
+  cfgDeviceId,
+  cfgModbus,
+) {
   const keys = Object.keys(statusPoints || {}).filter(
     (k) => statusPoints[k] && typeof statusPoints[k] === "object",
   );
@@ -181,23 +194,30 @@ async function hasResolvableDeviceForPoints(statusPoints, cfgDeviceId, cfgModbus
 }
 
 /**
- * 與 emergencyRescueStatusService 的狀態規則對齊：
- * - 觸發（smoke / alarm / trigger 任一为 true）→ alarm
- * - fault → warning（異常）
+ * - **alarm**：raw.running === true
+ * - **normal**：已連線且有讀值、未觸發
+ * - **warning**：未連線、無點位或讀值全失敗
  */
-function deriveSmokeAlarmUiStatus(raw, hadDeviceConfig, pointKeysConfigured) {
+function deriveSmokeAlarmUiStatus(
+  rawMerged,
+  hadDeviceConfig,
+  pointKeysConfigured,
+  rawRead,
+) {
   if (!hadDeviceConfig) return "warning";
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0) return "unknown";
+  if (!pointKeysConfigured || pointKeysConfigured.length === 0) {
+    return "warning";
+  }
 
+  const src = rawRead && typeof rawRead === "object" ? rawRead : rawMerged;
   const anyRead = pointKeysConfigured.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
+    (k) => src[k] !== undefined && src[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (raw.smoke === true || raw.alarm === true || raw.trigger === true) {
+  if (rawMerged.running === true) {
     return "alarm";
   }
-  if (raw.fault === true) return "warning";
   return "normal";
 }
 
@@ -209,7 +229,9 @@ async function syncSmokeAlarmConnectivityAlert(
   readError,
 ) {
   if (!hadDeviceConfig || !pointKeys || pointKeys.length === 0) return;
-  const anyRead = pointKeys.some((k) => raw[k] !== undefined && raw[k] !== null);
+  const anyRead = pointKeys.some(
+    (k) => raw[k] !== undefined && raw[k] !== null,
+  );
   await systemAlert.syncLocationSnapshotReadResult(
     "smoke_alarm",
     systemId,
@@ -218,7 +240,12 @@ async function syncSmokeAlarmConnectivityAlert(
   );
 }
 
-async function buildItemForSmokeAlarmSystem(zone, location, system, options = {}) {
+async function buildItemForSmokeAlarmSystem(
+  zone,
+  location,
+  system,
+  options = {},
+) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
@@ -247,7 +274,13 @@ async function buildItemForSmokeAlarmSystem(zone, location, system, options = {}
     }
   }
 
-  const uiStatus = deriveSmokeAlarmUiStatus(raw, hadDeviceConfig, pointKeys);
+  const rawMerged = normalizeSmokeEmergencySnapshotRaw(raw);
+  const uiStatus = deriveSmokeAlarmUiStatus(
+    rawMerged,
+    hadDeviceConfig,
+    pointKeys,
+    raw,
+  );
 
   if (syncAlerts) {
     try {
@@ -276,9 +309,45 @@ async function buildItemForSmokeAlarmSystem(zone, location, system, options = {}
     equipmentKind,
     viewCategory,
     uiStatus,
-    raw,
+    raw: rawMerged,
     ...(readError ? { error: readError } : {}),
   };
+}
+
+function smokeAlarmFallbackItem(zone, location, system, errorMsg) {
+  const cfg = system.config || {};
+  return {
+    zoneId: String(zone.id),
+    zoneName: zone.name,
+    locationId: String(location.id),
+    locationName: location.name,
+    systemId: String(system.id),
+    equipmentKind: cfg.equipmentKind || "detector",
+    viewCategory: cfg.viewCategory || "smoke",
+    uiStatus: "warning",
+    raw: {},
+    error: errorMsg || "timeout",
+  };
+}
+
+async function buildSmokeAlarmItemWithTimeout(zone, location, system, options) {
+  try {
+    return await Promise.race([
+      buildItemForSmokeAlarmSystem(zone, location, system, options),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error("STATUS_SNAPSHOT_ITEM_TIMEOUT")),
+          STATUS_SNAPSHOT_ITEM_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (err) {
+    const msg =
+      String(err?.message || err) === "STATUS_SNAPSHOT_ITEM_TIMEOUT"
+        ? "timeout"
+        : String(err?.message || err);
+    return smokeAlarmFallbackItem(zone, location, system, msg);
+  }
 }
 
 function collectSmokeAlarmItemsFromZones(zones) {
@@ -300,7 +369,9 @@ function collectSmokeAlarmItemsFromZones(zones) {
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
   const syncAlerts = query.syncAlerts !== false;
-  const result = await locationService.getZones({ locationType: "smoke_alarm" });
+  const result = await locationService.getZones({
+    locationType: "smoke_alarm",
+  });
   let zones = result.zones || [];
 
   if (zoneIdsFilter != null && zoneIdsFilter.length > 0) {
@@ -312,17 +383,29 @@ async function getStatusSnapshot(query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.SMOKE_ALARM,
     systemIds,
   );
-  const items = await Promise.all(
+  const settled = await Promise.allSettled(
     triples.map(({ zone, location, system }) =>
-      buildItemForSmokeAlarmSystem(zone, location, system, { syncAlerts }),
+      buildSmokeAlarmItemWithTimeout(zone, location, system, { syncAlerts }),
     ),
   );
+  const items = settled.map((r, idx) => {
+    if (r.status === "fulfilled") return r.value;
+    const t = triples[idx];
+    return smokeAlarmFallbackItem(
+      t.zone,
+      t.location,
+      t.system,
+      String(r.reason?.message || r.reason || "error"),
+    );
+  });
 
-  return { items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) };
+  return {
+    items: mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds),
+  };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
@@ -333,70 +416,32 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.SMOKE_ALARM,
     systemIds,
   );
-  const items = await Promise.all(
+  const settled = await Promise.allSettled(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForSmokeAlarmSystem(z, location, system, { syncAlerts }),
+      buildSmokeAlarmItemWithTimeout(z, location, system, { syncAlerts }),
     ),
   );
+  const items = settled.map((r, idx) => {
+    if (r.status === "fulfilled") return r.value;
+    const t = triples[idx];
+    return smokeAlarmFallbackItem(
+      t.zone,
+      t.location,
+      t.system,
+      String(r.reason?.message || r.reason || "error"),
+    );
+  });
   return {
     zoneId: String(zone.id),
-    items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId),
+    items: mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds),
   };
-}
-
-function severityRank(sev) {
-  const s = String(sev || "").trim().toLowerCase();
-  if (s === "critical") return 3;
-  if (s === "error") return 2;
-  if (s === "warning") return 1;
-  return 0;
-}
-
-async function loadActiveAlertsUiBySystemIds(source, systemIds) {
-  const ids = (systemIds || [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  if (ids.length === 0) return new Map();
-
-  const rows = await db.query(
-    `SELECT source_id, severity
-     FROM alerts
-     WHERE source = ?
-       AND status = 'active'::alert_status
-       AND source_id = ANY(?::integer[])`,
-    [source, ids],
-  );
-
-  const out = new Map(); // systemId -> { rank }
-  for (const r of rows || []) {
-    const sid = Number(r.source_id);
-    if (!Number.isFinite(sid)) continue;
-    const rk = severityRank(r.severity);
-    const prev = out.get(sid);
-    if (!prev || rk > prev.rank) out.set(sid, { rank: rk });
-  }
-  return out;
-}
-
-function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
-  return (items || []).map((it) => {
-    const sid = Number(it.systemId);
-    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!hit) return it;
-    if (hit.rank >= 3) {
-      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
-    }
-    if (it.uiStatus === "normal") return { ...it, uiStatus: "warning" };
-    return it;
-  });
 }
 
 module.exports = {
   getStatusSnapshot,
   getZoneStatusSnapshot,
 };
-

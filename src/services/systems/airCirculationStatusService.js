@@ -1,7 +1,7 @@
 /**
  * 空氣循環：依 location_systems 設定讀取 Modbus 並合成 uiStatus
- * - 以 statusPoints 為主要狀態來源（可含 holding/input/coil/discrete）
- * - 若無可用控制器連線或讀值全失敗 → offline / warning
+ * - 與煙霧／緊急求救一致：快照 API `raw` 僅 `{ running }`（config 請使用 `statusPoints.running`）
+ * - warning：未連線／無讀值
  */
 
 const locationService = require("./locationService");
@@ -9,8 +9,12 @@ const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
-const db = require("../../database/db");
+const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
+  systemAlert;
 const logger = require("../../utils/logger");
+const {
+  mergeAirCirculationSnapshotRaw,
+} = require("../monitoring/systemSnapshotMonitorFactory");
 
 const statusLogger = logger.createLogger("airCirculationStatusService");
 
@@ -21,6 +25,13 @@ const DEVICE_CFG_CACHE_TTL = Number.isFinite(DEVICE_CFG_CACHE_TTL_MS)
   ? Math.max(1000, Math.floor(DEVICE_CFG_CACHE_TTL_MS))
   : 60_000;
 const deviceCfgCache = new Map();
+
+const RAW_STATUS_TIMEOUT_MS = Number(
+  process.env.STATUS_SNAPSHOT_ITEM_TIMEOUT_MS || 4000,
+);
+const STATUS_SNAPSHOT_ITEM_TIMEOUT_MS = Number.isFinite(RAW_STATUS_TIMEOUT_MS)
+  ? Math.max(500, Math.floor(RAW_STATUS_TIMEOUT_MS))
+  : 4000;
 
 function getCachedDeviceCfg(deviceId) {
   const hit = deviceCfgCache.get(String(deviceId));
@@ -141,7 +152,10 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     if (!k) continue;
     if (r.ok) {
       const v = r.data?.[0];
-      raw[k] = v;
+      // 與煙霧／緊急求救 statusService 對齊：discrete／coil 讀值正規化成 boolean，供 merge 與 deriveUiStatus
+      if (typeof v === "boolean") raw[k] = v;
+      else if (typeof v === "number") raw[k] = v !== 0;
+      else raw[k] = Boolean(v);
     } else {
       raw[k] = undefined;
     }
@@ -181,30 +195,22 @@ async function hasResolvableDeviceForPoints(
 }
 
 function deriveUiStatus(
-  equipmentKind,
-  raw,
+  rawMerged,
   hadDeviceConfig,
   pointKeysConfigured,
+  rawRead,
 ) {
   if (!hadDeviceConfig) return "warning";
-  // UX 對齊 drainage：不顯示 unknown，無可判斷資料一律視為異常層（warning）
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0) return "warning";
+  if (!pointKeysConfigured || pointKeysConfigured.length === 0)
+    return "warning";
 
-  const kind = equipmentKind === "tank" ? "tank" : "pump";
+  const src = rawRead && typeof rawRead === "object" ? rawRead : rawMerged;
   const anyRead = pointKeysConfigured.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
+    (k) => src[k] !== undefined && src[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (kind === "pump") {
-    if (raw.fault === true) return "alarm";
-    if (raw.running === true) return "alarm";
-    return "normal";
-  }
-
-  if (raw.coverAlarm === true || raw.highLevel === true) return "alarm";
-  if (raw.levelOk === false) return "alarm";
-  if (raw.lowLevel === true) return "alarm";
+  if (rawMerged.running === true) return "alarm";
   return "normal";
 }
 
@@ -243,6 +249,31 @@ function collectItemsFromZones(zones) {
   return items;
 }
 
+function effectiveAirCirculationStatusPoints(cfg) {
+  const sp = cfg.statusPoints || {};
+  const keys = Object.keys(sp).filter(
+    (k) => sp[k] && typeof sp[k] === "object",
+  );
+  if (keys.length > 0) return sp;
+
+  const pts = cfg.modbus?.points;
+  const p0 = Array.isArray(pts) ? pts[0] : null;
+  const addr = Number(p0?.address);
+  if (
+    cfg.deviceId != null &&
+    cfg.deviceId !== "" &&
+    Number.isFinite(addr) &&
+    addr >= 0
+  ) {
+    const t = String(p0?.type || "DI").toUpperCase();
+    const registerType = t === "DO" ? "coil" : "discrete";
+    return {
+      running: { registerType, address: addr },
+    };
+  }
+  return sp;
+}
+
 async function buildItem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
@@ -250,7 +281,7 @@ async function buildItem(zone, location, system, options = {}) {
   const modbus = cfg.modbus;
   const equipmentKind = cfg.equipmentKind || "pump";
   const viewCategory = cfg.viewCategory || "air_circulation";
-  const statusPoints = cfg.statusPoints || {};
+  const statusPoints = effectiveAirCirculationStatusPoints(cfg);
 
   const pointKeys = Object.keys(statusPoints).filter(
     (k) => statusPoints[k] && typeof statusPoints[k] === "object",
@@ -273,12 +304,9 @@ async function buildItem(zone, location, system, options = {}) {
     }
   }
 
-  const uiStatus = deriveUiStatus(
-    equipmentKind,
-    raw,
-    hadDeviceConfig,
-    pointKeys,
-  );
+  const rawMerged = mergeAirCirculationSnapshotRaw(raw);
+
+  const uiStatus = deriveUiStatus(rawMerged, hadDeviceConfig, pointKeys, raw);
 
   if (syncAlerts) {
     try {
@@ -307,9 +335,50 @@ async function buildItem(zone, location, system, options = {}) {
     equipmentKind,
     viewCategory,
     uiStatus,
-    raw,
+    raw: rawMerged,
     ...(readError ? { error: readError } : {}),
   };
+}
+
+function airCirculationFallbackItem(zone, location, system, errorMsg) {
+  const cfg = system.config || {};
+  return {
+    zoneId: String(zone.id),
+    zoneName: zone.name,
+    locationId: String(location.id),
+    locationName: location.name,
+    systemId: String(system.id),
+    equipmentKind: cfg.equipmentKind || "pump",
+    viewCategory: cfg.viewCategory || "air_circulation",
+    uiStatus: "warning",
+    raw: {},
+    error: errorMsg || "timeout",
+  };
+}
+
+async function buildAirCirculationItemWithTimeout(
+  zone,
+  location,
+  system,
+  options,
+) {
+  try {
+    return await Promise.race([
+      buildItem(zone, location, system, options),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error("STATUS_SNAPSHOT_ITEM_TIMEOUT")),
+          STATUS_SNAPSHOT_ITEM_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (err) {
+    const msg =
+      String(err?.message || err) === "STATUS_SNAPSHOT_ITEM_TIMEOUT"
+        ? "timeout"
+        : String(err?.message || err);
+    return airCirculationFallbackItem(zone, location, system, msg);
+  }
 }
 
 async function getStatusSnapshot(query = {}) {
@@ -329,16 +398,30 @@ async function getStatusSnapshot(query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.AIR_CIRCULATION,
     systemIds,
   );
-  const items = await Promise.all(
+  const settled = await Promise.allSettled(
     triples.map(({ zone, location, system }) =>
-      buildItem(zone, location, system, { syncAlerts }),
+      buildAirCirculationItemWithTimeout(zone, location, system, {
+        syncAlerts,
+      }),
     ),
   );
-  return { items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) };
+  const items = settled.map((r, idx) => {
+    if (r.status === "fulfilled") return r.value;
+    const t = triples[idx];
+    return airCirculationFallbackItem(
+      t.zone,
+      t.location,
+      t.system,
+      String(r.reason?.message || r.reason || "error"),
+    );
+  });
+  return {
+    items: mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds),
+  };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
@@ -349,66 +432,29 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.AIR_CIRCULATION,
     systemIds,
   );
-  const items = await Promise.all(
+  const settled = await Promise.allSettled(
     triples.map(({ zone: z, location, system }) =>
-      buildItem(z, location, system, { syncAlerts }),
+      buildAirCirculationItemWithTimeout(z, location, system, { syncAlerts }),
     ),
   );
+  const items = settled.map((r, idx) => {
+    if (r.status === "fulfilled") return r.value;
+    const t = triples[idx];
+    return airCirculationFallbackItem(
+      t.zone,
+      t.location,
+      t.system,
+      String(r.reason?.message || r.reason || "error"),
+    );
+  });
   return {
     zoneId: String(zone.id),
-    items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId),
+    items: mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds),
   };
-}
-
-function severityRank(sev) {
-  const s = String(sev || "").trim().toLowerCase();
-  if (s === "critical") return 3;
-  if (s === "error") return 2;
-  if (s === "warning") return 1;
-  return 0;
-}
-
-async function loadActiveAlertsUiBySystemIds(source, systemIds) {
-  const ids = (systemIds || [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  if (ids.length === 0) return new Map();
-
-  const rows = await db.query(
-    `SELECT source_id, severity
-     FROM alerts
-     WHERE source = ?
-       AND status = 'active'::alert_status
-       AND source_id = ANY(?::integer[])`,
-    [source, ids],
-  );
-
-  const out = new Map(); // systemId -> { rank }
-  for (const r of rows || []) {
-    const sid = Number(r.source_id);
-    if (!Number.isFinite(sid)) continue;
-    const rk = severityRank(r.severity);
-    const prev = out.get(sid);
-    if (!prev || rk > prev.rank) out.set(sid, { rank: rk });
-  }
-  return out;
-}
-
-function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
-  return (items || []).map((it) => {
-    const sid = Number(it.systemId);
-    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!hit) return it;
-    if (hit.rank >= 3) {
-      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
-    }
-    if (it.uiStatus === "normal") return { ...it, uiStatus: "warning" };
-    return it;
-  });
 }
 
 module.exports = {

@@ -8,7 +8,11 @@ const db = require("../../database/db");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
-const STATUS_CACHE_TTL_MS = Number(process.env.LIGHTING_STATUS_CACHE_TTL_MS || 1500);
+const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
+  systemAlert;
+const STATUS_CACHE_TTL_MS = Number(
+  process.env.LIGHTING_STATUS_CACHE_TTL_MS || 1500,
+);
 const statusCache = new Map();
 
 function parseDeviceConfig(row, modbusConfigRaw) {
@@ -61,7 +65,10 @@ function resolvePrimaryBitPoint(modbusConfigRaw) {
   }
 
   if (Number.isFinite(Number(modbusConfigRaw?.diAddress))) {
-    return { registerType: "discrete", address: Number(modbusConfigRaw.diAddress) };
+    return {
+      registerType: "discrete",
+      address: Number(modbusConfigRaw.diAddress),
+    };
   }
   if (Number.isFinite(Number(modbusConfigRaw?.doAddress))) {
     return { registerType: "coil", address: Number(modbusConfigRaw.doAddress) };
@@ -77,9 +84,7 @@ function parseZoneIds(zoneIds) {
   if (!Array.isArray(zoneIds) || zoneIds.length === 0) {
     return [];
   }
-  return zoneIds
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id));
+  return zoneIds.map((id) => Number(id)).filter((id) => Number.isFinite(id));
 }
 
 async function fetchLightingSystems(zoneIds = []) {
@@ -192,7 +197,11 @@ async function buildLightingSnapshotItem(row, options = {}) {
 
     const isOn = Boolean(first.data?.[0]);
     if (syncAlerts) {
-      await systemAlert.syncLocationSnapshotReadResult("lighting", systemId, true);
+      await systemAlert.syncLocationSnapshotReadResult(
+        "lighting",
+        systemId,
+        true,
+      );
     }
 
     return {
@@ -218,7 +227,12 @@ async function buildLightingSnapshotItem(row, options = {}) {
 async function getStatusSnapshot(query = {}) {
   const zoneIds = parseZoneIds(query.zoneIds);
   const syncAlerts = query.syncAlerts !== false;
-  const cacheKey = `${zoneIds.slice().sort((a, b) => a - b).join(",") || "all"}`;
+  const cacheKey = `${
+    zoneIds
+      .slice()
+      .sort((a, b) => a - b)
+      .join(",") || "all"
+  }`;
   const canUseCache = !syncAlerts && STATUS_CACHE_TTL_MS > 0;
   const cached = statusCache.get(cacheKey);
   if (canUseCache && cached && Date.now() - cached.ts <= STATUS_CACHE_TTL_MS) {
@@ -241,11 +255,14 @@ async function getStatusSnapshot(query = {}) {
   const systemIds = items
     .map((it) => Number(it.systemId))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.LIGHTING,
     systemIds,
   );
-  const merged = mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId);
+  const merged = mergeActiveAlertsIntoSnapshotItems(
+    items,
+    activeAlertSystemIds,
+  );
   const result = { items: merged };
   if (canUseCache) {
     statusCache.set(cacheKey, { ts: Date.now(), value: result });
@@ -265,53 +282,6 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
     syncAlerts,
   });
   return { zoneId: String(id), items: result.items };
-}
-
-function severityRank(sev) {
-  const s = String(sev || "").trim().toLowerCase();
-  if (s === "critical") return 3;
-  if (s === "error") return 2;
-  if (s === "warning") return 1;
-  return 0;
-}
-
-async function loadActiveAlertsUiBySystemIds(source, systemIds) {
-  const ids = (systemIds || [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  if (ids.length === 0) return new Map();
-
-  const rows = await db.query(
-    `SELECT source_id, severity
-     FROM alerts
-     WHERE source = ?
-       AND status = 'active'::alert_status
-       AND source_id = ANY(?::integer[])`,
-    [source, ids],
-  );
-
-  const out = new Map(); // systemId -> { rank }
-  for (const r of rows || []) {
-    const sid = Number(r.source_id);
-    if (!Number.isFinite(sid)) continue;
-    const rk = severityRank(r.severity);
-    const prev = out.get(sid);
-    if (!prev || rk > prev.rank) out.set(sid, { rank: rk });
-  }
-  return out;
-}
-
-function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
-  return (items || []).map((it) => {
-    const sid = Number(it.systemId);
-    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!hit) return it;
-    if (hit.rank >= 3) {
-      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
-    }
-    if (it.uiStatus === "normal") return { ...it, uiStatus: "warning" };
-    return it;
-  });
 }
 
 module.exports = {

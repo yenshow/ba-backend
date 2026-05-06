@@ -7,10 +7,29 @@ const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
-const db = require("../../database/db");
+const {
+  loadActiveAlertSystemIdSet,
+  loadActiveRuleSemanticsBySystemId,
+  mergeActiveAlertsIntoSnapshotItems,
+  mergeRuleSemanticsIntoDrainageFireSnapshotItems,
+} = systemAlert;
 const logger = require("../../utils/logger");
+const {
+  mergeDrainageFirePumpSnapshotRaw,
+  mergeDrainageFireTankSnapshotRaw,
+} = require("../monitoring/systemSnapshotMonitorFactory");
+const {
+  resolveLocationSystemStatusFields,
+  buildAlertSemanticsMetaBySystemId,
+  deriveSnapshotAggregateRunningUiStatus,
+} = require("./systemSnapshotStatusFields");
 
 const statusLogger = logger.createLogger("fireStatusService");
+
+const FIRE_STATUS_FIELD_DEFAULTS = {
+  equipmentKind: "pump",
+  viewCategory: "sprinkler",
+};
 
 // deviceId -> { ts, cfg }
 const DEVICE_CFG_CACHE_TTL_MS = Number(
@@ -186,39 +205,8 @@ async function hasResolvableDeviceForPoints(
   return false;
 }
 
-/**
- * 產品語意（馬達／液位一致方向）：
- * - 串接點「觸發」警報條件（例如 running=true、highLevel=true）→ alarm（警報）
- * - 無法取得控制器連線或已設定點位但讀值全失敗 → warning（異常：視為未連線／通訊失敗）
- * - 其餘有成功讀值且無警報 → normal
- */
-function deriveUiStatus(
-  equipmentKind,
-  raw,
-  hadDeviceConfig,
-  pointKeysConfigured,
-) {
-  if (!hadDeviceConfig) return "warning";
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0)
-    return "unknown";
-
-  const kind = equipmentKind === "tank" ? "tank" : "pump";
-
-  const anyRead = pointKeysConfigured.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
-  );
-  if (!anyRead) return "warning";
-
-  if (kind === "pump") {
-    if (raw.fault === true) return "alarm";
-    if (raw.running === true) return "alarm";
-    return "normal";
-  }
-
-  if (raw.coverAlarm === true || raw.highLevel === true) return "alarm";
-  if (raw.levelOk === false) return "alarm";
-  if (raw.lowLevel === true) return "alarm";
-  return "normal";
+function resolveFireSystemFields(system) {
+  return resolveLocationSystemStatusFields(system, FIRE_STATUS_FIELD_DEFAULTS);
 }
 
 async function syncFireConnectivityAlert(
@@ -245,12 +233,13 @@ async function syncFireConnectivityAlert(
 
 async function buildItemForFireSystem(zone, location, system, options = {}) {
   const { syncAlerts = true } = options || {};
-  const cfg = system.config || {};
-  const deviceId = cfg.deviceId;
-  const modbus = cfg.modbus;
-  const equipmentKind = cfg.equipmentKind || "pump";
-  const viewCategory = cfg.viewCategory || "sprinkler";
-  const statusPoints = cfg.statusPoints || {};
+  const {
+    deviceId,
+    modbus,
+    equipmentKind,
+    viewCategory,
+    statusPoints,
+  } = resolveFireSystemFields(system);
 
   const pointKeys = Object.keys(statusPoints).filter(
     (k) => statusPoints[k] && typeof statusPoints[k] === "object",
@@ -272,11 +261,16 @@ async function buildItemForFireSystem(zone, location, system, options = {}) {
     }
   }
 
-  const uiStatus = deriveUiStatus(
-    equipmentKind,
-    raw,
+  const rawMerged =
+    equipmentKind === "tank"
+      ? mergeDrainageFireTankSnapshotRaw(raw)
+      : mergeDrainageFirePumpSnapshotRaw(raw);
+
+  const uiStatus = deriveSnapshotAggregateRunningUiStatus(
+    rawMerged,
     hadDeviceConfig,
     pointKeys,
+    raw,
   );
 
   if (syncAlerts) {
@@ -306,7 +300,7 @@ async function buildItemForFireSystem(zone, location, system, options = {}) {
     equipmentKind,
     viewCategory,
     uiStatus,
-    raw,
+    raw: rawMerged,
     ...(readError ? { error: readError } : {}),
   };
 }
@@ -342,9 +336,18 @@ async function getStatusSnapshot(query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.FIRE,
     systemIds,
+  );
+  const metaBySystemId = buildAlertSemanticsMetaBySystemId(
+    triples,
+    resolveFireSystemFields,
+  );
+  const ruleSemanticsBySystemId = await loadActiveRuleSemanticsBySystemId(
+    alertService.ALERT_SOURCES.FIRE,
+    systemIds,
+    metaBySystemId,
   );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
@@ -352,7 +355,16 @@ async function getStatusSnapshot(query = {}) {
     ),
   );
 
-  return { items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) };
+  const mergedAlerts = mergeActiveAlertsIntoSnapshotItems(
+    items,
+    activeAlertSystemIds,
+  );
+  return {
+    items: mergeRuleSemanticsIntoDrainageFireSnapshotItems(
+      mergedAlerts,
+      ruleSemanticsBySystemId,
+    ),
+  };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
@@ -363,66 +375,35 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.FIRE,
     systemIds,
+  );
+  const metaBySystemId = buildAlertSemanticsMetaBySystemId(
+    triples,
+    resolveFireSystemFields,
+  );
+  const ruleSemanticsBySystemId = await loadActiveRuleSemanticsBySystemId(
+    alertService.ALERT_SOURCES.FIRE,
+    systemIds,
+    metaBySystemId,
   );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
       buildItemForFireSystem(z, location, system, { syncAlerts }),
     ),
   );
+  const mergedAlerts = mergeActiveAlertsIntoSnapshotItems(
+    items,
+    activeAlertSystemIds,
+  );
   return {
     zoneId: String(zone.id),
-    items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId),
+    items: mergeRuleSemanticsIntoDrainageFireSnapshotItems(
+      mergedAlerts,
+      ruleSemanticsBySystemId,
+    ),
   };
-}
-
-function severityRank(sev) {
-  const s = String(sev || "").trim().toLowerCase();
-  if (s === "critical") return 3;
-  if (s === "error") return 2;
-  if (s === "warning") return 1;
-  return 0;
-}
-
-async function loadActiveAlertsUiBySystemIds(source, systemIds) {
-  const ids = (systemIds || [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  if (ids.length === 0) return new Map();
-
-  const rows = await db.query(
-    `SELECT source_id, severity
-     FROM alerts
-     WHERE source = ?
-       AND status = 'active'::alert_status
-       AND source_id = ANY(?::integer[])`,
-    [source, ids],
-  );
-
-  const out = new Map(); // systemId -> { rank }
-  for (const r of rows || []) {
-    const sid = Number(r.source_id);
-    if (!Number.isFinite(sid)) continue;
-    const rk = severityRank(r.severity);
-    const prev = out.get(sid);
-    if (!prev || rk > prev.rank) out.set(sid, { rank: rk });
-  }
-  return out;
-}
-
-function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
-  return (items || []).map((it) => {
-    const sid = Number(it.systemId);
-    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!hit) return it;
-    if (hit.rank >= 3) {
-      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
-    }
-    if (it.uiStatus === "normal") return { ...it, uiStatus: "warning" };
-    return it;
-  });
 }
 
 module.exports = {

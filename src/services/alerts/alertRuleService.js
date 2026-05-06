@@ -553,7 +553,6 @@ function deriveRuleDimensionKey({
       }
       return channel ? `do:ch:${channel}` : "do:default";
     }
-    // 語意欄位名（對應 statusPoints 的鍱，如 highLevel、running）
     const safe = normalizeRuleDimensionValue(bitKeyRaw);
     if (alertType === "di") {
       return safe ? `di:sem:${safe}` : "di:default";

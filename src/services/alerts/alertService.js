@@ -1247,6 +1247,24 @@ async function updateAlertStatus(
         }
 
         void emitUnresolvedAlertCount();
+
+        if (
+          effectiveStatus === ALERT_STATUS.RESOLVED &&
+          config.alerts?.linkageRevertOnResolve !== false &&
+          alertResults &&
+          alertResults.length > 0
+        ) {
+          try {
+            await alertLinkageService.revertLinkagesForResolvedAlerts(
+              alertResults,
+            );
+          } catch (linkErr) {
+            alertLogger.warn("結案後連動 DO 復歸失敗（略過）", {
+              error: linkErr?.message || String(linkErr),
+              module: "alertService",
+            });
+          }
+        }
       }
     }
 

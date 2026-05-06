@@ -10,6 +10,88 @@ const logger = require("../../utils/logger");
 const websocketService = require("../websocket/websocketService");
 
 /**
+ * 監控快照 API：`raw` 形狀依設備類型而定。
+ * - **running**：聚合警報（任一細項為 true 則 true），供 deriveUiStatus / 前端總覽
+ * - **幫浦／ATS／油位／煙霧／空氣循環**：僅 `{ running }`
+ * - **液位**：`coverAlarm`、`highLevel`、`lowLevel` + `running`
+ * - **發電機**：`fault`、`highOil`、`lowOil` + `running`
+ *
+ * 注意：此語意原本位於 `services/systems/statusRawSemantics.js`，為集中「監控快照」領域概念，
+ * 併入 monitoring 域（SSOT）。
+ */
+function truthy(v) {
+  return v === true;
+}
+
+function snapshotRunningOnly(runningBool) {
+  return { running: !!runningBool };
+}
+
+function normalizeRunningSnapshotRaw(raw) {
+  if (!raw || typeof raw !== "object") return snapshotRunningOnly(false);
+  return snapshotRunningOnly(truthy(raw.running));
+}
+
+/** 煙霧／緊急求救（statusPoints 僅 `running`） */
+function normalizeSmokeEmergencySnapshotRaw(raw) {
+  return normalizeRunningSnapshotRaw(raw);
+}
+
+/** 排水／消防幫浦（statusPoints 僅 `running`） */
+function mergeDrainageFirePumpSnapshotRaw(raw) {
+  return normalizeRunningSnapshotRaw(raw);
+}
+
+/** 排水／消防液位：三點位 + 聚合 running */
+function mergeDrainageFireTankSnapshotRaw(raw) {
+  if (!raw || typeof raw !== "object") {
+    return {
+      running: false,
+      coverAlarm: false,
+      highLevel: false,
+      lowLevel: false,
+    };
+  }
+  const coverAlarm = truthy(raw.coverAlarm);
+  const highLevel = truthy(raw.highLevel);
+  const lowLevel = truthy(raw.lowLevel);
+  const running = coverAlarm || highLevel || lowLevel;
+  return { running, coverAlarm, highLevel, lowLevel };
+}
+
+/** 電力 ATS（statusPoints 僅 `running`） */
+function mergePowerAtsSnapshotRaw(raw) {
+  return normalizeRunningSnapshotRaw(raw);
+}
+
+/** 電力發電機：fault／高／低油位 + 聚合 running */
+function mergePowerGeneratorSnapshotRaw(raw) {
+  if (!raw || typeof raw !== "object") {
+    return {
+      running: false,
+      fault: false,
+      highOil: false,
+      lowOil: false,
+    };
+  }
+  const fault = truthy(raw.fault);
+  const highOil = truthy(raw.highOil);
+  const lowOil = truthy(raw.lowOil);
+  const running = fault || highOil || lowOil;
+  return { running, fault, highOil, lowOil };
+}
+
+/** 電力獨立油位點（statusPoints 僅 `running`） */
+function mergePowerOilLevelSnapshotRaw(raw) {
+  return normalizeRunningSnapshotRaw(raw);
+}
+
+/** 空氣循環：與煙霧／緊急求救相同，API `raw` 僅 `{ running }`（讀取階段僅認 `running` 鍵） */
+function mergeAirCirculationSnapshotRaw(raw) {
+  return normalizeSmokeEmergencySnapshotRaw(raw);
+}
+
+/**
  * @param {object} options
  * @param {string} options.systemKey - e.g. "drainage" | "power" | "fire" | "emergency_rescue"
  * @param {string} options.loggerName - e.g. "drainageMonitor"
@@ -30,7 +112,8 @@ function createSystemSnapshotMonitor(options) {
 
   if (!systemKey) throw new Error("systemKey is required");
   if (!loggerName) throw new Error("loggerName is required");
-  if (typeof getSnapshot !== "function") throw new Error("getSnapshot must be a function");
+  if (typeof getSnapshot !== "function")
+    throw new Error("getSnapshot must be a function");
 
   const monitorLogger = logger.createLogger(loggerName);
   const lastDeviceStatus = new Map(); // key: `${systemKey}:${sourceId}` -> 'online' | 'offline'
@@ -76,5 +159,11 @@ function createSystemSnapshotMonitor(options) {
 
 module.exports = {
   createSystemSnapshotMonitor,
+  normalizeSmokeEmergencySnapshotRaw,
+  mergeDrainageFirePumpSnapshotRaw,
+  mergeDrainageFireTankSnapshotRaw,
+  mergePowerAtsSnapshotRaw,
+  mergePowerGeneratorSnapshotRaw,
+  mergePowerOilLevelSnapshotRaw,
+  mergeAirCirculationSnapshotRaw,
 };
-

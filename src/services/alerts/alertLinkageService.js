@@ -256,6 +256,55 @@ async function revertLinkagesForDailyRollover(activeAlerts) {
   return { reverted };
 }
 
+/**
+ * 單筆或多筆警報結案為 resolved 時：依 rule_id 復歸對應連動 DO（與日界線 rollover_revert 語意一致）
+ * @param {Array<Object>} resolvedAlerts - 已結案後之 alerts 列（須含 id、rule_id）
+ * @returns {Promise<{ reverted: number }>}
+ */
+async function revertLinkagesForResolvedAlerts(resolvedAlerts) {
+  if (!Array.isArray(resolvedAlerts) || resolvedAlerts.length === 0) {
+    return { reverted: 0 };
+  }
+  let reverted = 0;
+  for (const a of resolvedAlerts) {
+    const rid = a.rule_id != null ? Number(a.rule_id) : null;
+    if (!Number.isInteger(rid) || rid <= 0) continue;
+
+    const linkages = await db.query(
+      `
+      SELECT *
+      FROM alert_linkages
+      WHERE enabled = true
+        AND rule_id = ?
+      ORDER BY id ASC
+    `,
+      [rid],
+    );
+
+    if (!Array.isArray(linkages) || linkages.length === 0) continue;
+
+    for (const linkage of linkages) {
+      const doDeviceId = linkage?.do_device_id;
+      const doAddress = linkage?.do_address;
+      if (doDeviceId == null || doAddress == null) continue;
+
+      cancelPendingAutoOffForDo(doDeviceId, doAddress);
+
+      await writeDo({
+        linkageId: linkage.id,
+        alertId: a.id ?? null,
+        executionType: "manual_revert",
+        doDeviceId,
+        doAddress,
+        doValue: !outputValueToBool(linkage?.do_output_value),
+        createdBy: null,
+      });
+      reverted += 1;
+    }
+  }
+  return { reverted };
+}
+
 function mapLinkageRowFromJoin(row) {
   if (!row) return null;
   const linkage = {
@@ -668,6 +717,7 @@ module.exports = {
   manualTriggerLinkage,
   cancelPendingAutoOffForDo,
   revertLinkagesForDailyRollover,
+  revertLinkagesForResolvedAlerts,
   getSingleLinkageByRuleId,
   getLatestLinkagesByRuleIds,
   upsertSingleLinkageForRule,

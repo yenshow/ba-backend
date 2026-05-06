@@ -6,6 +6,7 @@ const powerStatusService = require("../systems/powerStatusService");
 const fireStatusService = require("../systems/fireStatusService");
 const emergencyRescueStatusService = require("../systems/emergencyRescueStatusService");
 const airCirculationStatusService = require("../systems/airCirculationStatusService");
+const smokeAlarmStatusService = require("../systems/smokeAlarmStatusService");
 
 const drainageSnapshotMonitor = createSystemSnapshotMonitor({
   systemKey: "drainage",
@@ -50,6 +51,12 @@ const hvacSnapshotMonitor = createSystemSnapshotMonitor({
   getSnapshot: () => hvacStatusService.getStatusSnapshot(),
 });
 
+const smokeAlarmSnapshotMonitor = createSystemSnapshotMonitor({
+  systemKey: "smoke_alarm",
+  loggerName: "smokeAlarmMonitor",
+  getSnapshot: () => smokeAlarmStatusService.getStatusSnapshot(),
+});
+
 const snapshotTaskRegistry = [
   {
     systemName: "照明系統",
@@ -78,6 +85,10 @@ const snapshotTaskRegistry = [
   {
     systemName: "緊急求救系統",
     taskFunction: () => emergencyRescueSnapshotMonitor.check(),
+  },
+  {
+    systemName: "煙霧警報系統",
+    taskFunction: () => smokeAlarmSnapshotMonitor.check(),
   },
 ];
 

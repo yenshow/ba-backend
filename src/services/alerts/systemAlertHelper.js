@@ -15,6 +15,325 @@ const helperLogger = logger.createLogger("systemAlertHelper");
 const getErrorTracker = () => require("./errorTracker");
 
 /**
+ * 取得指定 source 在一批 source_id 中「仍為 active」的集合
+ * - 供各系統 `/status` 快照合併（將 active alerts 映射到快照 item）
+ * @param {string} source - alert source（例如 alertService.ALERT_SOURCES.DRAINAGE）
+ * @param {Array<string|number>} sourceIds - source_id 列表（location_systems.id）
+ * @returns {Promise<Set<string>>} 以字串化 id 表示的 Set
+ */
+async function loadActiveAlertSystemIdSet(source, sourceIds) {
+  const ids = Array.isArray(sourceIds) ? sourceIds : [];
+  const normalized = ids
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n));
+  if (!source || normalized.length === 0) return new Set();
+
+  // MySQL/SQLite 皆可：用 IN (?, ?, ...) 動態參數
+  const placeholders = normalized.map(() => "?").join(", ");
+  const rows = await db.query(
+    `
+      SELECT DISTINCT source_id
+      FROM alerts
+      WHERE status = 'active'::alert_status
+        AND source = ?
+        AND source_id IN (${placeholders})
+    `,
+    [source, ...normalized],
+  );
+
+  const out = new Set();
+  for (const r of rows || []) {
+    const sid = Number(r?.source_id);
+    if (Number.isFinite(sid)) out.add(String(sid));
+  }
+  return out;
+}
+
+function parseAlertRuleConditionConfig(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function normalizePointRegisterType(pointDef) {
+  let registerType = String(
+    pointDef?.registerType || pointDef?.register_type || pointDef?.type || "",
+  )
+    .toLowerCase()
+    .trim();
+  if (registerType === "di") registerType = "discrete";
+  if (registerType === "do") registerType = "coil";
+  return registerType;
+}
+
+function getSemanticsCandidateKeys(alertSource, equipmentKind, statusPoints) {
+  const sp =
+    statusPoints && typeof statusPoints === "object" ? statusPoints : {};
+  const configured = Object.keys(sp).filter(
+    (k) => sp[k] && typeof sp[k] === "object",
+  );
+  const ek = String(equipmentKind || "").trim().toLowerCase();
+
+  let allowed = [];
+  if (alertSource === "drainage" || alertSource === "fire") {
+    allowed = ek === "tank" ? ["coverAlarm", "highLevel", "lowLevel"] : ["running"];
+  } else if (alertSource === "power") {
+    if (ek === "oil_level" || ek === "ats") allowed = ["running"];
+    else allowed = ["fault", "highOil", "lowOil"];
+  } else {
+    return [];
+  }
+  return allowed.filter((k) => configured.includes(k));
+}
+
+function matchBitStateRuleToStatusPointKey(
+  alertType,
+  conditionConfig,
+  statusPoints,
+  candidateKeys,
+) {
+  const cc =
+    conditionConfig && typeof conditionConfig === "object"
+      ? conditionConfig
+      : null;
+  if (!cc) return null;
+  const bk = String(cc.bit_key || "").trim().toLowerCase();
+  const m = bk.match(/^(di|do|discrete|coil):(\d+)$/);
+  if (!m) return null;
+  const prefix = m[1].toLowerCase();
+  const addr = Number(m[2]);
+  if (!Number.isFinite(addr)) return null;
+
+  let expectedRt = null;
+  if (prefix === "di" || prefix === "discrete") expectedRt = "discrete";
+  else if (prefix === "do" || prefix === "coil") expectedRt = "coil";
+  else return null;
+
+  const at = String(alertType || "").trim().toLowerCase();
+  if (at === "di" && expectedRt !== "discrete") return null;
+  if (at === "do" && expectedRt !== "coil") return null;
+
+  for (const key of candidateKeys) {
+    const def = statusPoints[key];
+    if (!def || typeof def !== "object") continue;
+    const rt = normalizePointRegisterType(def);
+    if (rt !== expectedRt) continue;
+    const a = Number(def.address);
+    if (!Number.isFinite(a) || a !== addr) continue;
+    return key;
+  }
+  return null;
+}
+
+function buildSemanticsFlagsForLocationSystem(rows, alertSource, equipmentKind, statusPoints) {
+  const candidates = getSemanticsCandidateKeys(
+    alertSource,
+    equipmentKind,
+    statusPoints,
+  );
+  if (candidates.length === 0) return null;
+
+  const flags = {};
+  for (const row of rows || []) {
+    const ct = String(row.condition_type || "").trim().toLowerCase();
+    if (ct !== "bit_state") continue;
+    const cc = parseAlertRuleConditionConfig(row.condition_config);
+    const key = matchBitStateRuleToStatusPointKey(
+      row.alert_type,
+      cc,
+      statusPoints,
+      candidates,
+    );
+    if (key) flags[key] = true;
+  }
+  return Object.keys(flags).length > 0 ? flags : null;
+}
+
+/**
+ * 載入「DI/DO bit_state 規則」作用中的警報，並依 location_system 的 status_points 位址映射成語意鍵
+ * @param {string} source - alert source（drainage | fire | power）
+ * @param {number[]} sourceIds - location_systems.id
+ * @param {Map<string, { equipmentKind: string, statusPoints: object }>} metaBySystemId
+ * @returns {Promise<Map<string, Record<string, boolean>>>}
+ */
+async function loadActiveRuleSemanticsBySystemId(source, sourceIds, metaBySystemId) {
+  const ids = Array.isArray(sourceIds) ? sourceIds : [];
+  const normalized = ids.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+  if (!source || normalized.length === 0) return new Map();
+  if (!(metaBySystemId instanceof Map)) return new Map();
+
+  const placeholders = normalized.map(() => "?").join(", ");
+  const rows = await db.query(
+    `
+      SELECT a.source_id,
+             a.alert_type::text AS alert_type,
+             ar.condition_type,
+             ar.condition_config
+      FROM alerts a
+      INNER JOIN alert_rules ar ON ar.id = a.rule_id
+      WHERE a.status = 'active'::alert_status
+        AND a.source = ?
+        AND a.source_id IN (${placeholders})
+        AND ar.condition_type = 'bit_state'
+    `,
+    [source, ...normalized],
+  );
+
+  const bySid = new Map();
+  for (const r of rows || []) {
+    const sid = String(r.source_id);
+    if (!bySid.has(sid)) bySid.set(sid, []);
+    bySid.get(sid).push(r);
+  }
+
+  const out = new Map();
+  for (const [sid, list] of bySid.entries()) {
+    const meta = metaBySystemId.get(sid);
+    if (!meta) continue;
+    const flags = buildSemanticsFlagsForLocationSystem(
+      list,
+      source,
+      meta.equipmentKind,
+      meta.statusPoints || {},
+    );
+    if (flags) out.set(sid, flags);
+  }
+  return out;
+}
+
+function mergeRuleSemanticsIntoDrainageFireSnapshotItems(items, semanticsBySystemId) {
+  const {
+    mergeDrainageFireTankSnapshotRaw,
+    mergeDrainageFirePumpSnapshotRaw,
+  } = require("../monitoring/systemSnapshotMonitorFactory");
+
+  const list = Array.isArray(items) ? items : [];
+  if (!(semanticsBySystemId instanceof Map) || semanticsBySystemId.size === 0) {
+    return list;
+  }
+
+  return list.map((it) => {
+    const sid = it?.systemId != null ? String(it.systemId) : "";
+    if (!sid) return it;
+    const flags = semanticsBySystemId.get(sid);
+    if (!flags) return it;
+
+    const prev = it?.raw && typeof it.raw === "object" ? { ...it.raw } : {};
+    const runningAlarm = prev.runningAlarm === true;
+    const ek = String(it.equipmentKind || "pump").trim().toLowerCase();
+
+    let mergedShape;
+    if (ek === "tank") {
+      mergedShape = mergeDrainageFireTankSnapshotRaw({
+        coverAlarm: !!(prev.coverAlarm || flags.coverAlarm),
+        highLevel: !!(prev.highLevel || flags.highLevel),
+        lowLevel: !!(prev.lowLevel || flags.lowLevel),
+      });
+    } else {
+      mergedShape = mergeDrainageFirePumpSnapshotRaw({
+        running: !!(prev.running || flags.running),
+      });
+    }
+
+    let nextUi = it.uiStatus;
+    if (mergedShape?.running === true) nextUi = "alarm";
+
+    return {
+      ...it,
+      uiStatus: nextUi,
+      raw: {
+        ...mergedShape,
+        ...(runningAlarm ? { runningAlarm: true } : {}),
+      },
+    };
+  });
+}
+
+function mergeRuleSemanticsIntoPowerSnapshotItems(items, semanticsBySystemId) {
+  const {
+    mergePowerGeneratorSnapshotRaw,
+    mergePowerAtsSnapshotRaw,
+  } = require("../monitoring/systemSnapshotMonitorFactory");
+
+  const list = Array.isArray(items) ? items : [];
+  if (!(semanticsBySystemId instanceof Map) || semanticsBySystemId.size === 0) {
+    return list;
+  }
+
+  return list.map((it) => {
+    const sid = it?.systemId != null ? String(it.systemId) : "";
+    if (!sid) return it;
+    const flags = semanticsBySystemId.get(sid);
+    if (!flags) return it;
+
+    const prev = it?.raw && typeof it.raw === "object" ? { ...it.raw } : {};
+    const runningAlarm = prev.runningAlarm === true;
+    const ek = String(it.equipmentKind || "generator").trim().toLowerCase();
+
+    let mergedShape;
+    if (ek === "oil_level" || ek === "ats") {
+      mergedShape = mergePowerAtsSnapshotRaw({
+        running: !!(prev.running || flags.running),
+      });
+    } else {
+      mergedShape = mergePowerGeneratorSnapshotRaw({
+        fault: !!(prev.fault || flags.fault),
+        highOil: !!(prev.highOil || flags.highOil),
+        lowOil: !!(prev.lowOil || flags.lowOil),
+      });
+    }
+
+    let nextUi = it.uiStatus;
+    if (mergedShape?.running === true) nextUi = "alarm";
+
+    return {
+      ...it,
+      uiStatus: nextUi,
+      raw: {
+        ...mergedShape,
+        ...(runningAlarm ? { runningAlarm: true } : {}),
+      },
+    };
+  });
+}
+
+/**
+ * 將 active alert 集合合併進快照 items
+ * - active 的系統：頂層 uiStatus 統一標記為 alarm，並在 raw.runningAlarm=true
+ * @template T
+ * @param {T[]} items
+ * @param {Set<string>|null|undefined} activeAlertSystemIds
+ * @returns {T[]}
+ */
+function mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds) {
+  const list = Array.isArray(items) ? items : [];
+  const activeSet =
+    activeAlertSystemIds instanceof Set ? activeAlertSystemIds : new Set();
+
+  if (list.length === 0) return list;
+  if (activeSet.size === 0) return list;
+
+  return list.map((it) => {
+    const sid = it?.systemId != null ? String(it.systemId) : "";
+    if (!sid || !activeSet.has(sid)) return it;
+
+    const raw = it?.raw && typeof it.raw === "object" ? it.raw : {};
+    return {
+      ...it,
+      uiStatus: "alarm",
+      raw: { ...raw, runningAlarm: true },
+    };
+  });
+}
+
+/**
  * 從設備配置中提取設備 ID
  * @param {Object} deviceConfig - 設備配置 { host, port, unitId }
  * @returns {Promise<number|null>} 設備 ID
@@ -686,6 +1005,7 @@ function ruleAppliesToScope(rule, scope) {
   if (!Number.isFinite(tid)) return false;
   if (t === "location") return Number(scope.locationId) === tid;
   if (t === "zone") return Number(scope.zoneId) === tid;
+  if (t === "system") return Number(scope.systemId) === tid;
   return true;
 }
 
@@ -953,6 +1273,11 @@ async function clearManualAlarm(systemKey, sourceId, options = {}) {
 }
 
 module.exports = {
+  loadActiveAlertSystemIdSet,
+  loadActiveRuleSemanticsBySystemId,
+  mergeRuleSemanticsIntoDrainageFireSnapshotItems,
+  mergeRuleSemanticsIntoPowerSnapshotItems,
+  mergeActiveAlertsIntoSnapshotItems,
   recordError,
   clearError,
   recordManualAlarm,

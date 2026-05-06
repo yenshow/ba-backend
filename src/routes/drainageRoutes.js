@@ -110,9 +110,17 @@ router.post(
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { systemId } = req.params;
-    await systemAlert.recordError("drainage", Number(systemId), "手動警報測試", {
-      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
-    });
+    await systemAlert.recordError(
+      "drainage",
+      Number(systemId),
+      "手動警報測試",
+      {
+        origin: {
+          channel: "manual_alert_api",
+          actorUserId: req.user?.id ?? null,
+        },
+      },
+    );
     res.sendSuccess({ ok: true });
   }),
 );
@@ -123,22 +131,35 @@ router.post(
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { systemId } = req.params;
-    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
-    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+    const mode = String(req.body?.mode ?? "manual")
+      .trim()
+      .toLowerCase();
+    const origin = {
+      channel: "manual_alarm_api",
+      actorUserId: req.user?.id ?? null,
+    };
 
     if (mode === "rule") {
-      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "")
+        .trim()
+        .toLowerCase();
       const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
-      const detail = await systemAlert.recordRuleBitStateAlarm("drainage", Number(systemId), {
-        alertType: ruleAlertType,
-        bitKey,
-        origin,
-      });
+      const detail = await systemAlert.recordRuleBitStateAlarm(
+        "drainage",
+        Number(systemId),
+        {
+          alertType: ruleAlertType,
+          bitKey,
+          origin,
+        },
+      );
       res.sendSuccess({ ok: true, mode: "rule", ...detail });
       return;
     }
 
-    await systemAlert.recordManualAlarm("drainage", Number(systemId), { origin });
+    await systemAlert.recordManualAlarm("drainage", Number(systemId), {
+      origin,
+    });
     res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );
@@ -150,7 +171,10 @@ router.delete(
   asyncHandler(async (req, res) => {
     const { systemId } = req.params;
     await systemAlert.clearError("drainage", Number(systemId), {
-      origin: { channel: "manual_alert_api", actorUserId: req.user?.id ?? null },
+      origin: {
+        channel: "manual_alert_api",
+        actorUserId: req.user?.id ?? null,
+      },
     });
     res.sendSuccess({ ok: true });
   }),
@@ -162,22 +186,35 @@ router.delete(
   requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const { systemId } = req.params;
-    const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
-    const origin = { channel: "manual_alarm_api", actorUserId: req.user?.id ?? null };
+    const mode = String(req.body?.mode ?? "manual")
+      .trim()
+      .toLowerCase();
+    const origin = {
+      channel: "manual_alarm_api",
+      actorUserId: req.user?.id ?? null,
+    };
 
     if (mode === "rule") {
-      const ruleAlertType = String(req.body?.rule?.alert_type ?? "").trim().toLowerCase();
+      const ruleAlertType = String(req.body?.rule?.alert_type ?? "")
+        .trim()
+        .toLowerCase();
       const bitKey = String(req.body?.rule?.bit_key ?? "").trim();
-      const detail = await systemAlert.clearRuleBitStateAlarm("drainage", Number(systemId), {
-        alertType: ruleAlertType,
-        bitKey,
-        origin,
-      });
+      const detail = await systemAlert.clearRuleBitStateAlarm(
+        "drainage",
+        Number(systemId),
+        {
+          alertType: ruleAlertType,
+          bitKey,
+          origin,
+        },
+      );
       res.sendSuccess({ ok: true, mode: "rule", ...detail });
       return;
     }
 
-    await systemAlert.clearManualAlarm("drainage", Number(systemId), { origin });
+    await systemAlert.clearManualAlarm("drainage", Number(systemId), {
+      origin,
+    });
     res.sendSuccess({ ok: true, mode: "manual" });
   }),
 );

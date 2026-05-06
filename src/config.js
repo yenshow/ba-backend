@@ -195,6 +195,11 @@ const yscp = {
  * 警報每日結案（日界線）：批次 active→resolved、連動 DO 復歸、忽視僅當曆日阻擋
  */
 const alerts = {
+  /** 警報結案（resolved）時是否依 rule_id 復歸 alert_linkages DO（預設開） */
+  linkageRevertOnResolve: toBoolean(
+    getEnv("ALERT_LINKAGE_REVERT_ON_RESOLVE"),
+    true,
+  ),
   dailyRolloverEnabled: true,
   dailyRolloverTimezone: getEnv("ALERT_DAILY_ROLLOVER_TZ", "Asia/Taipei"),
   dailyRolloverLocalHour: Math.min(

@@ -1,6 +1,6 @@
 /**
  * 緊急求救：依 location_systems 讀取 Modbus（DI/DO 回授），不寫入控制。
- * 狀態鍵建議：sos / trigger / running（觸發＝警報）、fault（故障＝異常）。
+ * API `raw`：觸發（含舊鍵與 fault）合併為 **running**。
  */
 
 const locationService = require("./locationService");
@@ -8,8 +8,12 @@ const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
-const db = require("../../database/db");
+const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
+  systemAlert;
 const logger = require("../../utils/logger");
+const {
+  normalizeSmokeEmergencySnapshotRaw,
+} = require("../monitoring/systemSnapshotMonitorFactory");
 
 const statusLogger = logger.createLogger("emergencyRescueStatusService");
 
@@ -182,28 +186,26 @@ async function hasResolvableDeviceForPoints(
   return false;
 }
 
-/**
- * 求救觸發（sos / trigger / running 任一为 true）→ alarm
- * fault → warning（異常）
- */
 function deriveEmergencyRescueUiStatus(
-  raw,
+  rawMerged,
   hadDeviceConfig,
   pointKeysConfigured,
+  rawRead,
 ) {
   if (!hadDeviceConfig) return "warning";
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0)
-    return "unknown";
+  if (!pointKeysConfigured || pointKeysConfigured.length === 0) {
+    return "warning";
+  }
 
+  const src = rawRead && typeof rawRead === "object" ? rawRead : rawMerged;
   const anyRead = pointKeysConfigured.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
+    (k) => src[k] !== undefined && src[k] !== null,
   );
   if (!anyRead) return "warning";
 
-  if (raw.sos === true || raw.trigger === true || raw.running === true) {
+  if (rawMerged.running === true) {
     return "alarm";
   }
-  if (raw.fault === true) return "warning";
   return "normal";
 }
 
@@ -263,10 +265,12 @@ async function buildItemForEmergencyRescueSystem(
     }
   }
 
+  const rawMerged = normalizeSmokeEmergencySnapshotRaw(raw);
   const uiStatus = deriveEmergencyRescueUiStatus(
-    raw,
+    rawMerged,
     hadDeviceConfig,
     pointKeys,
+    raw,
   );
 
   if (syncAlerts) {
@@ -296,7 +300,7 @@ async function buildItemForEmergencyRescueSystem(
     equipmentKind,
     viewCategory,
     uiStatus,
-    raw,
+    raw: rawMerged,
     ...(readError ? { error: readError } : {}),
   };
 }
@@ -334,7 +338,7 @@ async function getStatusSnapshot(query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
     systemIds,
   );
@@ -344,7 +348,9 @@ async function getStatusSnapshot(query = {}) {
     ),
   );
 
-  return { items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) };
+  return {
+    items: mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds),
+  };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
@@ -355,7 +361,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   const systemIds = triples
     .map((t) => Number(t.system?.id))
     .filter((n) => Number.isFinite(n));
-  const activeAlertUiBySystemId = await loadActiveAlertsUiBySystemIds(
+  const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
     alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
     systemIds,
   );
@@ -366,55 +372,8 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   return {
     zoneId: String(zone.id),
-    items: mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId),
+    items: mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds),
   };
-}
-
-function severityRank(sev) {
-  const s = String(sev || "").trim().toLowerCase();
-  if (s === "critical") return 3;
-  if (s === "error") return 2;
-  if (s === "warning") return 1;
-  return 0;
-}
-
-async function loadActiveAlertsUiBySystemIds(source, systemIds) {
-  const ids = (systemIds || [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  if (ids.length === 0) return new Map();
-
-  const rows = await db.query(
-    `SELECT source_id, severity
-     FROM alerts
-     WHERE source = ?
-       AND status = 'active'::alert_status
-       AND source_id = ANY(?::integer[])`,
-    [source, ids],
-  );
-
-  const out = new Map(); // systemId -> { rank }
-  for (const r of rows || []) {
-    const sid = Number(r.source_id);
-    if (!Number.isFinite(sid)) continue;
-    const rk = severityRank(r.severity);
-    const prev = out.get(sid);
-    if (!prev || rk > prev.rank) out.set(sid, { rank: rk });
-  }
-  return out;
-}
-
-function mergeActiveAlertsIntoItems(items, activeAlertUiBySystemId) {
-  return (items || []).map((it) => {
-    const sid = Number(it.systemId);
-    const hit = Number.isFinite(sid) ? activeAlertUiBySystemId.get(sid) : null;
-    if (!hit) return it;
-    if (hit.rank >= 3) {
-      return { ...it, uiStatus: "alarm", raw: { ...(it.raw || {}), runningAlarm: true } };
-    }
-    if (it.uiStatus === "normal") return { ...it, uiStatus: "warning" };
-    return it;
-  });
 }
 
 module.exports = {
