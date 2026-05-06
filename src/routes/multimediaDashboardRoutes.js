@@ -35,6 +35,17 @@ router.put(
   }),
 );
 
+// ========== Env Readings (snapshot) ==========
+
+router.get(
+  "/dashboard/env-readings",
+  asyncHandler(async (_req, res) => {
+    const snapshot =
+      await multimediaDashboardService.getMultimediaEnvReadingsSnapshot();
+    res.sendSuccess({ snapshot });
+  }),
+);
+
 // ========== Upload (media) ==========
 
 const uploadsDir = path.join(process.cwd(), "uploads", "multimedia");

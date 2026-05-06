@@ -7,18 +7,18 @@ const mailLogger = logger.createLogger("alertEmail");
 const SOURCE_LABELS_ZH_TW = {
   device: "設備",
   environment: "環境品質",
-  lighting: "照明",
-  people_counting: "人流統計",
   drainage: "衛生排水",
   power: "電力",
-  hvac: "空調",
+  air_circulation: "空氣循環",
   fire: "消防",
   emergency_rescue: "緊急求救",
-  security: "保全",
+  smoke_alarm: "煙霧警報",
 };
 
 const getSeverityLabelZhTw = (severity) => {
-  const s = String(severity || "").trim().toLowerCase();
+  const s = String(severity || "")
+    .trim()
+    .toLowerCase();
   if (s === "critical") return "警報";
   if (s === "warning") return "異常";
   if (s === "error") return "警報";
@@ -116,8 +116,14 @@ async function notifyNewAlertByEmail(alert) {
         return;
       }
 
-      const minInterval = Math.max(15, toInt(sub.repeat_min_interval_seconds, 15));
-      const maxCount = Math.min(10, Math.max(1, toInt(sub.repeat_max_send_count, 10)));
+      const minInterval = Math.max(
+        15,
+        toInt(sub.repeat_min_interval_seconds, 15),
+      );
+      const maxCount = Math.min(
+        10,
+        Math.max(1, toInt(sub.repeat_max_send_count, 10)),
+      );
 
       // 同 rule_id 全域節流：任意兩封成功信最短間隔
       const throttleRows = await tq(
@@ -211,7 +217,9 @@ async function notifyNewAlertByEmail(alert) {
  */
 async function processActiveAlertEmailResends({ limit = 50 } = {}) {
   const n = Number(limit);
-  const safeLimit = Number.isFinite(n) ? Math.max(1, Math.min(500, Math.trunc(n))) : 50;
+  const safeLimit = Number.isFinite(n)
+    ? Math.max(1, Math.min(500, Math.trunc(n)))
+    : 50;
 
   try {
     const rows = await db.query(
@@ -248,4 +256,3 @@ module.exports = {
   notifyNewAlertByEmail,
   processActiveAlertEmailResends,
 };
-

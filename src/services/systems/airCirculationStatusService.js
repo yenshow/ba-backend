@@ -250,27 +250,8 @@ function collectItemsFromZones(zones) {
 }
 
 function effectiveAirCirculationStatusPoints(cfg) {
-  const sp = cfg.statusPoints || {};
-  const keys = Object.keys(sp).filter(
-    (k) => sp[k] && typeof sp[k] === "object",
-  );
-  if (keys.length > 0) return sp;
-
-  const pts = cfg.modbus?.points;
-  const p0 = Array.isArray(pts) ? pts[0] : null;
-  const addr = Number(p0?.address);
-  if (
-    cfg.deviceId != null &&
-    cfg.deviceId !== "" &&
-    Number.isFinite(addr) &&
-    addr >= 0
-  ) {
-    const t = String(p0?.type || "DI").toUpperCase();
-    const registerType = t === "DO" ? "coil" : "discrete";
-    return {
-      running: { registerType, address: addr },
-    };
-  }
+  // SSOT：以 statusPoints.running 為主（與 smoke_alarm / emergency_rescue 對齊）
+  const sp = cfg?.statusPoints && typeof cfg.statusPoints === "object" ? cfg.statusPoints : {};
   return sp;
 }
 

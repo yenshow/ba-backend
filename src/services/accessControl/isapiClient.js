@@ -177,7 +177,7 @@ function createIsapiClient(deviceConfig) {
       headers: { "Content-Type": contentType, ...headers },
       validateStatus: (status) => status < 500,
       maxRedirects: 0,
-      timeout: 1000000,
+      timeout: 15000,
     };
     if (data !== undefined) {
       config.data = typeof data === "string" ? data : JSON.stringify(data);

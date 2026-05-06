@@ -1,4 +1,8 @@
 const settingsService = require("../settingsService");
+const db = require("../../database/db");
+const modbusBatchService = require("../devices/modbusBatchService");
+const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
+const environmentReadingsService = require("../systems/environmentReadingsService");
 
 const SETTINGS_KEY = "multimedia_dashboard_settings_v1";
 
@@ -190,10 +194,293 @@ async function updateDashboardSettings(payload) {
   return normalized;
 }
 
+// ====== Derived metrics (AQI / Heat Index) ======
+const PM25_BREAKPOINTS = [
+  { cLow: 0, cHigh: 12, iLow: 0, iHigh: 50 },
+  { cLow: 12.1, cHigh: 35.4, iLow: 51, iHigh: 100 },
+  { cLow: 35.5, cHigh: 55.4, iLow: 101, iHigh: 150 },
+  { cLow: 55.5, cHigh: 150.4, iLow: 151, iHigh: 200 },
+  { cLow: 150.5, cHigh: 250.4, iLow: 201, iHigh: 300 },
+  { cLow: 250.5, cHigh: 350.4, iLow: 301, iHigh: 400 },
+  { cLow: 350.5, cHigh: 500.4, iLow: 401, iHigh: 500 },
+];
+
+const PM10_BREAKPOINTS = [
+  { cLow: 0, cHigh: 54, iLow: 0, iHigh: 50 },
+  { cLow: 55, cHigh: 154, iLow: 51, iHigh: 100 },
+  { cLow: 155, cHigh: 254, iLow: 101, iHigh: 150 },
+  { cLow: 255, cHigh: 354, iLow: 151, iHigh: 200 },
+  { cLow: 355, cHigh: 424, iLow: 201, iHigh: 300 },
+  { cLow: 425, cHigh: 504, iLow: 301, iHigh: 400 },
+  { cLow: 505, cHigh: 604, iLow: 401, iHigh: 500 },
+];
+
+function calculatePollutantAqi(value, breakpoints) {
+  if (value == null || !Number.isFinite(Number(value))) return null;
+  const v = Number(value);
+  const bp =
+    breakpoints.find((b) => v >= b.cLow && v <= b.cHigh) ||
+    breakpoints[breakpoints.length - 1];
+  const clamped = Math.min(Math.max(v, bp.cLow), bp.cHigh);
+  const idx =
+    ((bp.iHigh - bp.iLow) / (bp.cHigh - bp.cLow)) * (clamped - bp.cLow) +
+    bp.iLow;
+  return Number.isFinite(idx) ? Math.round(idx) : null;
+}
+
+function calculateAqiScore(pm25, pm10) {
+  const list = [
+    calculatePollutantAqi(pm25, PM25_BREAKPOINTS),
+    calculatePollutantAqi(pm10, PM10_BREAKPOINTS),
+  ].filter((n) => typeof n === "number" && Number.isFinite(n));
+  if (!list.length) return null;
+  return Math.max(...list);
+}
+
+const cToF = (c) => c * (9 / 5) + 32;
+const fToC = (f) => (f - 32) * (5 / 9);
+
+function calculateHeatIndexC(temperatureC, humidityPercent) {
+  if (
+    temperatureC == null ||
+    humidityPercent == null ||
+    !Number.isFinite(Number(temperatureC)) ||
+    !Number.isFinite(Number(humidityPercent))
+  ) {
+    return null;
+  }
+
+  const tC = Number(temperatureC);
+  const rh = Number(humidityPercent);
+  const tF = cToF(tC);
+
+  if (tF < 80 || rh < 40) return tC;
+
+  const T = tF;
+  const R = rh;
+
+  const hiF =
+    -42.379 +
+    2.04901523 * T +
+    10.14333127 * R -
+    0.22475541 * T * R -
+    0.00683783 * T * T -
+    0.05481717 * R * R +
+    0.00122874 * T * T * R +
+    0.00085282 * T * R * R -
+    0.00000199 * T * T * R * R;
+
+  const hiC = fToC(hiF);
+  return Number.isFinite(hiC) ? hiC : null;
+}
+
+const toNormalizedRegisterType = (registerType) => {
+  const rt = String(registerType || "holding").toLowerCase();
+  if (rt === "input") return "input";
+  if (rt === "coil" || rt === "coils") return "coils";
+  if (rt === "discrete" || rt === "discrete_input") return "discrete";
+  return "holding";
+};
+
+const REGISTER_TYPE_TO_BATCH = Object.freeze({
+  holding: "holding",
+  input: "input",
+  coils: "coil",
+  discrete: "discrete",
+});
+
+async function readDeviceValuesByRegisterType(enabledValues, deviceConfig) {
+  const deviceValues = {};
+  const registerTypes = ["holding", "input", "coils", "discrete"];
+
+  for (const rt of registerTypes) {
+    const group = enabledValues.filter(
+      (v) => toNormalizedRegisterType(v.register_type) === rt,
+    );
+    if (group.length === 0) continue;
+
+    let minAddress = Number(group[0].address);
+    let maxAddress = Number(group[0].address) + (Number(group[0].length) || 1);
+    for (const vc of group) {
+      const addr = Number(vc.address);
+      const len = Number(vc.length) || 1;
+      if (!Number.isFinite(addr) || addr < 0) continue;
+      const endAddr = addr + len;
+      minAddress = Math.min(minAddress, addr);
+      maxAddress = Math.max(maxAddress, endAddr);
+    }
+    const readLength = maxAddress - minAddress;
+    if (!Number.isFinite(readLength) || readLength <= 0) continue;
+
+    const results = await modbusBatchService.batchRead([
+      {
+        host: deviceConfig.host,
+        port: deviceConfig.port,
+        unitId: deviceConfig.unitId,
+        registerType: REGISTER_TYPE_TO_BATCH[rt] || "holding",
+        address: minAddress,
+        length: readLength,
+        meta: { registerType: rt, multimedia: true },
+      },
+    ]);
+    const first = results?.[0];
+    if (!first || first.ok !== true) {
+      throw new Error(first?.error || "讀取失敗");
+    }
+    const modbusData = first.data;
+
+    for (const valueConfig of group) {
+      const addr = Number(valueConfig.address);
+      const len = Number(valueConfig.length) || 1;
+      if (!Number.isFinite(addr) || addr < 0) continue;
+      const relativeAddress = addr - minAddress;
+      const rawValue =
+        Array.isArray(modbusData) &&
+        relativeAddress >= 0 &&
+        relativeAddress < modbusData.length
+          ? len === 1
+            ? modbusData[relativeAddress]
+            : modbusData.slice(relativeAddress, relativeAddress + len)
+          : null;
+
+      if (rawValue !== null && rawValue !== undefined) {
+        const convertedValue = deviceLoggingConfig.applyConversion(
+          rawValue,
+          valueConfig.conversion,
+        );
+        deviceValues[valueConfig.name] = convertedValue;
+      }
+    }
+  }
+
+  return deviceValues;
+}
+
+async function getMultimediaEnvReadingsSnapshot() {
+  const settings = await getDashboardSettings();
+  const deviceIds = (settings.envDeviceIds || [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0);
+
+  if (!deviceIds.length) {
+    return {
+      timestamp: new Date().toISOString(),
+      data: {},
+      devices: [],
+    };
+  }
+
+  const rows = await db.query(
+    `SELECT id, config as device_config
+     FROM devices
+     WHERE id = ANY($1::int[])
+       AND status = 'active'
+       AND type_code = 'sensor'
+       AND config->>'protocol' = 'modbus'`,
+    [deviceIds],
+  );
+  const deviceConfigMap = new Map(
+    (rows || []).map((d) => [Number(d.id), d.device_config]),
+  );
+
+  const timestamp = new Date().toISOString();
+  const mergedData = {};
+  const devices = [];
+
+  for (const deviceId of deviceIds) {
+    const deviceConfigRaw = deviceConfigMap.get(deviceId);
+    if (!deviceConfigRaw) {
+      devices.push({
+        deviceId,
+        status: "offline",
+        reason: "設備不存在 / 未啟用 / 非 Modbus 感測器",
+      });
+      continue;
+    }
+
+    const deviceConfig =
+      typeof deviceConfigRaw === "string"
+        ? JSON.parse(deviceConfigRaw || "{}")
+        : deviceConfigRaw || {};
+    if (!deviceConfig.host || !deviceConfig.port) {
+      devices.push({
+        deviceId,
+        status: "offline",
+        reason: "設備配置不完整（host/port）",
+      });
+      continue;
+    }
+
+    const cfg = {
+      host: deviceConfig.host,
+      port: deviceConfig.port,
+      unitId: deviceConfig.unitId || 1,
+    };
+
+    try {
+      const loggingConfig = await deviceLoggingConfig.getDeviceLoggingConfig(
+        deviceId,
+      );
+      const enabledValues = (loggingConfig?.values || []).filter(
+        (v) => v && v.enabled !== false,
+      );
+
+      // 沒有 values 也視為 online（配置可能只用於 health check）
+      let deviceValues = {};
+      if (loggingConfig?.enabled && enabledValues.length > 0) {
+        deviceValues = await readDeviceValuesByRegisterType(enabledValues, cfg);
+      } else {
+        // 最小 health check：讀取 holding register 0（與 environmentMonitor 一致）
+        const results = await modbusBatchService.batchRead([
+          {
+            host: cfg.host,
+            port: cfg.port,
+            unitId: cfg.unitId,
+            registerType: "holding",
+            address: 0,
+            length: 1,
+            meta: { health: true, multimedia: true },
+          },
+        ]);
+        const first = results?.[0];
+        if (!first || first.ok !== true) {
+          throw new Error(first?.error || "設備離線");
+        }
+      }
+
+      // merge (first non-null wins)
+      for (const [k, v] of Object.entries(deviceValues || {})) {
+        if (mergedData[k] === undefined || mergedData[k] === null) {
+          mergedData[k] = v;
+        }
+      }
+
+      devices.push({ deviceId, status: "online" });
+    } catch (err) {
+      devices.push({
+        deviceId,
+        status: "offline",
+        reason: err?.message || "設備離線",
+      });
+    }
+  }
+
+  // rounding + derived metrics
+  const rounded = environmentReadingsService.roundDataToOneDecimal(mergedData);
+  const derived = {
+    ...rounded,
+    aqi: calculateAqiScore(rounded.pm25, rounded.pm10),
+    heatIndex: calculateHeatIndexC(rounded.temperature, rounded.humidity),
+  };
+
+  return { timestamp, data: derived, devices };
+}
+
 module.exports = {
   SETTINGS_KEY,
   DEFAULT_SETTINGS,
   getDashboardSettings,
   updateDashboardSettings,
+  getMultimediaEnvReadingsSnapshot,
 };
 

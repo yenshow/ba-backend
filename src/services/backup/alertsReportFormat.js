@@ -12,11 +12,12 @@ const {
 const SOURCE_LABELS = {
   device: "設備",
   environment: "環境",
-  lighting: "照明",
-  people_counting: "人流統計",
-  hvac: "空調",
+  drainage: "衛生排水",
+  power: "電力",
+  air_circulation: "空氣循環",
   fire: "消防",
-  security: "安防",
+  emergency_rescue: "緊急求救",
+  smoke_alarm: "煙霧警報",
 };
 
 const TYPE_LABELS = { offline: "離線", error: "錯誤", threshold: "閾值" };
@@ -39,7 +40,7 @@ function alertToReportRow(alert) {
     "區域-地點": formatZoneLocation(alert.zone_name, alert.source_name),
     設備類型: alert.device_type_name ?? "",
     設備配置: getDeviceConfigDisplay(alert.device_config),
-    "類型與程度": formatTypeSeverity(alert.alert_type, alert.severity),
+    類型與程度: formatTypeSeverity(alert.alert_type, alert.severity),
     狀態: STATUS_LABELS[alert.status] ?? alert.status,
     訊息: alert.message ?? "",
     創建時間: formatDateTimeZhTW(alert.created_at),

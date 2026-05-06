@@ -369,16 +369,12 @@ async function createAlertEvent(
 const ALERT_SOURCES = {
   DEVICE: "device",
   ENVIRONMENT: "environment",
-  LIGHTING: "lighting",
-  PEOPLE_COUNTING: "people_counting",
   DRAINAGE: "drainage",
   POWER: "power",
-  HVAC: "hvac",
   AIR_CIRCULATION: "air_circulation",
   FIRE: "fire",
   EMERGENCY_RESCUE: "emergency_rescue",
   SMOKE_ALARM: "smoke_alarm",
-  SECURITY: "security",
 };
 
 // 警報狀態（移除 pending，只保留 active, resolved, ignored
@@ -542,7 +538,8 @@ async function getAlerts(filters = {}) {
     const actualSource = source;
     const actualSourceId = source_id;
     const actualStatus = status;
-    const timeFieldCol = time_field === "updated_at" ? "updated_at" : "created_at";
+    const timeFieldCol =
+      time_field === "updated_at" ? "updated_at" : "created_at";
 
     let query = buildAlertSelectQuery() + ` WHERE 1=1`;
     const params = [];
@@ -1401,7 +1398,8 @@ async function getUnresolvedAlertCount(filters = {}) {
 
     const actualSource = source;
     const actualSourceId = source_id;
-    const timeFieldCol = time_field === "updated_at" ? "updated_at" : "created_at";
+    const timeFieldCol =
+      time_field === "updated_at" ? "updated_at" : "created_at";
 
     let query = `
 			SELECT

@@ -1372,45 +1372,6 @@ function shallowMergePeopleCountingConfig(baseline, incoming) {
   return out;
 }
 
-/**
- * drainage / fire / power：status_points 的 SSOT key 驗證（避免 UI/快照語意漂移）
- * - tank: coverAlarm/highLevel/lowLevel
- * - pump: running
- * - power.generator: fault/highOil/lowOil
- * - power.oil_level: running
- */
-function assertStatusPointsKeys(systemType, equipmentKind, statusPoints) {
-  const sys = String(systemType || "").trim();
-  if (sys !== "drainage" && sys !== "fire" && sys !== "power") return;
-
-  const sp =
-    statusPoints && typeof statusPoints === "object" ? statusPoints : {};
-  const keys = Object.keys(sp);
-  if (keys.length === 0) return;
-
-  const kind = String(equipmentKind || "").trim().toLowerCase();
-
-  let allowed = null;
-  if (sys === "drainage" || sys === "fire") {
-    allowed = kind === "tank" ? ["coverAlarm", "highLevel", "lowLevel"] : ["running"];
-  } else if (sys === "power") {
-    allowed = kind === "oil_level" ? ["running"] : ["fault", "highOil", "lowOil"];
-  }
-
-  if (!allowed) return;
-  const allowSet = new Set(allowed);
-  const invalid = keys.filter((k) => !allowSet.has(k));
-  if (invalid.length === 0) return;
-
-  const err = new Error(
-    `statusPoints 鍵不符合規範：不允許 [${invalid.join(
-      ", ",
-    )}]；此系統僅允許 [${allowed.join(", ")}]`,
-  );
-  err.statusCode = 400;
-  throw err;
-}
-
 function buildSystemConfig(systemType, config) {
   switch (systemType) {
     case "environment": {
@@ -1460,7 +1421,6 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "drainage":
-      assertStatusPointsKeys("drainage", config.equipmentKind || "pump", config.statusPoints);
       return {
         device_id: config.deviceId || null,
         location_x: config.location?.x || 50.0,
@@ -1475,7 +1435,6 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "power":
-      assertStatusPointsKeys("power", config.equipmentKind || "generator", config.statusPoints);
       return {
         device_id: config.deviceId || null,
         location_x: config.location?.x || 50.0,
@@ -1490,7 +1449,6 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "fire":
-      assertStatusPointsKeys("fire", config.equipmentKind || "pump", config.statusPoints);
       return {
         device_id: config.deviceId || null,
         location_x: config.location?.x || 50.0,
