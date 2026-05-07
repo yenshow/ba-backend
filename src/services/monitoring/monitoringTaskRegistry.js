@@ -1,11 +1,24 @@
 const environmentMonitor = require("./environmentMonitor");
 const snapshotTaskRegistry = require("./snapshotTaskRegistry");
 const diDoMonitor = require("./diDoMonitor");
+const deviceConnectivityService = require("../devices/deviceConnectivityService");
 const {
   processActiveAlertEmailResends,
 } = require("../alerts/alertEmailNotifier");
 
 const nonSnapshotTaskRegistry = [
+  {
+    systemName: "設備連線狀態",
+    taskFunction: async () => {
+      await deviceConnectivityService.checkAndBroadcastConnectivity();
+      return { nextIntervalMs: 15_000 };
+    },
+    options: {
+      baseIntervalMs: 15_000,
+      minIntervalMs: 15_000,
+      maxIntervalMs: 15_000,
+    },
+  },
   {
     systemName: "環境系統",
     taskFunction: environmentMonitor.checkEnvironmentLocations,
