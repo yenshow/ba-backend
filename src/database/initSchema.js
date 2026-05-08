@@ -116,14 +116,6 @@ async function initSchema() {
 			)
 		`);
 
-    // 遷移：若為舊版既有 DB（含 email 欄位），則移除 email 欄位與相關索引
-    await targetPool.query(`
-			ALTER TABLE users DROP COLUMN IF EXISTS email;
-		`);
-    await targetPool.query(`
-			DROP INDEX IF EXISTS idx_users_email;
-		`);
-
     // 建立 updated_at 自動更新觸發器函數
     await targetPool.query(`
 			CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -408,86 +400,14 @@ async function initSchema() {
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
 				type_code VARCHAR(20) NOT NULL,
+        port INTEGER,
+        unit_id INTEGER,
 				description TEXT,
 				config JSONB,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				CONSTRAINT ck_device_models_type_code CHECK (type_code IN ('camera','sensor','controller','access_control'))
 			)
-		`);
-
-    // 遷移：舊版 device_models.type_id -> type_code
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'device_models' AND column_name = 'type_id'
-        ) THEN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'device_models' AND column_name = 'type_code'
-          ) THEN
-            ALTER TABLE device_models ADD COLUMN type_code VARCHAR(20);
-          END IF;
-
-          -- 盡力回填（若仍存在 device_types）
-          IF EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema='public' AND table_name='device_types'
-          ) THEN
-            UPDATE device_models dm
-            SET type_code = dt.code
-            FROM device_types dt
-            WHERE dm.type_code IS NULL AND dm.type_id = dt.id;
-          END IF;
-
-          -- 若仍回填不到，給一個保守預設（避免卡住遷移；後續可由管理者修正）
-          UPDATE device_models SET type_code = COALESCE(type_code, 'controller');
-
-          -- 移除舊 FK 與欄位
-          ALTER TABLE device_models DROP CONSTRAINT IF EXISTS fk_device_model_type;
-          ALTER TABLE device_models DROP COLUMN IF EXISTS type_id;
-        END IF;
-      END $$;
-    `);
-
-    // 如果表已存在但沒有 port 欄位，添加它（可為 NULL，無預設值）
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'device_models' AND column_name = 'port'
-				) THEN
-					ALTER TABLE device_models ADD COLUMN port INTEGER;
-					RAISE NOTICE '已添加 port 欄位到 device_models 表';
-				END IF;
-			END $$;
-		`);
-
-    // 若 port 為 NOT NULL DEFAULT 502，改為可為 NULL、移除預設（型號端口改為留空）
-    try {
-      await targetPool.query(
-        "ALTER TABLE device_models ALTER COLUMN port DROP DEFAULT",
-      );
-      await targetPool.query(
-        "ALTER TABLE device_models ALTER COLUMN port DROP NOT NULL",
-      );
-    } catch (_) {}
-
-    // 如果表已存在但沒有 unit_id 欄位，添加它（感測器/控制器等每設備可不同）
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'device_models' AND column_name = 'unit_id'
-				) THEN
-					ALTER TABLE device_models ADD COLUMN unit_id INTEGER;
-					RAISE NOTICE '已添加 unit_id 欄位到 device_models 表';
-				END IF;
-			END $$;
 		`);
 
     await createUpdatedAtTrigger(targetPool, "device_models");
@@ -511,7 +431,6 @@ async function initSchema() {
 				description TEXT,
 				status device_status NOT NULL DEFAULT 'inactive',
 				config JSONB,
-				last_seen_at TIMESTAMP,
 				created_by INTEGER,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -520,40 +439,6 @@ async function initSchema() {
 				CONSTRAINT ck_devices_type_code CHECK (type_code IN ('camera','sensor','controller','access_control'))
 			)
 		`);
-
-    // 遷移：舊版 devices.type_id -> type_code
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'devices' AND column_name = 'type_id'
-        ) THEN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'devices' AND column_name = 'type_code'
-          ) THEN
-            ALTER TABLE devices ADD COLUMN type_code VARCHAR(20);
-          END IF;
-
-          -- 盡力回填（若仍存在 device_types）
-          IF EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema='public' AND table_name='device_types'
-          ) THEN
-            UPDATE devices d
-            SET type_code = dt.code
-            FROM device_types dt
-            WHERE d.type_code IS NULL AND d.type_id = dt.id;
-          END IF;
-
-          UPDATE devices SET type_code = COALESCE(type_code, 'controller');
-
-          ALTER TABLE devices DROP CONSTRAINT IF EXISTS fk_devices_type;
-          ALTER TABLE devices DROP COLUMN IF EXISTS type_id;
-        END IF;
-      END $$;
-    `);
 
     await createUpdatedAtTrigger(targetPool, "devices");
 
@@ -565,11 +450,6 @@ async function initSchema() {
 		`);
 
     schemaLogger.info("devices 表已建立", { module: "initSchema" });
-
-    // 清理：若舊表 device_types 仍存在則移除（設備類型不入 DB）
-    await targetPool.query(`
-      DROP TABLE IF EXISTS device_types CASCADE;
-    `);
 
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
@@ -601,22 +481,6 @@ async function initSchema() {
     });
 
     // ISAPI 攝影機 PeopleCounting 事件（enter/exit 為設備累計；enter_delta/exit_delta 與前筆差）
-    // 舊版曾使用 enter_abs/exit_abs 等欄位；執行 db:init 時偵測到舊表則 DROP 後重建（資料清空，請先備份）
-    await targetPool.query(`
-      DO $migration$
-      BEGIN
-        IF EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'isapi_people_counting_events'
-            AND column_name = 'enter_abs'
-        ) THEN
-          DROP TABLE IF EXISTS isapi_people_counting_events CASCADE;
-        END IF;
-      END
-      $migration$;
-    `);
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS isapi_people_counting_events (
         id BIGSERIAL PRIMARY KEY,
@@ -646,9 +510,6 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_isapi_people_counting_events_region_name
       ON isapi_people_counting_events(region_name);
-    `);
-    await targetPool.query(`
-      DROP INDEX IF EXISTS idx_isapi_people_counting_events_unique_global;
     `);
     await targetPool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_isapi_people_counting_events_unique_region
@@ -701,26 +562,14 @@ async function initSchema() {
 				severity alert_severity NOT NULL DEFAULT 'warning',
 				message TEXT NOT NULL,
 				status alert_status NOT NULL DEFAULT 'active',
+        dimension_key VARCHAR(120) NOT NULL DEFAULT 'default',
+        rule_id INTEGER,
 				ignored_at TIMESTAMP,
 				ignored_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        acknowledged_at TIMESTAMP,
-        acknowledged_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)
 		`);
-    await targetPool.query(
-      `ALTER TABLE alerts DROP COLUMN IF EXISTS resolved_by;`,
-    );
-    await targetPool.query(
-      `ALTER TABLE alerts DROP COLUMN IF EXISTS resolved_at;`,
-    );
-
-    // 兼容舊版資料：先補齊欄位，再建立依賴這些欄位的索引
-    await targetPool.query(`
-      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS dimension_key VARCHAR(120) NOT NULL DEFAULT 'default';
-      ALTER TABLE alerts ADD COLUMN IF NOT EXISTS rule_id INTEGER;
-    `);
 
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_alerts_source_composite ON alerts(source, source_id, alert_type, status);
@@ -757,23 +606,6 @@ async function initSchema() {
 			)
 		`);
 
-    // 向下相容：若從舊版升級（表已存在但無 alert_type），先補欄位再建索引
-    await targetPool.query(`
-      ALTER TABLE error_tracking ADD COLUMN IF NOT EXISTS alert_type VARCHAR(50) NOT NULL DEFAULT 'offline'
-    `);
-    // 移除舊的 UNIQUE(source, source_id) 約束（PostgreSQL 必須用 DROP CONSTRAINT）
-    try {
-      await targetPool.query(`
-        ALTER TABLE error_tracking DROP CONSTRAINT IF EXISTS error_tracking_source_source_id_key
-      `);
-    } catch (_e) {
-      /* 約束不存在（新表已用三欄約束），忽略 */
-    }
-    await targetPool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS error_tracking_source_source_id_alert_type_key
-      ON error_tracking(source, source_id, alert_type)
-    `);
-
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_error_tracking_source ON error_tracking(source, source_id);
 			CREATE INDEX IF NOT EXISTS idx_error_tracking_source_type ON error_tracking(source, source_id, alert_type);
@@ -807,55 +639,6 @@ async function initSchema() {
 			)
 		`);
 
-    // 遷移：既有 DB 補齊警報定義欄位（不破壞舊規則）
-    await targetPool.query(`
-      DO $$ 
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name = 'alert_rules' AND column_name = 'name'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN name VARCHAR(120);
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name = 'alert_rules' AND column_name = 'dimension_key'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN dimension_key VARCHAR(120);
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name = 'alert_rules' AND column_name = 'target_type'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN target_type VARCHAR(30);
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name = 'alert_rules' AND column_name = 'target_id'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN target_id INTEGER;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_template_key'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN message_template_key VARCHAR(64);
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_template_custom'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN message_template_custom BOOLEAN NOT NULL DEFAULT FALSE;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'alert_rules' AND column_name = 'message_suffix'
-        ) THEN
-          ALTER TABLE alert_rules ADD COLUMN message_suffix TEXT;
-        END IF;
-      END $$;
-    `);
-
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_alert_rules_source_type ON alert_rules(source, alert_type);
 			CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
@@ -868,21 +651,6 @@ async function initSchema() {
     schemaLogger.info("alert_rules 表已建立（警報規則參照表）", {
       module: "initSchema",
     });
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM information_schema.table_constraints
-          WHERE table_name = 'alerts'
-            AND constraint_name = 'fk_alerts_rule_id'
-        ) THEN
-          ALTER TABLE alerts
-          ADD CONSTRAINT fk_alerts_rule_id
-          FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE SET NULL;
-        END IF;
-      END $$;
-    `);
 
     // 建立警報事件表（事件流）
     await targetPool.query(`
@@ -906,22 +674,6 @@ async function initSchema() {
     });
 
     // ========== 警報連動（掛載 alert_rules） ==========
-    // 舊版以 trigger_* 平行描述條件；遷移時整表重建（連動執行紀錄一併清空）
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'alert_linkages'
-            AND column_name = 'trigger_source'
-        ) THEN
-          DROP TABLE IF EXISTS alert_linkage_executions CASCADE;
-          DROP TABLE IF EXISTS alert_linkages CASCADE;
-        END IF;
-      END $$;
-    `);
-
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_linkages (
         id SERIAL PRIMARY KEY,
@@ -936,37 +688,6 @@ async function initSchema() {
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    // 遷移：移除舊版 name 欄位（連動不需要命名）
-    await targetPool.query(`
-      DO $$ 
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'alert_linkages'
-            AND column_name = 'name'
-        ) THEN
-          ALTER TABLE alert_linkages DROP COLUMN name;
-        END IF;
-        -- 遷移：do_value(boolean) -> do_output_value('on'/'off')
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'alert_linkages' AND column_name = 'do_output_value'
-        ) THEN
-          ALTER TABLE alert_linkages ADD COLUMN do_output_value VARCHAR(8) NOT NULL DEFAULT 'on';
-        END IF;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'alert_linkages' AND column_name = 'do_value'
-        ) THEN
-          -- 將舊資料回填到新欄位（true->on, false->off）
-          UPDATE alert_linkages
-          SET do_output_value = CASE WHEN do_value = TRUE THEN 'on' ELSE 'off' END
-          WHERE do_value IS NOT NULL;
-          ALTER TABLE alert_linkages DROP COLUMN do_value;
-        END IF;
-      END $$;
-    `);
     await createUpdatedAtTrigger(targetPool, "alert_linkages");
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_linkages_enabled ON alert_linkages(enabled);
@@ -978,32 +699,13 @@ async function initSchema() {
       { module: "initSchema" },
     );
 
-    // 移除舊版 DO 人工覆寫（manual off）機制：改為「手動觸發」一次性寫入
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1
-          FROM information_schema.tables
-          WHERE table_schema = 'public'
-            AND table_name = 'do_output_overrides'
-        ) THEN
-          DROP TABLE IF EXISTS do_output_overrides CASCADE;
-        END IF;
-      END $$;
-    `);
-
     // 連動執行記錄（稽核）
-    // 若舊表存在，直接重建以更新 execution_type 白名單
-    await targetPool.query(`
-      DROP TABLE IF EXISTS alert_linkage_executions CASCADE;
-    `);
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_linkage_executions (
         id BIGSERIAL PRIMARY KEY,
         linkage_id INTEGER NOT NULL REFERENCES alert_linkages(id) ON DELETE CASCADE,
         alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
-        execution_type VARCHAR(30) NOT NULL CHECK (execution_type IN ('trigger', 'auto_off', 'manual_trigger', 'rollover_revert')),
+        execution_type VARCHAR(30) NOT NULL CHECK (execution_type IN ('trigger', 'auto_off', 'manual_trigger', 'manual_revert', 'rollover_revert')),
         do_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
         do_address INTEGER,
         do_value BOOLEAN,
@@ -1037,20 +739,6 @@ async function initSchema() {
         UNIQUE(rule_id)
       )
     `);
-    // 遷移：舊環境若無 camera_device_ids 則補欄位
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='alert_camera_linkages' AND column_name='camera_device_ids'
-        ) THEN
-          ALTER TABLE alert_camera_linkages
-            ADD COLUMN camera_device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[];
-        END IF;
-      END $$;
-    `);
-    // 注意：本專案已統一使用 camera_device_ids；舊資料請於 UI 重新設定即可。
     await createUpdatedAtTrigger(targetPool, "alert_camera_linkages");
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_enabled ON alert_camera_linkages(enabled);
@@ -1060,12 +748,6 @@ async function initSchema() {
     schemaLogger.info("alert_camera_linkages 表已建立（攝影機連動）", {
       module: "initSchema",
     });
-
-    // ========== 警報外部通知（Webhook）==========
-    // 已移除：僅保留 Email(SMTP) 通知。若舊表存在則刪除。
-    await targetPool.query(`
-      DROP TABLE IF EXISTS alert_webhook_subscriptions CASCADE;
-    `);
 
     // ========== 警報外部通知（Email / SMTP，每規則獨立）==========
     await targetPool.query(`
@@ -1086,36 +768,6 @@ async function initSchema() {
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(rule_id)
       )
-    `);
-    // 遷移：移除已淘汰欄位
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='from_email'
-        ) THEN
-          ALTER TABLE alert_email_subscriptions DROP COLUMN from_email;
-        END IF;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='from_name'
-        ) THEN
-          ALTER TABLE alert_email_subscriptions DROP COLUMN from_name;
-        END IF;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='cc_emails'
-        ) THEN
-          ALTER TABLE alert_email_subscriptions DROP COLUMN cc_emails;
-        END IF;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='alert_email_subscriptions' AND column_name='bcc_emails'
-        ) THEN
-          ALTER TABLE alert_email_subscriptions DROP COLUMN bcc_emails;
-        END IF;
-      END $$;
     `);
     await createUpdatedAtTrigger(targetPool, "alert_email_subscriptions");
     await targetPool.query(`
@@ -1172,7 +824,6 @@ async function initSchema() {
 				description TEXT,
 				device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
 				modbus_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-				room_ids INTEGER[] DEFAULT ARRAY[]::INTEGER[],
 				status VARCHAR(50) DEFAULT 'active',
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1216,36 +867,6 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_zones_building_id ON zones(building_id);
 		`);
 
-    // 如果表已存在，添加 image_url 欄位
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'zones' AND column_name = 'image_url'
-				) THEN
-					ALTER TABLE zones ADD COLUMN image_url TEXT;
-					RAISE NOTICE '已添加 zones.image_url 欄位';
-				END IF;
-			END $$;
-		`);
-
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_schema = 'public' AND table_name = 'zones' AND column_name = 'sort_order'
-				) THEN
-					ALTER TABLE zones ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
-					UPDATE zones z SET sort_order = sub.rn FROM (
-						SELECT id, (ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) - 1)::int AS rn FROM zones
-					) sub WHERE z.id = sub.id;
-					RAISE NOTICE '已添加 zones.sort_order 並回填（與舊版 created_at DESC 列表順序對齊）';
-				END IF;
-			END $$;
-		`);
-
     schemaLogger.info("zones 表已建立（統一區域表）", { module: "initSchema" });
 
     // 建立統一的 locations 表（統一地點表）
@@ -1259,59 +880,9 @@ async function initSchema() {
 				sort_order INTEGER NOT NULL DEFAULT 0,
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(zone_id, name)
 			)
-		`);
-
-    // 如果表已存在，遷移資料並移除舊欄位
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				-- 如果缺少 description 欄位，添加它
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'locations' AND column_name = 'description'
-				) THEN
-					ALTER TABLE locations ADD COLUMN description TEXT;
-					RAISE NOTICE '已添加 locations.description 欄位';
-				END IF;
-			END $$;
-		`);
-
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_schema = 'public' AND table_name = 'locations' AND column_name = 'sort_order'
-				) THEN
-					ALTER TABLE locations ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
-					UPDATE locations l SET sort_order = sub.rn FROM (
-						SELECT id, (ROW_NUMBER() OVER (PARTITION BY zone_id ORDER BY created_at ASC, id ASC) - 1)::int AS rn FROM locations
-					) sub WHERE l.id = sub.id;
-					RAISE NOTICE '已添加 locations.sort_order 並回填（與舊版 created_at ASC 順序對齊）';
-				END IF;
-			END $$;
-		`);
-
-    // 如果約束不存在，則添加約束
-    await targetPool.query(`
-			DO $$ 
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM pg_constraint 
-					WHERE conname = 'unique_zone_location_name'
-				) THEN
-					ALTER TABLE locations 
-					ADD CONSTRAINT unique_zone_location_name UNIQUE(zone_id, name);
-					RAISE NOTICE '已添加 unique_zone_location_name 約束';
-				ELSE
-					RAISE NOTICE '約束 unique_zone_location_name 已存在，跳過';
-				END IF;
-			EXCEPTION
-				WHEN duplicate_object THEN
-					RAISE NOTICE '約束 unique_zone_location_name 已存在，跳過';
-			END $$;
 		`);
 
     await createUpdatedAtTrigger(targetPool, "locations");
@@ -1335,13 +906,6 @@ async function initSchema() {
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				UNIQUE(location_id, system_type)
 			)
-		`);
-
-    // 若表已存在且為舊版 CHECK（無 vehicle_access），則擴充約束
-    await targetPool.query(`
-			ALTER TABLE location_systems DROP CONSTRAINT IF EXISTS location_systems_system_type_check;
-			ALTER TABLE location_systems ADD CONSTRAINT location_systems_system_type_check
-				CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm'));
 		`);
 
     // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
@@ -1387,18 +951,6 @@ async function initSchema() {
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
-    `);
-    // 遷移：舊環境補齊 parent_id 欄位（主群組/子群組）
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='person_groups' AND column_name='parent_id'
-        ) THEN
-          ALTER TABLE person_groups ADD COLUMN parent_id INTEGER REFERENCES person_groups(id) ON DELETE CASCADE;
-        END IF;
-      END $$;
     `);
     await createUpdatedAtTrigger(targetPool, "person_groups");
     await targetPool.query(`
@@ -1478,18 +1030,6 @@ async function initSchema() {
         UNIQUE(device_id, employee_no)
       )
     `);
-    // 遷移：舊環境補齊 fingerprint_detail 欄位
-    await targetPool.query(`
-      DO $$ 
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='person_device_sync_states' AND column_name='fingerprint_detail'
-        ) THEN
-          ALTER TABLE person_device_sync_states ADD COLUMN fingerprint_detail JSONB;
-        END IF;
-      END $$;
-    `);
     await createUpdatedAtTrigger(targetPool, "person_device_sync_states");
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_person_device_sync_states_device ON person_device_sync_states(device_id, updated_at DESC);
@@ -1500,35 +1040,6 @@ async function initSchema() {
     });
 
     // 人員門禁同步 job（持久化：取代 in-memory Map；供輪詢/稽核/重啟恢復）
-    // 若舊庫殘留與目前欄位不一致的 person_sync_jobs，IF NOT EXISTS 不會修正，子表 FK 會失敗
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.tables
-          WHERE table_schema = 'public' AND table_name = 'person_sync_jobs'
-        ) THEN
-          IF NOT (
-            EXISTS (
-              SELECT 1 FROM information_schema.columns
-              WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'job_id'
-            )
-            AND EXISTS (
-              SELECT 1 FROM information_schema.columns
-              WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'job_type'
-            )
-            AND EXISTS (
-              SELECT 1 FROM information_schema.columns
-              WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'status'
-            )
-          ) THEN
-            DROP TABLE IF EXISTS person_sync_job_warnings CASCADE;
-            DROP TABLE IF EXISTS person_sync_job_items CASCADE;
-            DROP TABLE IF EXISTS person_sync_jobs CASCADE;
-          END IF;
-        END IF;
-      END $$;
-    `);
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_sync_jobs (
         job_id VARCHAR(80) PRIMARY KEY,
@@ -1543,30 +1054,6 @@ async function initSchema() {
         result JSONB,
         error JSONB
       )
-    `);
-    // 遷移：舊庫曾以不完整欄位建表，IF NOT EXISTS 不會補欄位，建索引時會出現 column "job_type" does not exist
-    await targetPool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'person_sync_jobs' AND column_name = 'job_type'
-        ) THEN
-          ALTER TABLE person_sync_jobs ADD COLUMN job_type VARCHAR(24);
-          UPDATE person_sync_jobs SET job_type = 'sync_location' WHERE job_type IS NULL;
-          ALTER TABLE person_sync_jobs ALTER COLUMN job_type SET NOT NULL;
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_class t ON c.conrelid = t.oid
-            JOIN pg_namespace n ON t.relnamespace = n.oid
-            WHERE n.nspname = 'public' AND t.relname = 'person_sync_jobs' AND c.conname = 'person_sync_jobs_job_type_check'
-          ) THEN
-            ALTER TABLE person_sync_jobs
-              ADD CONSTRAINT person_sync_jobs_job_type_check
-              CHECK (job_type IN ('sync_location', 'sync_all_locations'));
-          END IF;
-        END IF;
-      END $$;
     `);
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_person_sync_jobs_type_created
@@ -1676,8 +1163,6 @@ async function initSchema() {
     schemaLogger.info("environment_readings_aggregated 表已建立", {
       module: "initSchema",
     });
-
-    await targetPool.query("DROP TABLE IF EXISTS device_data_logs CASCADE");
 
     // 建立 system_settings 表（系統設定表）
     await targetPool.query(`

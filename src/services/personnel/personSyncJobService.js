@@ -77,10 +77,10 @@ function pushJobTailItem(job, item) {
 }
 
 function pushJobIssueItem(job, item) {
-  // 僅保留 failed / skipped（success/running 不進入 issues）
+  // 僅保留 failed（success/running/unchanged 不進入 issues）
   if (!job?.jobId) return;
   const st = item?.status ? String(item.status) : "";
-  if (st !== "failed" && st !== "skipped") return;
+  if (st !== "failed") return;
   void personSyncJobStore.appendItem(job.jobId, "issues", item, {
     maxIssues: MAX_JOB_ISSUES_ITEMS,
   });
@@ -159,7 +159,7 @@ function createLocationJobReporter(job, locationId = null) {
     message,
   }) => {
     bump("completed", 1);
-    if (ok === "skipped") bump("skipped", 1);
+    if (ok === "unchanged") bump("skipped", 1);
     else if (ok) bump("succeeded", 1);
     else bump("failed", 1);
     const completedItem = withLocationId(
@@ -169,14 +169,14 @@ function createLocationJobReporter(job, locationId = null) {
         deviceId,
         action,
         stage,
-        status: ok === "skipped" ? "skipped" : ok ? "success" : "failed",
+        status: ok === "unchanged" ? "unchanged" : ok ? "success" : "failed",
         startedAt: startedAt ?? Date.now(),
         finishedAt: Date.now(),
         message: message ?? null,
       },
       locId,
     );
-    // completed 事件一律進 tail；issues 只保留 failed/skipped
+    // completed 事件一律進 tail；issues 只保留 failed
     pushJobTailItem(job, completedItem);
     pushJobIssueItem(job, completedItem);
   };
@@ -189,8 +189,8 @@ function createLocationJobReporter(job, locationId = null) {
       action,
       stage,
       startedAt: Date.now(),
-      ok: "skipped",
-      message: message ?? "已同步且未變更，略過",
+      ok: "unchanged",
+      message: message ?? "未變更",
     });
   };
 
@@ -246,7 +246,7 @@ function createAllLocationsItemReporter(rootJob, locationId) {
       deviceId,
       action,
       stage,
-      status: ok === "skipped" ? "skipped" : ok ? "success" : "failed",
+      status: ok === "unchanged" ? "unchanged" : ok ? "success" : "failed",
       startedAt: startedAt ?? Date.now(),
       finishedAt: Date.now(),
       message: message ?? null,
@@ -261,8 +261,8 @@ function createAllLocationsItemReporter(rootJob, locationId) {
       action,
       stage,
       startedAt: Date.now(),
-      ok: "skipped",
-      message: message ?? "已同步且未變更，略過",
+      ok: "unchanged",
+      message: message ?? "未變更",
     });
   };
   const noOp = () => {};
@@ -443,7 +443,7 @@ async function syncPersonToDevice(
         deviceId,
         action: "sync",
         stage: "userInfo",
-        message: "人員資料未變更，略過",
+        message: "未變更",
       });
     } else {
       const startedAt = reporter?.startOp
@@ -576,7 +576,7 @@ async function syncPersonToDevice(
         deviceId,
         action: "sync",
         stage: "face",
-        message: "人臉未變更，略過",
+        message: "未變更",
       });
     } else {
       const startedAt = reporter?.startOp
@@ -666,7 +666,7 @@ async function syncPersonToDevice(
         deviceId,
         action: "sync",
         stage: "card",
-        message: "卡片未變更，略過",
+        message: "未變更",
       });
     } else {
       const startedAt = reporter?.startOp
@@ -780,7 +780,7 @@ async function syncPersonToDevice(
       deviceId,
       action: "sync",
       stage: "fingerprint",
-      message: "指紋未變更，略過",
+      message: "未變更",
     });
     return;
   }
@@ -813,7 +813,7 @@ async function syncPersonToDevice(
         deviceId,
         action: "sync",
         stage: `fingerprint:${fingerPrintID}`,
-        message: "指紋未變更，略過",
+        message: "未變更",
       });
       continue;
     }
@@ -1473,14 +1473,39 @@ async function getSyncCandidatesForLocation(locationId) {
     });
   }
 
-  const aggStep = (eno, step) => {
+  // face hash：需與 syncPersonToDevice 的規則一致
+  // - /uploads/*：以檔案內容 hash（避免 URL 不變但內容更新造成誤判）
+  // - 其他：以 faceUrl hash
+  const faceHashCache = new Map(); // faceUrl -> hash|null
+  const computeDesiredFaceHash = async (faceUrl) => {
+    const u = faceUrl != null ? String(faceUrl).trim() : "";
+    if (!u) return null;
+    if (faceHashCache.has(u)) return faceHashCache.get(u);
+    let hash = null;
+    try {
+      if (u.startsWith("/uploads/")) {
+        const buf = await resolveFaceUrlToBuffer(u);
+        hash = personDeviceSyncStateService.hashFace({
+          faceBuffer: buf && buf.length > 0 ? buf : null,
+          faceUrl: null,
+        });
+      } else {
+        hash = personDeviceSyncStateService.hashFace({ faceBuffer: null, faceUrl: u });
+      }
+    } catch (_e) {
+      hash = personDeviceSyncStateService.hashFace({ faceBuffer: null, faceUrl: u });
+    }
+    faceHashCache.set(u, hash);
+    return hash;
+  };
+
+  const aggStep = (eno, step, desired) => {
     const rows = stateMaps
       .map(({ deviceId, map }) => ({
         deviceId,
         row: map.get(String(eno)) || null,
       }))
       .filter((x) => x.row);
-    if (rows.length === 0) return { status: "never", at: null };
     const statusKey =
       step === "userInfo"
         ? "user_info_status"
@@ -1497,30 +1522,41 @@ async function getSyncCandidatesForLocation(locationId) {
           : step === "card"
             ? "card_synced_at"
             : "fingerprint_synced_at";
+    const hashKey =
+      step === "userInfo"
+        ? "user_info_hash"
+        : step === "face"
+          ? "face_hash"
+          : step === "card"
+            ? "card_hash"
+            : "fingerprint_hash";
     let lastAt = null;
     let hasFailed = false;
     let hasSuccess = false;
     let successCount = 0;
+    let matchCount = 0;
     for (const r of rows) {
       const st = r.row?.[statusKey] != null ? String(r.row[statusKey]) : "";
       if (st === "failed") hasFailed = true;
       if (st === "success") {
         hasSuccess = true;
         successCount += 1;
+        const hv = r.row?.[hashKey] != null ? String(r.row[hashKey]) : "";
+        if (desired != null && hv && hv === String(desired)) matchCount += 1;
       }
       const t = r.row?.[atKey] ? new Date(r.row[atKey]).getTime() : null;
       if (t != null && (lastAt == null || t > lastAt)) lastAt = t;
     }
+    if (desired == null) return { status: "no_data", at: null };
+    if (rows.length === 0) return { status: "success", at: null };
     if (hasFailed) return { status: "failed", at: lastAt };
-    // 跨多設備：全部設備都 success 才算 success；否則視為 partial（代表有些設備未同步過）
-    if (hasSuccess && successCount === rows.length)
-      return { status: "success", at: lastAt };
-    if (hasSuccess && successCount < rows.length)
-      return { status: "partial", at: lastAt };
-    return { status: "never", at: lastAt };
+    if (hasSuccess && successCount === rows.length && matchCount === rows.length)
+      return { status: "unchanged", at: lastAt };
+    if (hasSuccess) return { status: "success", at: lastAt };
+    return { status: "success", at: lastAt };
   };
 
-  const buildNeedsSync = (person) => {
+  const buildNeedsSync = async (person) => {
     let cfg = person?.config;
     if (typeof cfg === "string") {
       try {
@@ -1547,9 +1583,7 @@ async function getSyncCandidatesForLocation(locationId) {
 
     const faceUrl =
       person?.face_url != null ? String(person.face_url).trim() : "";
-    const desiredFaceHash = faceUrl
-      ? personDeviceSyncStateService.hashFace({ faceBuffer: null, faceUrl })
-      : null;
+    const desiredFaceHash = faceUrl ? await computeDesiredFaceHash(faceUrl) : null;
 
     const cardNo = ac?.cardNo != null ? String(ac.cardNo).trim() : "";
     const desiredCardHash = cardNo
@@ -1601,10 +1635,21 @@ async function getSyncCandidatesForLocation(locationId) {
     }
 
     const needsSyncSteps = Array.from(steps);
-    return { needsSync: needsSyncSteps.length > 0, needsSyncSteps };
+    return {
+      needsSync: needsSyncSteps.length > 0,
+      needsSyncSteps,
+      desired: {
+        userInfoHash: desiredUserInfoHash,
+        faceHash: desiredFaceHash,
+        cardHash: desiredCardHash,
+        fingerprintHash: desiredFpHash,
+      },
+    };
   };
 
-  return list.map((p) => {
+  const needs = await Promise.all(list.map((p) => buildNeedsSync(p)));
+
+  return list.map((p, idx) => {
     let cfg = p?.config;
     if (typeof cfg === "string") {
       try {
@@ -1625,7 +1670,12 @@ async function getSyncCandidatesForLocation(locationId) {
     ).length;
     const faceUrl = p?.face_url != null ? String(p.face_url).trim() : "";
     const employeeNo = String(p.employee_no);
-    const { needsSync, needsSyncSteps } = buildNeedsSync(p);
+    const n = needs[idx] || {
+      needsSync: true,
+      needsSyncSteps: ["user_info"],
+      desired: { userInfoHash: null, faceHash: null, cardHash: null, fingerprintHash: null },
+    };
+    const { needsSync, needsSyncSteps, desired } = n;
     return {
       employee_no: employeeNo,
       full_name: p.full_name || "",
@@ -1636,10 +1686,10 @@ async function getSyncCandidatesForLocation(locationId) {
       needs_sync: needsSync,
       needs_sync_steps: needsSyncSteps,
       last_sync: {
-        user_info: aggStep(employeeNo, "userInfo"),
-        face: aggStep(employeeNo, "face"),
-        card: aggStep(employeeNo, "card"),
-        fingerprint: aggStep(employeeNo, "fingerprint"),
+        user_info: aggStep(employeeNo, "userInfo", desired?.userInfoHash ?? null),
+        face: aggStep(employeeNo, "face", desired?.faceHash ?? null),
+        card: aggStep(employeeNo, "card", desired?.cardHash ?? null),
+        fingerprint: aggStep(employeeNo, "fingerprint", desired?.fingerprintHash ?? null),
       },
     };
   });

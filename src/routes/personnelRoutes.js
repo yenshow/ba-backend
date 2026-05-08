@@ -523,7 +523,7 @@ router.get(
  * 同步 job 明細（分頁）
  * GET /api/personnel/sync-location/jobs/:jobId/items?type=issues|tail&limit=200&offset=0
  *
- * - type=issues：僅保留 failed/skipped（用於查錯）
+ * - type=issues：僅保留 failed（用於查錯）
  * - type=tail：最後 N 筆事件（用於前端即時 UI；小 payload）
  */
 router.get(
