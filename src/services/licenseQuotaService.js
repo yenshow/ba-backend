@@ -45,16 +45,10 @@ const countControllersBySystemBinding = async (systemType) => {
     `SELECT COUNT(*)::int AS count
      FROM (
        SELECT DISTINCT
-         COALESCE(
-           (ls.system_config->>'device_id')::int,
-           (ls.system_config->>'deviceId')::int
-         ) AS device_id
+        (ls.system_config->'device_ids'->>0)::int AS device_id
        FROM location_systems ls
        WHERE ls.system_type = ?
-         AND (
-           ls.system_config->>'device_id' IS NOT NULL
-           OR ls.system_config->>'deviceId' IS NOT NULL
-         )
+         AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
      ) x
      INNER JOIN devices d ON d.id = x.device_id
      WHERE d.type_code = 'controller'`,

@@ -1,7 +1,7 @@
 /**
  * 環境讀數彙總服務
  * 由 raw 計算時／日／月平均，寫入 environment_readings_aggregated
- * 設計：docs/ENVIRONMENT_DATA_DESIGN.md
+ * 設計：docs/40-systems/environment-data-design.md
  */
 
 const db = require("../../database/db");
@@ -11,56 +11,62 @@ async function getEnvironmentLocationIds() {
     SELECT l.id FROM locations l
     INNER JOIN location_systems ls ON l.id = ls.location_id
     WHERE ls.system_type = 'environment'
-      AND (
-        jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
-        OR ((ls.system_config->>'device_id') IS NOT NULL AND (ls.system_config->>'device_id') != '')
-      )
+      AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
   `);
   return (rows || []).map((r) => r.id);
 }
 
-function computeAverageData(rows) {
-  if (!rows || rows.length === 0) return {};
-  const sums = {};
-  const counts = {};
-  for (const row of rows) {
-    const data = typeof row.data === "object" ? row.data : (row.data ? JSON.parse(row.data) : {});
-    for (const [key, value] of Object.entries(data)) {
-      if (value != null && typeof value === "number" && !Number.isNaN(value)) {
-        sums[key] = (sums[key] || 0) + value;
-        counts[key] = (counts[key] || 0) + 1;
-      }
-    }
-  }
-  const result = {};
-  for (const key of Object.keys(sums)) {
-    if (counts[key] > 0) result[key] = Math.round((sums[key] / counts[key]) * 10) / 10;
-  }
-  return result;
-}
+/**
+ * 單次 SQL 聚合（location_id + 每個 numeric key 平均），並一次性 upsert
+ * - data: JSONB（含 derived 指標 aqi/heatIndex；依「平均值」語意落地）
+ */
+async function upsertAggregatedBySql({ locationIds, bucketType, bucketAt, periodEnd }) {
+  const ids = Array.isArray(locationIds)
+    ? locationIds.map((x) => Number(x)).filter((n) => Number.isFinite(n))
+    : [];
+  if (ids.length === 0) return;
 
-async function upsertAggregated(locationId, bucketType, bucketAt, data) {
-  if (Object.keys(data).length === 0) return;
   await db.query(
-    `INSERT INTO environment_readings_aggregated (location_id, bucket_type, bucket_at, data)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (location_id, bucket_type, bucket_at)
-     DO UPDATE SET data = EXCLUDED.data, created_at = CURRENT_TIMESTAMP`,
-    [locationId, bucketType, bucketAt, JSON.stringify(data)]
+    `
+      WITH src AS (
+        SELECT
+          er.location_id,
+          e.key AS k,
+          AVG((e.value)::numeric) AS avg_value
+        FROM environment_readings er
+        CROSS JOIN LATERAL jsonb_each_text(er.data) AS e(key, value)
+        WHERE er.location_id = ANY($1::int[])
+          AND er.recorded_at >= $2
+          AND er.recorded_at < $3
+          AND (e.value ~ '^-?\\d+(\\.\\d+)?$')
+        GROUP BY er.location_id, e.key
+      ),
+      agg AS (
+        SELECT
+          location_id,
+          jsonb_object_agg(k, to_jsonb(ROUND(avg_value::numeric, 1))) AS data
+        FROM src
+        GROUP BY location_id
+      )
+      INSERT INTO environment_readings_aggregated (location_id, bucket_type, bucket_at, data)
+      SELECT a.location_id, $4, $5, a.data
+      FROM agg a
+      ON CONFLICT (location_id, bucket_type, bucket_at)
+      DO UPDATE SET data = EXCLUDED.data, created_at = CURRENT_TIMESTAMP
+    `,
+    [ids, bucketAt, periodEnd, bucketType, bucketAt],
   );
 }
 
 /** 依區間計算並寫入彙總（共用邏輯） */
 async function computeAndSaveBucket(bucketType, bucketAt, periodEnd) {
   const locationIds = await getEnvironmentLocationIds();
-  for (const locationId of locationIds) {
-    const rows = await db.query(
-      `SELECT data FROM environment_readings
-       WHERE location_id = $1 AND recorded_at >= $2 AND recorded_at < $3`,
-      [locationId, bucketAt, periodEnd]
-    );
-    await upsertAggregated(locationId, bucketType, bucketAt, computeAverageData(rows || []));
-  }
+  await upsertAggregatedBySql({
+    locationIds,
+    bucketType,
+    bucketAt,
+    periodEnd,
+  });
 }
 
 async function computeAndSaveHour() {
@@ -114,16 +120,18 @@ async function computeAndSaveDayAndMonth() {
   const dayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1, 0, 0, 0, 0));
   const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
-  for (const locationId of locationIds) {
-    const [dayRows, monthRows] = await Promise.all([
-      db.query(`SELECT data FROM environment_readings WHERE location_id = $1 AND recorded_at >= $2 AND recorded_at < $3`, [locationId, dayStart, dayEnd]),
-      db.query(`SELECT data FROM environment_readings WHERE location_id = $1 AND recorded_at >= $2 AND recorded_at < $3`, [locationId, monthStart, monthEnd]),
-    ]);
-    await Promise.all([
-      upsertAggregated(locationId, "day", dayStart, computeAverageData(dayRows || [])),
-      upsertAggregated(locationId, "month", monthStart, computeAverageData(monthRows || [])),
-    ]);
-  }
+  await upsertAggregatedBySql({
+    locationIds,
+    bucketType: "day",
+    bucketAt: dayStart,
+    periodEnd: dayEnd,
+  });
+  await upsertAggregatedBySql({
+    locationIds,
+    bucketType: "month",
+    bucketAt: monthStart,
+    periodEnd: monthEnd,
+  });
 }
 
 module.exports = {

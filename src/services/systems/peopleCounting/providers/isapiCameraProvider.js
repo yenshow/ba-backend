@@ -36,16 +36,13 @@ function stableUnitIdFromName(name) {
 
 async function getSiteConfigOrThrow(siteId, config) {
   const deviceIds = ensureIntArray(config.cameraDeviceIds);
-  const deviceId = ensureInt(config.cameraDeviceId);
-  const effectiveDeviceIds =
-    deviceIds.length > 0 ? deviceIds : deviceId ? [deviceId] : [];
-  const channelId = 1;
-  if (effectiveDeviceIds.length === 0) {
-    const err = new Error("未設定攝影機設備（cameraDeviceId）");
+  if (deviceIds.length === 0) {
+    const err = new Error("未設定攝影機設備（cameraDeviceIds）");
     err.statusCode = 400;
     throw err;
   }
-  return { deviceIds: effectiveDeviceIds, channelId };
+  const channelId = 1;
+  return { deviceIds, channelId };
 }
 
 async function getLatestRegionTotalsByName(

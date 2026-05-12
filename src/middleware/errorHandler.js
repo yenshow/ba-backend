@@ -24,6 +24,17 @@ const isPersonnelApiRequest = (req) => {
   return orig.startsWith("/api/personnel") || pathJoined.startsWith("/api/personnel");
 };
 
+/** /api/external-data 在 500／503 時對外固定訊息（與前端一致） */
+const getClientFacingErrorMessage = (req, statusCode, internalMessage) => {
+  const external = String(req.originalUrl || req.url || "").includes(
+    "/api/external-data",
+  );
+  if (external && (statusCode === 503 || statusCode === 500)) {
+    return "資料庫查詢錯誤";
+  }
+  return internalMessage;
+};
+
 const getDeviceErrorKey = (req, errorMessage) => {
   const host = req.query?.host ? String(req.query.host) : "";
   const port =
@@ -161,6 +172,7 @@ function getErrorStatusCode(err) {
 async function errorHandler(err, req, res, next) {
   const statusCode = getErrorStatusCode(err);
   const errorMessage = err.message || "Request failed";
+  const clientMessage = getClientFacingErrorMessage(req, statusCode, errorMessage);
 
   // 記錄錯誤日誌
   if (statusCode === 503) {
@@ -209,8 +221,8 @@ async function errorHandler(err, req, res, next) {
       success: false,
       error: {
         code: `HTTP_${statusCode}`,
-        message: errorMessage,
-        details: errorMessage,
+        message: clientMessage,
+        details: clientMessage,
       },
       timestamp: new Date().toISOString(),
     };
@@ -223,8 +235,8 @@ async function errorHandler(err, req, res, next) {
   // 統一錯誤響應格式
   const response = {
     error: true,
-    message: errorMessage,
-    details: errorMessage,
+    message: clientMessage,
+    details: clientMessage,
     timestamp: new Date().toISOString(),
   };
 

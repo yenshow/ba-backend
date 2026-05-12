@@ -873,12 +873,9 @@ async function updateDevice(id, deviceData, userId) {
           const linked = await db.query(
             `SELECT id, system_type
              FROM location_systems
-             WHERE (
-               (system_config->>'device_id' IS NOT NULL AND (system_config->>'device_id')::integer = ?)
-               OR (system_config->>'deviceId' IS NOT NULL AND (system_config->>'deviceId')::integer = ?)
-               OR (system_config->'device_ids' IS NOT NULL AND system_config->'device_ids' @> ?::jsonb)
-             )`,
-            [id, id, JSON.stringify([id])],
+             WHERE system_config->'device_ids' IS NOT NULL
+               AND system_config->'device_ids' @> ?::jsonb`,
+            [JSON.stringify([id])],
           );
 
           const sourceMap = {

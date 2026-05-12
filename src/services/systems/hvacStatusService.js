@@ -4,10 +4,12 @@
  * 主要用途：提供 `/api/hvac/status` 與 `/api/hvac/zones/:id/status` 的後端快照彙總。
  * - HVAC 的 location_systems.config 允許 `statusPoints`（holding/input 等數值點位）
  * - `modbus_config`（DI/DO）主要供控制回路使用；本服務以 statusPoints 為狀態快照主體
+ * - DI/DO 位址解析與 `modbusDiDoConfig` 共用（與照明一致，避免分叉）
  */
 
 const locationService = require("./locationService");
 const deviceService = require("../devices/deviceService");
+const { pickPrimaryDiDoBitRead } = require("./modbusDiDoConfig");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
@@ -53,41 +55,6 @@ function parseInlineModbus(modbus) {
   return { host, port: Number(port), unitId: Number(unitId) };
 }
 
-function extractPrimaryBitPoint(modbus) {
-  if (!modbus || typeof modbus !== "object") return null;
-
-  const points = Array.isArray(modbus.points) ? modbus.points : [];
-  if (points.length > 0) {
-    const di = points.find((p) => String(p?.type || "").toLowerCase() === "di");
-    if (di && Number.isFinite(Number(di.address))) {
-      return { registerType: "discrete", address: Number(di.address) };
-    }
-    const dO = points.find((p) => String(p?.type || "").toLowerCase() === "do");
-    if (dO && Number.isFinite(Number(dO.address))) {
-      return { registerType: "coil", address: Number(dO.address) };
-    }
-  }
-
-  // fallback: compact schema
-  if (
-    modbus.diAddress !== undefined &&
-    Number.isFinite(Number(modbus.diAddress))
-  ) {
-    return { registerType: "discrete", address: Number(modbus.diAddress) };
-  }
-  if (
-    modbus.doAddress !== undefined &&
-    Number.isFinite(Number(modbus.doAddress))
-  ) {
-    return { registerType: "coil", address: Number(modbus.doAddress) };
-  }
-  if (modbus.address !== undefined && Number.isFinite(Number(modbus.address))) {
-    return { registerType: "coil", address: Number(modbus.address) };
-  }
-
-  return null;
-}
-
 async function resolveDeviceConfig(deviceId, modbus) {
   if (deviceId != null && deviceId !== "") {
     try {
@@ -122,7 +89,7 @@ function normalizeRegisterType(pointDef) {
 }
 
 async function readPrimaryBitPoint(modbus, cfgDeviceId) {
-  const primary = extractPrimaryBitPoint(modbus);
+  const primary = pickPrimaryDiDoBitRead(modbus);
   if (!primary) return { ok: false, error: "未配置 DI/DO 點位" };
 
   const conn = await resolveDeviceConfig(cfgDeviceId, modbus);

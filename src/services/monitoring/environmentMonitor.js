@@ -11,94 +11,17 @@ const alertRuleService = require("../alerts/alertRuleService");
 const alertService = require("../alerts/alertService");
 const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
 const environmentReadingsService = require("../systems/environmentReadingsService");
+const {
+  computeDerivedMetrics,
+} = require("../systems/environmentDerivedMetrics");
 const logger = require("../../utils/logger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
 
-// 每 5 分鐘才寫入一筆 raw 至 DB（設計：ENVIRONMENT_DATA_DESIGN.md）
+// 每 5 分鐘才寫入一筆 raw 至 DB（設計：docs/40-systems/environment-data-design.md）
 const RAW_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const lastRawWriteByLocation = new Map(); // key: location_id, value: timestamp
-
-// ====== Derived metrics (AQI / Heat Index) ======
-const PM25_BREAKPOINTS = [
-  { cLow: 0, cHigh: 12, iLow: 0, iHigh: 50 },
-  { cLow: 12.1, cHigh: 35.4, iLow: 51, iHigh: 100 },
-  { cLow: 35.5, cHigh: 55.4, iLow: 101, iHigh: 150 },
-  { cLow: 55.5, cHigh: 150.4, iLow: 151, iHigh: 200 },
-  { cLow: 150.5, cHigh: 250.4, iLow: 201, iHigh: 300 },
-  { cLow: 250.5, cHigh: 350.4, iLow: 301, iHigh: 400 },
-  { cLow: 350.5, cHigh: 500.4, iLow: 401, iHigh: 500 },
-];
-
-const PM10_BREAKPOINTS = [
-  { cLow: 0, cHigh: 54, iLow: 0, iHigh: 50 },
-  { cLow: 55, cHigh: 154, iLow: 51, iHigh: 100 },
-  { cLow: 155, cHigh: 254, iLow: 101, iHigh: 150 },
-  { cLow: 255, cHigh: 354, iLow: 151, iHigh: 200 },
-  { cLow: 355, cHigh: 424, iLow: 201, iHigh: 300 },
-  { cLow: 425, cHigh: 504, iLow: 301, iHigh: 400 },
-  { cLow: 505, cHigh: 604, iLow: 401, iHigh: 500 },
-];
-
-function calculatePollutantAqi(value, breakpoints) {
-  if (value == null || !Number.isFinite(Number(value))) return null;
-  const v = Number(value);
-  const bp =
-    breakpoints.find((b) => v >= b.cLow && v <= b.cHigh) ||
-    breakpoints[breakpoints.length - 1];
-  const clamped = Math.min(Math.max(v, bp.cLow), bp.cHigh);
-  const idx =
-    ((bp.iHigh - bp.iLow) / (bp.cHigh - bp.cLow)) * (clamped - bp.cLow) +
-    bp.iLow;
-  return Number.isFinite(idx) ? Math.round(idx) : null;
-}
-
-function calculateAqiScore(pm25, pm10) {
-  const list = [
-    calculatePollutantAqi(pm25, PM25_BREAKPOINTS),
-    calculatePollutantAqi(pm10, PM10_BREAKPOINTS),
-  ].filter((n) => typeof n === "number" && Number.isFinite(n));
-  if (!list.length) return null;
-  return Math.max(...list);
-}
-
-const cToF = (c) => c * (9 / 5) + 32;
-const fToC = (f) => (f - 32) * (5 / 9);
-
-function calculateHeatIndexC(temperatureC, humidityPercent) {
-  if (
-    temperatureC == null ||
-    humidityPercent == null ||
-    !Number.isFinite(Number(temperatureC)) ||
-    !Number.isFinite(Number(humidityPercent))
-  ) {
-    return null;
-  }
-
-  const tC = Number(temperatureC);
-  const rh = Number(humidityPercent);
-  const tF = cToF(tC);
-
-  if (tF < 80 || rh < 40) return tC;
-
-  const T = tF;
-  const R = rh;
-
-  const hiF =
-    -42.379 +
-    2.04901523 * T +
-    10.14333127 * R -
-    0.22475541 * T * R -
-    0.00683783 * T * T -
-    0.05481717 * R * R +
-    0.00122874 * T * T * R +
-    0.00085282 * T * R * R -
-    0.00000199 * T * T * R * R;
-
-  const hiC = fToC(hiF);
-  return Number.isFinite(hiC) ? hiC : null;
-}
 
 /** 依 register_type 分組讀取 Modbus（FC01～FC04），合併為 deviceValues */
 async function readValuesByRegisterType(enabledValues, deviceConfig) {
@@ -353,14 +276,7 @@ async function checkEnvironmentLocations() {
                 }
                 const dataRounded =
                   environmentReadingsService.roundDataToOneDecimal(data);
-                const derived = {
-                  ...dataRounded,
-                  aqi: calculateAqiScore(dataRounded.pm25, dataRounded.pm10),
-                  heatIndex: calculateHeatIndexC(
-                    dataRounded.temperature,
-                    dataRounded.humidity,
-                  ),
-                };
+                const derived = { ...dataRounded, ...computeDerivedMetrics(dataRounded) };
                 sensorDataForThreshold = derived;
                 const ts = new Date().toISOString();
                 const now = Date.now();

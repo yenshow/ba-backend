@@ -98,17 +98,11 @@ async function resolveTargetSystems(rule) {
 
   const rows = await db.query(
     `SELECT ls.id AS system_id,
-            COALESCE(
-              (ls.system_config->>'device_id')::integer,
-              (ls.system_config->>'deviceId')::integer
-            ) AS device_id
+            (ls.system_config->'device_ids'->>0)::integer AS device_id
      FROM location_systems ls
      JOIN locations l ON l.id = ls.location_id
      WHERE ls.system_type = ? ${whereClause}
-       AND (
-         ls.system_config->>'device_id' IS NOT NULL
-         OR ls.system_config->>'deviceId' IS NOT NULL
-       )`,
+       AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0`,
     params,
   );
 

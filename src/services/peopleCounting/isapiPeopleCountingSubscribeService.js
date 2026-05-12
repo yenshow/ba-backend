@@ -51,15 +51,12 @@ async function getCameraSubscriptions() {
   const rows = await db.query(
     `SELECT
        ls.location_id AS location_id,
-       (ls.system_config->>'camera_device_id') AS device_id,
        (ls.system_config->'camera_device_ids') AS device_ids
      FROM location_systems ls
      WHERE ls.system_type = 'people_counting'
        AND (ls.system_config->>'data_source') = 'isapi_camera'
-       AND (
-         (ls.system_config->>'camera_device_id') IS NOT NULL
-         OR (ls.system_config->'camera_device_ids') IS NOT NULL
-       )`,
+       AND jsonb_typeof(COALESCE(ls.system_config->'camera_device_ids', '[]'::jsonb)) = 'array'
+       AND jsonb_array_length(COALESCE(ls.system_config->'camera_device_ids', '[]'::jsonb)) > 0`,
     [],
   );
   const subs = [];
@@ -68,16 +65,9 @@ async function getCameraSubscriptions() {
     const channelId = 1;
     if (!locationId) continue;
 
-    const deviceIdsFromArray = Array.isArray(r.device_ids)
+    const deviceIds = Array.isArray(r.device_ids)
       ? r.device_ids.map(ensureInt).filter(Boolean)
       : [];
-    const deviceIdFallback = ensureInt(r.device_id);
-    const deviceIds =
-      deviceIdsFromArray.length > 0
-        ? deviceIdsFromArray
-        : deviceIdFallback
-          ? [deviceIdFallback]
-          : [];
 
     for (const deviceId of deviceIds) {
       if (deviceId) subs.push({ locationId, deviceId, channelId });

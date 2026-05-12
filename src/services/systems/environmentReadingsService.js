@@ -4,6 +4,9 @@
  */
 
 const db = require("../../database/db");
+const {
+  computeDerivedMetrics,
+} = require("./environmentDerivedMetrics");
 
 async function getReadingsForBackup(beforeDate) {
   const rows = await db.query(
@@ -41,7 +44,12 @@ async function saveReading({ locationId, sourceId, deviceId, data }) {
     throw new Error("locationId, sourceId, data 為必填");
   }
 
-  const roundedData = roundDataToOneDecimal(data);
+  const roundedBase = roundDataToOneDecimal(data);
+  const derived = computeDerivedMetrics(roundedBase);
+  const roundedData = {
+    ...roundedBase,
+    ...derived,
+  };
   const recordedAt = new Date();
   const result = await db.query(
     `INSERT INTO environment_readings (location_id, source_id, recorded_at, data, device_id)

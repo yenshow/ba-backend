@@ -62,6 +62,57 @@ function validateName(name, fieldName = "名稱") {
   return name.trim();
 }
 
+/** DB SSOT：`system_config.device_ids`（不再讀 `device_id` / `deviceId`） */
+function deviceIdsFromDbSystemConfig(config) {
+  if (!config || typeof config !== "object") return [];
+  if (!Array.isArray(config.device_ids)) return [];
+  return config.device_ids
+    .map((id) => Number(id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/** 寫入 DB：`deviceIds` / `deviceId`（API camel）→ 正整數去重陣列 */
+function deviceIdsFromApiSystemConfig(config) {
+  if (!config || typeof config !== "object") return [];
+  const ids = Array.isArray(config.deviceIds)
+    ? config.deviceIds.filter((id) => id != null && !Number.isNaN(Number(id)))
+    : config.deviceId != null && config.deviceId !== ""
+      ? [config.deviceId]
+      : [];
+  return [
+    ...new Set(
+      ids
+        .map((x) => Math.trunc(Number(x)))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+}
+
+function assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds) {
+  if (deviceIds !== undefined) systemConfig.deviceIds = deviceIds;
+  else if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+}
+
+function assignFlatControllerFields(
+  systemConfig,
+  {
+    deviceId,
+    deviceIds,
+    locationXY,
+    modbus,
+    equipmentKind,
+    viewCategory,
+    statusPoints,
+  },
+) {
+  assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
+  if (locationXY !== undefined) systemConfig.location = locationXY;
+  if (modbus !== undefined) systemConfig.modbus = modbus;
+  if (equipmentKind !== undefined) systemConfig.equipmentKind = equipmentKind;
+  if (viewCategory !== undefined) systemConfig.viewCategory = viewCategory;
+  if (statusPoints !== undefined) systemConfig.statusPoints = statusPoints;
+}
+
 /**
  * 格式化系統配置為前端格式
  */
@@ -79,28 +130,23 @@ function formatSystem(system) {
   // 根據系統類型格式化配置
   switch (system.system_type) {
     case "environment": {
-      const deviceIds = Array.isArray(config.device_ids)
-        ? config.device_ids
-            .map((id) => Number(id))
-            .filter((n) => !Number.isNaN(n))
-        : config.device_id != null && config.device_id !== ""
-          ? [Number(config.device_id)]
-          : [];
+      const deviceIds = deviceIdsFromDbSystemConfig(config);
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id ?? deviceIds[0] ?? undefined,
+          deviceId: deviceIds[0],
           deviceIds: deviceIds.length ? deviceIds : undefined,
           parameters: config.parameters || [],
         },
       };
     }
 
-    case "lighting":
+    case "lighting": {
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -111,13 +157,15 @@ function formatSystem(system) {
               : undefined,
         },
       };
+    }
 
     case "hvac": {
       const spHvac = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -138,10 +186,11 @@ function formatSystem(system) {
 
     case "air_circulation": {
       const sp = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -165,10 +214,11 @@ function formatSystem(system) {
 
     case "drainage": {
       const sp = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -192,10 +242,11 @@ function formatSystem(system) {
 
     case "power": {
       const spPow = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -219,10 +270,11 @@ function formatSystem(system) {
 
     case "fire": {
       const spFire = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -248,10 +300,11 @@ function formatSystem(system) {
 
     case "emergency_rescue": {
       const spEr = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -275,10 +328,11 @@ function formatSystem(system) {
 
     case "smoke_alarm": {
       const spSmoke = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
       return {
         ...baseSystem,
         config: {
-          deviceId: config.device_id || undefined,
+          deviceId: primary,
           location: {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
@@ -333,13 +387,6 @@ function formatSystem(system) {
                 .map((id) => Number(id))
                 .filter((n) => Number.isFinite(n) && n > 0)
             : undefined,
-          // 相容欄位：僅供舊前端/舊資料 fallback；以 cameraDeviceIds 為準
-          cameraDeviceId:
-            config.camera_device_id ??
-            (Array.isArray(config.camera_device_ids) &&
-            config.camera_device_ids.length > 0
-              ? Number(config.camera_device_ids[0])
-              : undefined),
           cameraChannelId: config.camera_channel_id ?? undefined,
           preferRegion: config.prefer_region ?? undefined,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
@@ -1353,7 +1400,9 @@ function peopleCountingRowConfigToMergeInput(raw) {
     dataSource: c.data_source,
     entryDeviceIds: c.entry_device_ids,
     exitDeviceIds: c.exit_device_ids,
-    cameraDeviceId: c.camera_device_id,
+    cameraDeviceIds: Array.isArray(c.camera_device_ids)
+      ? c.camera_device_ids
+      : [],
     cameraChannelId: c.camera_channel_id,
     preferRegion: c.prefer_region,
     accessControlGroups: c.access_control_groups,
@@ -1375,23 +1424,16 @@ function shallowMergePeopleCountingConfig(baseline, incoming) {
 function buildSystemConfig(systemType, config) {
   switch (systemType) {
     case "environment": {
-      const ids = Array.isArray(config.deviceIds)
-        ? config.deviceIds.filter(
-            (id) => id != null && !Number.isNaN(Number(id)),
-          )
-        : config.deviceId != null
-          ? [config.deviceId]
-          : [];
+      const deviceIds = deviceIdsFromApiSystemConfig(config);
       return {
-        device_id: ids[0] ?? null,
-        device_ids: ids,
+        device_ids: deviceIds,
         parameters: config.parameters || [],
       };
     }
 
     case "lighting":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1399,7 +1441,7 @@ function buildSystemConfig(systemType, config) {
 
     case "hvac":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1408,7 +1450,7 @@ function buildSystemConfig(systemType, config) {
 
     case "air_circulation":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1422,7 +1464,7 @@ function buildSystemConfig(systemType, config) {
 
     case "drainage":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1436,7 +1478,7 @@ function buildSystemConfig(systemType, config) {
 
     case "power":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1450,7 +1492,7 @@ function buildSystemConfig(systemType, config) {
 
     case "fire":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1464,7 +1506,7 @@ function buildSystemConfig(systemType, config) {
 
     case "emergency_rescue":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1478,7 +1520,7 @@ function buildSystemConfig(systemType, config) {
 
     case "smoke_alarm":
       return {
-        device_id: config.deviceId || null,
+        device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
         modbus_config: config.modbus || {},
@@ -1495,9 +1537,7 @@ function buildSystemConfig(systemType, config) {
         ? config.cameraDeviceIds
             .map((id) => Number(id))
             .filter((n) => Number.isFinite(n) && n > 0)
-        : config.cameraDeviceId != null
-          ? [Number(config.cameraDeviceId)]
-          : [];
+        : [];
       return {
         person_group_ids: config.personGroupIds || [],
         entry_door_ids: Array.isArray(config.entryDoorIds)
@@ -1513,8 +1553,6 @@ function buildSystemConfig(systemType, config) {
         exit_device_ids: Array.isArray(config.exitDeviceIds)
           ? config.exitDeviceIds
           : [],
-        // 相容欄位：僅供 fallback；以 camera_device_ids 為準
-        camera_device_id: ids[0] ?? config.cameraDeviceId ?? null,
         camera_device_ids: ids,
         camera_channel_id: 1,
         prefer_region: config.preferRegion ?? false,
@@ -1611,16 +1649,10 @@ async function assertControllerQuotaWithinLimit({
        SUM(CASE WHEN device_id = $2 THEN 1 ELSE 0 END)::int AS has
      FROM (
        SELECT DISTINCT
-         COALESCE(
-           (ls.system_config->>'device_id')::int,
-           (ls.system_config->>'deviceId')::int
-         ) AS device_id
+        (ls.system_config->'device_ids'->>0)::int AS device_id
        FROM location_systems ls
        WHERE ls.system_type = $1
-         AND (
-           ls.system_config->>'device_id' IS NOT NULL
-           OR ls.system_config->>'deviceId' IS NOT NULL
-         )
+         AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
          AND ($3::int IS NULL OR ls.id <> $3::int)
      ) t`,
     [
@@ -1675,7 +1707,9 @@ async function createSystem(query, locationId, system) {
   await assertControllerQuotaWithinLimit({
     query,
     systemType,
-    nextDeviceId: systemConfig?.device_id ?? null,
+    nextDeviceId: Array.isArray(systemConfig?.device_ids)
+      ? systemConfig.device_ids[0] ?? null
+      : null,
   });
 
   const result = await query(
@@ -1715,7 +1749,7 @@ async function updateSystem(query, systemId, system) {
         })()
       : existing[0].system_config || {};
   const currentDeviceId =
-    currentSystemConfig?.device_id ?? currentSystemConfig?.deviceId ?? null;
+    deviceIdsFromDbSystemConfig(currentSystemConfig)[0] ?? null;
   const targetSystemType = systemType || currentSystemType;
 
   if (
@@ -1754,7 +1788,9 @@ async function updateSystem(query, systemId, system) {
   await assertControllerQuotaWithinLimit({
     query,
     systemType: targetSystemType,
-    nextDeviceId: systemConfig?.device_id ?? null,
+    nextDeviceId: Array.isArray(systemConfig?.device_ids)
+      ? systemConfig.device_ids[0] ?? null
+      : null,
     currentDeviceId:
       targetSystemType === currentSystemType ? currentDeviceId : null,
     excludeSystemId: systemId,
@@ -1807,69 +1843,30 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       const systemConfig = {};
       switch (locationType) {
         case "environment":
-          if (deviceIds !== undefined) systemConfig.deviceIds = deviceIds;
-          else if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
           if (parameters !== undefined) systemConfig.parameters = parameters;
           break;
         case "lighting":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
+          assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
           if (locationXY !== undefined) systemConfig.location = locationXY;
           if (modbus !== undefined) systemConfig.modbus = modbus;
           break;
+        case "hvac":
         case "air_circulation":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
-          if (locationXY !== undefined) systemConfig.location = locationXY;
-          if (modbus !== undefined) systemConfig.modbus = modbus;
-          if (equipmentKind !== undefined)
-            systemConfig.equipmentKind = equipmentKind;
-          if (viewCategory !== undefined)
-            systemConfig.viewCategory = viewCategory;
-          if (statusPoints !== undefined)
-            systemConfig.statusPoints = statusPoints;
-          break;
         case "drainage":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
-          if (locationXY !== undefined) systemConfig.location = locationXY;
-          if (modbus !== undefined) systemConfig.modbus = modbus;
-          if (equipmentKind !== undefined)
-            systemConfig.equipmentKind = equipmentKind;
-          if (viewCategory !== undefined)
-            systemConfig.viewCategory = viewCategory;
-          if (statusPoints !== undefined)
-            systemConfig.statusPoints = statusPoints;
-          break;
         case "power":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
-          if (locationXY !== undefined) systemConfig.location = locationXY;
-          if (modbus !== undefined) systemConfig.modbus = modbus;
-          if (equipmentKind !== undefined)
-            systemConfig.equipmentKind = equipmentKind;
-          if (viewCategory !== undefined)
-            systemConfig.viewCategory = viewCategory;
-          if (statusPoints !== undefined)
-            systemConfig.statusPoints = statusPoints;
-          break;
         case "fire":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
-          if (locationXY !== undefined) systemConfig.location = locationXY;
-          if (modbus !== undefined) systemConfig.modbus = modbus;
-          if (equipmentKind !== undefined)
-            systemConfig.equipmentKind = equipmentKind;
-          if (viewCategory !== undefined)
-            systemConfig.viewCategory = viewCategory;
-          if (statusPoints !== undefined)
-            systemConfig.statusPoints = statusPoints;
-          break;
         case "emergency_rescue":
-          if (deviceId !== undefined) systemConfig.deviceId = deviceId;
-          if (locationXY !== undefined) systemConfig.location = locationXY;
-          if (modbus !== undefined) systemConfig.modbus = modbus;
-          if (equipmentKind !== undefined)
-            systemConfig.equipmentKind = equipmentKind;
-          if (viewCategory !== undefined)
-            systemConfig.viewCategory = viewCategory;
-          if (statusPoints !== undefined)
-            systemConfig.statusPoints = statusPoints;
+        case "smoke_alarm":
+          assignFlatControllerFields(systemConfig, {
+            deviceId,
+            deviceIds,
+            locationXY,
+            modbus,
+            equipmentKind,
+            viewCategory,
+            statusPoints,
+          });
           break;
         case "people_counting":
           if (personGroupIds !== undefined)

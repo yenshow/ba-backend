@@ -730,8 +730,6 @@ async function initSchema() {
         id SERIAL PRIMARY KEY,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
-        camera_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
-        -- 新版：同一規則最多 4 台攝影機；保留 camera_device_id 做相容（取第一台）
         camera_device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -743,7 +741,26 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_enabled ON alert_camera_linkages(enabled);
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_rule_id ON alert_camera_linkages(rule_id);
-      CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_camera ON alert_camera_linkages(camera_device_id);
+    `);
+
+    // 既有 DB：移除 camera_device_id（資料併入 camera_device_ids 後 DROP）
+    await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'alert_camera_linkages'
+            AND column_name = 'camera_device_id'
+        ) THEN
+          UPDATE alert_camera_linkages
+          SET camera_device_ids = ARRAY[camera_device_id]::INTEGER[]
+          WHERE camera_device_id IS NOT NULL
+            AND cardinality(camera_device_ids) = 0;
+          DROP INDEX IF EXISTS idx_alert_camera_linkages_camera;
+          ALTER TABLE alert_camera_linkages DROP COLUMN camera_device_id;
+        END IF;
+      END $BODY$;
     `);
     schemaLogger.info("alert_camera_linkages 表已建立（攝影機連動）", {
       module: "initSchema",
@@ -937,6 +954,77 @@ async function initSchema() {
 		`);
 
     schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
+      module: "initSchema",
+    });
+
+    // ========== Migration: location_systems.system_config ==========
+    // device_ids：僅在已是 JSON array 時做正整數去重清洗；不從舊鍵回填
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config =
+        (
+          jsonb_set(
+            COALESCE(system_config, '{}'::jsonb),
+            '{device_ids}',
+            (
+              SELECT COALESCE(
+                jsonb_agg(v ORDER BY ord),
+                '[]'::jsonb
+              )
+              FROM (
+                SELECT DISTINCT ON (val_int) val_int AS val_int, ord
+                FROM (
+                  SELECT
+                    NULLIF(regexp_replace(elem, '[^0-9]', '', 'g'), '')::int AS val_int,
+                    ord
+                  FROM jsonb_array_elements_text(
+                    COALESCE((COALESCE(system_config, '{}'::jsonb)->'device_ids'), '[]'::jsonb)
+                  ) WITH ORDINALITY AS t(elem, ord)
+                ) x
+                WHERE val_int IS NOT NULL AND val_int > 0
+                ORDER BY val_int, ord
+              ) y
+              CROSS JOIN LATERAL to_jsonb(y.val_int) AS v
+            ),
+            true
+          )
+        ),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'device_ids') = 'array'
+    `);
+
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config = COALESCE(system_config, '{}'::jsonb) - 'device_id' - 'deviceId',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE (COALESCE(system_config, '{}'::jsonb) ? 'device_id')
+         OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceId')
+    `);
+
+    // people_counting：JSON 只保留 camera_device_ids（陣列；無或非陣列則 []），移除 camera_device_id 鍵
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config = (
+        jsonb_set(
+          COALESCE(system_config, '{}'::jsonb),
+          '{camera_device_ids}',
+          CASE
+            WHEN jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'camera_device_ids') = 'array'
+              AND jsonb_array_length(COALESCE(system_config->'camera_device_ids', '[]'::jsonb)) > 0
+              THEN COALESCE(system_config->'camera_device_ids', '[]'::jsonb)
+            ELSE '[]'::jsonb
+          END,
+          true
+        ) - 'camera_device_id'
+      ),
+      updated_at = CURRENT_TIMESTAMP
+      WHERE system_type = 'people_counting'
+        AND (
+          (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_id')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_ids')
+        )
+    `);
+    schemaLogger.info("location_systems：已套用 system_config（device_ids／camera_device_ids）migration", {
       module: "initSchema",
     });
 

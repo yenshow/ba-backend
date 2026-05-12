@@ -507,7 +507,9 @@ function buildAlertSelectQuery() {
     LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
-    LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
+    LEFT JOIN devices d_system
+      ON (ls.system_config->'device_ids'->>0) IS NOT NULL
+     AND (ls.system_config->'device_ids'->>0)::integer = d_system.id
     `;
 }
 
@@ -1609,7 +1611,9 @@ async function getAlertById(id) {
       LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
       LEFT JOIN zones z ON l.zone_id = z.id
-      LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
+      LEFT JOIN devices d_system
+        ON (ls.system_config->'device_ids'->>0) IS NOT NULL
+       AND (ls.system_config->'device_ids'->>0)::integer = d_system.id
       WHERE a.id = ?
     `;
     const result = await db.query(query, [id]);
@@ -1674,7 +1678,9 @@ async function getResolvedAlertsForBackup(beforeDate) {
     LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'smoke_alarm') AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
-    LEFT JOIN devices d_system ON ls.system_config->>'device_id' IS NOT NULL AND (ls.system_config->>'device_id')::integer = d_system.id
+    LEFT JOIN devices d_system
+      ON (ls.system_config->'device_ids'->>0) IS NOT NULL
+     AND (ls.system_config->'device_ids'->>0)::integer = d_system.id
     WHERE a.status = 'resolved' AND a.updated_at < ?
     ORDER BY a.updated_at ASC
   `;

@@ -112,7 +112,6 @@ function validateLocationData(locationData, isUpdate = false) {
     dataSource = "yscp",
     entryDeviceIds,
     exitDeviceIds,
-    cameraDeviceId,
     cameraDeviceIds,
     preferRegion,
   } = locationData;
@@ -205,22 +204,12 @@ function validateLocationData(locationData, isUpdate = false) {
             (id) => typeof id === "number" && Number.isFinite(id) && id > 0,
           )
         : [];
-      const hasAnyCamera = cameraIds.length > 0 || !!cameraDeviceId;
 
-      if (!isUpdate && !hasAnyCamera) {
+      if (!isUpdate && cameraIds.length === 0) {
         throw createValidationError("至少需要選擇一台攝影機設備");
       }
       if (isUpdate && cameraDeviceIds !== undefined && cameraIds.length === 0) {
         throw createValidationError("至少需要選擇一台攝影機設備");
-      }
-      if (
-        isUpdate &&
-        cameraDeviceId !== undefined &&
-        cameraDeviceIds === undefined &&
-        !cameraDeviceId
-      ) {
-        // 向後相容：若只傳 cameraDeviceId（未傳 cameraDeviceIds），仍允許以單值更新
-        throw createValidationError("攝影機設備 ID 不能為空");
       }
     }
   }
@@ -314,7 +303,7 @@ async function createPeopleCountingLocation(locationData, userId) {
         dataSource = "yscp",
         entryDeviceIds = [],
         exitDeviceIds = [],
-        cameraDeviceId,
+        cameraDeviceIds = [],
         preferRegion,
         accessControlGroups = [], // 相容保留；門禁人員改由人員管理 person_location_access 處理
       } = locationData;
@@ -333,7 +322,7 @@ async function createPeopleCountingLocation(locationData, userId) {
             dataSource,
             entryDeviceIds,
             exitDeviceIds,
-            cameraDeviceId,
+            cameraDeviceIds,
             cameraChannelId: 1,
             preferRegion,
             accessControlGroups,
@@ -371,7 +360,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         dataSource,
         entryDeviceIds,
         exitDeviceIds,
-        cameraDeviceId,
+        cameraDeviceIds,
         preferRegion,
         accessControlGroups,
       } = locationData;
@@ -403,7 +392,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         exit_device_ids: Array.isArray(existingConfig.exitDeviceIds)
           ? existingConfig.exitDeviceIds
           : [],
-        camera_device_id: existingConfig.cameraDeviceId ?? null,
         camera_device_ids: Array.isArray(existingConfig.cameraDeviceIds)
           ? existingConfig.cameraDeviceIds
               .map((id) => Number(id))
@@ -427,9 +415,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         }),
         ...(exitDeviceIds !== undefined && {
           exit_device_ids: exitDeviceIds,
-        }),
-        ...(cameraDeviceId !== undefined && {
-          camera_device_id: cameraDeviceId,
         }),
         ...(cameraDeviceIds !== undefined && {
           camera_device_ids: Array.isArray(cameraDeviceIds)
@@ -461,7 +446,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               dataSource: config.data_source,
               entryDeviceIds: config.entry_device_ids,
               exitDeviceIds: config.exit_device_ids,
-              cameraDeviceId: config.camera_device_id,
               cameraDeviceIds: config.camera_device_ids,
               cameraChannelId: 1,
               preferRegion: config.prefer_region,
@@ -725,7 +709,9 @@ function getPeopleCountingConfig(location) {
     dataSource: peopleCountingSystem?.config?.dataSource || "yscp",
     entryDeviceIds: ensureArray(peopleCountingSystem?.config?.entryDeviceIds),
     exitDeviceIds: ensureArray(peopleCountingSystem?.config?.exitDeviceIds),
-    cameraDeviceId: peopleCountingSystem?.config?.cameraDeviceId ?? null,
+    cameraDeviceIds: ensureArray(peopleCountingSystem?.config?.cameraDeviceIds)
+      .map((id) => Number(id))
+      .filter((n) => Number.isFinite(n) && n > 0),
     cameraChannelId: 1,
     preferRegion: peopleCountingSystem?.config?.preferRegion ?? false,
     accessControlGroups: ensureArray(
@@ -752,7 +738,7 @@ async function getSiteConfig(siteId) {
     dataSource: config.dataSource,
     entryDeviceIds: config.entryDeviceIds,
     exitDeviceIds: config.exitDeviceIds,
-    cameraDeviceId: config.cameraDeviceId,
+    cameraDeviceIds: config.cameraDeviceIds,
     cameraChannelId: 1,
     preferRegion: config.preferRegion,
     accessControlGroups: config.accessControlGroups,

@@ -382,7 +382,7 @@ async function getSourceInfoByType(systemId, systemType) {
   try {
     const result = await db.query(
       `SELECT ls.id, ls.system_type,
-              COALESCE(ls.system_config->>'device_id', ls.system_config->>'deviceId') as device_id,
+              (ls.system_config->'device_ids'->>0) as device_id,
               l.name, l.zone_id, z.name as zone_name
        FROM location_systems ls
        INNER JOIN locations l ON ls.location_id = l.id
@@ -474,10 +474,9 @@ function isDeviceConnectionError(errorMessage) {
 }
 
 /**
- * 從 location_systems.system_config 解析綁定的設備 ID（含 device_ids 陣列）
- * 與 environmentMonitor 展開 device_ids 的語意對齊，避免僅設 device_ids 時無法對應到 devices.id
+ * 將 location_systems.system_config 正規化為物件（實際綁定以 `device_ids` 為準）
  * @param {unknown} systemConfigRaw - JSON 或字串
- * @returns {number[]}
+ * @returns {Record<string, unknown>}
  */
 function parseSystemConfigObject(systemConfigRaw) {
   return typeof systemConfigRaw === "string"
@@ -485,16 +484,17 @@ function parseSystemConfigObject(systemConfigRaw) {
     : systemConfigRaw || {};
 }
 
-/** 僅 device_id／deviceId（不含 device_ids），供 recordError 對應 device 來源 */
+/** 主設備：`device_ids[0]`（供單一 device 來源對應） */
 function parseSingularDeviceIdFromSystemConfig(systemConfigRaw) {
   const c = parseSystemConfigObject(systemConfigRaw);
-  const raw = c.device_id ?? c.deviceId;
+  const raw =
+    Array.isArray(c.device_ids) && c.device_ids.length > 0 ? c.device_ids[0] : null;
   if (raw == null || raw === "") return null;
   const n = parseInt(String(raw), 10);
   return Number.isNaN(n) ? null : n;
 }
 
-/** device_id、deviceId、device_ids[] 去重；供 clearError 清除所有綁定設備之離線 */
+/** `device_ids` 去重；供 clearError 清除所有綁定設備之離線 */
 function parseDeviceIdsFromSystemConfig(systemConfigRaw) {
   const config = parseSystemConfigObject(systemConfigRaw);
   const out = new Set();
@@ -503,9 +503,10 @@ function parseDeviceIdsFromSystemConfig(systemConfigRaw) {
     const n = parseInt(String(v), 10);
     if (!Number.isNaN(n)) out.add(n);
   };
-  push(config.device_id ?? config.deviceId);
-  for (const x of config.device_ids ?? []) {
-    push(x);
+  if (Array.isArray(config.device_ids)) {
+    for (const x of config.device_ids) {
+      push(x);
+    }
   }
   return [...out];
 }
@@ -541,7 +542,7 @@ async function getDeviceIdsFromLocationSystem(systemId, systemType) {
 }
 
 /**
- * 依系統類型從 location_systems 獲取單一設備 ID（僅 device_id／deviceId；不含 device_ids）
+ * 依系統類型從 location_systems 獲取單一設備 ID（`device_ids[0]`）
  * @param {number} systemId - location_systems.id
  * @param {string} systemType - 'environment' | 'lighting'
  * @returns {Promise<number|null>}
@@ -593,23 +594,7 @@ async function getLocationSystemIdsByDeviceId(deviceId, systemType) {
     const result = await db.query(
       `SELECT id FROM location_systems
        WHERE system_type = $1
-         AND (
-           (
-             system_config->>'device_id' IS NOT NULL
-             AND (system_config->>'device_id')::integer = $2
-           )
-           OR (
-             system_config->>'deviceId' IS NOT NULL
-             AND (system_config->>'deviceId')::integer = $2
-           )
-           OR EXISTS (
-             SELECT 1
-             FROM jsonb_array_elements_text(
-               COALESCE((system_config::jsonb->'device_ids'), '[]'::jsonb)
-             ) AS device_elem(elem_text)
-             WHERE (device_elem.elem_text)::integer = $2
-           )
-         )`,
+         AND COALESCE(system_config->'device_ids', '[]'::jsonb) @> to_jsonb(ARRAY[$2]::int[])`,
       [systemType, deviceId],
     );
     return (result || []).map((r) => r.id);

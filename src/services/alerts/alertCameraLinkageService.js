@@ -33,10 +33,12 @@ const parsePgIntArray = (v) => {
 
 const normalizeRow = (row) => {
   if (!row) return row;
-  return {
+  const out = {
     ...row,
     camera_device_ids: parsePgIntArray(row.camera_device_ids),
   };
+  delete out.camera_device_id;
+  return out;
 };
 
 async function getByRuleId(ruleId) {
@@ -66,27 +68,19 @@ async function upsertForRule(ruleId, payload, userId = null) {
   if (!rid) throw new Error("rule_id 不合法");
   const enabled = payload?.enabled !== undefined ? Boolean(payload.enabled) : true;
   const cameraDeviceIds = normalizeIdList(payload?.camera_device_ids, 4);
-  const cameraDeviceId = cameraDeviceIds[0] ?? null;
 
   const rows = await db.query(
     `
-    INSERT INTO alert_camera_linkages (rule_id, enabled, camera_device_id, camera_device_ids, created_by)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO alert_camera_linkages (rule_id, enabled, camera_device_ids, created_by)
+    VALUES (?, ?, ?, ?)
     ON CONFLICT (rule_id)
     DO UPDATE SET
       enabled = EXCLUDED.enabled,
-      camera_device_id = EXCLUDED.camera_device_id,
       camera_device_ids = EXCLUDED.camera_device_ids,
       updated_at = CURRENT_TIMESTAMP
     RETURNING *
     `,
-    [
-      rid,
-      enabled,
-      cameraDeviceId,
-      cameraDeviceIds,
-      userId != null ? Number(userId) : null,
-    ],
+    [rid, enabled, cameraDeviceIds, userId != null ? Number(userId) : null],
   );
   return normalizeRow(rows?.[0] || null);
 }
