@@ -1,17 +1,8 @@
-const readline = require("readline");
 const userService = require("../src/services/userService");
 const db = require("../src/database/db");
 
-const rl = readline.createInterface({
-	input: process.stdin,
-	output: process.stdout
-});
-
-function question(prompt) {
-	return new Promise((resolve) => {
-		rl.question(prompt, resolve);
-	});
-}
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "Aa83124007";
 
 async function createAdmin() {
 	try {
@@ -20,43 +11,17 @@ async function createAdmin() {
 		console.log("=".repeat(60));
 		console.log();
 
-		// 檢查是否已有管理員
-		const admins = await db.query("SELECT id, username FROM users WHERE role = 'admin'");
-		if (admins.length > 0) {
-			console.log("⚠️  系統中已有管理員：");
-			admins.forEach((admin) => {
-				console.log(`   - ${admin.username}`);
-			});
-			console.log();
-			const continueAnswer = await question("是否仍要建立新的管理員？(y/N): ");
-			if (continueAnswer.toLowerCase() !== "y") {
-				console.log("已取消");
-				process.exit(0);
-			}
+		const existing = await db.query("SELECT id FROM users WHERE username = ?", [ADMIN_USERNAME]);
+
+		if (existing.length > 0) {
+			console.log(`已存在管理員：${ADMIN_USERNAME}`);
+			return;
 		}
 
-		// 取得用戶資訊（無 email；登入僅以用戶名辨識）
-		const username = await question("用戶名: ");
-		if (!username || username.trim() === "") {
-			throw new Error("用戶名不能為空");
-		}
-
-		const password = await question("密碼: ");
-		if (!password || password.length < 6) {
-			throw new Error("密碼長度至少需要 6 個字元");
-		}
-
-		const confirmPassword = await question("確認密碼: ");
-		if (password !== confirmPassword) {
-			throw new Error("兩次輸入的密碼不一致");
-		}
-
-		console.log();
-		console.log("正在建立管理員...");
-
+		console.log(`正在建立管理員... (${ADMIN_USERNAME})`);
 		const user = await userService.registerUser({
-			username: username.trim(),
-			password,
+			username: ADMIN_USERNAME,
+			password: ADMIN_PASSWORD,
 			role: "admin"
 		});
 
@@ -67,15 +32,12 @@ async function createAdmin() {
 		console.log(`角色: ${user.role}`);
 		console.log(`狀態: ${user.status}`);
 		console.log("=".repeat(60));
-		console.log();
-		console.log("💡 提示: 請妥善保管管理員帳號資訊");
 
 	} catch (error) {
 		console.error();
 		console.error("❌ 建立管理員失敗:", error.message);
 		process.exit(1);
 	} finally {
-		rl.close();
 		await db.close();
 	}
 }

@@ -21,26 +21,6 @@ function ignoreEffectiveTodayKey() {
  */
 
 /**
- * 統一日誌函數（減少重複的環境檢查）
- * @param {string} level - 日誌級別 ('log', 'warn', 'error')
- * @param {string} message - 日誌訊息
- */
-function log(level, message) {
-  if (process.env.NODE_ENV === "development") {
-    console[level](message);
-  }
-}
-
-/**
- * 開發模式日誌（簡化寫法）
- */
-const devLog = {
-  log: (msg) => log("log", msg),
-  warn: (msg) => log("warn", msg),
-  error: (msg) => log("error", msg),
-};
-
-/**
  * 參數匹配正則表達式（用於舊資料訊息推導維度）
  */
 const PARAMETER_PATTERN =
@@ -251,7 +231,7 @@ async function handleAlertUpdate(
 
   if (!needsUpgrade && !messageChanged) {
     // 不需要更新，直接返回現有警報
-    devLog.log(
+    alertLogger.debug(
       `[alertService] 警報已存在且未改變 | ID:${existingAlert.id} | ` +
         `${actualSource}:${source_id} | 類型:${alert_type} | 嚴重程度:${currentSeverity}`,
     );
@@ -270,12 +250,12 @@ async function handleAlertUpdate(
   }
 
   if (needsUpgrade) {
-    devLog.log(
+    alertLogger.debug(
       `[alertService] 🔄 警報已更新 | ID:${updatedAlert.id} | ${actualSource}:${source_id} | ` +
         `類型:${alert_type} | 嚴重程度:${currentSeverity} -> ${severity}`,
     );
   } else {
-    devLog.log(
+    alertLogger.debug(
       `[alertService] 🔄 警報數值已更新 | ID:${updatedAlert.id} | ${actualSource}:${source_id} | ` +
         `類型:${alert_type} | 新 message: ${message}`,
     );
@@ -361,7 +341,7 @@ async function createAlertEvent(
       ],
     );
   } catch (error) {
-    devLog.warn(`[alertService] 寫入 alert_events 失敗: ${error.message}`);
+    alertLogger.warn(`[alertService] 寫入 alert_events 失敗: ${error.message}`);
   }
 }
 
@@ -744,7 +724,7 @@ async function createAlert(alertData) {
 
     if (ignoredAlert) {
       // 如果警報已被忽視，不創建新警報（忽視功能：不再顯示相同來源和類型的警示）
-      devLog.log(
+      alertLogger.debug(
         `[alertService] 警報已被忽視，不創建新警報: source=${actualSource}, source_id=${source_id}, alert_type=${alert_type}`,
       );
       // 返回忽視的警報（不更新，保持忽視狀態）
@@ -780,7 +760,7 @@ async function createAlert(alertData) {
     // message 已在函數開頭檢查，這裡不需要重複檢查
 
     // 使用 INSERT 語句，如果發生並發衝突，會由唯一索引捕獲
-    devLog.log(
+    alertLogger.debug(
       `[alertService] ➕ 創建新警報 | ${actualSource}:${source_id} | ` +
         `類型:${alert_type} | 嚴重程度:${severity}`,
     );
@@ -806,7 +786,7 @@ async function createAlert(alertData) {
       const alert = insertResult[0];
 
       // 記錄警報創建日誌（結構化日誌）
-      devLog.log(
+      alertLogger.debug(
         `[alertService] ✅ 新警報創建 | ID:${alert.id} | ${actualSource}:${source_id} | ` +
           `類型:${alert_type} | 嚴重程度:${severity}`,
       );
@@ -840,7 +820,7 @@ async function createAlert(alertData) {
         alertLinkageService
           .processLinkagesForNewAlert(enrichedAlert)
           .catch((err) => {
-            devLog.warn(
+            alertLogger.warn(
               `[alertService] 警報連動執行失敗 | alertId=${enrichedAlert?.id} | ${err?.message || String(err)}`,
             );
           });
@@ -872,7 +852,7 @@ async function createAlert(alertData) {
 
         if (retryExistingAlert) {
           // 使用統一的更新處理函數（並發衝突處理）
-          devLog.log(`[alertService] 並發衝突，重新處理警報更新`);
+          alertLogger.debug(`[alertService] 並發衝突，重新處理警報更新`);
           const result = await handleAlertUpdate(
             retryExistingAlert,
             severity,
@@ -1490,11 +1470,11 @@ function emitUnresolvedAlertCount() {
           ? countResult
           : parseInt(String(countResult?.count ?? 0), 10);
       websocketService.emitAlertCount(Number.isFinite(n) ? n : 0);
-      devLog.log(
+      alertLogger.debug(
         `[alertService] 📢 已推送未解決警報數量（狀態型、全量 active）: ${n}`,
       );
     } catch (error) {
-      devLog.error(
+      alertLogger.error(
         "[alertService] ❌ 推送未解決警報數量失敗: " + error.message,
       );
       // 不拋出錯誤，避免影響主要流程
@@ -1520,7 +1500,7 @@ async function resolveAllActiveForDailyRollover() {
     try {
       await alertLinkageService.revertLinkagesForDailyRollover(snapshot);
     } catch (linkErr) {
-      devLog.warn(
+      alertLogger.warn(
         `[alertService] 日界線連動復歸部分失敗: ${linkErr?.message || linkErr}`,
       );
     }
@@ -1555,7 +1535,7 @@ async function resolveAllActiveForDailyRollover() {
       throw err;
     }
     if (resolvedCount > 0) {
-      devLog.log(`[alertService] 日界線結案完成: ${resolvedCount} 筆`);
+      alertLogger.debug(`[alertService] 日界線結案完成: ${resolvedCount} 筆`);
     }
   }
 
@@ -1628,7 +1608,7 @@ async function getAlertById(id) {
       device_type_name: getDeviceTypeName(row.device_type_code),
     });
   } catch (error) {
-    devLog.error(`[alertService] 取得警報失敗 (ID: ${id}): ` + error.message);
+    alertLogger.error(`[alertService] 取得警報失敗 (ID: ${id}): ` + error.message);
     throw error;
   }
 }

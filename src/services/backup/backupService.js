@@ -88,7 +88,7 @@ async function backupTable(options) {
     category = "default",
     deleteAfterBackup = false,
     mergeStrategy = "date",
-    compress = backupConfig.compression.enabled,
+    compress = false,
     csvTransform = null,
   } = options;
 
@@ -204,7 +204,7 @@ async function backupMultiple(options) {
   const {
     tables,
     deleteAfterBackup = false,
-    compress = backupConfig.compression.enabled,
+    compress = false,
   } = options;
 
   const results = {

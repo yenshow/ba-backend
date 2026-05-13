@@ -26,10 +26,6 @@ const backupConfig = {
       parseInt(process.env.BACKUP_SCHEDULER_INTERVAL, 10) ||
       24 * 60 * 60 * 1000,
   },
-
-  compression: {
-    enabled: process.env.BACKUP_COMPRESSION_ENABLED === "true",
-  },
 };
 
 module.exports = backupConfig;

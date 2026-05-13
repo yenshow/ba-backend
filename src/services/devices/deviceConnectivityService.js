@@ -24,18 +24,20 @@ const FAIL_THRESHOLD = Math.max(
 );
 // Unified timeout for connectivity probes (RTSP / ISAPI).
 // Modbus timeout is controlled by MODBUS_TIMEOUT (modbusClient).
-const CONNECTIVITY_TIMEOUT_MS = Math.max(
-  300,
-  toInt(process.env.DEVICE_CONNECTIVITY_TIMEOUT_MS, 5000),
+const CONNECTIVITY_TIMEOUT_MS = 5000;
+const CONCURRENCY = Math.max(
+  1,
+  toInt(process.env.DEVICE_CONNECTIVITY_CONCURRENCY, 8),
 );
-const CONCURRENCY = Math.max(1, toInt(process.env.DEVICE_CONNECTIVITY_CONCURRENCY, 8));
 
 function nowIso() {
   return new Date().toISOString();
 }
 
 function normalizeStatus(raw) {
-  const s = String(raw || "").trim().toLowerCase();
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase();
   return VALID_STATUSES.has(s) ? s : "offline";
 }
 
@@ -67,14 +69,19 @@ function bumpFail(deviceId) {
   const prev = statusByDeviceId.get(deviceId);
   const prevFail = prev?.failCount ?? 0;
   const nextFail = prevFail + 1;
-  const nextStatus = nextFail >= FAIL_THRESHOLD ? "offline" : (prev?.status ?? "offline");
+  const nextStatus =
+    nextFail >= FAIL_THRESHOLD ? "offline" : (prev?.status ?? "offline");
   const next = {
     status: normalizeStatus(nextStatus),
     updatedAt: nowIso(),
     failCount: nextFail,
   };
   statusByDeviceId.set(deviceId, next);
-  return { prevStatus: prev?.status ?? "offline", nextStatus: next.status, failCount: nextFail };
+  return {
+    prevStatus: prev?.status ?? "offline",
+    nextStatus: next.status,
+    failCount: nextFail,
+  };
 }
 
 async function rtspOptionsProbe(rtspUrl) {
@@ -179,8 +186,12 @@ async function isapiHealthCheck(deviceConfig) {
 
 async function checkSingleDeviceConnectivity(deviceRow) {
   const deviceId = Number(deviceRow?.id);
-  const typeCode = String(deviceRow?.type_code || "").trim().toLowerCase();
-  const status = String(deviceRow?.status || "").trim().toLowerCase();
+  const typeCode = String(deviceRow?.type_code || "")
+    .trim()
+    .toLowerCase();
+  const status = String(deviceRow?.status || "")
+    .trim()
+    .toLowerCase();
 
   if (!Number.isFinite(deviceId)) {
     return { deviceId: null, ok: false, error: "deviceId 無效" };
@@ -215,7 +226,9 @@ async function checkSingleDeviceConnectivity(deviceRow) {
   }
 
   if (typeCode === "sensor") {
-    const protocol = String(cfg?.protocol || "").trim().toLowerCase();
+    const protocol = String(cfg?.protocol || "")
+      .trim()
+      .toLowerCase();
     if (protocol !== "modbus") {
       // 目前方案 A 只定義 modbus sensor 的健康檢查；其餘視為離線（UI 不顯示 unknown）
       return { deviceId, ok: true, skipped: true, nextStatus: "offline" };
@@ -229,7 +242,10 @@ async function checkSingleDeviceConnectivity(deviceRow) {
     const p = Promise.race([
       isapiHealthCheck(cfg),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("ISAPI 連線超時")), CONNECTIVITY_TIMEOUT_MS),
+        setTimeout(
+          () => reject(new Error("ISAPI 連線超時")),
+          CONNECTIVITY_TIMEOUT_MS,
+        ),
       ),
     ]);
     await p;
@@ -243,16 +259,18 @@ async function mapWithConcurrency(items, worker) {
   const list = Array.isArray(items) ? items : [];
   const results = new Array(list.length);
   let idx = 0;
-  const runners = new Array(Math.min(CONCURRENCY, list.length)).fill(null).map(async () => {
-    while (idx < list.length) {
-      const my = idx++;
-      try {
-        results[my] = await worker(list[my], my);
-      } catch (e) {
-        results[my] = { ok: false, error: e?.message || String(e) };
+  const runners = new Array(Math.min(CONCURRENCY, list.length))
+    .fill(null)
+    .map(async () => {
+      while (idx < list.length) {
+        const my = idx++;
+        try {
+          results[my] = await worker(list[my], my);
+        } catch (e) {
+          results[my] = { ok: false, error: e?.message || String(e) };
+        }
       }
-    }
-  });
+    });
   await Promise.all(runners);
   return results;
 }
@@ -301,7 +319,12 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
     if (r.ok && r.nextStatus === "online") {
       const { nextStatus } = setStatus(deviceId, "online");
       if (prevStatus !== nextStatus) {
-        updates.push({ system: "device", sourceId: deviceId, deviceId, status: nextStatus });
+        updates.push({
+          system: "device",
+          sourceId: deviceId,
+          deviceId,
+          status: nextStatus,
+        });
       }
       continue;
     }
@@ -309,7 +332,12 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
     if (r.ok && r.nextStatus === "unknown") {
       const { nextStatus } = setStatus(deviceId, "unknown");
       if (prevStatus !== nextStatus) {
-        updates.push({ system: "device", sourceId: deviceId, deviceId, status: nextStatus });
+        updates.push({
+          system: "device",
+          sourceId: deviceId,
+          deviceId,
+          status: nextStatus,
+        });
       }
       continue;
     }
@@ -376,7 +404,12 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
     if (r.ok && r.nextStatus === "online") {
       const { nextStatus } = setStatus(deviceId, "online");
       if (prevStatus !== nextStatus) {
-        updates.push({ system: "device", sourceId: deviceId, deviceId, status: nextStatus });
+        updates.push({
+          system: "device",
+          sourceId: deviceId,
+          deviceId,
+          status: nextStatus,
+        });
       }
       continue;
     }
@@ -384,7 +417,12 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
     if (r.ok && r.nextStatus === "unknown") {
       const { nextStatus } = setStatus(deviceId, "unknown");
       if (prevStatus !== nextStatus) {
-        updates.push({ system: "device", sourceId: deviceId, deviceId, status: nextStatus });
+        updates.push({
+          system: "device",
+          sourceId: deviceId,
+          deviceId,
+          status: nextStatus,
+        });
       }
       continue;
     }
@@ -412,13 +450,15 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
       ok: Boolean(c?.ok),
       skipped: Boolean(c?.skipped),
       next_status: c?.nextStatus || null,
-      error: c?.ok ? null : (c?.error || null),
+      error: c?.ok ? null : c?.error || null,
     })),
   };
 }
 
 async function getConnectivitySnapshot(params = {}) {
-  const typeCode = params?.type_code ? String(params.type_code).trim().toLowerCase() : null;
+  const typeCode = params?.type_code
+    ? String(params.type_code).trim().toLowerCase()
+    : null;
   const deviceIdsRaw = Array.isArray(params?.device_ids)
     ? params.device_ids
     : typeof params?.device_ids === "string"
@@ -458,4 +498,3 @@ module.exports = {
     rtspOptionsProbe,
   },
 };
-

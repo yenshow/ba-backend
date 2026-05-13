@@ -13,6 +13,9 @@ dotenv.config({
   path: process.env.ENV_FILE || path.resolve(process.cwd(), ".env"),
 });
 
+/** PM2／封裝環境見 `scripts/generate-ecosystem.cjs`（`NODE_ENV: "production"`）；其餘視為非 production（較詳細的 debug／連線 log） */
+const isProduction = process.env.NODE_ENV === "production";
+
 /**
  * 轉換為數字
  * @param {string|number} value - 要轉換的值
@@ -64,7 +67,7 @@ const server = {
  */
 const modbus = {
   // 設備連線資訊由前端 API 請求中提供，此處僅保留全域設定
-  timeout: toNumber(getEnv("MODBUS_TIMEOUT"), 2000),
+  timeout: 10000,
 };
 
 /**
@@ -119,34 +122,12 @@ const cors = {
 };
 
 /**
- * 日誌配置
- */
-const logging = {
-  level: getEnv(
-    "LOG_LEVEL",
-    server.nodeEnv === "production" ? "info" : "debug",
-  ),
-  enableDebugLogs: toBoolean(
-    getEnv("ENABLE_DEBUG_LOGS"),
-    server.nodeEnv === "development",
-  ),
-  enableRequestLogs: toBoolean(
-    getEnv("ENABLE_REQUEST_LOGS"),
-    server.nodeEnv === "development",
-  ),
-};
-
-/**
- * 功能旗標（分版本：YSCP 人流 / 門禁人員）
- * 預設皆 true（兩流程並存）；設為 false 可關閉對應路由或行為。
+ * 功能旗標（YSCP 人流資料源）
+ * 預設 true；設為 false 時見 peopleCountingService（略過 data_source=yscp）。
  */
 const features = {
   enableYscpPeopleCounting: toBoolean(
     getEnv("ENABLE_YSCP_PEOPLE_COUNTING"),
-    true,
-  ),
-  enableAccessControlPersonnel: toBoolean(
-    getEnv("ENABLE_ACCESS_CONTROL_PERSONNEL"),
     true,
   ),
 };
@@ -175,7 +156,7 @@ const license = {
   // 授權平台 API（線上啟用）Base URL，例如 https://api.yenshow.com/api/license
   platformApiBaseUrl: getEnv("LICENSE_PLATFORM_API_BASE_URL", ""),
   // 授權平台 API 逾時（毫秒）
-  platformTimeoutMs: toNumber(getEnv("LICENSE_PLATFORM_TIMEOUT_MS"), 8000),
+  platformTimeoutMs: 10000,
   // 離線授權回應檔驗簽用（HMAC-SHA256）
   signSecret: getEnv("LICENSE_SIGN_SECRET", ""),
 };
@@ -188,7 +169,7 @@ const yscp = {
   accessKey: getEnv("YSCP_AK", ""),
   secretKey: getEnv("YSCP_SK", ""),
   apiVersion: getEnv("YSCP_API_VER", "v1"),
-  rejectUnauthorized: toBoolean(getEnv("YSCP_REJECT_UNAUTHORIZED"), false), // 是否拒絕自簽名證書（預設為 false，允許自簽名證書）
+  rejectUnauthorized: false, // 是否拒絕自簽名證書（預設為 false，允許自簽名證書）
 };
 
 /**
@@ -196,10 +177,7 @@ const yscp = {
  */
 const alerts = {
   /** 警報結案（resolved）時是否依 rule_id 復歸 alert_linkages DO（預設開） */
-  linkageRevertOnResolve: toBoolean(
-    getEnv("ALERT_LINKAGE_REVERT_ON_RESOLVE"),
-    true,
-  ),
+  linkageRevertOnResolve: true,
   dailyRolloverEnabled: true,
   dailyRolloverTimezone: getEnv("ALERT_DAILY_ROLLOVER_TZ", "Asia/Taipei"),
   dailyRolloverLocalHour: Math.min(
@@ -226,6 +204,7 @@ const mediaMTX = {
 
 module.exports = {
   server,
+  isProduction,
   modbus,
   database,
   jwt,
@@ -237,7 +216,6 @@ module.exports = {
   alerts,
   mediaMTX,
   cors,
-  logging,
   // 向後兼容：保留舊的配置結構
   serverHost: server.host,
   serverPort: server.port,

@@ -108,7 +108,7 @@ app.use(securityHeaders);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// HTTP 請求日誌（過濾掉 /ws 請求的日誌，避免日誌被刷屏）
+// HTTP 請求日誌：只記錄錯誤（>=400），避免 dev / prod 都刷屏
 app.use(
   morgan("dev", {
     skip: (req, res) => {
@@ -117,13 +117,8 @@ app.use(
         return true;
       }
 
-      // 2) 高頻成功請求降噪：batch-read 成功不記錄（保留非 2xx/3xx）
-      const url = req.originalUrl || req.url || "";
-      if (url.startsWith("/api/modbus/batch-read") && res.statusCode < 400) {
-        return true;
-      }
-
-      return false;
+      // 2) 僅記錄錯誤請求（>=400）
+      return res.statusCode < 400;
     },
   }),
 );
@@ -173,17 +168,7 @@ app.use(
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes); // 車輛相關路由在 externalDataRoutes 內依 requireFeature(vehicle_access) 控管
 app.use("/api/access-control", accessControlRoutes);
-// 功能旗標：ENABLE_ACCESS_CONTROL_PERSONNEL=false 時不掛載人員/門禁 API
-if (config.features && config.features.enableAccessControlPersonnel !== false) {
-  app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
-} else {
-  app.use("/api/personnel", (_req, res) =>
-    res.status(403).json({
-      success: false,
-      error: "門禁人員功能已關閉（ENABLE_ACCESS_CONTROL_PERSONNEL）",
-    }),
-  );
-}
+app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 app.use(
@@ -356,17 +341,12 @@ async function startServer() {
     global.__httpServer = httpServer;
 
     // 門禁佈防訂閱：全面改為佈防模式，後端主動向門禁設備訂閱事件
-    if (
-      config.features &&
-      config.features.enableAccessControlPersonnel !== false
-    ) {
-      isapiSubscribeService.start().catch((err) => {
-        serverLogger.warn(
-          "門禁佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
-          { error: err.message },
-        );
-      });
-    }
+    isapiSubscribeService.start().catch((err) => {
+      serverLogger.warn(
+        "門禁佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
+        { error: err.message },
+      );
+    });
 
     // 攝影機人流（ISAPI PeopleCounting）佈防訂閱：依 people_counting 地點配置 isapi_camera 啟動
     isapiPeopleCountingSubscribeService.start().catch((err) => {

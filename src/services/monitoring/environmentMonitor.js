@@ -486,7 +486,7 @@ async function checkEnvironmentLocations() {
         module: "environmentMonitor",
       });
     } else {
-      // `logger.debug` 在 production 預設不輸出（除非 ENABLE_DEBUG_LOGS=true）
+      // `logger.debug` 僅在非 production（NODE_ENV !== "production"）輸出
       logger.debug(summary, {
         successCount,
         failCount,
@@ -538,18 +538,16 @@ async function resolveThresholdAlert(
       },
     );
   } catch (error) {
-    // 如果警報不存在或已經解決，靜默處理（這在自動解決中是正常的）
-    if (process.env.NODE_ENV === "development") {
-      logger.warn(
-        `解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}`,
-        {
-          error: error.message,
-          systemId,
-          parameter,
-          module: "environmentMonitor",
-        },
-      );
-    }
+    // 可能已解決／競態；仍記錄以利現場追蹤
+    logger.warn(
+      `解決警報失敗（可能已解決） | 系統 ${systemId} | 參數 ${parameter}`,
+      {
+        error: error.message,
+        systemId,
+        parameter,
+        module: "environmentMonitor",
+      },
+    );
   }
 }
 
@@ -773,14 +771,11 @@ async function resolveAllThresholdAlerts(systemId) {
       );
     }
   } catch (error) {
-    // 如果警報不存在或已經解決，靜默處理
-    if (process.env.NODE_ENV === "development") {
-      logger.warn(`解決所有閾值警報失敗（可能已解決） | 系統 ${systemId}`, {
-        error: error.message,
-        systemId,
-        module: "environmentMonitor",
-      });
-    }
+    logger.warn(`解決所有閾值警報失敗（可能已解決） | 系統 ${systemId}`, {
+      error: error.message,
+      systemId,
+      module: "environmentMonitor",
+    });
   }
 }
 

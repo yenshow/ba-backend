@@ -61,8 +61,7 @@ function safeEmit(eventName, data, options = {}) {
     }
   }
 
-  // 僅在明確開啟時輸出推送日誌，避免刷屏（LOG_WS_PUSH=true）
-  if (process.env.LOG_WS_PUSH === "true" && logMessage) {
+  if (logMessage) {
     wsLogger.debug("推送事件", {
       event: eventName,
       message: logMessage,
@@ -109,8 +108,7 @@ function initializeWebSocket(httpServer) {
     pingInterval: 25000,
   });
 
-  // 連接事件處理（僅在 LOG_WS_CONNECTIONS=true 時輸出連線/斷線日誌）
-  const logConnections = process.env.LOG_WS_CONNECTIONS === "true";
+  const logConnections = true;
   ioInstance.on("connection", (socket) => {
     // 預設加入 legacy room，直到前端發送 client:hello 進行識別
     socket.join(ROOM_LEGACY);
@@ -396,11 +394,6 @@ function emitBatchDeviceStatus(updates) {
 function emitMonitoringStatus(summary) {
   // 前端不需要 monitoring:status 事件，已停用推送
   // 保留函數以維持 API 兼容性（未來管理員監控面板可能需要）
-  if (process.env.NODE_ENV === "development") {
-    wsLogger.debug("monitoring:status 已停用（前端不需要此事件）", {
-      event: "monitoring:status:disabled",
-    });
-  }
   // safeEmit("monitoring:status", summary, {
   //   logMessage: `${summary.tasks?.length || 0} 個任務`,
   // });

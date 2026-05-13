@@ -534,11 +534,6 @@ async function getSites() {
       const ds = getPeopleCountingConfig(loc).dataSource || "yscp";
       if (ds === "yscp" && config.features?.enableYscpPeopleCounting === false)
         continue;
-      if (
-        ds === "access_control" &&
-        config.features?.enableAccessControlPersonnel === false
-      )
-        continue;
       if (ds === "access_control") accessControlList.push(loc);
       else if (ds === "isapi_camera") isapiCameraList.push(loc);
       else yscpList.push(loc);

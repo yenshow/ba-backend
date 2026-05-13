@@ -226,24 +226,16 @@ async function errorHandler(err, req, res, next) {
       },
       timestamp: new Date().toISOString(),
     };
-    if (process.env.NODE_ENV === "development" && statusCode >= 500) {
-      response.error.stack = err.stack;
-    }
     return res.status(statusCode).json(response);
   }
 
-  // 統一錯誤響應格式
+  // 統一錯誤響應格式（不向客戶端回傳 stack；除錯請看伺服器 logger.error）
   const response = {
     error: true,
     message: clientMessage,
     details: clientMessage,
     timestamp: new Date().toISOString(),
   };
-
-  // 開發環境下包含堆疊信息
-  if (process.env.NODE_ENV === "development" && statusCode >= 500) {
-    response.stack = err.stack;
-  }
 
   res.status(statusCode).json(response);
 }

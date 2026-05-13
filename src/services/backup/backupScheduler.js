@@ -68,7 +68,6 @@ async function runBackup() {
       category: "environmentReadings",
       deleteAfterBackup: true,
       mergeStrategy: "date",
-      compress: backupConfig.compression.enabled,
       csvTransform: transformEnvironmentReadingsToReportFormat,
     });
     results.environment_readings = envResult;
@@ -83,7 +82,6 @@ async function runBackup() {
       category: "environmentReadingsAggregated",
       deleteAfterBackup: true,
       mergeStrategy: "date",
-      compress: backupConfig.compression.enabled,
       csvTransform: transformEnvironmentReadingsAggregatedToReportFormat,
     });
     results.environment_readings_aggregated = aggResult;
@@ -99,7 +97,6 @@ async function runBackup() {
       category: "alerts",
       deleteAfterBackup: true,
       mergeStrategy: "date",
-      compress: backupConfig.compression.enabled,
       csvTransform: transformAlertsToReportFormat,
     });
     results.alerts = alertResult;
@@ -129,7 +126,6 @@ async function runBackup() {
         category: "peopleCounting",
         deleteAfterBackup: true,
         mergeStrategy: "date",
-        compress: backupConfig.compression.enabled,
         csvTransform: (rows) =>
           transformPeopleCountingToReportFormat(
             rows,
@@ -165,7 +161,6 @@ async function runBackup() {
         category: "vehicleAccess",
         deleteAfterBackup: true,
         mergeStrategy: "date",
-        compress: backupConfig.compression.enabled,
         csvTransform: transformVehicleAccessToReportFormat,
       });
       vehicleResult = vehicleData;

@@ -508,7 +508,7 @@ async function startPostgreSQL() {
 		}
 		console.log(`\n  2. 或修改配置使用不同端口：`);
 		console.log(`     編輯 ${postgresqlConf}`);
-		console.log(`     將 port = ${port} 改為其他端口（例如 5433）`);
+		console.log(`     將 port = ${port} 改為其他端口（例如 ${port + 1}）`);
 		console.log(`     然後重新執行此腳本\n`);
 		throw new Error(`端口 ${port} 已被占用，無法啟動 PostgreSQL`);
 	}
@@ -563,6 +563,41 @@ function setupDatabase() {
 	log(`📝 設定資料庫和使用者...`, "yellow");
 
 	const psqlPath = path.join(BIN_DIR, `psql${commonBinExtension}`);
+	const port = getPostgresPort();
+	const host = "127.0.0.1";
+
+	const sleepMs = (ms) => {
+		// 同步 sleep（避免引入額外依賴；此腳本本來就以同步流程為主）
+		// eslint-disable-next-line no-undef
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+	};
+
+	const waitForPsqlReady = (maxAttempts = 30, delayMs = 500) => {
+		const currentUser = os.userInfo().username;
+		for (let i = 1; i <= maxAttempts; i++) {
+			try {
+				execSync(
+					`"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "SELECT 1;"`,
+					{
+						encoding: "utf8",
+						stdio: "pipe",
+						shell: process.platform === "win32" ? true : false
+					}
+				);
+				return;
+			} catch (e) {
+				if (i === maxAttempts) {
+					throw new Error(
+						`PostgreSQL 已啟動但仍無法連線（${host}:${port}）。請檢查 ${path.join(
+							LOG_DIR,
+							"postgres.log"
+						)}`
+					);
+				}
+				sleepMs(delayMs);
+			}
+		}
+	};
 
 	// 讀取 .env
 	let dbName = "ba_system";
@@ -579,8 +614,11 @@ function setupDatabase() {
 	const currentUser = os.userInfo().username;
 
 	try {
+		// Windows 上 pg_ctl start 可能回報已啟動但尚未就緒，先等到可接受連線
+		waitForPsqlReady();
+
 		// 建立資料庫
-		const dbCheckCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
+		const dbCheckCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
 		const dbCheck = execSync(dbCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",
@@ -588,14 +626,14 @@ function setupDatabase() {
 		});
 
 		if (!dbCheck.trim()) {
-			execSync(`"${psqlPath}" -U "${currentUser}" -d postgres -c "CREATE DATABASE ${dbName};"`, {
+			execSync(`"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE DATABASE ${dbName};"`, {
 				stdio: "inherit",
 				shell: process.platform === "win32" ? true : false
 			});
 		}
 
 		// 建立使用者
-		const userCheckCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_user WHERE usename = '${dbUser}'"`;
+		const userCheckCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_user WHERE usename = '${dbUser}'"`;
 		const userCheck = execSync(userCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",
@@ -603,7 +641,7 @@ function setupDatabase() {
 		});
 
 		if (!userCheck.trim()) {
-			const createUserCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -c "CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';"`;
+			const createUserCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';"`;
 			execSync(createUserCmd, {
 				stdio: "inherit",
 				shell: process.platform === "win32" ? true : false
@@ -611,12 +649,12 @@ function setupDatabase() {
 		}
 
 		// 授予權限
-		const grantDbCmd = `"${psqlPath}" -U "${currentUser}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"`;
+		const grantDbCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"`;
 		execSync(grantDbCmd, {
 			stdio: "inherit",
 			shell: process.platform === "win32" ? true : false
 		});
-		const grantSchemaCmd = `"${psqlPath}" -U "${currentUser}" -d ${dbName} -c "GRANT ALL ON SCHEMA public TO ${dbUser};"`;
+		const grantSchemaCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d ${dbName} -c "GRANT ALL ON SCHEMA public TO ${dbUser};"`;
 		execSync(grantSchemaCmd, {
 			stdio: "inherit",
 			shell: process.platform === "win32" ? true : false

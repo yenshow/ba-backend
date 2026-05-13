@@ -5,8 +5,13 @@
  * 在生產環境中，可以使用 winston 等專業日誌庫
  */
 
-const isDevelopment = process.env.NODE_ENV === "development";
 const isProduction = process.env.NODE_ENV === "production";
+/**
+ * 是否啟用 debug 級別輸出。
+ * 預設關閉（即使是 development 也不輸出），避免背景監控與事件推播刷屏。
+ * 需要時可在啟動指令/PM2 env 臨時加上 DEBUG=true。
+ */
+const isDebugEnabled = process.env.DEBUG === "true";
 
 /**
  * 日誌級別
@@ -92,7 +97,7 @@ function info(message, meta = {}) {
  * @param {Object} meta - 元數據（可選）
  */
 function debug(message, meta = {}) {
-  if (!isDevelopment && process.env.ENABLE_DEBUG_LOGS !== "true") {
+  if (isProduction || !isDebugEnabled) {
     return;
   }
 
@@ -124,6 +129,5 @@ module.exports = {
   info,
   debug,
   createLogger,
-  LOG_LEVELS,
 };
 

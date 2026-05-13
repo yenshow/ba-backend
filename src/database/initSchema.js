@@ -451,6 +451,174 @@ async function initSchema() {
 
     schemaLogger.info("devices 表已建立", { module: "initSchema" });
 
+    // ========== 統一地點管理架構 ==========
+
+    // 建立統一的 zones 表
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS zones (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(100) NOT NULL UNIQUE,
+				building_id INTEGER,
+				image_url TEXT,
+				description TEXT,
+				sort_order INTEGER NOT NULL DEFAULT 0,
+				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+    await createUpdatedAtTrigger(targetPool, "zones");
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_zones_name ON zones(name);
+			CREATE INDEX IF NOT EXISTS idx_zones_building_id ON zones(building_id);
+		`);
+
+    schemaLogger.info("zones 表已建立（統一區域表）", { module: "initSchema" });
+
+    // 建立統一的 locations 表（統一地點表）
+    // 注意：此表只存儲物理地點的基本資訊，不包含系統相關資訊
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS locations (
+				id SERIAL PRIMARY KEY,
+				zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
+				name VARCHAR(100) NOT NULL,
+				description TEXT,
+				sort_order INTEGER NOT NULL DEFAULT 0,
+				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(zone_id, name)
+			)
+		`);
+
+    await createUpdatedAtTrigger(targetPool, "locations");
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_locations_zone_id ON locations(zone_id);
+		`);
+
+    schemaLogger.info("locations 表已建立（統一地點表）", {
+      module: "initSchema",
+    });
+
+    // 建立 location_systems 表（地點系統關聯表）
+    await targetPool.query(`
+			CREATE TABLE IF NOT EXISTS location_systems (
+				id SERIAL PRIMARY KEY,
+				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm')),
+				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(location_id, system_type)
+			)
+		`);
+
+    // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
+    for (const source of [
+      "power",
+      "drainage",
+      "hvac",
+      "air_circulation",
+      "fire",
+      "emergency_rescue",
+      "smoke_alarm",
+    ]) {
+      try {
+        await targetPool.query(`ALTER TYPE alert_source ADD VALUE '${source}'`);
+      } catch (e) {
+        const msg = e && e.message ? String(e.message) : "";
+        if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
+          throw e;
+        }
+      }
+    }
+
+    await createUpdatedAtTrigger(targetPool, "location_systems");
+
+    await targetPool.query(`
+			CREATE INDEX IF NOT EXISTS idx_location_systems_location_id ON location_systems(location_id);
+			CREATE INDEX IF NOT EXISTS idx_location_systems_system_type ON location_systems(system_type);
+			CREATE INDEX IF NOT EXISTS idx_location_systems_config ON location_systems USING GIN(system_config);
+		`);
+
+    schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
+      module: "initSchema",
+    });
+
+    // ========== Migration: location_systems.system_config ==========
+    // device_ids：僅在已是 JSON array 時做正整數去重清洗；不從舊鍵回填
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config =
+        (
+          jsonb_set(
+            COALESCE(system_config, '{}'::jsonb),
+            '{device_ids}',
+            (
+              SELECT COALESCE(
+                jsonb_agg(v ORDER BY ord),
+                '[]'::jsonb
+              )
+              FROM (
+                SELECT DISTINCT ON (val_int) val_int AS val_int, ord
+                FROM (
+                  SELECT
+                    NULLIF(regexp_replace(elem, '[^0-9]', '', 'g'), '')::int AS val_int,
+                    ord
+                  FROM jsonb_array_elements_text(
+                    COALESCE((COALESCE(system_config, '{}'::jsonb)->'device_ids'), '[]'::jsonb)
+                  ) WITH ORDINALITY AS t(elem, ord)
+                ) x
+                WHERE val_int IS NOT NULL AND val_int > 0
+                ORDER BY val_int, ord
+              ) y
+              CROSS JOIN LATERAL to_jsonb(y.val_int) AS v
+            ),
+            true
+          )
+        ),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'device_ids') = 'array'
+    `);
+
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config = COALESCE(system_config, '{}'::jsonb) - 'device_id' - 'deviceId',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE (COALESCE(system_config, '{}'::jsonb) ? 'device_id')
+         OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceId')
+    `);
+
+    // people_counting：JSON 只保留 camera_device_ids（陣列；無或非陣列則 []），移除 camera_device_id 鍵
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config = (
+        jsonb_set(
+          COALESCE(system_config, '{}'::jsonb),
+          '{camera_device_ids}',
+          CASE
+            WHEN jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'camera_device_ids') = 'array'
+              AND jsonb_array_length(COALESCE(system_config->'camera_device_ids', '[]'::jsonb)) > 0
+              THEN COALESCE(system_config->'camera_device_ids', '[]'::jsonb)
+            ELSE '[]'::jsonb
+          END,
+          true
+        ) - 'camera_device_id'
+      ),
+      updated_at = CURRENT_TIMESTAMP
+      WHERE system_type = 'people_counting'
+        AND (
+          (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_id')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_ids')
+        )
+    `);
+    schemaLogger.info("location_systems：已套用 system_config（device_ids／camera_device_ids）migration", {
+      module: "initSchema",
+    });
+
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS people_counting_logs (
@@ -859,174 +1027,6 @@ async function initSchema() {
 		`);
 
     schemaLogger.info("lighting_categories 表已建立", { module: "initSchema" });
-
-    // ========== 統一地點管理架構 ==========
-
-    // 建立統一的 zones 表
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS zones (
-				id SERIAL PRIMARY KEY,
-				name VARCHAR(100) NOT NULL UNIQUE,
-				building_id INTEGER,
-				image_url TEXT,
-				description TEXT,
-				sort_order INTEGER NOT NULL DEFAULT 0,
-				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			)
-		`);
-
-    await createUpdatedAtTrigger(targetPool, "zones");
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_zones_name ON zones(name);
-			CREATE INDEX IF NOT EXISTS idx_zones_building_id ON zones(building_id);
-		`);
-
-    schemaLogger.info("zones 表已建立（統一區域表）", { module: "initSchema" });
-
-    // 建立統一的 locations 表（統一地點表）
-    // 注意：此表只存儲物理地點的基本資訊，不包含系統相關資訊
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS locations (
-				id SERIAL PRIMARY KEY,
-				zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE CASCADE,
-				name VARCHAR(100) NOT NULL,
-				description TEXT,
-				sort_order INTEGER NOT NULL DEFAULT 0,
-				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(zone_id, name)
-			)
-		`);
-
-    await createUpdatedAtTrigger(targetPool, "locations");
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_locations_zone_id ON locations(zone_id);
-		`);
-
-    schemaLogger.info("locations 表已建立（統一地點表）", {
-      module: "initSchema",
-    });
-
-    // 建立 location_systems 表（地點系統關聯表）
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS location_systems (
-				id SERIAL PRIMARY KEY,
-				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm')),
-				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				UNIQUE(location_id, system_type)
-			)
-		`);
-
-    // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
-    for (const source of [
-      "power",
-      "drainage",
-      "hvac",
-      "air_circulation",
-      "fire",
-      "emergency_rescue",
-      "smoke_alarm",
-    ]) {
-      try {
-        await targetPool.query(`ALTER TYPE alert_source ADD VALUE '${source}'`);
-      } catch (e) {
-        const msg = e && e.message ? String(e.message) : "";
-        if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
-          throw e;
-        }
-      }
-    }
-
-    await createUpdatedAtTrigger(targetPool, "location_systems");
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_location_systems_location_id ON location_systems(location_id);
-			CREATE INDEX IF NOT EXISTS idx_location_systems_system_type ON location_systems(system_type);
-			CREATE INDEX IF NOT EXISTS idx_location_systems_config ON location_systems USING GIN(system_config);
-		`);
-
-    schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
-      module: "initSchema",
-    });
-
-    // ========== Migration: location_systems.system_config ==========
-    // device_ids：僅在已是 JSON array 時做正整數去重清洗；不從舊鍵回填
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config =
-        (
-          jsonb_set(
-            COALESCE(system_config, '{}'::jsonb),
-            '{device_ids}',
-            (
-              SELECT COALESCE(
-                jsonb_agg(v ORDER BY ord),
-                '[]'::jsonb
-              )
-              FROM (
-                SELECT DISTINCT ON (val_int) val_int AS val_int, ord
-                FROM (
-                  SELECT
-                    NULLIF(regexp_replace(elem, '[^0-9]', '', 'g'), '')::int AS val_int,
-                    ord
-                  FROM jsonb_array_elements_text(
-                    COALESCE((COALESCE(system_config, '{}'::jsonb)->'device_ids'), '[]'::jsonb)
-                  ) WITH ORDINALITY AS t(elem, ord)
-                ) x
-                WHERE val_int IS NOT NULL AND val_int > 0
-                ORDER BY val_int, ord
-              ) y
-              CROSS JOIN LATERAL to_jsonb(y.val_int) AS v
-            ),
-            true
-          )
-        ),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'device_ids') = 'array'
-    `);
-
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config = COALESCE(system_config, '{}'::jsonb) - 'device_id' - 'deviceId',
-          updated_at = CURRENT_TIMESTAMP
-      WHERE (COALESCE(system_config, '{}'::jsonb) ? 'device_id')
-         OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceId')
-    `);
-
-    // people_counting：JSON 只保留 camera_device_ids（陣列；無或非陣列則 []），移除 camera_device_id 鍵
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config = (
-        jsonb_set(
-          COALESCE(system_config, '{}'::jsonb),
-          '{camera_device_ids}',
-          CASE
-            WHEN jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'camera_device_ids') = 'array'
-              AND jsonb_array_length(COALESCE(system_config->'camera_device_ids', '[]'::jsonb)) > 0
-              THEN COALESCE(system_config->'camera_device_ids', '[]'::jsonb)
-            ELSE '[]'::jsonb
-          END,
-          true
-        ) - 'camera_device_id'
-      ),
-      updated_at = CURRENT_TIMESTAMP
-      WHERE system_type = 'people_counting'
-        AND (
-          (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_id')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_ids')
-        )
-    `);
-    schemaLogger.info("location_systems：已套用 system_config（device_ids／camera_device_ids）migration", {
-      module: "initSchema",
-    });
 
     // ========== 人員主檔與門禁權限（本系統） ==========
     await targetPool.query(`
