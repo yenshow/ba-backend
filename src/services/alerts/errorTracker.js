@@ -12,9 +12,9 @@ const trackerLogger = logger.createLogger("errorTracker");
  * **呼叫約定**：業務層連線／快照請優先經 `systemAlertHelper`（`recordError`／`clearError`／
  * `syncLocationSnapshotReadResult`／`notifyModbusHttpDevice*`）；本檔為計數、`error_tracking` 與
  * incident 解決的底層實作。`alertService.unignoreAlerts` 後續僅呼叫 `reconcileTrackingAfterUnignore`。
+ *
+ * **無規則不發送**：`source`+`alert_type` 若無啟用的 `error_count` 規則，不寫入計數、不建立警報。
  */
-
-const ERROR_THRESHOLD = 5; // 預設閾值（如果規則不存在時使用）
 
 /**
  * 規則快取（error_count 只會用到 source+alertType 這一維）
@@ -81,7 +81,31 @@ async function recordErrorDetailed(
       };
     }
 
-    // 2. 使用 UPSERT 操作一次完成取得/創建和增加計數（以 source + source_id + alert_type 為維度）
+    // 2. 必須有啟用的 error_count 規則才計數／建警報（無規則則不寫入 error_tracking、不發送）
+    const rule = await getCachedErrorCountRule(source, alertType);
+    if (!rule) {
+      trackerLogger.debug("無啟用的錯誤次數規則，略過計數與警報", {
+        source,
+        sourceId,
+        alertType,
+        module: "errorTracker",
+      });
+      return {
+        ignored: false,
+        trackingUpdated: false,
+        errorCount: 0,
+        threshold: 0,
+        thresholdReached: false,
+        alertCreated: false,
+      };
+    }
+
+    const rawMin = rule.condition_config?.min_errors;
+    const parsedMin = Number(rawMin);
+    const threshold =
+      Number.isFinite(parsedMin) && parsedMin >= 1 ? Math.floor(parsedMin) : 1;
+
+    // 3. 使用 UPSERT 操作一次完成取得/創建和增加計數（以 source + source_id + alert_type 為維度）
     const now = new Date();
     const upsertResult = await db.query(
       `INSERT INTO error_tracking (source, source_id, alert_type, error_count, last_error_at, alert_created, updated_at)
@@ -101,27 +125,20 @@ async function recordErrorDetailed(
 
     const tracking = upsertResult[0];
 
-    // 3. 取得規則（加 TTL cache）：確保「新增/編輯警報規則」能在短時間內生效
-    const rule = await getCachedErrorCountRule(source, alertType);
-    const threshold = rule?.condition_config?.min_errors || ERROR_THRESHOLD;
     const thresholdReached = tracking.error_count >= threshold;
 
     // 4. 判斷是否達到閾值並創建/更新警報
     if (thresholdReached) {
-      // 使用規則定義的嚴重程度，如果沒有規則則使用預設值
-      const severity = rule?.severity || alertService.SEVERITIES.WARNING;
+      const severity = rule.severity || alertService.SEVERITIES.WARNING;
 
       // 5. 創建或更新警報
       try {
         // 構建警報資料（總是提供 message，使用達到閾值時的錯誤次數）
         const sourceName = metadata.name || `${source}:${sourceId}`;
-        let message;
-        if (rule) {
-          message = await alertRuleService.renderRuleMessage(rule, {
-            source_id: sourceId,
-            error_count: threshold,
-          });
-        }
+        let message = await alertRuleService.renderRuleMessage(rule, {
+          source_id: sourceId,
+          error_count: threshold,
+        });
         if (!message) {
           message = `${sourceName} 連續 ${threshold} 次無法連接，請檢查狀態`;
         }
@@ -133,7 +150,7 @@ async function recordErrorDetailed(
           severity,
           // Message should be user-facing and stable; keep debug/trace in `origin`.
           message,
-          rule_id: rule?.id || null,
+          rule_id: rule.id,
           origin: metadata?.origin || null,
         };
 
@@ -550,5 +567,4 @@ module.exports = {
   clearError,
   getErrorTracking,
   reconcileTrackingAfterUnignore,
-  ERROR_THRESHOLD,
 };

@@ -17,10 +17,6 @@ const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
 const logger = require("../../utils/logger");
 
 const statusLogger = logger.createLogger("lightingStatusService");
-const STATUS_CACHE_TTL_MS = Number(
-  process.env.LIGHTING_STATUS_CACHE_TTL_MS || 1500,
-);
-const statusCache = new Map();
 
 const DEVICE_CFG_CACHE_TTL_MS = Number(
   process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
@@ -296,26 +292,11 @@ async function buildLightingSnapshotItem(row, options = {}) {
 async function getStatusSnapshot(query = {}) {
   const zoneIds = parseZoneIds(query.zoneIds);
   const syncAlerts = query.syncAlerts !== false;
-  const cacheKey = `${
-    zoneIds
-      .slice()
-      .sort((a, b) => a - b)
-      .join(",") || "all"
-  }`;
-  const canUseCache = !syncAlerts && STATUS_CACHE_TTL_MS > 0;
-  const cached = statusCache.get(cacheKey);
-  if (canUseCache && cached && Date.now() - cached.ts <= STATUS_CACHE_TTL_MS) {
-    return cached.value;
-  }
 
   const rows = await fetchLightingSystems(zoneIds);
 
   if (!rows || rows.length === 0) {
-    const emptyResult = { items: [] };
-    if (canUseCache) {
-      statusCache.set(cacheKey, { ts: Date.now(), value: emptyResult });
-    }
-    return emptyResult;
+    return { items: [] };
   }
 
   const items = await Promise.all(
@@ -332,11 +313,7 @@ async function getStatusSnapshot(query = {}) {
     items,
     activeAlertSystemIds,
   );
-  const result = { items: merged };
-  if (canUseCache) {
-    statusCache.set(cacheKey, { ts: Date.now(), value: result });
-  }
-  return result;
+  return { items: merged };
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {

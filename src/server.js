@@ -41,6 +41,7 @@ const accessControlRoutes = require("./routes/accessControlRoutes");
 const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const deploymentEnvRoutes = require("./routes/deploymentEnvRoutes");
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const permissionRoutes = require("./routes/permissionRoutes");
@@ -171,6 +172,7 @@ app.use("/api/access-control", accessControlRoutes);
 app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
+app.use("/api/deployment", deploymentEnvRoutes); // 部署用：後端 .env（僅 admin）
 app.use(
   "/api/multimedia",
   requireFeature("multimedia"),
