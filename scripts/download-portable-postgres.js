@@ -11,10 +11,7 @@ const https = require("https");
 const http = require("http");
 const { execSync } = require("child_process");
 const os = require("os");
-const dotenv = require("dotenv");
-
-// 載入 .env 以讀取 DB_PORT 等配置
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+const zlib = require("zlib");
 
 const VERSION = "16.11.0"; // PostgreSQL 版本（對應 GitHub Releases 標籤，例如 v16.11.0）
 const {
@@ -44,6 +41,151 @@ function log(message, color = "reset") {
 	}
 }
 
+function execWithUtf8OnWindows(innerCommand, options) {
+	// On Windows, many native tools (initdb/pg_ctl/psql/tar) output using system codepage (e.g. cp950).
+	// When piped into a GUI logger expecting UTF-8, it becomes garbled.
+	// Force UTF-8 codepage via `chcp 65001` for consistent logs.
+	if (process.platform !== "win32") {
+		return execSync(innerCommand, options);
+	}
+	const wrapped = `cmd.exe /d /s /c "chcp 65001>nul & ${innerCommand}"`;
+	// Force shell on Windows so pipes and builtins work consistently.
+	return execSync(wrapped, { ...options, shell: true });
+}
+
+function findExistingArchive({ targetTriple, archiveName }) {
+	// 先找精確檔名，再找同平台的任意版本（容許手動放入不同版本檔案）
+	const exact = path.join(POSTGRES_DIR, archiveName);
+	if (fs.existsSync(exact)) {
+		return exact;
+	}
+
+	const files = fs.readdirSync(POSTGRES_DIR).filter((file) => {
+		return file.endsWith(".tar.gz") && file.includes(targetTriple) && file.startsWith("postgresql-");
+	});
+
+	if (files.length === 0) {
+		return null;
+	}
+
+	return path.join(POSTGRES_DIR, files[0]);
+}
+
+function ensureDirSync(dirPath) {
+	if (!fs.existsSync(dirPath)) {
+		fs.mkdirSync(dirPath, { recursive: true });
+	}
+}
+
+function safeJoinInside(baseDir, relativePath) {
+	// Tar entry names use forward slashes. Normalize and ensure no traversal.
+	const cleaned = relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+	const normalized = path.normalize(cleaned);
+	const joined = path.resolve(baseDir, normalized);
+	const baseResolved = path.resolve(baseDir);
+	if (joined === baseResolved) return joined;
+	if (!joined.startsWith(baseResolved + path.sep)) {
+		throw new Error(`不安全的壓縮檔路徑（疑似路徑穿越）：${relativePath}`);
+	}
+	return joined;
+}
+
+function parseTarHeader(block) {
+	const readString = (start, len) =>
+		block
+			.subarray(start, start + len)
+			.toString("utf8")
+			.replace(/\0.*$/, "")
+			.trim();
+
+	const name = readString(0, 100);
+	const prefix = readString(345, 155);
+	const fullName = prefix ? `${prefix}/${name}` : name;
+	const sizeRaw = readString(124, 12);
+	const size = sizeRaw ? parseInt(sizeRaw, 8) : 0;
+	const typeflag = readString(156, 1) || "0"; // '0' file, '5' dir, '2' symlink
+	const linkname = readString(157, 100);
+
+	return {
+		name: fullName,
+		size: Number.isFinite(size) ? size : 0,
+		typeflag,
+		linkname
+	};
+}
+
+function extractTarGzWithNode(archivePath, destDir) {
+	log(`🧩 使用內建解壓（Node.js）...`, "yellow");
+	ensureDirSync(destDir);
+
+	const gzData = fs.readFileSync(archivePath);
+	let tarData;
+	try {
+		tarData = zlib.gunzipSync(gzData);
+	} catch (e) {
+		throw new Error(`gzip 解壓失敗：${e.message}`);
+	}
+
+	const BLOCK = 512;
+	let offset = 0;
+
+	const isAllZeroBlock = (buf) => {
+		for (let i = 0; i < buf.length; i++) {
+			if (buf[i] !== 0) return false;
+		}
+		return true;
+	};
+
+	while (offset + BLOCK <= tarData.length) {
+		const header = tarData.subarray(offset, offset + BLOCK);
+		offset += BLOCK;
+
+		// End of archive: two consecutive zero blocks (we accept one to stop safely)
+		if (isAllZeroBlock(header)) {
+			break;
+		}
+
+		const { name, size, typeflag, linkname } = parseTarHeader(header);
+		if (!name) {
+			// Some tar variants may include padding; stop if name is empty.
+			break;
+		}
+
+		const outPath = safeJoinInside(destDir, name);
+
+		// Directory
+		if (typeflag === "5") {
+			ensureDirSync(outPath);
+			continue;
+		}
+
+		// Symlink (best-effort). Windows may require privileges; skip rather than fail.
+		if (typeflag === "2") {
+			try {
+				const linkTarget = safeJoinInside(destDir, linkname || "");
+				ensureDirSync(path.dirname(outPath));
+				if (!fs.existsSync(outPath)) {
+					fs.symlinkSync(linkTarget, outPath);
+				}
+			} catch {
+				// Ignore symlink errors on Windows.
+			}
+			continue;
+		}
+
+		// Regular file (default)
+		ensureDirSync(path.dirname(outPath));
+		const fileData = tarData.subarray(offset, offset + size);
+		fs.writeFileSync(outPath, fileData);
+
+		// Advance to next header (size rounded up to 512)
+		const padded = Math.ceil(size / BLOCK) * BLOCK;
+		offset += padded;
+	}
+
+	log(`✅ 內建解壓完成`, "green");
+}
+
 // 檢測系統平台
 function detectPlatform() {
 	const platform = os.platform();
@@ -51,7 +193,7 @@ function detectPlatform() {
 
 	log(`🔍 檢測系統: ${platform} ${arch}`, "green");
 
-	let downloadUrl, archiveName, extractCommand, binExtension;
+	let downloadUrl, archiveName, extractCommand;
 	let targetTriple = null;
 
 	// 使用 GitHub 開源二進制檔案（theseus-rs/postgresql-binaries）- 無需登入
@@ -65,7 +207,6 @@ function detectPlatform() {
 		downloadUrl = `https://github.com/theseus-rs/postgresql-binaries/releases/download/v${VERSION}/postgresql-${VERSION}-${targetTriple}.tar.gz`;
 		archiveName = `postgresql-${VERSION}-${targetTriple}.tar.gz`;
 		extractCommand = "tar";
-		binExtension = "";
 	} else if (platform === "win32") {
 		// Windows
 		if (arch === "x64") {
@@ -76,7 +217,6 @@ function detectPlatform() {
 		} else {
 			throw new Error(`不支援的 Windows 架構: ${arch}`);
 		}
-		binExtension = ".exe";
 	} else if (platform === "linux") {
 		// Linux
 		if (arch === "x64") {
@@ -89,7 +229,6 @@ function detectPlatform() {
 		downloadUrl = `https://github.com/theseus-rs/postgresql-binaries/releases/download/v${VERSION}/postgresql-${VERSION}-${targetTriple}.tar.gz`;
 		archiveName = `postgresql-${VERSION}-${targetTriple}.tar.gz`;
 		extractCommand = "tar";
-		binExtension = "";
 	} else {
 		throw new Error(`不支援的作業系統: ${platform}`);
 	}
@@ -192,14 +331,13 @@ function extractArchive(archivePath, extractCommand, platform) {
 				// Windows 需要特殊處理（可能需要安裝 tar 或使用其他工具）
 				// 嘗試使用內建的 tar（Windows 10+ 有）
 				try {
-					// Windows 路徑需要正確處理，使用 shell: true
-					execSync(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, {
+					// Windows 路徑需要正確處理，使用 UTF-8 codepage 執行 tar（避免亂碼）
+					execWithUtf8OnWindows(`tar -xzf "${archivePath}" -C "${POSTGRES_DIR}"`, {
 						stdio: "inherit",
-						shell: true
 					});
 				} catch (error) {
-					// 如果 tar 不可用，提示安裝
-					throw new Error("Windows 需要 tar 命令。請安裝 Git for Windows 或使用 Windows 10+ 內建的 tar。");
+					// 如果 tar 不可用或解壓失敗，改用 Node.js 內建流程（避免全新機器缺 tar）
+					extractTarGzWithNode(archivePath, POSTGRES_DIR);
 				}
 			} else {
 				// macOS 和 Linux
@@ -317,12 +455,10 @@ function initDatabase() {
 	try {
 		// Windows 需要特殊處理路徑中的空格和特殊字元
 		if (process.platform === "win32") {
-			// Windows: 使用引號包裹路徑，並使用 shell: true
 			const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
 			try {
-				execSync(initdbCmd, {
+				execWithUtf8OnWindows(initdbCmd, {
 					stdio: "inherit",
-					shell: true,
 					encoding: "utf8"
 				});
 			} catch (execError) {
@@ -432,30 +568,68 @@ function initDatabase() {
 	}
 
 	const pgHbaConf = path.join(DATA_DIR, "pg_hba.conf");
-	// 檢查 trust 規則是否已存在，避免重複添加
-	let pgHbaContent = "";
-	if (fs.existsSync(pgHbaConf)) {
-		pgHbaContent = fs.readFileSync(pgHbaConf, "utf8");
-	}
-	
-	if (!pgHbaContent.includes("host all all 127.0.0.1/32 trust")) {
-		fs.appendFileSync(pgHbaConf, "\nhost all all 127.0.0.1/32 trust\n");
-	}
-	if (!pgHbaContent.includes("host all all ::1/128 trust")) {
-		fs.appendFileSync(pgHbaConf, "host all all ::1/128 trust\n");
-	}
+	ensurePgHbaTrustRules(pgHbaConf);
 
 	log(`✅ 資料庫已初始化`, "green");
+}
+
+function ensurePgHbaTrustRules(pgHbaConfPath) {
+	// Important: pg_hba.conf rules are matched top-to-bottom.
+	// Appending "trust" rules to the end may not take effect if earlier rules match first,
+	// which can make `psql` block waiting for password input (no stdin in GUI runners).
+	ensureDirSync(path.dirname(pgHbaConfPath));
+	if (!fs.existsSync(pgHbaConfPath)) {
+		throw new Error(`找不到 pg_hba.conf：${pgHbaConfPath}`);
+	}
+
+	const beginMarker = "# BA_SYSTEM_MANAGED_BEGIN";
+	const endMarker = "# BA_SYSTEM_MANAGED_END";
+	const managedBlock = [
+		beginMarker,
+		// Localhost only; keep surface area minimal.
+		"local all all trust",
+		"host all all 127.0.0.1/32 trust",
+		"host all all ::1/128 trust",
+		endMarker,
+		""
+	].join("\n");
+
+	const original = fs.readFileSync(pgHbaConfPath, "utf8");
+	let content = original.replace(/\r\n/g, "\n");
+
+	// Remove old managed block (if any) to keep the file deterministic.
+	const blockRegex = new RegExp(
+		`${beginMarker}[\\s\\S]*?${endMarker}\\n?`,
+		"g"
+	);
+	content = content.replace(blockRegex, "");
+
+	// Insert after leading comments/blank lines so it takes precedence over default rules.
+	const lines = content.split("\n");
+	let insertAt = 0;
+	while (insertAt < lines.length) {
+		const line = lines[insertAt].trim();
+		if (line === "" || line.startsWith("#")) {
+			insertAt += 1;
+			continue;
+		}
+		break;
+	}
+
+	lines.splice(insertAt, 0, managedBlock.trimEnd());
+	const next = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+	if (next !== content) {
+		fs.writeFileSync(pgHbaConfPath, next.replace(/\n/g, os.EOL), "utf8");
+	}
 }
 
 // 檢查端口是否被占用
 function checkPortAvailable(port) {
 	try {
 		if (process.platform === "win32") {
-			const result = execSync(`netstat -ano | findstr :${port}`, {
+			const result = execWithUtf8OnWindows(`netstat -ano | findstr :${port}`, {
 				stdio: "pipe",
-				encoding: "utf8",
-				shell: true
+				encoding: "utf8"
 			});
 			return result.trim().length === 0;
 		} else {
@@ -477,7 +651,7 @@ async function startPostgreSQL() {
 
 	// 檢查是否已在運行
 	try {
-		execSync(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
+		execWithUtf8OnWindows(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
 			stdio: "pipe",
 			shell: process.platform === "win32" ? true : false
 		});
@@ -523,7 +697,7 @@ async function startPostgreSQL() {
 
 	try {
 		const startCmd = `"${pgCtlPath}" -D "${DATA_DIR}" -l "${logFile}" start`;
-		execSync(startCmd, {
+		execWithUtf8OnWindows(startCmd, {
 			stdio: "inherit",
 			shell: process.platform === "win32" ? true : false
 		});
@@ -532,7 +706,7 @@ async function startPostgreSQL() {
 
 		// 驗證是否成功啟動
 		try {
-			execSync(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
+			execWithUtf8OnWindows(`"${pgCtlPath}" -D "${DATA_DIR}" status`, {
 				stdio: "pipe",
 				shell: process.platform === "win32" ? true : false
 			});
@@ -565,6 +739,7 @@ function setupDatabase() {
 	const psqlPath = path.join(BIN_DIR, `psql${commonBinExtension}`);
 	const port = getPostgresPort();
 	const host = "127.0.0.1";
+	const commonPsqlArgs = `-X -w -v ON_ERROR_STOP=1`;
 
 	const sleepMs = (ms) => {
 		// 同步 sleep（避免引入額外依賴；此腳本本來就以同步流程為主）
@@ -576,8 +751,8 @@ function setupDatabase() {
 		const currentUser = os.userInfo().username;
 		for (let i = 1; i <= maxAttempts; i++) {
 			try {
-				execSync(
-					`"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "SELECT 1;"`,
+				execWithUtf8OnWindows(
+					`"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "SELECT 1;"`,
 					{
 						encoding: "utf8",
 						stdio: "pipe",
@@ -599,17 +774,9 @@ function setupDatabase() {
 		}
 	};
 
-	// 讀取 .env
-	let dbName = "ba_system";
-	let dbUser = "postgres";
-
-	if (fs.existsSync(path.join(PROJECT_DIR, ".env"))) {
-		const envContent = fs.readFileSync(path.join(PROJECT_DIR, ".env"), "utf8");
-		const dbNameMatch = envContent.match(/^DB_NAME=(.+)$/m);
-		const dbUserMatch = envContent.match(/^DB_USER=(.+)$/m);
-		if (dbNameMatch) dbName = dbNameMatch[1].trim();
-		if (dbUserMatch) dbUser = dbUserMatch[1].trim();
-	}
+	// `.env` 已由 postgres-common 載入到 process.env，這裡只取值與預設即可
+	const dbName = (process.env.DB_NAME || "ba_system").trim();
+	const dbUser = (process.env.DB_USER || "postgres").trim();
 
 	const currentUser = os.userInfo().username;
 
@@ -618,44 +785,44 @@ function setupDatabase() {
 		waitForPsqlReady();
 
 		// 建立資料庫
-		const dbCheckCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
-		const dbCheck = execSync(dbCheckCmd, {
+		const dbCheckCmd = `"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
+		const dbCheck = execWithUtf8OnWindows(dbCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",
 			shell: process.platform === "win32" ? true : false
 		});
 
 		if (!dbCheck.trim()) {
-			execSync(`"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE DATABASE ${dbName};"`, {
+			execWithUtf8OnWindows(`"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE DATABASE ${dbName};"`, {
 				stdio: "inherit",
 				shell: process.platform === "win32" ? true : false
 			});
 		}
 
 		// 建立使用者
-		const userCheckCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_user WHERE usename = '${dbUser}'"`;
-		const userCheck = execSync(userCheckCmd, {
+		const userCheckCmd = `"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_user WHERE usename = '${dbUser}'"`;
+		const userCheck = execWithUtf8OnWindows(userCheckCmd, {
 			encoding: "utf8",
 			stdio: "pipe",
 			shell: process.platform === "win32" ? true : false
 		});
 
 		if (!userCheck.trim()) {
-			const createUserCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';"`;
-			execSync(createUserCmd, {
+			const createUserCmd = `"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';"`;
+			execWithUtf8OnWindows(createUserCmd, {
 				stdio: "inherit",
 				shell: process.platform === "win32" ? true : false
 			});
 		}
 
 		// 授予權限
-		const grantDbCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"`;
-		execSync(grantDbCmd, {
+		const grantDbCmd = `"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"`;
+		execWithUtf8OnWindows(grantDbCmd, {
 			stdio: "inherit",
 			shell: process.platform === "win32" ? true : false
 		});
-		const grantSchemaCmd = `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d ${dbName} -c "GRANT ALL ON SCHEMA public TO ${dbUser};"`;
-		execSync(grantSchemaCmd, {
+		const grantSchemaCmd = `"${psqlPath}" ${commonPsqlArgs} -h "${host}" -p ${port} -U "${currentUser}" -d ${dbName} -c "GRANT ALL ON SCHEMA public TO ${dbUser};"`;
+		execWithUtf8OnWindows(grantSchemaCmd, {
 			stdio: "inherit",
 			shell: process.platform === "win32" ? true : false
 		});
@@ -700,24 +867,9 @@ async function main() {
 		if (fs.existsSync(psqlPath)) {
 			log(`✅ PostgreSQL 二進制檔案已存在`, "green");
 		} else {
-			// 檢查是否已有壓縮檔（優先使用精確匹配的檔案名稱）
-			let archivePath = path.join(POSTGRES_DIR, archiveName);
-			let archiveExists = fs.existsSync(archivePath);
-
-			// 如果精確匹配的檔案不存在，嘗試尋找同平台的任何版本
-			if (!archiveExists) {
-				log(`🔍 尋找手動下載的壓縮檔...`, "yellow");
-				const files = fs.readdirSync(POSTGRES_DIR).filter((file) => {
-					// 檢查是否為 tar.gz 檔案且包含目標平台標識符
-					return file.endsWith(".tar.gz") && file.includes(targetTriple) && file.startsWith("postgresql-");
-				});
-
-				if (files.length > 0) {
-					archivePath = path.join(POSTGRES_DIR, files[0]);
-					archiveExists = true;
-					log(`✅ 找到手動下載的檔案: ${files[0]}`, "green");
-				}
-			}
+			// 檢查是否已有壓縮檔（優先使用精確匹配的檔案名稱；否則尋找同平台任意版本）
+			let archivePath = findExistingArchive({ targetTriple, archiveName });
+			let archiveExists = !!archivePath;
 
 			// 如果檔案存在，驗證是否有效（不是空的）
 			if (archiveExists) {
@@ -737,17 +889,15 @@ async function main() {
 			}
 
 			if (!archiveExists) {
+				archivePath = path.join(POSTGRES_DIR, archiveName);
 				// 下載
 				try {
 					await downloadFile(downloadUrl, archivePath);
 				} catch (error) {
 					// 如果下載失敗，再次檢查是否有手動下載的檔案（可能在下載過程中放置）
-					const retryFiles = fs.readdirSync(POSTGRES_DIR).filter((file) => {
-						return file.endsWith(".tar.gz") && file.includes(targetTriple) && file.startsWith("postgresql-");
-					});
-
-					if (retryFiles.length > 0) {
-						archivePath = path.join(POSTGRES_DIR, retryFiles[0]);
+					const retry = findExistingArchive({ targetTriple, archiveName });
+					if (retry) {
+						archivePath = retry;
 						log(`✅ 發現手動下載的檔案，將使用該檔案`, "green");
 					} else {
 						// 如果下載失敗且沒有壓縮檔，提供手動下載說明
@@ -786,9 +936,9 @@ async function main() {
 	}
 }
 
-// 執行
+// 執行（成功後須明確結束程序：從 GUI / npm 子程序啟動時，stdin 等 handle 可能讓事件迴圈不退出，導致外層一直轉圈等待）
 if (require.main === module) {
-	main();
+	main().then(() => process.exit(0));
 }
 
-module.exports = { main };
+module.exports = { main, extractTarGzWithNode };

@@ -152,7 +152,10 @@ async function main() {
 	}
 }
 
-main().catch((error) => {
-	console.error(`\n錯誤：${error.message}`);
-	process.exit(1);
-});
+// GUI / Redirect 子程序須明確結束，否則父程序 WaitForExit 會卡住
+main()
+	.then(() => process.exit(0))
+	.catch((error) => {
+		console.error(`\n錯誤：${error.message}`);
+		process.exit(1);
+	});

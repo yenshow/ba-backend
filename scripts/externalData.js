@@ -650,8 +650,10 @@ async function main() {
   }
 }
 
-// 執行
-main().catch((error) => {
-  console.error("\n❌ 執行過程發生錯誤:", error);
-  process.exit(1);
-});
+// 執行（GUI / Redirect 子程序須明確結束，否則父程序 WaitForExit 會卡住）
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error("\n❌ 執行過程發生錯誤:", error);
+    process.exit(1);
+  });

@@ -193,8 +193,10 @@ const main = async () => {
   console.log("[DONE] create finished");
 };
 
-main().catch((err) => {
-  console.error(err?.stack || err?.message || String(err));
-  process.exitCode = 1;
-});
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err?.stack || err?.message || String(err));
+    process.exit(1);
+  });
 

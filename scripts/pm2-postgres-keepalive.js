@@ -9,11 +9,14 @@
  * - Ensures portable postgres is running; if not, attempts to start it.
  * - Periodically checks `pg_ctl status` and a simple `psql SELECT 1`.
  * - On SIGINT/SIGTERM, attempts to stop postgres gracefully.
+ *
+ * Windows: use execFileSync (no shell) + windowsHide so the keepalive loop
+ * does not spawn a visible cmd.exe every interval (execSync+shell would).
  */
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 const {
   DATA_DIR,
@@ -28,14 +31,19 @@ const pgCtlPath = getBinPath("pg_ctl");
 const psqlPath = getBinPath("psql");
 const host = "127.0.0.1";
 
+const isWin = process.platform === "win32";
+
+const childOpts = () => ({
+  stdio: "pipe",
+  encoding: "utf8",
+  windowsHide: isWin,
+});
+
 const log = (msg) => console.log(`[ba-postgres] ${msg}`);
 
-const run = (cmd, opts = {}) =>
-  execSync(cmd, {
-    stdio: "pipe",
-    shell: process.platform === "win32",
-    ...opts,
-  });
+const runPgCtl = (args) => execFileSync(pgCtlPath, args, childOpts());
+
+const runPsql = (args) => execFileSync(psqlPath, args, childOpts());
 
 const ensureDirs = () => {
   if (!fs.existsSync(LOG_DIR)) {
@@ -45,7 +53,7 @@ const ensureDirs = () => {
 
 const isPgCtlRunning = () => {
   try {
-    run(`"${pgCtlPath}" -D "${DATA_DIR}" status`);
+    runPgCtl(["-D", DATA_DIR, "status"]);
     return true;
   } catch {
     return false;
@@ -57,10 +65,18 @@ const canPsqlConnect = () => {
   const currentUser = require("os").userInfo().username;
 
   try {
-    run(
-      `"${psqlPath}" -h "${host}" -p ${port} -U "${currentUser}" -d postgres -c "SELECT 1;"`,
-      { encoding: "utf8" },
-    );
+    runPsql([
+      "-h",
+      host,
+      "-p",
+      String(port),
+      "-U",
+      currentUser,
+      "-d",
+      "postgres",
+      "-c",
+      "SELECT 1;",
+    ]);
     return true;
   } catch {
     return false;
@@ -76,12 +92,12 @@ const startPostgres = async () => {
   const port = getPostgresPort();
 
   log(`starting postgres (port=${port})...`);
-  execSync(`"${pgCtlPath}" -D "${DATA_DIR}" -l "${logFile}" start`, {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
+  execFileSync(
+    pgCtlPath,
+    ["-D", DATA_DIR, "-l", logFile, "start"],
+    { stdio: "inherit", windowsHide: isWin },
+  );
 
-  // Wait until it is actually accepting connections.
   for (let i = 1; i <= 30; i++) {
     if (isPgCtlRunning() && canPsqlConnect()) {
       log("postgres is up.");
@@ -97,9 +113,9 @@ const stopPostgres = () => {
   try {
     if (!isPgCtlRunning()) return;
     log("stopping postgres...");
-    execSync(`"${pgCtlPath}" -D "${DATA_DIR}" stop -m fast`, {
+    execFileSync(pgCtlPath, ["-D", DATA_DIR, "stop", "-m", "fast"], {
       stdio: "inherit",
-      shell: process.platform === "win32",
+      windowsHide: isWin,
     });
   } catch (e) {
     log(`stop failed: ${e?.message || e}`);
@@ -124,7 +140,6 @@ const main = async () => {
     log(`postgres already running (port=${getPostgresPort()}).`);
   }
 
-  // Keepalive loop: if postgres dies, crash so PM2 restarts us.
   setInterval(() => {
     const ok = isPgCtlRunning() && canPsqlConnect();
     if (ok) return;
@@ -145,4 +160,3 @@ main().catch((e) => {
   console.error(`[ba-postgres] fatal: ${e?.message || e}`);
   process.exit(1);
 });
-

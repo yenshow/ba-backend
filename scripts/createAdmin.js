@@ -42,9 +42,11 @@ async function createAdmin() {
 	}
 }
 
-// 如果直接執行此腳本
+// 如果直接執行此腳本（GUI / Redirect 子程序須明確結束，否則父程序 WaitForExit 會卡住）
 if (require.main === module) {
-	createAdmin();
+	createAdmin()
+		.then(() => process.exit(0))
+		.catch(() => process.exit(1));
 }
 
 module.exports = { createAdmin };
