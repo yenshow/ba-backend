@@ -7,6 +7,8 @@ const db = require("../../database/db");
 const {
   computeDerivedMetrics,
 } = require("./environmentDerivedMetrics");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 async function getReadingsForBackup(beforeDate) {
   const rows = await db.query(
@@ -41,7 +43,10 @@ function roundDataToOneDecimal(data) {
 
 async function saveReading({ locationId, sourceId, deviceId, data }) {
   if (!locationId || !sourceId || !data || typeof data !== "object") {
-    throw new Error("locationId, sourceId, data 為必填");
+    throwApiError(
+      C.ENVIRONMENT_READING_REQUIRED,
+      "locationId, sourceId, data 為必填",
+    );
   }
 
   const roundedBase = roundDataToOneDecimal(data);
@@ -61,26 +66,8 @@ async function saveReading({ locationId, sourceId, deviceId, data }) {
   return result?.[0] ?? null;
 }
 
-/**
- * 取得過期彙總列（供備份後刪除，與 raw 共用 beforeDate）
- */
-async function getAggregatedForBackup(beforeDate) {
-  const rows = await db.query(
-    `SELECT a.bucket_at, a.bucket_type, a.data,
-       l.name as location_name, z.name as zone_name
-     FROM environment_readings_aggregated a
-     INNER JOIN locations l ON a.location_id = l.id
-     INNER JOIN zones z ON l.zone_id = z.id
-     WHERE a.bucket_at < $1
-     ORDER BY a.bucket_at ASC`,
-    [beforeDate]
-  );
-  return rows || [];
-}
-
 module.exports = {
   saveReading,
   getReadingsForBackup,
-  getAggregatedForBackup,
   roundDataToOneDecimal,
 };

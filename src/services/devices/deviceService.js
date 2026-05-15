@@ -11,6 +11,16 @@ const licenseService = require("../licenseService");
 const licenseQuotaService = require("../licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const logger = require("../../utils/logger");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError, throwApiError } = require("../../utils/apiErrorMeta");
+const {
+  rethrowIfApiError,
+  failDeviceList,
+  failDeviceGet,
+  failDeviceCreate,
+  failDeviceUpdate,
+  failDeviceDelete,
+} = require("../../utils/deviceErrors");
 const {
   normalizeDeviceTypeCode,
   getDeviceTypeName,
@@ -110,11 +120,12 @@ async function getDevices(filters = {}) {
       offset: parseInt(offset),
     };
   } catch (error) {
+    rethrowIfApiError(error);
     deviceLogger.error("取得設備列表失敗", {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throw new Error("取得設備列表失敗: " + error.message);
+    failDeviceList("取得設備列表失敗: " + error.message, error.message);
   }
 }
 
@@ -137,9 +148,7 @@ async function getDeviceById(id) {
     );
 
     if (devices.length === 0) {
-      const error = new Error("設備不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.DEVICE_NOT_FOUND, "設備不存在");
     }
 
     const device = devices[0];
@@ -164,15 +173,13 @@ async function getDeviceById(id) {
 
     return { device };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     deviceLogger.error("取得設備失敗", {
       id,
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throw new Error("取得設備失敗: " + error.message);
+    failDeviceGet("取得設備失敗: " + error.message, error.message);
   }
 }
 
@@ -183,20 +190,20 @@ async function createDevice(deviceData, userId) {
 
     // 驗證必填欄位
     if (!name || name.trim().length === 0) {
-      throw new Error("設備名稱不能為空");
+      throwApiError(C.DEVICE_NAME_REQUIRED, "設備名稱不能為空");
     }
 
     if (name.length > 100) {
-      throw new Error("設備名稱長度不能超過 100 字元");
+      throwApiError(C.DEVICE_NAME_TOO_LONG, "設備名稱長度不能超過 100 字元");
     }
 
     const inputTypeCode = normalizeDeviceTypeCode(type_code);
     if (!inputTypeCode) {
-      throw new Error("設備類型不能為空");
+      throwApiError(C.DEVICE_TYPE_REQUIRED, "設備類型不能為空");
     }
 
     if (!config) {
-      throw new Error("設備配置不能為空");
+      throwApiError(C.DEVICE_CONFIG_REQUIRED, "設備配置不能為空");
     }
 
     const typeCode = inputTypeCode;
@@ -227,9 +234,10 @@ async function createDevice(deviceData, userId) {
       const activeKeys = licenseService.getActiveFeatureKeys();
 
       if (!activeKeys.includes(featureKey)) {
-        const err = new Error(`不支援的 system_type：${featureKey}`);
-        err.statusCode = 400;
-        throw err;
+        throw createApiError(
+          C.DEVICE_UNSUPPORTED_FEATURE,
+          `不支援的 system_type：${featureKey}`,
+        );
       }
 
       const openAll = license?.activationMethod === "open_all";
@@ -237,11 +245,9 @@ async function createDevice(deviceData, userId) {
         Array.isArray(license?.features) && license.features.includes(featureKey);
 
       if (!openAll && !licensed) {
-        const err = new Error(`未授權功能：${featureKey}`);
-        err.statusCode = 403;
-        err.code = "FEATURE_NOT_LICENSED";
-        err.feature = featureKey;
-        throw err;
+        throw createApiError(C.FEATURE_NOT_LICENSED, `未授權功能：${featureKey}`, {
+          details: { feature: featureKey },
+        });
       }
 
       const rawMax = license?.quotas?.[featureKey]?.maxDevices;
@@ -251,20 +257,16 @@ async function createDevice(deviceData, userId) {
       if (!openAll && hasMax) {
         const used = await licenseQuotaService.getUsedDevicesCount(featureKey);
         if (used >= max) {
-          const err = new Error("已達到授權配額上限");
-          err.statusCode = 403;
-          err.code = "LICENSE_QUOTA_EXCEEDED";
-          err.feature = featureKey;
-          err.used = used;
-          err.max = max;
-          throw err;
+          throw createApiError(C.LICENSE_QUOTA_EXCEEDED, "已達到授權配額上限", {
+            details: { feature: featureKey, used, max },
+          });
         }
       }
     }
 
     // 驗證 model_id 必填
     if (!model_id) {
-      throw new Error("設備型號 ID 不能為空");
+      throwApiError(C.DEVICE_MODEL_ID_REQUIRED, "設備型號 ID 不能為空");
     }
 
     // 驗證設備型號是否存在且類型匹配
@@ -273,11 +275,14 @@ async function createDevice(deviceData, userId) {
       [model_id],
     );
     if (models.length === 0) {
-      throw new Error("設備型號不存在");
+      throwApiError(C.DEVICE_MODEL_NOT_FOUND, "設備型號不存在");
     }
 
     if (String(models[0].type_code || "") !== typeCode) {
-      throw new Error("設備型號的類型與設備類型不匹配");
+      throwApiError(
+        C.DEVICE_MODEL_TYPE_MISMATCH,
+        "設備型號的類型與設備類型不匹配",
+      );
     }
 
     const modelPort = models[0].port ?? null;
@@ -290,17 +295,24 @@ async function createDevice(deviceData, userId) {
     if (config.logging) {
       const loggingValidation = validateLoggingConfig(config.logging);
       if (!loggingValidation.valid) {
-        throw new Error(`logging 配置驗證失敗: ${loggingValidation.error}`);
+        throwApiError(
+          C.DEVICE_LOGGING_CONFIG_INVALID,
+          `logging 配置驗證失敗: ${loggingValidation.error}`,
+        );
       }
     }
 
     // 對於 controller 類型的設備，處理連接資訊和自動生成 unitId
     if (typeCode === "controller") {
       if (!config.host) {
-        throw new Error("controller 類型需要 host (主機位址)");
+        throwApiError(
+          C.DEVICE_CONTROLLER_HOST_REQUIRED,
+          "controller 類型需要 host (主機位址)",
+        );
       }
       if (config.port === undefined && modelPort === null) {
-        throw new Error(
+        throwApiError(
+          C.DEVICE_CONTROLLER_PORT_REQUIRED,
           "controller 類型需要 port (端口)，請在型號或設備中填寫",
         );
       }
@@ -339,7 +351,10 @@ async function createDevice(deviceData, userId) {
           }
 
           if (autoUnitId > 255) {
-            throw new Error("無法自動生成 unitId：已達到最大值 255");
+            throwApiError(
+              C.DEVICE_UNIT_ID_EXHAUSTED,
+              "無法自動生成 unitId：已達到最大值 255",
+            );
           }
 
           config.unitId = autoUnitId;
@@ -357,7 +372,8 @@ async function createDevice(deviceData, userId) {
       );
 
       if (existing.length > 0) {
-        throw new Error(
+        throwApiError(
+          C.DEVICE_DUPLICATE_CONNECTION,
           "已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）",
         );
       }
@@ -366,10 +382,14 @@ async function createDevice(deviceData, userId) {
     // 對於 sensor (modbus) 類型的設備，處理連接資訊和自動生成 unitId
     if (typeCode === "sensor" && config.protocol === "modbus") {
       if (!config.host) {
-        throw new Error("sensor (modbus) 類型需要 host (主機位址)");
+        throwApiError(
+          C.DEVICE_SENSOR_HOST_REQUIRED,
+          "sensor (modbus) 類型需要 host (主機位址)",
+        );
       }
       if (config.port === undefined && modelPort === null) {
-        throw new Error(
+        throwApiError(
+          C.DEVICE_SENSOR_PORT_REQUIRED,
           "sensor (modbus) 類型需要 port (端口)，請在型號或設備中填寫",
         );
       }
@@ -413,7 +433,10 @@ async function createDevice(deviceData, userId) {
           }
 
           if (autoUnitId > 255) {
-            throw new Error("無法自動生成 unitId：已達到最大值 255");
+            throwApiError(
+              C.DEVICE_UNIT_ID_EXHAUSTED,
+              "無法自動生成 unitId：已達到最大值 255",
+            );
           }
 
           config.unitId = autoUnitId;
@@ -432,7 +455,8 @@ async function createDevice(deviceData, userId) {
       );
 
       if (existing.length > 0) {
-        throw new Error(
+        throwApiError(
+          C.DEVICE_DUPLICATE_CONNECTION,
           "已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）",
         );
       }
@@ -480,14 +504,12 @@ async function createDevice(deviceData, userId) {
 
     return deviceResult;
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     deviceLogger.error("創建設備失敗", {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throw new Error("創建設備失敗: " + error.message);
+    failDeviceCreate("創建設備失敗: " + error.message, error.message);
   }
 }
 
@@ -499,9 +521,7 @@ async function updateDevice(id, deviceData, userId) {
     // 檢查設備是否存在
     const existing = await db.query("SELECT * FROM devices WHERE id = ?", [id]);
     if (existing.length === 0) {
-      const error = new Error("設備不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.DEVICE_NOT_FOUND, "設備不存在");
     }
 
     const existingDevice = existing[0];
@@ -512,10 +532,10 @@ async function updateDevice(id, deviceData, userId) {
 
     if (name !== undefined) {
       if (name.trim().length === 0) {
-        throw new Error("設備名稱不能為空");
+        throwApiError(C.DEVICE_NAME_REQUIRED, "設備名稱不能為空");
       }
       if (name.length > 100) {
-        throw new Error("設備名稱長度不能超過 100 字元");
+        throwApiError(C.DEVICE_NAME_TOO_LONG, "設備名稱長度不能超過 100 字元");
       }
       updates.push("name = ?");
       params.push(name.trim());
@@ -524,7 +544,7 @@ async function updateDevice(id, deviceData, userId) {
     if (type_code !== undefined) {
       const normalized = normalizeDeviceTypeCode(type_code);
       if (!normalized) {
-        throw new Error("設備類型代碼不正確");
+        throwApiError(C.DEVICE_TYPE_INVALID, "設備類型代碼不正確");
       }
       updates.push("type_code = ?");
       params.push(normalized);
@@ -533,7 +553,7 @@ async function updateDevice(id, deviceData, userId) {
     if (model_id !== undefined) {
       // model_id 現在是必填的，不能為 null
       if (!model_id) {
-        throw new Error("設備型號 ID 不能為空");
+        throwApiError(C.DEVICE_MODEL_ID_REQUIRED, "設備型號 ID 不能為空");
       }
 
       // 驗證設備型號是否存在
@@ -542,14 +562,17 @@ async function updateDevice(id, deviceData, userId) {
         [model_id],
       );
       if (models.length === 0) {
-        throw new Error("設備型號不存在");
+        throwApiError(C.DEVICE_MODEL_NOT_FOUND, "設備型號不存在");
       }
 
       // 驗證類型匹配
       const currentTypeCode =
         normalizeDeviceTypeCode(type_code) || String(existingDevice.type_code || "");
       if (String(models[0].type_code || "") !== String(currentTypeCode || "")) {
-        throw new Error("設備型號的類型與設備類型不匹配");
+        throwApiError(
+          C.DEVICE_MODEL_TYPE_MISMATCH,
+          "設備型號的類型與設備類型不匹配",
+        );
       }
 
       updates.push("model_id = ?");
@@ -563,7 +586,10 @@ async function updateDevice(id, deviceData, userId) {
 
     if (status !== undefined) {
       if (!["active", "inactive", "error"].includes(status)) {
-        throw new Error("狀態必須為 active, inactive 或 error");
+        throwApiError(
+          C.DEVICE_STATUS_INVALID,
+          "狀態必須為 active, inactive 或 error",
+        );
       }
       updates.push("status = ?");
       params.push(status);
@@ -581,7 +607,10 @@ async function updateDevice(id, deviceData, userId) {
       if (config.logging) {
         const loggingValidation = validateLoggingConfig(config.logging);
         if (!loggingValidation.valid) {
-          throw new Error(`logging 配置驗證失敗: ${loggingValidation.error}`);
+          throwApiError(
+            C.DEVICE_LOGGING_CONFIG_INVALID,
+            `logging 配置驗證失敗: ${loggingValidation.error}`,
+          );
         }
       }
 
@@ -650,7 +679,10 @@ async function updateDevice(id, deviceData, userId) {
                     autoUnitId++;
                   }
                   if (autoUnitId > 255) {
-                    throw new Error("無法自動生成 unitId：已達到最大值 255");
+                    throwApiError(
+                      C.DEVICE_UNIT_ID_EXHAUSTED,
+                      "無法自動生成 unitId：已達到最大值 255",
+                    );
                   }
                   config.unitId = autoUnitId;
                 }
@@ -661,7 +693,10 @@ async function updateDevice(id, deviceData, userId) {
                   autoUnitId++;
                 }
                 if (autoUnitId > 255) {
-                  throw new Error("無法自動生成 unitId：已達到最大值 255");
+                  throwApiError(
+                    C.DEVICE_UNIT_ID_EXHAUSTED,
+                    "無法自動生成 unitId：已達到最大值 255",
+                  );
                 }
                 config.unitId = autoUnitId;
               }
@@ -686,7 +721,8 @@ async function updateDevice(id, deviceData, userId) {
           );
 
           if (existing.length > 0) {
-            throw new Error(
+            throwApiError(
+              C.DEVICE_DUPLICATE_CONNECTION,
               "已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）",
             );
           }
@@ -767,7 +803,10 @@ async function updateDevice(id, deviceData, userId) {
                     autoUnitId++;
                   }
                   if (autoUnitId > 255) {
-                    throw new Error("無法自動生成 unitId：已達到最大值 255");
+                    throwApiError(
+                      C.DEVICE_UNIT_ID_EXHAUSTED,
+                      "無法自動生成 unitId：已達到最大值 255",
+                    );
                   }
                   config.unitId = autoUnitId;
                 }
@@ -778,7 +817,10 @@ async function updateDevice(id, deviceData, userId) {
                   autoUnitId++;
                 }
                 if (autoUnitId > 255) {
-                  throw new Error("無法自動生成 unitId：已達到最大值 255");
+                  throwApiError(
+                    C.DEVICE_UNIT_ID_EXHAUSTED,
+                    "無法自動生成 unitId：已達到最大值 255",
+                  );
                 }
                 config.unitId = autoUnitId;
               }
@@ -803,7 +845,8 @@ async function updateDevice(id, deviceData, userId) {
           );
 
           if (existing.length > 0) {
-            throw new Error(
+            throwApiError(
+              C.DEVICE_DUPLICATE_CONNECTION,
               "已存在相同連接配置的設備（相同的 IP、端口和 Unit ID）",
             );
           }
@@ -815,7 +858,7 @@ async function updateDevice(id, deviceData, userId) {
     }
 
     if (updates.length === 0) {
-      throw new Error("沒有提供要更新的欄位");
+      throwApiError(C.DEVICE_UPDATE_NO_FIELDS, "沒有提供要更新的欄位");
     }
 
     params.push(id);
@@ -922,15 +965,13 @@ async function updateDevice(id, deviceData, userId) {
 
     return updatedDevice;
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     deviceLogger.error("更新設備失敗", {
       id,
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throw new Error("更新設備失敗: " + error.message);
+    failDeviceUpdate("更新設備失敗: " + error.message, error.message);
   }
 }
 
@@ -948,9 +989,7 @@ async function deleteDevice(id, userId = null) {
       [id]
     );
     if (devices.length === 0) {
-      const error = new Error("設備不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.DEVICE_NOT_FOUND, "設備不存在");
     }
 
     const isCamera = String(devices[0]?.type_code || "").toLowerCase() === "camera";
@@ -977,15 +1016,13 @@ async function deleteDevice(id, userId = null) {
 
     return { message: "設備已刪除" };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     deviceLogger.error("刪除設備失敗", {
       id,
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throw new Error("刪除設備失敗: " + error.message);
+    failDeviceDelete("刪除設備失敗: " + error.message, error.message);
   }
 }
 
@@ -1003,11 +1040,15 @@ async function getCameraGroups() {
     const rows = await db.query(query, ["camera"]);
     return rows.map((r) => r.group_name).filter(Boolean);
   } catch (error) {
+    rethrowIfApiError(error);
     deviceLogger.error("取得攝影機群組失敗", {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throw new Error("取得攝影機群組失敗: " + error.message);
+    throwApiError(C.DEVICE_CAMERA_GROUPS_FAILED, "取得攝影機群組失敗: " + error.message, {
+      statusCode: 500,
+      details: error.message,
+    });
   }
 }
 

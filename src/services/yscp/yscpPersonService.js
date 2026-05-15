@@ -7,6 +7,8 @@ const config = require("../../config");
 const logger = require("../../utils/logger");
 
 const serviceLogger = logger.createLogger("YSCP Person Service");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * YSCP 人員服務
@@ -26,7 +28,7 @@ class YscpPersonService {
 			}
 
 			if (!fs.existsSync(fullPath)) {
-				throw new Error(`文件不存在: ${fullPath}`);
+				throwApiError(C.YSCP_FILE_NOT_FOUND, `文件不存在: ${fullPath}`);
 			}
 
 			const content = fs.readFileSync(fullPath, "utf8");
@@ -118,8 +120,9 @@ class YscpPersonService {
 			);
 
 			if (response.data.code !== "0") {
-				throw new Error(
-					`獲取人員資訊失敗: ${response.data.msg || "未知錯誤"}`
+				throwApiError(
+					C.YSCP_PERSON_INFO_FAILED,
+					`獲取人員資訊失敗: ${response.data.msg || "未知錯誤"}`,
 				);
 			}
 
@@ -170,8 +173,9 @@ class YscpPersonService {
 				try {
 					const jsonData = JSON.parse(response.data);
 					if (jsonData.code !== "0") {
-						throw new Error(
-							`獲取人員圖片失敗: ${jsonData.msg || "未知錯誤"}`
+						throwApiError(
+							C.YSCP_PERSON_PICTURE_FAILED,
+							`獲取人員圖片失敗: ${jsonData.msg || "未知錯誤"}`,
 						);
 					}
 					pictureData = jsonData.data;
@@ -186,13 +190,14 @@ class YscpPersonService {
 				pictureData = response.data;
 			} else if (response.data && typeof response.data === "object") {
 				if (response.data.code !== "0") {
-					throw new Error(
-						`獲取人員圖片失敗: ${response.data.msg || "未知錯誤"}`
+					throwApiError(
+						C.YSCP_PERSON_PICTURE_FAILED,
+						`獲取人員圖片失敗: ${response.data.msg || "未知錯誤"}`,
 					);
 				}
 				pictureData = response.data.data;
 			} else {
-				throw new Error("無法解析響應數據格式");
+				throwApiError(C.YSCP_RESPONSE_PARSE_FAILED, "無法解析響應數據格式");
 			}
 
 			if (typeof pictureData === "string" && pictureData.startsWith("data:image")) {

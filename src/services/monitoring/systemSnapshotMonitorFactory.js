@@ -8,6 +8,8 @@
 
 const logger = require("../../utils/logger");
 const websocketService = require("../websocket/websocketService");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 監控快照 API：`raw` 形狀依設備類型而定。
@@ -110,10 +112,18 @@ function createSystemSnapshotMonitor(options) {
     isOnline = (item) => !item?.error,
   } = options || {};
 
-  if (!systemKey) throw new Error("systemKey is required");
-  if (!loggerName) throw new Error("loggerName is required");
-  if (typeof getSnapshot !== "function")
-    throw new Error("getSnapshot must be a function");
+  if (!systemKey) {
+    throwApiError(C.MONITOR_FACTORY_CONFIG_INVALID, "systemKey is required");
+  }
+  if (!loggerName) {
+    throwApiError(C.MONITOR_FACTORY_CONFIG_INVALID, "loggerName is required");
+  }
+  if (typeof getSnapshot !== "function") {
+    throwApiError(
+      C.MONITOR_FACTORY_CONFIG_INVALID,
+      "getSnapshot must be a function",
+    );
+  }
 
   const monitorLogger = logger.createLogger(loggerName);
   const lastDeviceStatus = new Map(); // key: `${systemKey}:${sourceId}` -> 'online' | 'offline'

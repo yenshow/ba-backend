@@ -19,6 +19,7 @@ const errorHandler = require("./middleware/errorHandler");
 const responseHandler = require("./middleware/responseHandler");
 const { securityHeaders } = require("./middleware/common");
 const logger = require("./utils/logger");
+const C = require("./utils/apiErrorCodes");
 
 // 路由
 const modbusRoutes = require("./routes/modbusRoutes");
@@ -183,6 +184,22 @@ app.use(
 
 // 移除舊的 /ws 端點，現在使用 Socket.IO
 // Socket.IO 會自動處理 WebSocket 連接
+
+// 未匹配的 API 路徑
+app.use((req, res) => {
+  if (!req.path.startsWith("/api")) {
+    res.status(404).end();
+    return;
+  }
+  res.sendFailure(
+    {
+      code: C.NOT_FOUND,
+      message: "找不到 API 路徑",
+      details: { method: req.method, path: req.originalUrl },
+    },
+    404,
+  );
+});
 
 // 統一錯誤處理中間件（必須放在所有路由之後）
 app.use(errorHandler);

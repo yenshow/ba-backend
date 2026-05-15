@@ -5,6 +5,8 @@
 const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("./isapiClient");
 const FormData = require("form-data");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError } = require("../../utils/apiErrorMeta");
 
 const ISAPI_PATHS = {
   userInfoSearch: "/ISAPI/AccessControl/UserInfo/Search?format=json",
@@ -166,20 +168,17 @@ function applyUserInfoDefaults(userInfo) {
 async function getDeviceAndClient(deviceId) {
   const { device } = await deviceService.getDeviceById(deviceId);
   if (device.type_code !== "access_control") {
-    const err = new Error("該設備不是門禁設備");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.ACCESS_CONTROL_NOT_DEVICE, "該設備不是門禁設備");
   }
   if (
     !device.config?.host ||
     !device.config?.username ||
     !device.config?.password
   ) {
-    const err = new Error(
+    throw createApiError(
+      C.ACCESS_CONTROL_CONFIG_INCOMPLETE,
       "門禁設備連線設定不完整（缺少 host / username / password）",
     );
-    err.statusCode = 400;
-    throw err;
   }
   const client = createIsapiClient(device.config);
   const model = device.model || {};
@@ -210,7 +209,10 @@ async function searchUserInfo(deviceId, options = {}) {
   });
   const search = res.data?.UserInfoSearch;
   if (!search) {
-    throw new Error("設備回傳格式異常：缺少 UserInfoSearch");
+    throw createApiError(
+      C.ACCESS_CONTROL_ISAPI_INVALID_RESPONSE,
+      "設備回傳格式異常：缺少 UserInfoSearch",
+    );
   }
   const rawList = search.UserInfo || [];
   const list = rawList.map((u) => {
@@ -256,7 +258,7 @@ async function deleteUserInfo(deviceId, payload) {
       ? [payload.employeeNo]
       : [];
   if (rawList.length === 0) {
-    throw new Error("請提供 employeeNo 或 employeeNoList");
+    throw createApiError(C.ACCESS_CONTROL_EMPLOYEE_NO_REQUIRED, "請提供 employeeNo 或 employeeNoList");
   }
   const employeeNoList = rawList.map((no) => ({ employeeNo: String(no) }));
   const body = {
@@ -394,14 +396,10 @@ async function setCardInfo(deviceId, cardInfo) {
   const cardType = cardInfo?.cardType || "normalCard";
 
   if (!employeeNo.trim()) {
-    const err = new Error("請提供 employeeNo");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.ACCESS_CONTROL_EMPLOYEE_NO_REQUIRED, "請提供 employeeNo");
   }
   if (!cardNo.trim()) {
-    const err = new Error("請提供 cardNo");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.ACCESS_CONTROL_CARD_NO_REQUIRED, "請提供 cardNo");
   }
 
   await client.request({
@@ -481,14 +479,10 @@ async function setFingerPrint(deviceId, fingerPrintCfg) {
     : undefined;
 
   if (!employeeNo.trim()) {
-    const err = new Error("請提供 employeeNo");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.ACCESS_CONTROL_EMPLOYEE_NO_REQUIRED, "請提供 employeeNo");
   }
   if (!fingerData.trim()) {
-    const err = new Error("請提供 fingerData");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.ACCESS_CONTROL_FINGER_DATA_REQUIRED, "請提供 fingerData");
   }
 
   await client.request({

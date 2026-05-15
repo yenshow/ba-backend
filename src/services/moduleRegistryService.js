@@ -1,4 +1,5 @@
 const config = require("../config");
+const yscpFeature = require("../utils/yscpPeopleCountingFeature");
 
 /**
  * 模組 Registry（SSOT）
@@ -253,6 +254,9 @@ const getRegistry = () => {
   return {
     profile,
     modules: getModulesForProfile(profile),
+    serverFeatures: {
+      enableYscpPeopleCounting: yscpFeature.isEnabled(),
+    },
   };
 };
 

@@ -1,4 +1,6 @@
 const db = require("../database/db");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrorMeta");
 
 /**
  * 取得權限定義（樹狀或扁平），供權限設定頁與 API 使用
@@ -107,7 +109,9 @@ async function setUserPermissionOverrides(userId, overrides) {
  */
 async function getUserPermissionSettings(userId) {
 	const users = await db.query("SELECT id, role FROM users WHERE id = ?", [userId]);
-	if (users.length === 0) throw new Error("用戶不存在");
+	if (users.length === 0) {
+		throwApiError(C.USER_NOT_FOUND, "用戶不存在");
+	}
 	const userRole = users[0].role;
 
 	const [definitions, roleDefaults, overrides] = await Promise.all([

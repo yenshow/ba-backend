@@ -10,6 +10,8 @@
  */
 const db = require("../../../../database/db");
 const { getTodayTimeRange } = require("../../../../utils/dateRangeUtils");
+const C = require("../../../../utils/apiErrorCodes");
+const { throwApiError } = require("../../../../utils/apiErrorMeta");
 
 function ensureInt(v) {
   const n = Number(v);
@@ -37,9 +39,10 @@ function stableUnitIdFromName(name) {
 async function getSiteConfigOrThrow(siteId, config) {
   const deviceIds = ensureIntArray(config.cameraDeviceIds);
   if (deviceIds.length === 0) {
-    const err = new Error("未設定攝影機設備（cameraDeviceIds）");
-    err.statusCode = 400;
-    throw err;
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "未設定攝影機設備（cameraDeviceIds）",
+    );
   }
   const channelId = 1;
   return { deviceIds, channelId };
@@ -162,6 +165,7 @@ async function getSiteLogs(siteId, config, options = {}) {
 
   const toEvent = (row, eventType, unitName) => {
     const suffix = eventType === "entry" ? "in" : "out";
+    const eventLabel = eventType === "entry" ? "進入" : "離開";
     return {
       id: `pc-cam-${row.id}-${suffix}`,
       personId: -1,
@@ -170,6 +174,8 @@ async function getSiteLogs(siteId, config, options = {}) {
       unitName,
       employeeId: null,
       eventType,
+      eventLabel,
+      verifyMethod: null,
       timestamp: row.event_time,
       deviceScreenshotUrl: "",
       deviceName: row.device_ip || "",

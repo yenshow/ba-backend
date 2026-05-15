@@ -9,6 +9,8 @@ const LaneInfoHandler = require("./handlers/laneInfoHandler");
 const VehicleCustomListHandler = require("./handlers/vehicleCustomListHandler");
 const VehicleAndListRelationHandler = require("./handlers/vehicleAndListRelationHandler");
 const systemMapping = require("./systemMapping");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 處理器工廠
@@ -68,7 +70,8 @@ class HandlerFactory {
     const handler = this.handlers.get(key);
 
     if (!handler) {
-      throw new Error(
+      throwApiError(
+        C.EXTERNAL_DATA_HANDLER_NOT_FOUND,
         `找不到 ${key} 的處理器。請確認 schema 和 table 是否正確，或該處理器是否已註冊。`,
       );
     }

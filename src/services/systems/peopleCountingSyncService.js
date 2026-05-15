@@ -5,6 +5,7 @@
 
 const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
+const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 
 const syncLogger = logger.createLogger("peopleCountingSyncService");
 const db = require("../../database/db");
@@ -45,6 +46,8 @@ async function getPhysicalIdToLocationMap() {
  * @returns {Promise<{ synced: number }>}
  */
 async function syncRecords(start, end) {
+  if (!yscpFeature.isEnabled()) return { synced: 0 };
+
   const sql = `
     SELECT 
       r.person_id,
@@ -182,6 +185,7 @@ async function getPhysicalIdToDirectionMap() {
  */
 async function getDoorNamesByPhysicalIds(physicalIds) {
   const map = new Map();
+  if (!yscpFeature.isEnabled()) return map;
   if (!physicalIds || physicalIds.length === 0) return map;
 
   const uniqueIds = [...new Set(physicalIds)].filter((id) => id != null && id !== "");

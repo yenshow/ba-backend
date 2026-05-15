@@ -1,5 +1,6 @@
 const userService = require("../services/userService");
 const permissionService = require("../services/permissionService");
+const C = require("../utils/apiErrorCodes");
 
 // 驗證 JWT Token 中間件
 function authenticate(req, res, next) {
@@ -7,7 +8,14 @@ function authenticate(req, res, next) {
 		const authHeader = req.headers.authorization;
 
 		if (!authHeader) {
-			return res.status(401).json({ error: "未提供認證 Token" });
+			return res.sendFailure(
+				{
+					code: C.AUTH_TOKEN_MISSING,
+					message: "未提供認證 Token",
+					details: null,
+				},
+				401,
+			);
 		}
 
 		// 支援 "Bearer <token>" 格式
@@ -16,14 +24,28 @@ function authenticate(req, res, next) {
 		// 驗證 Token
 		const decoded = userService.verifyToken(token);
 		if (!decoded) {
-			return res.status(401).json({ error: "無效的 Token" });
+			return res.sendFailure(
+				{
+					code: C.AUTH_TOKEN_INVALID,
+					message: "無效的 Token",
+					details: null,
+				},
+				401,
+			);
 		}
 
 		// 將用戶資訊附加到 request
 		req.user = decoded;
 		next();
 	} catch (error) {
-		return res.status(401).json({ error: "認證失敗", details: error.message });
+		return res.sendFailure(
+			{
+				code: C.AUTH_FAILED,
+				message: "認證失敗",
+				details: error.message,
+			},
+			401,
+		);
 	}
 }
 
@@ -31,11 +53,25 @@ function authenticate(req, res, next) {
 function authorize(...allowedRoles) {
 	return (req, res, next) => {
 		if (!req.user) {
-			return res.status(401).json({ error: "未認證" });
+			return res.sendFailure(
+				{
+					code: C.AUTH_UNAUTHENTICATED,
+					message: "未認證",
+					details: null,
+				},
+				401,
+			);
 		}
 
 		if (!allowedRoles.includes(req.user.role)) {
-			return res.status(403).json({ error: "權限不足" });
+			return res.sendFailure(
+				{
+					code: C.PERMISSION_DENIED,
+					message: "權限不足",
+					details: null,
+				},
+				403,
+			);
 		}
 
 		next();
@@ -60,7 +96,14 @@ function requireAdminOrOperator(req, res, next) {
 function requirePermission(requiredCode) {
 	return async (req, res, next) => {
 		if (!req.user) {
-			return res.status(401).json({ error: "未認證" });
+			return res.sendFailure(
+				{
+					code: C.AUTH_UNAUTHENTICATED,
+					message: "未認證",
+					details: null,
+				},
+				401,
+			);
 		}
 		if (req.user.role === "admin") {
 			return next();
@@ -72,13 +115,27 @@ function requirePermission(requiredCode) {
 				codes = result.codes;
 				req.user.permissions = codes;
 			} catch (err) {
-				return res.status(500).json({ error: "無法取得權限", details: err.message });
+				return res.sendFailure(
+					{
+						code: C.PERMISSION_LOAD_FAILED,
+						message: "無法取得權限",
+						details: err.message,
+					},
+					500,
+				);
 			}
 		}
 		if (codes.includes(requiredCode)) {
 			return next();
 		}
-		return res.status(403).json({ error: "權限不足" });
+		return res.sendFailure(
+			{
+				code: C.PERMISSION_DENIED,
+				message: "權限不足",
+				details: null,
+			},
+			403,
+		);
 	};
 }
 
@@ -89,4 +146,3 @@ module.exports = {
 	requireAdminOrOperator,
 	requirePermission
 };
-

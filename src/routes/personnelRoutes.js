@@ -24,6 +24,8 @@ const {
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const logger = require("../utils/logger");
+const C = require("../utils/apiErrorCodes");
+const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
 
 const router = express.Router();
 const isapiEventLogger = logger.createLogger("ISAPI Event");
@@ -49,7 +51,13 @@ const personnelUpload = multer({
       cb(null, true);
       return;
     }
-    cb(new Error("圖片格式不正確：僅允許 JPEG（JPG）"), false);
+    cb(
+      createApiError(
+        C.PERSONNEL_FACE_UPLOAD_INVALID_FILE_FORMAT,
+        "圖片格式不正確：僅允許 JPEG（JPG）",
+      ),
+      false,
+    );
   },
   limits: { fileSize: PERSONNEL_FACE_MAX_BYTES },
 });
@@ -240,9 +248,9 @@ router.get(
       req.params.employeeNo,
     );
     if (!person) {
-      const err = new Error("人員不存在");
-      err.statusCode = 404;
-      throw err;
+      throwApiError(C.PERSONNEL_PERSON_NOT_FOUND, "人員不存在", {
+        statusCode: 404,
+      });
     }
     res.sendSuccess(person);
   }),
@@ -338,9 +346,7 @@ router.post(
   personnelUpload.single("file"),
   asyncHandler(async (req, res) => {
     if (!req.file) {
-      const err = new Error("請選擇圖片檔案");
-      err.statusCode = 400;
-      throw err;
+      throwApiError(C.PERSONNEL_FACE_UPLOAD_FILE_MISSING, "請選擇圖片檔案");
     }
 
     const tempPath = path.join(personnelUploadsDir, req.file.filename);
@@ -511,9 +517,9 @@ router.get(
       tailLimit,
     });
     if (!job) {
-      const err = new Error("同步工作不存在");
-      err.statusCode = 404;
-      throw err;
+      throwApiError(C.PERSONNEL_SYNC_JOB_NOT_FOUND, "同步工作不存在", {
+        statusCode: 404,
+      });
     }
     res.sendSuccess(job);
   }),
@@ -547,9 +553,9 @@ router.get(
       offset,
     });
     if (!result) {
-      const err = new Error("同步工作不存在");
-      err.statusCode = 404;
-      throw err;
+      throwApiError(C.PERSONNEL_SYNC_JOB_NOT_FOUND, "同步工作不存在", {
+        statusCode: 404,
+      });
     }
     res.sendSuccess(result);
   }),
@@ -573,9 +579,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const job = await personSyncJobService.getSyncAllLocationsJob(req.params.jobId);
     if (!job) {
-      const err = new Error("同步工作不存在");
-      err.statusCode = 404;
-      throw err;
+      throwApiError(C.PERSONNEL_SYNC_JOB_NOT_FOUND, "同步工作不存在", {
+        statusCode: 404,
+      });
     }
     res.sendSuccess(job);
   }),
@@ -613,9 +619,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const excelFile = req.files?.excel?.[0];
     if (!excelFile) {
-      const err = new Error("請上傳 Excel 檔（欄位名稱：excel）");
-      err.statusCode = 400;
-      throw err;
+      throwApiError(C.PERSONNEL_IMPORT_EXCEL_FILE_MISSING, "請上傳 Excel 檔（欄位名稱：excel）");
     }
     const zipFile = req.files?.imagesZip?.[0] ?? null;
     const createdBy = req.user?.id ?? null;

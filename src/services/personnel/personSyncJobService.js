@@ -13,6 +13,8 @@ const personnelService = require("./personnelService");
 const logger = require("../../utils/logger").createLogger("PersonSyncService");
 const personDeviceSyncStateService = require("./personDeviceSyncStateService");
 const personSyncJobStore = require("./personSyncJobStore");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const SYNC_DELAY_MS = 300;
 
@@ -56,12 +58,6 @@ const MAX_JOB_TAIL_ITEMS = personSyncJobStore.MAX_JOB_TAIL_ITEMS;
 
 function randomJobId() {
   return `syncall_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function createValidationError(message) {
-  const err = new Error(message);
-  err.statusCode = 400;
-  return err;
 }
 
 function toMessage(err) {
@@ -919,7 +915,9 @@ async function syncPersonToDevice(
 async function syncLocation(locationId, reporter = null) {
   const warnings = [];
   const devs = await getPeopleCountingDevicesForLocation(locationId);
-  if (!devs) throw createValidationError("該地點未設定人流門禁入口設備");
+  if (!devs) {
+    throwApiError(C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED, "該地點未設定人流門禁入口設備");
+  }
 
   const persons =
     await personnelService.getPersonsWithAccessByLocationId(locationId);

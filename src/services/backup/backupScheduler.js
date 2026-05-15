@@ -1,6 +1,5 @@
 /**
- * 備份排程器
- * 定時備份過期資料並刪除，依資料夾分類（environment_readings、alerts、people_counting、vehicle_access）
+ * 備份排程：歸檔過期 DB 列為 CSV，驗證通過後刪除；清理過期歸檔檔
  */
 
 const backupService = require("./backupService");
@@ -20,197 +19,164 @@ const {
 const {
   transformEnvironmentReadingsToReportFormat,
 } = require("./environmentReadingsReportFormat");
-const {
-  transformEnvironmentReadingsAggregatedToReportFormat,
-} = require("./environmentReadingsAggregatedReportFormat");
-
-const RETENTION_DAYS = backupConfig.retention.databaseDays;
-const FILE_RETENTION_DAYS = backupConfig.retention.backupFileDays;
 const logger = require("../../utils/logger");
+const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 
 const backupLogger = logger.createLogger("backupScheduler");
 
-/**
- * 執行完整備份流程（警報為狀態型：不因跨日自動結案；僅備份並刪除已解決且過保留期之資料）
- */
-async function runBackup() {
-  const beforeDate = new Date();
-  beforeDate.setDate(beforeDate.getDate() - RETENTION_DAYS);
+const CUTOFF_DAYS = backupConfig.retention.databaseDays;
+const FILE_RETENTION_DAYS = backupConfig.retention.backupFileDays;
 
-  const results = {
-    environment_readings: null,
-    environment_readings_aggregated: null,
-    alerts: null,
-    people_counting_logs: null,
-    vehicle_passageway_logs: null,
-    deletedFiles: 0,
-  };
+let isBackupRunning = false;
+
+function cutoffBeforeDate() {
+  const before = new Date();
+  before.setDate(before.getDate() - CUTOFF_DAYS);
+  return before;
+}
+
+async function runOptionalSync(label, syncFns) {
+  for (const fn of syncFns) {
+    try {
+      await fn();
+    } catch (error) {
+      backupLogger.warn(`${label}同步略過（仍嘗試備份／刪除既有 DB 資料）`, {
+        error: error?.message || String(error),
+        module: "backupScheduler",
+      });
+    }
+  }
+}
+
+async function runBackupJob(label, job) {
+  try {
+    return await job();
+  } catch (error) {
+    backupLogger.error(`${label}備份失敗（DB 可能未刪除過期資料）`, {
+      error: error?.message || String(error),
+      module: "backupScheduler",
+    });
+    return { error: error.message };
+  }
+}
+
+function sumCounts(...results) {
+  return results.reduce(
+    (acc, r) => ({
+      backed: acc.backed + (r?.count || 0),
+      deleted: acc.deleted + (r?.deletedCount || 0),
+    }),
+    { backed: 0, deleted: 0 },
+  );
+}
+
+async function runBackup() {
+  const beforeDate = cutoffBeforeDate();
 
   try {
-    // 彙總寫入：昨日 day、上月 month（每日備份時執行一次）
     try {
       await environmentAggregationService.computeAndSaveDayAndMonth();
-    } catch (aggError) {
+    } catch (error) {
       backupLogger.warn("彙總寫入 day/month 略過", {
-        error: aggError?.message || String(aggError),
+        error: error?.message || String(error),
         module: "backupScheduler",
       });
     }
 
-    // environment_readings
-    const envData =
-      await environmentReadingsService.getReadingsForBackup(beforeDate);
     const envResult = await backupService.backupTable({
       tableName: "environment_readings",
-      data: envData,
+      data: await environmentReadingsService.getReadingsForBackup(beforeDate),
       deleteQuery: "DELETE FROM environment_readings WHERE recorded_at < $1",
       deleteParams: [beforeDate],
       category: "environmentReadings",
       deleteAfterBackup: true,
-      mergeStrategy: "date",
       csvTransform: transformEnvironmentReadingsToReportFormat,
     });
-    results.environment_readings = envResult;
 
-    // environment_readings_aggregated（同一 beforeDate，先備份再刪除）
-    const aggData = await environmentReadingsService.getAggregatedForBackup(beforeDate);
-    const aggResult = await backupService.backupTable({
-      tableName: "environment_readings_aggregated",
-      data: aggData,
-      deleteQuery: "DELETE FROM environment_readings_aggregated WHERE bucket_at < $1",
-      deleteParams: [beforeDate],
-      category: "environmentReadingsAggregated",
-      deleteAfterBackup: true,
-      mergeStrategy: "date",
-      csvTransform: transformEnvironmentReadingsAggregatedToReportFormat,
-    });
-    results.environment_readings_aggregated = aggResult;
-
-    // alerts
-    const enrichedAlerts =
-      await alertService.getResolvedAlertsForBackup(beforeDate);
     const alertResult = await backupService.backupTable({
       tableName: "alerts",
-      data: enrichedAlerts,
+      data: await alertService.getResolvedAlertsForBackup(beforeDate),
       deleteQuery: `DELETE FROM alerts WHERE status = 'resolved' AND updated_at < $1`,
       deleteParams: [beforeDate],
       category: "alerts",
       deleteAfterBackup: true,
-      mergeStrategy: "date",
       csvTransform: transformAlertsToReportFormat,
     });
-    results.alerts = alertResult;
 
-    // people_counting_logs：先同步再備份
-    let peopleResult = { count: 0, deletedCount: 0, message: "略過" };
-    try {
-      await peopleCountingSyncService.syncYesterday();
-      await peopleCountingSyncService.syncDayAgo(RETENTION_DAYS + 1);
-
-      const peopleRows =
-        await backupService.getPeopleCountingForBackup(beforeDate);
-      const physicalIds = [
-        ...new Set(peopleRows.map((r) => r.physical_id).filter(Boolean)),
-      ];
-      const [doorNameMap, directionMap] = await Promise.all([
-        peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds),
-        peopleCountingSyncService.getPhysicalIdToDirectionMap(),
+    let peopleResult = { skipped: true };
+    if (yscpFeature.isEnabled()) {
+      await runOptionalSync("人流統計", [
+        () => peopleCountingSyncService.syncYesterday(),
+        () => peopleCountingSyncService.syncDayAgo(CUTOFF_DAYS + 1),
       ]);
-
-      const peopleData = await backupService.backupTable({
-        tableName: "people_counting_logs",
-        data: peopleRows,
-        deleteQuery:
-          "DELETE FROM people_counting_logs WHERE swip_card_rev_time < $1",
-        deleteParams: [beforeDate],
-        category: "peopleCounting",
-        deleteAfterBackup: true,
-        mergeStrategy: "date",
-        csvTransform: (rows) =>
-          transformPeopleCountingToReportFormat(
-            rows,
-            doorNameMap,
-            directionMap,
-          ),
+      peopleResult = await runBackupJob("人流統計", async () => {
+        const peopleRows =
+          await backupService.getPeopleCountingForBackup(beforeDate);
+        const physicalIds = [
+          ...new Set(peopleRows.map((r) => r.physical_id).filter(Boolean)),
+        ];
+        const [doorNameMap, directionMap] = await Promise.all([
+          peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds),
+          peopleCountingSyncService.getPhysicalIdToDirectionMap(),
+        ]);
+        return backupService.backupTable({
+          tableName: "people_counting_logs",
+          data: peopleRows,
+          deleteQuery:
+            "DELETE FROM people_counting_logs WHERE swip_card_rev_time < $1",
+          deleteParams: [beforeDate],
+          category: "peopleCounting",
+          deleteAfterBackup: true,
+          csvTransform: (rows) =>
+            transformPeopleCountingToReportFormat(
+              rows,
+              doorNameMap,
+              directionMap,
+            ),
+        });
       });
-      peopleResult = peopleData;
-      results.people_counting_logs = peopleResult;
-    } catch (pcError) {
-      backupLogger.warn("人流統計同步/備份略過", {
-        error: pcError?.message || String(pcError),
-        module: "backupScheduler",
-      });
-      results.people_counting_logs = { error: pcError.message };
     }
 
-    // vehicle_passageway_logs：先同步再備份
-    let vehicleResult = { count: 0, deletedCount: 0, message: "略過" };
-    try {
-      await vehicleAccessSyncService.syncYesterday();
-      await vehicleAccessSyncService.syncDayAgo(RETENTION_DAYS + 1);
-
-      const vehicleRows =
-        await backupService.getVehiclePassagewayForBackup(beforeDate);
-
-      const vehicleData = await backupService.backupTable({
+    await runOptionalSync("車輛進出", [
+      () => vehicleAccessSyncService.syncYesterday(),
+      () => vehicleAccessSyncService.syncDayAgo(CUTOFF_DAYS + 1),
+    ]);
+    const vehicleResult = await runBackupJob("車輛進出", async () =>
+      backupService.backupTable({
         tableName: "vehicle_passageway_logs",
-        data: vehicleRows,
+        data: await backupService.getVehiclePassagewayForBackup(beforeDate),
         deleteQuery:
           "DELETE FROM vehicle_passageway_logs WHERE trigger_time < $1",
         deleteParams: [beforeDate],
         category: "vehicleAccess",
         deleteAfterBackup: true,
-        mergeStrategy: "date",
         csvTransform: transformVehicleAccessToReportFormat,
-      });
-      vehicleResult = vehicleData;
-      results.vehicle_passageway_logs = vehicleResult;
-    } catch (vaError) {
-      backupLogger.warn("車輛進出同步/備份略過", {
-        error: vaError?.message || String(vaError),
-        module: "backupScheduler",
-      });
-      results.vehicle_passageway_logs = { error: vaError.message };
-    }
+      }),
+    );
 
-    // 刪除過期備份檔
-    results.deletedFiles += await backupService.deleteOldBackups(
-      "environmentReadings",
-      FILE_RETENTION_DAYS,
-    );
-    results.deletedFiles += await backupService.deleteOldBackups(
-      "environmentReadingsAggregated",
-      FILE_RETENTION_DAYS,
-    );
-    results.deletedFiles += await backupService.deleteOldBackups(
-      "alerts",
-      FILE_RETENTION_DAYS,
-    );
-    results.deletedFiles += await backupService.deleteOldBackups(
-      "peopleCounting",
-      FILE_RETENTION_DAYS,
-    );
-    results.deletedFiles += await backupService.deleteOldBackups(
-      "vehicleAccess",
+    const deletedFiles = await backupService.purgeOldArchiveFiles(
       FILE_RETENTION_DAYS,
     );
 
-    const totalBacked =
-      (envResult.count || 0) +
-      (aggResult.count || 0) +
-      (alertResult.count || 0) +
-      (peopleResult.count || 0) +
-      (vehicleResult.count || 0);
-    const totalDeleted =
-      (envResult.deletedCount || 0) +
-      (aggResult.deletedCount || 0) +
-      (alertResult.deletedCount || 0) +
-      (peopleResult.deletedCount || 0) +
-      (vehicleResult.deletedCount || 0);
+    const { backed, deleted } = sumCounts(
+      envResult,
+      alertResult,
+      peopleResult,
+      vehicleResult,
+    );
+
+    const results = {
+      environment_readings: envResult,
+      alerts: alertResult,
+      people_counting_logs: peopleResult,
+      vehicle_passageway_logs: vehicleResult,
+      deletedFiles,
+    };
+
     backupLogger.info("備份完成", {
-      totalBacked,
-      totalDeleted,
-      deletedFiles: results.deletedFiles,
+      totalBacked: backed,
+      totalDeleted: deleted,
+      deletedFiles,
       module: "backupScheduler",
     });
 
@@ -224,22 +190,41 @@ async function runBackup() {
   }
 }
 
-/**
- * 啟動定時備份（伺服器啟動時呼叫）
- */
+async function runBackupOnce() {
+  if (isBackupRunning) {
+    backupLogger.warn("備份執行中，略過重複觸發", {
+      module: "backupScheduler",
+    });
+    return null;
+  }
+
+  isBackupRunning = true;
+  try {
+    return await runBackup();
+  } finally {
+    isBackupRunning = false;
+  }
+}
+
+function scheduleBackupRun(onError) {
+  runBackupOnce().catch(onError);
+}
+
 function startScheduler() {
   const interval = backupConfig.scheduler.interval;
-  const timer = setInterval(() => {
-    runBackup().catch((err) =>
-      backupLogger.error("定時任務失敗", {
-        error: err?.message || String(err),
-        module: "backupScheduler",
-      }),
-    );
-  }, interval);
+  const onError = (err) =>
+    backupLogger.error("備份任務失敗", {
+      error: err?.message || String(err),
+      module: "backupScheduler",
+    });
+
+  const timer = setInterval(() => scheduleBackupRun(onError), interval);
+  setImmediate(() => scheduleBackupRun(onError));
 
   backupLogger.info("備份排程已啟動", {
     intervalHours: interval / 1000 / 60 / 60,
+    databaseCutoffDays: CUTOFF_DAYS,
+    archiveFileRetentionDays: FILE_RETENTION_DAYS,
     module: "backupScheduler",
   });
 
@@ -248,11 +233,12 @@ function startScheduler() {
       clearInterval(timer);
       backupLogger.info("備份排程已停止", { module: "backupScheduler" });
     },
-    runNow: () => runBackup(),
+    runNow: () => runBackupOnce(),
   };
 }
 
 module.exports = {
   runBackup,
+  runBackupOnce,
   startScheduler,
 };

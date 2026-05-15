@@ -1,4 +1,6 @@
 const nodemailer = require("nodemailer");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());
 
@@ -18,13 +20,13 @@ function createSmtpTransporter(smtp) {
   const security = String(smtp?.security || "none").toLowerCase();
 
   if (!host) {
-    throw new Error("SMTP_HOST_REQUIRED");
+    throwApiError(C.SMTP_HOST_REQUIRED, "SMTP 主機為必填");
   }
   if (!Number.isFinite(port) || port <= 0) {
-    throw new Error("SMTP_PORT_REQUIRED");
+    throwApiError(C.SMTP_PORT_REQUIRED, "SMTP 連接埠為必填");
   }
   if (security !== "none" && security !== "ssl" && security !== "tls") {
-    throw new Error("SMTP_SECURITY_INVALID");
+    throwApiError(C.SMTP_SECURITY_INVALID, "SMTP 安全模式無效");
   }
 
   const user = smtp?.user != null ? String(smtp.user) : "";

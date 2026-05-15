@@ -8,6 +8,8 @@
  * 僅落地分區列（RegionList/Region.enter/exit → region_id IS NOT NULL）。
  */
 const db = require("../../database/db");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("../accessControl/isapiClient");
 const logger = require("../../utils/logger").createLogger(
@@ -88,11 +90,10 @@ async function getDeviceClient(deviceId) {
     !device?.config?.username ||
     !device?.config?.password
   ) {
-    const err = new Error(
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
       "攝影機連線設定不完整（缺少 host / username / password）",
     );
-    err.statusCode = 400;
-    throw err;
   }
   const client = createIsapiClient(device.config);
   return { device, client };

@@ -4,6 +4,8 @@
  */
 const axios = require("axios");
 const crypto = require("crypto");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 解析 WWW-Authenticate: Digest 標頭
@@ -69,10 +71,15 @@ function throwIfBadStatus(res) {
       (fallbackBody
         ? `${res.statusText || `HTTP ${res.status}`}: ${fallbackBody}`
         : res.statusText || `HTTP ${res.status}`);
-    const err = new Error(msg);
-    err.statusCode = res.status;
-    err.response = res;
-    throw err;
+    const status = res.status;
+    const code =
+      status >= 500
+        ? C.BAD_GATEWAY
+        : C.ACCESS_CONTROL_ISAPI_INVALID_RESPONSE;
+    throwApiError(code, msg, {
+      statusCode: status >= 400 && status <= 599 ? status : 502,
+      details: fallbackBody ? { status, body: fallbackBody } : { status },
+    });
   }
 }
 
@@ -121,11 +128,17 @@ function createIsapiClient(deviceConfig) {
       timeout: 10000,
     });
     if (probeRes.status !== 401 || !probeRes.headers["www-authenticate"]) {
-      throw new Error("預期設備回傳 401 Digest 挑戰");
+      throwApiError(
+        C.ACCESS_CONTROL_ISAPI_DIGEST_CHALLENGE_EXPECTED,
+        "預期設備回傳 401 Digest 挑戰",
+      );
     }
     const authHeader = probeRes.headers["www-authenticate"];
     if (!authHeader.toLowerCase().startsWith("digest ")) {
-      throw new Error(`不支援的認證方式: ${authHeader.split(" ")[0]}`);
+      throwApiError(
+        C.ACCESS_CONTROL_ISAPI_AUTH_UNSUPPORTED,
+        `不支援的認證方式: ${authHeader.split(" ")[0]}`,
+      );
     }
     const challenge = parseDigestChallenge(authHeader);
     const digestAuth = buildAuthHeader(
@@ -188,7 +201,10 @@ function createIsapiClient(deviceConfig) {
     if (res.status === 401 && res.headers["www-authenticate"]) {
       const authHeader = res.headers["www-authenticate"];
       if (!authHeader.toLowerCase().startsWith("digest ")) {
-        throw new Error(`不支援的認證方式: ${authHeader.split(" ")[0]}`);
+        throwApiError(
+        C.ACCESS_CONTROL_ISAPI_AUTH_UNSUPPORTED,
+        `不支援的認證方式: ${authHeader.split(" ")[0]}`,
+      );
       }
       const challenge = parseDigestChallenge(authHeader);
       const uri = new URL(url).pathname + new URL(url).search;
@@ -227,11 +243,17 @@ function createIsapiClient(deviceConfig) {
       timeout: 10000,
     });
     if (probeRes.status !== 401 || !probeRes.headers["www-authenticate"]) {
-      throw new Error("預期設備回傳 401 Digest 挑戰");
+      throwApiError(
+        C.ACCESS_CONTROL_ISAPI_DIGEST_CHALLENGE_EXPECTED,
+        "預期設備回傳 401 Digest 挑戰",
+      );
     }
     const authHeader = probeRes.headers["www-authenticate"];
     if (!authHeader.toLowerCase().startsWith("digest ")) {
-      throw new Error(`不支援的認證方式: ${authHeader.split(" ")[0]}`);
+      throwApiError(
+        C.ACCESS_CONTROL_ISAPI_AUTH_UNSUPPORTED,
+        `不支援的認證方式: ${authHeader.split(" ")[0]}`,
+      );
     }
     const challenge = parseDigestChallenge(authHeader);
     const digestAuth = buildAuthHeader(

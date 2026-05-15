@@ -12,6 +12,8 @@ const path = require("path");
 const db = require("../../database/db");
 const mediaMTXService = require("./mediaMTXService");
 const logger = require("../../utils/logger").createLogger("MediaMTX Sync");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const rootDir = path.resolve(__dirname, "../../..");
 const mediamtxDir = path.join(rootDir, "mediamtx");
@@ -92,7 +94,7 @@ const listCameraRtspItems = async () => {
 
 async function generateConfigFile() {
   if (!fs.existsSync(baseConfigPath)) {
-    throw new Error(`找不到 base config: ${baseConfigPath}`);
+    throwApiError(C.MEDIAMTX_CONFIG_NOT_FOUND, `找不到 base config: ${baseConfigPath}`);
   }
 
   const baseText = fs.readFileSync(baseConfigPath, "utf8");

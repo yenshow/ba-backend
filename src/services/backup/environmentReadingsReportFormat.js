@@ -47,6 +47,4 @@ function transformEnvironmentReadingsToReportFormat(rows) {
 
 module.exports = {
   transformEnvironmentReadingsToReportFormat,
-  PARAM_LABELS,
-  roundParamValue,
 };

@@ -11,6 +11,8 @@ const {
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
+const C = require("../utils/apiErrorCodes");
+const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
 
 const router = express.Router();
 
@@ -22,7 +24,10 @@ const uploadMemory = multer({
     if (allowed.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("僅允許 JPEG、PNG 人臉圖片"), false);
+      cb(
+        createApiError(C.VALIDATION_CUSTOM, "僅允許 JPEG、PNG 人臉圖片"),
+        false,
+      );
     }
   },
 });
@@ -60,9 +65,7 @@ router.put(
     const deviceId = parseInt(req.params.deviceId);
     const userInfo = req.body.UserInfo || req.body;
     if (!userInfo || !userInfo.employeeNo) {
-      const err = new Error("請提供 UserInfo，且包含 employeeNo");
-      err.statusCode = 400;
-      throw err;
+      throwApiError(C.ACCESS_CONTROL_EMPLOYEE_NO_REQUIRED, "請提供 UserInfo，且包含 employeeNo");
     }
     await accessControlService.updateUserInfo(deviceId, userInfo);
     res.sendSuccess({ success: true });
@@ -102,9 +105,7 @@ router.put(
     const deviceId = parseInt(req.params.deviceId);
     const employeeNo = req.params.employeeNo;
     if (!req.file || !req.file.buffer) {
-      const err = new Error("請上傳人臉圖片（欄位名：img）");
-      err.statusCode = 400;
-      throw err;
+      throwApiError(C.ACCESS_CONTROL_FACE_IMAGE_REQUIRED, "請上傳人臉圖片（欄位名：img）");
     }
     const options = {};
     if (req.body?.faceLibType) options.faceLibType = req.body.faceLibType;

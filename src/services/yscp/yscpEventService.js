@@ -1,5 +1,6 @@
 const logger = require("../../utils/logger");
 const websocketService = require("../websocket/websocketService");
+const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 
 const serviceLogger = logger.createLogger("YSCP Event Service");
 
@@ -22,6 +23,9 @@ class YscpEventService {
       const mapped = ability ? ABILITY_WS_MAP[ability] : null;
 
       if (mapped) {
+        if (mapped.type === "acs" && yscpFeature.shouldSkipYscp("yscp")) {
+          return { processed: true, eventType: null };
+        }
         websocketService.emitYscpEvent(mapped.type);
         return { processed: true, eventType: mapped.type };
       }

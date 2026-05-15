@@ -5,6 +5,8 @@
 const axios = require("axios");
 const config = require("../../config");
 const logger = require("../../utils/logger").createLogger("MediaMTX");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const API_BASE = (config.mediaMTX?.apiBaseUrl ?? "http://127.0.0.1:9997").replace(/\/$/, "");
 const WEBRTC_BASE = (config.mediaMTX?.webrtcBaseUrl ?? "http://127.0.0.1:8889").replace(/\/$/, "");
@@ -79,12 +81,13 @@ async function addPath(pathName, rtspUrl) {
         } catch (retryErr) {
           const retryMsg =
             retryErr.response?.data?.message ?? retryErr.response?.data?.error ?? retryErr.message;
-          throw new Error(
-            `MediaMTX 拒絕此設定 (400)。請檢查 RTSP URL 是否正確、路徑是否完整（海康威視常見：/Streaming/Channels/101 或 /102），以及帳密是否正確。詳情: ${retryMsg}`
+          throwApiError(
+            C.MEDIAMTX_ADD_PATH_REJECTED,
+            `MediaMTX 拒絕此設定 (400)。請檢查 RTSP URL 是否正確、路徑是否完整（海康威視常見：/Streaming/Channels/101 或 /102），以及帳密是否正確。詳情: ${retryMsg}`,
           );
         }
       } else {
-        throw new Error(`MediaMTX 新增 path 失敗: ${msg}`);
+        throwApiError(C.MEDIAMTX_ADD_PATH_FAILED, `MediaMTX 新增 path 失敗: ${msg}`);
       }
     }
   });
@@ -109,7 +112,7 @@ async function removePath(pathName) {
       }
       const msg = err.response?.data?.message ?? err.message;
       logger.error("MediaMTX 移除 path 失敗", { pathName, error: msg });
-      throw new Error(`MediaMTX 移除 path 失敗: ${msg}`);
+      throwApiError(C.MEDIAMTX_REMOVE_PATH_FAILED, `MediaMTX 移除 path 失敗: ${msg}`);
     }
   });
 }

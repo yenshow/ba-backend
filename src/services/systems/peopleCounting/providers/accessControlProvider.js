@@ -8,6 +8,11 @@ const deviceService = require("../../../devices/deviceService");
 const personnelService = require("../../../personnel/personnelService");
 const { getTodayTimeRange } = require("../../../../utils/dateRangeUtils");
 const logger = require("../../../../utils/logger");
+const {
+  extractSubEventType,
+  resolveAccessControlEvent,
+  resolveVerifyMethodLabel,
+} = require("../accessControlLogLabels");
 
 function normalizeDeviceHost(host) {
   if (!host || typeof host !== "string") return "";
@@ -173,16 +178,14 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
 
   return (rows || []).map((row) => {
     const payload = typeof row.payload === "object" ? row.payload : {};
-    const sub =
-      payload.subEventType != null ? Number(payload.subEventType) : null;
-    const eventType =
-      sub === 9 || sub === 39 || sub === 76 || sub === 2078 || sub === 2079
-        ? "failed"
-        : entryIps.has(row.device_ip)
-          ? "entry"
-          : exitIps.has(row.device_ip)
-            ? "exit"
-            : "entry";
+    const sub = extractSubEventType(payload);
+    const { eventType, eventLabel } = resolveAccessControlEvent(
+      sub,
+      entryIps,
+      exitIps,
+      row.device_ip,
+    );
+    const verifyMethodLabel = resolveVerifyMethodLabel(payload);
     const employeeId = getEmployeeNo(payload);
     const personInfo = employeeId ? personByEmployeeNo.get(employeeId) : null;
     const devicePersonName =
@@ -195,6 +198,8 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
       unitName: personInfo?.unitName ?? "",
       employeeId: employeeId || null,
       eventType,
+      eventLabel,
+      verifyMethod: verifyMethodLabel,
       timestamp: row.event_time,
       deviceScreenshotUrl: row.picture_path || "",
       deviceName: ipToDeviceName.get(row.device_ip) || row.device_ip,

@@ -1,12 +1,12 @@
 const db = require("../../database/db");
 const locationService = require("./locationService");
 const logger = require("../../utils/logger");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
+const { rethrowIfApiError } = require("../../utils/apiErrorMeta");
 
 const envServiceLogger = logger.createLogger("environmentService");
 
-// ========== 區域管理函數 ==========
-
-// 取得區域列表（使用統一表）
 async function getZones() {
   try {
     const result = await locationService.getZones({
@@ -14,38 +14,39 @@ async function getZones() {
     });
     return { zones: result.zones };
   } catch (error) {
+    rethrowIfApiError(error);
     envServiceLogger.error("取得區域列表失敗", {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("取得區域列表失敗: " + error.message);
+    throwApiError(C.LOCATION_ZONE_LIST_FAILED, "取得區域列表失敗: " + error.message, {
+      statusCode: 500,
+      details: error.message,
+    });
   }
 }
 
-// 取得單一區域（使用統一表）
 async function getZoneById(id) {
   try {
     const result = await locationService.getZoneById(id, "environment");
     return { zone: result.zone };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     envServiceLogger.error("取得區域失敗", {
       id,
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("取得區域失敗: " + error.message);
+    throwApiError(C.LOCATION_ZONE_GET_FAILED, "取得區域失敗: " + error.message, {
+      statusCode: 500,
+      details: error.message,
+    });
   }
 }
 
-// 建立區域（使用統一表）
 async function createZone(zoneData, userId) {
   try {
-    const { name, locations = [] } = zoneData;
-
-    // 將 locations 轉換為統一格式（加入 locationType）
+    const { locations = [] } = zoneData;
     const unifiedLocations = locations.map((loc) => ({
       ...loc,
       locationType: "environment",
@@ -64,23 +65,21 @@ async function createZone(zoneData, userId) {
       zone: result.zone,
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     envServiceLogger.error("建立區域失敗", {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("建立區域失敗: " + error.message);
+    throwApiError(C.LOCATION_ZONE_CREATE_FAILED, "建立區域失敗: " + error.message, {
+      statusCode: 500,
+      details: error.message,
+    });
   }
 }
 
-// 更新區域（使用統一表）
 async function updateZone(id, zoneData, userId) {
   try {
     const { name, locations } = zoneData;
-
-    // 將 locations 轉換為統一格式（加入 locationType）
     const unifiedLocations = locations
       ? locations.map((loc) => ({
           ...loc,
@@ -102,36 +101,35 @@ async function updateZone(id, zoneData, userId) {
       zone: result.zone,
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     envServiceLogger.error("更新區域失敗", {
       id,
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("更新區域失敗: " + error.message);
+    throwApiError(C.LOCATION_ZONE_UPDATE_FAILED, "更新區域失敗: " + error.message, {
+      statusCode: 500,
+      details: error.message,
+    });
   }
 }
 
-// 刪除區域（使用統一表）
 async function deleteZone(id) {
   try {
     return await locationService.deleteZone(id);
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     envServiceLogger.error("刪除區域失敗", {
       id,
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("刪除區域失敗: " + error.message);
+    throwApiError(C.LOCATION_ZONE_DELETE_FAILED, "刪除區域失敗: " + error.message, {
+      statusCode: 500,
+      details: error.message,
+    });
   }
 }
-
-// ========== 感測器讀數管理函數 ==========
 
 async function getReadings(locationId, options = {}) {
   try {
@@ -162,8 +160,10 @@ async function getReadings(locationId, options = {}) {
 
     return {
       readings: rows.map((r) => {
-        const data = typeof r.data === "object" ? r.data : (r.data ? JSON.parse(r.data) : {});
-        const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+        const data =
+          typeof r.data === "object" ? r.data : r.data ? JSON.parse(r.data) : {};
+        const ts =
+          r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
         return {
           id: `env_${locationId}_${ts.getTime()}`,
           locationId: String(locationId),
@@ -174,28 +174,28 @@ async function getReadings(locationId, options = {}) {
       }),
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     envServiceLogger.error("取得讀數失敗", {
       locationId,
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("取得讀數失敗: " + error.message);
+    throwApiError(
+      C.ENVIRONMENT_READINGS_LIST_FAILED,
+      "取得讀數失敗: " + error.message,
+      { statusCode: 500, details: error.message },
+    );
   }
 }
 
-/**
- * 取得彙總讀數（時／日／月）
- * @param {string|number} locationId
- * @param {object} options - { bucket: 'hour'|'day'|'month', startTime, endTime }
- */
 async function getReadingsAggregated(locationId, options = {}) {
   try {
     const { bucket, startTime, endTime } = options;
     if (!bucket || !["hour", "day", "month"].includes(bucket)) {
-      throw new Error("bucket 必填且為 hour、day 或 month");
+      throwApiError(
+        C.ENVIRONMENT_BUCKET_INVALID,
+        "bucket 必填且為 hour、day 或 month",
+      );
     }
     const locId = parseInt(locationId, 10);
     let query = `
@@ -217,8 +217,10 @@ async function getReadingsAggregated(locationId, options = {}) {
     const rows = await db.query(query, params);
     return {
       readings: (rows || []).map((r) => {
-        const data = typeof r.data === "object" ? r.data : (r.data ? JSON.parse(r.data) : {});
-        const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+        const data =
+          typeof r.data === "object" ? r.data : r.data ? JSON.parse(r.data) : {};
+        const ts =
+          r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
         return {
           id: `agg_${locationId}_${bucket}_${ts.getTime()}`,
           locationId: String(locationId),
@@ -229,19 +231,22 @@ async function getReadingsAggregated(locationId, options = {}) {
       }),
     };
   } catch (error) {
-    if (error.statusCode) throw error;
+    rethrowIfApiError(error);
     envServiceLogger.error("取得彙總讀數失敗", {
       locationId,
       bucket: options?.bucket,
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throw new Error("取得彙總讀數失敗: " + error.message);
+    throwApiError(
+      C.ENVIRONMENT_READINGS_AGGREGATED_FAILED,
+      "取得彙總讀數失敗: " + error.message,
+      { statusCode: 500, details: error.message },
+    );
   }
 }
 
 module.exports = {
-  // 區域管理
   getZones,
   getZoneById,
   createZone,

@@ -1,6 +1,8 @@
 const BaseExternalDataService = require("../baseExternalDataService");
 const { applyDefaultTimeFilters } = require("../../../utils/dateRangeUtils");
 const externalDb = require("../../../database/externalDb");
+const C = require("../../../utils/apiErrorCodes");
+const { throwApiError } = require("../../../utils/apiErrorMeta");
 
 /**
  * 出入口過車日誌專用處理器（vehiclebiz.passageway_log_data）
@@ -212,8 +214,10 @@ class PassagewayLogDataHandler extends BaseExternalDataService {
         },
       };
     } catch (error) {
-      throw new Error(
-        `查詢 ${this.tableName} 總數（依 lane_type）失敗: ${error.message}`
+      throwApiError(
+        C.EXTERNAL_DATA_COUNT_FAILED,
+        `查詢 ${this.tableName} 總數（依 lane_type）失敗: ${error.message}`,
+        { statusCode: 500, details: error.message },
       );
     }
   }

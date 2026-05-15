@@ -1,4 +1,6 @@
 const db = require("../../database/db");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const ITEM_TYPES = new Set(["issues", "tail"]);
 const JOB_TYPES = new Set(["sync_location", "sync_all_locations"]);
@@ -11,7 +13,9 @@ const asJson = (v) => (v == null ? null : JSON.stringify(v));
 
 const assertIn = (set, v, label) => {
   const s = String(v || "");
-  if (!set.has(s)) throw new Error(`${label} 不合法: ${s}`);
+  if (!set.has(s)) {
+    throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST, `${label} 不合法: ${s}`);
+  }
   return s;
 };
 
@@ -36,7 +40,7 @@ const nowIso = () => new Date().toISOString();
 
 async function createJob(params) {
   const jobId = String(params?.jobId || "").trim();
-  if (!jobId) throw new Error("jobId 必填");
+  if (!jobId) throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,"jobId 必填");
   const jobType = assertIn(JOB_TYPES, params?.jobType, "jobType");
   const status = assertIn(JOB_STATUSES, params?.status || "queued", "status");
   const locationId =
@@ -62,7 +66,7 @@ async function createJob(params) {
 
 async function updateJob(jobId, patch) {
   const id = String(jobId || "").trim();
-  if (!id) throw new Error("jobId 必填");
+  if (!id) throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,"jobId 必填");
 
   const sets = [];
   const args = [];
@@ -131,9 +135,9 @@ async function bumpItemsMetaCounter(jobId, key, n = 1) {
 
 async function appendItem(jobId, itemType, payload, options = {}) {
   const id = String(jobId || "").trim();
-  if (!id) throw new Error("jobId 必填");
+  if (!id) throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,"jobId 必填");
   const type = assertIn(ITEM_TYPES, itemType, "itemType");
-  if (!payload || typeof payload !== "object") throw new Error("payload 必須為 object");
+  if (!payload || typeof payload !== "object") throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,"payload 必須為 object");
 
   await db.query(
     `INSERT INTO person_sync_job_items (job_id, item_type, payload)
@@ -195,7 +199,7 @@ async function listItems(jobId, itemType, params = {}) {
 
 async function replaceWarnings(jobId, warnings, locationId = null) {
   const id = String(jobId || "").trim();
-  if (!id) throw new Error("jobId 必填");
+  if (!id) throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,"jobId 必填");
   const loc =
     locationId != null && Number.isFinite(Number(locationId)) ? Math.trunc(Number(locationId)) : null;
 

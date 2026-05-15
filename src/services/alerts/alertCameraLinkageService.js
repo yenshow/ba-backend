@@ -1,4 +1,6 @@
 const db = require("../../database/db");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const normalizeId = (v) => {
   const n = Number(v);
@@ -65,7 +67,7 @@ async function getByRuleIds(ruleIds) {
 
 async function upsertForRule(ruleId, payload, userId = null) {
   const rid = normalizeId(ruleId);
-  if (!rid) throw new Error("rule_id 不合法");
+  if (!rid) throwApiError(C.ALERT_LINKAGE_RULE_ID_INVALID, "rule_id 不合法");
   const enabled = payload?.enabled !== undefined ? Boolean(payload.enabled) : true;
   const cameraDeviceIds = normalizeIdList(payload?.camera_device_ids, 4);
 

@@ -5,6 +5,8 @@ const deviceService = require("./deviceService");
 const mediaMTXService = require("../communication/mediaMTXService");
 const logger = require("../../utils/logger").createLogger("Device Stream");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError } = require("../../utils/apiErrorMeta");
 
 // 同一台攝影機同時被多視窗/多分割要求 start 時，合併成單次啟動，避免並發 addPath 造成連續 reload
 const startInFlightByDeviceId = new Map();
@@ -18,9 +20,7 @@ async function getCameraDevice(deviceId) {
   const { device } = await deviceService.getDeviceById(deviceId);
   const typeCode = (device.type_code || "").toLowerCase();
   if (typeCode !== "camera") {
-    const err = new Error("此設備並非攝影機類型");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.DEVICE_NOT_CAMERA, "此設備並非攝影機類型");
   }
   return { device };
 }
@@ -35,9 +35,7 @@ async function getCameraRtspUrl(deviceId) {
   const raw = (device.config?.rtsp_url || "").trim();
   const rtspUrl = raw.replace(/\r?\n/g, "").trim();
   if (!rtspUrl || !rtspUrl.toLowerCase().startsWith("rtsp://")) {
-    const err = new Error("此攝影機未設定 rtsp_url，無法啟動 WebRTC 串流");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.DEVICE_RTSP_URL_MISSING, "此攝影機未設定 rtsp_url，無法啟動 WebRTC 串流");
   }
   return { device, rtspUrl };
 }

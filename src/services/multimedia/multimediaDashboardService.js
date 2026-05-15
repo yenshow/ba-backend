@@ -6,6 +6,8 @@ const environmentReadingsService = require("../systems/environmentReadingsServic
 const {
   computeDerivedMetrics,
 } = require("../systems/environmentDerivedMetrics");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const SETTINGS_KEY = "multimedia_dashboard_settings_v1";
 
@@ -62,12 +64,6 @@ const isValidTimeKey = (v) => {
   return true;
 };
 
-const createBadRequestError = (message) => {
-  const err = new Error(message || "參數格式不正確");
-  err.statusCode = 400;
-  return err;
-};
-
 const normalizeDeviceIds = (v) => {
   const arr = Array.isArray(v) ? v : [];
   const out = [];
@@ -100,10 +96,10 @@ const normalizeAnnouncement = (item, index) => {
   const endDate = normalizeDateKey(it.endDate);
 
   if (it.startDate && !startDate) {
-    throw createBadRequestError(`公告第 ${index + 1} 筆：開始日期格式不正確`);
+    throwApiError(C.VALIDATION_CUSTOM, `公告第 ${index + 1} 筆：開始日期格式不正確`);
   }
   if (it.endDate && !endDate) {
-    throw createBadRequestError(`公告第 ${index + 1} 筆：結束日期格式不正確`);
+    throwApiError(C.VALIDATION_CUSTOM, `公告第 ${index + 1} 筆：結束日期格式不正確`);
   }
 
   // 若兩者都有且順序顛倒，直接交換，避免看板永遠顯示不到
@@ -123,13 +119,13 @@ const normalizeSchedule = (item, index) => {
   const title = normalizeString(it.title, 200).trim();
 
   if (!isValidTimeKey(startTime)) {
-    throw createBadRequestError(`排程第 ${index + 1} 筆：開始時間格式不正確`);
+    throwApiError(C.VALIDATION_CUSTOM, `排程第 ${index + 1} 筆：開始時間格式不正確`);
   }
   if (!isValidTimeKey(endTime)) {
-    throw createBadRequestError(`排程第 ${index + 1} 筆：結束時間格式不正確`);
+    throwApiError(C.VALIDATION_CUSTOM, `排程第 ${index + 1} 筆：結束時間格式不正確`);
   }
   if (startTime >= endTime) {
-    throw createBadRequestError(`排程第 ${index + 1} 筆：開始時間需早於結束時間`);
+    throwApiError(C.VALIDATION_CUSTOM, `排程第 ${index + 1} 筆：開始時間需早於結束時間`);
   }
 
   return { id, enabled, startTime, endTime, title };
@@ -248,7 +244,7 @@ async function readDeviceValuesByRegisterType(enabledValues, deviceConfig) {
     ]);
     const first = results?.[0];
     if (!first || first.ok !== true) {
-      throw new Error(first?.error || "讀取失敗");
+      throwApiError(C.MULTIMEDIA_MODBUS_READ_FAILED, first?.error || "讀取失敗");
     }
     const modbusData = first.data;
 
@@ -367,7 +363,7 @@ async function getMultimediaEnvReadingsSnapshot() {
         ]);
         const first = results?.[0];
         if (!first || first.ok !== true) {
-          throw new Error(first?.error || "設備離線");
+          throwApiError(C.MULTIMEDIA_MODBUS_READ_FAILED, first?.error || "設備離線");
         }
       }
 

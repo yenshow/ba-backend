@@ -7,6 +7,8 @@
 const logger = require("../../utils/logger");
 
 const monitorLogger = logger.createLogger("backgroundMonitor");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * Mode A（自適應監控）：
@@ -73,7 +75,7 @@ function registerMonitoringTask(
   intervalOrOptions = null,
 ) {
   if (typeof taskFunction !== "function") {
-    throw new Error(`監控任務必須是一個函數: ${systemName}`);
+    throwApiError(C.MONITOR_TASK_INVALID, `監控任務必須是一個函數: ${systemName}`);
   }
 
   const opts =

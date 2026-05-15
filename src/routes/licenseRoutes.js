@@ -10,26 +10,7 @@ const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { verifyLicensePayload } = require("../utils/licenseSign");
 const config = require("../config");
-
-const toPlatformErrorStatus = (error) => {
-  const status = error?.statusCode;
-  return Number.isFinite(status) ? status : 502;
-};
-
-/** 優先使用平台回傳的 code，否則依 HTTP／訊息推斷 */
-const toPlatformErrorCode = (error) => {
-  const data = error?.data;
-  const code = data && typeof data.code === "string" ? data.code.trim() : "";
-  if (code) return code;
-
-  const status = toPlatformErrorStatus(error);
-  const msg = String(error?.message || "");
-
-  if (status === 403 && msg.includes("使用過")) return "LICENSE_ALREADY_USED";
-  if (status === 403 && msg.includes("停用")) return "LICENSE_INACTIVE";
-
-  return "LICENSE_PLATFORM_ERROR";
-};
+const C = require("../utils/apiErrorCodes");
 
 const toLicenseApiPayload = async (license) => ({
   features: license.features || [],
@@ -76,28 +57,10 @@ router.post(
     if (licenseKey && typeof licenseKey === "string") {
       const trimmedKey = licenseKey.trim();
       const deviceFingerprint = getDeviceFingerprint();
-      let result;
-      try {
-        result = await licensePlatformService.activateOnline({
-          licenseKey: trimmedKey,
-          deviceFingerprint,
-        });
-      } catch (error) {
-        return res.status(toPlatformErrorStatus(error)).json({
-          success: false,
-          code: toPlatformErrorCode(error),
-          message: error.message || "授權平台啟用失敗",
-          details: error.data,
-        });
-      }
-
-      if (!result || !Array.isArray(result.features)) {
-        return res.status(502).json({
-          success: false,
-          code: "LICENSE_PLATFORM_INVALID_RESPONSE",
-          message: "授權平台回傳格式不正確",
-        });
-      }
+      const result = await licensePlatformService.activateOnline({
+        licenseKey: trimmedKey,
+        deviceFingerprint,
+      });
 
       const current = await licenseService.getLicenseState({
         bypassCache: true,
@@ -161,11 +124,14 @@ router.post(
     }
 
     if (!Array.isArray(features) || features.length === 0) {
-      return res.status(400).json({
-        success: false,
-        code: "INVALID_LICENSE_PAYLOAD",
-        message: "請提供 licenseKey 或非空 features 陣列",
-      });
+      return res.sendFailure(
+        {
+          code: C.INVALID_LICENSE_PAYLOAD,
+          message: "請提供 licenseKey 或非空 features 陣列",
+          details: null,
+        },
+        400,
+      );
     }
 
     const license = await licenseService.setLicenseState({
@@ -217,11 +183,14 @@ router.post(
         ? req.body.licenseKey.trim()
         : null;
     if (!lk) {
-      return res.status(400).json({
-        success: false,
-        code: "INVALID_LICENSE_PAYLOAD",
-        message: "請提供 licenseKey",
-      });
+      return res.sendFailure(
+        {
+          code: C.INVALID_LICENSE_PAYLOAD,
+          message: "請提供 licenseKey",
+          details: null,
+        },
+        400,
+      );
     }
 
     const deviceFingerprint = getDeviceFingerprint();
@@ -264,38 +233,49 @@ router.post(
     const payload = req.body;
     const secret = config.license?.signSecret;
     if (!secret) {
-      return res.status(500).json({
-        success: false,
-        code: "LICENSE_SIGN_SECRET_MISSING",
-        message: "未設定 LICENSE_SIGN_SECRET，無法驗簽離線授權檔",
-      });
+      return res.sendFailure(
+        {
+          code: C.LICENSE_SIGN_SECRET_MISSING,
+          message: "未設定 LICENSE_SIGN_SECRET，無法驗簽離線授權檔",
+          details: null,
+        },
+        500,
+      );
     }
 
     const verified = verifyLicensePayload(payload, secret);
     if (!verified.ok) {
-      return res.status(403).json({
-        success: false,
-        code: "INVALID_OFFLINE_LICENSE_SIGNATURE",
-        message: "離線授權檔驗簽失敗",
-        details: verified.reason,
-      });
+      return res.sendFailure(
+        {
+          code: C.INVALID_OFFLINE_LICENSE_SIGNATURE,
+          message: "離線授權檔驗簽失敗",
+          details: verified.reason,
+        },
+        403,
+      );
     }
 
     const product = payload?.product;
     if (product && product !== "BA-system") {
-      return res.status(400).json({
-        success: false,
-        code: "INVALID_LICENSE_PRODUCT",
-        message: "授權產品不匹配",
-      });
+      return res.sendFailure(
+        {
+          code: C.INVALID_LICENSE_PRODUCT,
+          message: "授權產品不匹配",
+          details: null,
+        },
+        400,
+      );
     }
 
     if (!Array.isArray(payload?.features) || payload.features.length === 0) {
-      return res.status(400).json({
-        success: false,
-        code: "INVALID_LICENSE_PAYLOAD",
-        message: "離線授權檔缺少 features",
-      });
+      return res.sendFailure(
+        {
+          code: C.INVALID_LICENSE_PAYLOAD,
+          message: "離線授權檔缺少 features",
+          details: null,
+        },
+        400,
+      );
     }
 
     let isExtension;

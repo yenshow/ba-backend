@@ -11,6 +11,8 @@ const logger = require("../../utils/logger");
 const { getDeviceTypeName } = require("../../constants/deviceTypes");
 
 const helperLogger = logger.createLogger("systemAlertHelper");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const getErrorTracker = () => require("./errorTracker");
 
@@ -683,7 +685,7 @@ async function recordErrorDetailed(system, sourceId, errorMessage, options = {})
   try {
     const config = SYSTEM_CONFIGS[system];
     if (!config) {
-      throw new Error(`未知的系統: ${system}`);
+      throwApiError(C.ALERT_SYSTEM_UNKNOWN, `未知的系統: ${system}`);
     }
 
     const isConnErr = isDeviceConnectionError(errorMessage);
@@ -842,7 +844,8 @@ async function syncLocationSnapshotReadResult(
   options = {},
 ) {
   if (!SNAPSHOT_CONNECTIVITY_SYSTEM_KEYS.has(systemKey)) {
-    throw new Error(
+    throwApiError(
+      C.ALERT_SYSTEM_SNAPSHOT_UNSUPPORTED,
       `[systemAlertHelper] syncLocationSnapshotReadResult 不支援: ${systemKey}`,
     );
   }
@@ -888,7 +891,7 @@ async function clearErrorDetailed(system, sourceId, options = {}) {
   try {
     const config = SYSTEM_CONFIGS[system];
     if (!config) {
-      throw new Error(`未知的系統: ${system}`);
+      throwApiError(C.ALERT_SYSTEM_UNKNOWN, `未知的系統: ${system}`);
     }
 
     const deviceIds =
@@ -1017,21 +1020,24 @@ async function recordRuleBitStateAlarm(
 ) {
   const config = SYSTEM_CONFIGS[systemKey];
   if (!config) {
-    throw new Error(`未知的系統: ${systemKey}`);
+    throwApiError(C.ALERT_SYSTEM_UNKNOWN, `未知的系統: ${systemKey}`);
   }
 
   const at = String(alertType || "").trim().toLowerCase();
   if (at !== "di" && at !== "do") {
-    throw new Error("rule alertType 必須為 di 或 do");
+    throwApiError(C.ALERT_RULE_ALERT_TYPE_INVALID, "rule alertType 必須為 di 或 do");
   }
   const bk = String(bitKey || "").trim().toLowerCase();
   if (!/^(di|do|discrete|coil):\d+$/.test(bk)) {
-    throw new Error("rule bitKey 格式需為 di:0 / do:3 / discrete:10 / coil:5");
+    throwApiError(
+      C.ALERT_RULE_BITKEY_INVALID,
+      "rule bitKey 格式需為 di:0 / do:3 / discrete:10 / coil:5",
+    );
   }
 
   const scope = await loadLocationSystemScope(systemKey, sourceId);
   if (!scope) {
-    throw new Error("來源 ID 不存在");
+    throwApiError(C.ALERT_SOURCE_ID_NOT_FOUND, "來源 ID 不存在");
   }
 
   const alertRuleService = require("./alertRuleService");
@@ -1046,7 +1052,8 @@ async function recordRuleBitStateAlarm(
   });
 
   if (candidates.length === 0) {
-    throw new Error(
+    throwApiError(
+      C.ALERT_RULE_NOT_AVAILABLE,
       `找不到可用的規則（source=${config.source}, alert_type=${at}, bit_key=${bk}）`,
     );
   }
@@ -1108,21 +1115,24 @@ async function clearRuleBitStateAlarm(
 ) {
   const config = SYSTEM_CONFIGS[systemKey];
   if (!config) {
-    throw new Error(`未知的系統: ${systemKey}`);
+    throwApiError(C.ALERT_SYSTEM_UNKNOWN, `未知的系統: ${systemKey}`);
   }
 
   const at = String(alertType || "").trim().toLowerCase();
   if (at !== "di" && at !== "do") {
-    throw new Error("rule alertType 必須為 di 或 do");
+    throwApiError(C.ALERT_RULE_ALERT_TYPE_INVALID, "rule alertType 必須為 di 或 do");
   }
   const bk = String(bitKey || "").trim().toLowerCase();
   if (!/^(di|do|discrete|coil):\d+$/.test(bk)) {
-    throw new Error("rule bitKey 格式需為 di:0 / do:3 / discrete:10 / coil:5");
+    throwApiError(
+      C.ALERT_RULE_BITKEY_INVALID,
+      "rule bitKey 格式需為 di:0 / do:3 / discrete:10 / coil:5",
+    );
   }
 
   const scope = await loadLocationSystemScope(systemKey, sourceId);
   if (!scope) {
-    throw new Error("來源 ID 不存在");
+    throwApiError(C.ALERT_SOURCE_ID_NOT_FOUND, "來源 ID 不存在");
   }
 
   const alertRuleService = require("./alertRuleService");
@@ -1137,7 +1147,8 @@ async function clearRuleBitStateAlarm(
   });
 
   if (candidates.length === 0) {
-    throw new Error(
+    throwApiError(
+      C.ALERT_RULE_NOT_AVAILABLE,
       `找不到可用的規則（source=${config.source}, alert_type=${at}, bit_key=${bk}）`,
     );
   }
@@ -1196,12 +1207,12 @@ async function clearRuleBitStateAlarm(
 async function recordManualAlarm(systemKey, sourceId, options = {}) {
   const config = SYSTEM_CONFIGS[systemKey];
   if (!config) {
-    throw new Error(`未知的系統: ${systemKey}`);
+    throwApiError(C.ALERT_SYSTEM_UNKNOWN, `未知的系統: ${systemKey}`);
   }
 
   const sourceInfo = await config.getSourceInfo(sourceId);
   if (!sourceInfo) {
-    throw new Error("來源 ID 不存在");
+    throwApiError(C.ALERT_SOURCE_ID_NOT_FOUND, "來源 ID 不存在");
   }
 
   let message = "";
@@ -1238,7 +1249,7 @@ async function recordManualAlarm(systemKey, sourceId, options = {}) {
 async function clearManualAlarm(systemKey, sourceId, options = {}) {
   const config = SYSTEM_CONFIGS[systemKey];
   if (!config) {
-    throw new Error(`未知的系統: ${systemKey}`);
+    throwApiError(C.ALERT_SYSTEM_UNKNOWN, `未知的系統: ${systemKey}`);
   }
   try {
     const n = await alertService.resolveAlert(

@@ -4,7 +4,7 @@
  */
 
 require("../src/config");
-const { runBackup } = require("../src/services/backup/backupScheduler");
+const { runBackupOnce } = require("../src/services/backup/backupScheduler");
 const path = require("path");
 
 function formatResult(key, r) {
@@ -18,7 +18,11 @@ function formatResult(key, r) {
 async function main() {
   console.log("[backup] 開始執行完整備份...");
   try {
-    const results = await runBackup();
+    const results = await runBackupOnce();
+    if (results === null) {
+      console.error("[backup] 已有備份執行中，略過");
+      process.exit(1);
+    }
     console.log("\n[backup] 完成");
     for (const [key, r] of Object.entries(results)) {
       const line = formatResult(key, r);

@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const C = require("./apiErrorCodes");
+const { throwApiError } = require("./apiErrorMeta");
 
 const toSortedPayload = (payload) => {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -28,7 +30,9 @@ const normalizeSignature = (signature) => {
  */
 const signLicensePayload = (payload, secret) => {
 	if (!secret || typeof secret !== "string") {
-		throw new Error("LICENSE_SIGN_SECRET 未設定");
+		throwApiError(C.LICENSE_SIGN_SECRET_MISSING, "LICENSE_SIGN_SECRET 未設定", {
+			statusCode: 500,
+		});
 	}
 	const sorted = toSortedPayload(payload);
 	const message = JSON.stringify(sorted);

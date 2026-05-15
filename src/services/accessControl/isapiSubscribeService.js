@@ -12,8 +12,10 @@ const {
   attachPictureToEvent,
 } = require("./isapiEventPersistence");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError } = require("../../utils/apiErrorMeta");
 
-/** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub∈{75,76,2077,2078,2079} */
+/** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件（見 isapiEventPersistence） */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
     <heartbeat>30</heartbeat>
@@ -286,9 +288,7 @@ async function consumeEventStreamIncremental(
  */
 async function runSubscribeForDevice(deviceId, abortSignal) {
   if (abortSignal?.aborted) {
-    const err = new Error("ABORTED");
-    err.code = "ABORTED";
-    throw err;
+    throw createApiError(C.ACCESS_CONTROL_ABORTED, "ABORTED");
   }
   const { device, client } =
     await accessControlService.getDeviceAndClient(deviceId);

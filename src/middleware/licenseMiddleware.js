@@ -1,15 +1,14 @@
 const licenseService = require("../services/licenseService");
-
-const buildNotLicensedError = (featureKey) => ({
-  success: false,
-  code: "FEATURE_NOT_LICENSED",
-  feature: featureKey,
-  message: `未授權功能：${featureKey}`,
-});
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrorMeta");
 
 function requireFeature(featureKey) {
   if (!featureKey || typeof featureKey !== "string") {
-    throw new Error("requireFeature(featureKey) 需要非空字串");
+    throwApiError(
+      C.LICENSE_FEATURE_KEY_REQUIRED,
+      "requireFeature(featureKey) 需要非空字串",
+      { statusCode: 500 },
+    );
   }
 
   return async (req, res, next) => {
@@ -20,15 +19,24 @@ function requireFeature(featureKey) {
 
       if (enabled) return next();
 
-      return res.status(403).json(buildNotLicensedError(featureKey));
+      return res.sendFailure(
+        {
+          code: C.FEATURE_NOT_LICENSED,
+          message: `未授權功能：${featureKey}`,
+          details: { feature: featureKey },
+        },
+        403,
+      );
     } catch (error) {
       // License check failures should be explicit (avoid accidental bypass)
-      return res.status(503).json({
-        success: false,
-        code: "LICENSE_CHECK_FAILED",
-        message: "授權狀態檢查失敗",
-        details: error.message,
-      });
+      return res.sendFailure(
+        {
+          code: C.LICENSE_CHECK_FAILED,
+          message: "授權狀態檢查失敗",
+          details: error.message,
+        },
+        503,
+      );
     }
   };
 }
@@ -36,4 +44,3 @@ function requireFeature(featureKey) {
 module.exports = {
   requireFeature,
 };
-

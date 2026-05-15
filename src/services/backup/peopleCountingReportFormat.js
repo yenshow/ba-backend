@@ -3,8 +3,17 @@
  * 與頁面一致：
  * 1. 進出統計：日期、區域-地點、進場人數、出場人數、在場人數
  * 2. 單位統計：日期、區域-地點、單位名稱、進場人數、出場人數、在場人數
- * 3. 進出紀錄：區域-地點、單位名稱、人員姓名、出入口名稱、刷卡時間、方向（進場未出場僅顯示最新一筆進場）
+ * 3. 進出紀錄：設備截圖、進場單位、工號、姓名、事件、方式、時間（與主表欄位一致；YSCP 備份無工號/方式時填 —）
  */
+const DETAIL_LOG_HEADERS = [
+  "設備截圖",
+  "進場單位",
+  "工號",
+  "姓名",
+  "事件",
+  "方式",
+  "時間",
+];
 
 const {
   formatDateTimeZhTW,
@@ -132,7 +141,13 @@ function getEntryOnlyLastLogMap(sortedRows, getDirection) {
   return out;
 }
 
-/** 進出紀錄：6 欄，進場未出場僅顯示最新一筆進場 */
+function eventLabelFromDirection(dir) {
+  if (dir === "entry") return "進入";
+  if (dir === "exit") return "離開";
+  return "失敗";
+}
+
+/** 進出紀錄：7 欄（與主表一致） */
 function buildDetailSection(rows, doorNameMap, directionMap) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
@@ -154,26 +169,19 @@ function buildDetailSection(rows, doorNameMap, directionMap) {
       const isEntryOnly = entryOnlyLast.has(personId);
       const lastEntryR = entryOnlyLast.get(personId);
       const physicalId = r.physical_id != null ? Number(r.physical_id) : null;
-      const doorName =
-        physicalId != null
-          ? (doorNameMap.get(physicalId) ?? String(r.physical_id ?? ""))
-          : "";
       const dir = directionMap.get(physicalId);
-      const directionLabel =
-        dir === "entry" ? "進場" : dir === "exit" ? "出場" : "";
       result.push({
-        "區域-地點": zoneLoc,
-        單位名稱: (r.unit_name ?? "").trim() || "- -",
-        人員姓名: r.person_name ?? "",
-        出入口名稱: doorName,
-        刷卡時間: formatDateTimeZhTW(r.swip_card_rev_time),
-        方向: directionLabel,
+        設備截圖: r.snap_pic_url?.trim() ? "有" : "—",
+        進場單位: (r.unit_name ?? "").trim() || "—",
+        工號: "—",
+        姓名: r.person_name ?? "—",
+        事件: eventLabelFromDirection(dir),
+        方式: "—",
+        時間: formatDateTimeZhTW(r.swip_card_rev_time),
       });
     }
   }
-  return result.sort((a, b) =>
-    (b.刷卡時間 || "").localeCompare(a.刷卡時間 || ""),
-  );
+  return result.sort((a, b) => (b.時間 || "").localeCompare(a.時間 || ""));
 }
 
 function transformPeopleCountingToReportFormat(
@@ -203,14 +211,7 @@ function transformPeopleCountingToReportFormat(
         },
         {
           title: "進出紀錄",
-          headers: [
-            "區域-地點",
-            "單位名稱",
-            "人員姓名",
-            "出入口名稱",
-            "刷卡時間",
-            "方向",
-          ],
+          headers: [...DETAIL_LOG_HEADERS],
           rows: [],
         },
       ],
@@ -238,14 +239,7 @@ function transformPeopleCountingToReportFormat(
       },
       {
         title: "進出紀錄",
-        headers: [
-          "區域-地點",
-          "單位名稱",
-          "人員姓名",
-          "出入口名稱",
-          "刷卡時間",
-          "方向",
-        ],
+        headers: [...DETAIL_LOG_HEADERS],
         rows: buildDetailSection(rows, doorNameMap, directionMap),
       },
     ],

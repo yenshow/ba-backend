@@ -8,12 +8,8 @@ const {
   isJpegByMagicBytes,
   safeUnlink,
 } = require("./personnelFileHelpers");
-
-function createValidationError(message) {
-  const err = new Error(message);
-  err.statusCode = 400;
-  return err;
-}
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 將暫存 JPEG 移至正式檔名並更新 personnel.face_url（DB 成功後刪舊檔）。
@@ -26,21 +22,21 @@ async function finalizeFaceUpload({
   warnLogger,
 }) {
   const pid = Number(personId);
-  if (!pid || pid <= 0) throw createValidationError("personId 不合法");
+  if (!pid || pid <= 0) throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"personId 不合法");
   if (!tempPath || !fs.existsSync(tempPath)) {
-    throw createValidationError("上傳暫存檔不存在");
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"上傳暫存檔不存在");
   }
 
   const st = fs.statSync(tempPath);
   if (st.size > PERSONNEL_FACE_MAX_BYTES) {
     safeUnlink(tempPath);
-    throw createValidationError("大頭照需小於等於 200KB（設備限制）");
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"大頭照需小於等於 200KB（設備限制）");
   }
 
   const header = readFileHeaderBytes(tempPath, 32);
   if (!isJpegByMagicBytes(header)) {
     safeUnlink(tempPath);
-    throw createValidationError("圖片格式不正確：僅允許 JPEG（JPG）");
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"圖片格式不正確：僅允許 JPEG（JPG）");
   }
 
   const person = await personnelService.getPersonById(pid);

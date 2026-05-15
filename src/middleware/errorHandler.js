@@ -7,24 +7,19 @@
 
 const systemAlert = require("../services/alerts/systemAlertHelper");
 const logger = require("../utils/logger");
+const {
+  formatFailurePayload,
+  getHttpStatusFromError,
+  resolveErrorCode,
+  resolveErrorDetails,
+} = require("../utils/apiErrorFormatter");
 
-/**
- * 針對高頻 503（如 Modbus timeout）做限流，避免日誌刷屏與重複寫入告警。
- * key 以 path + device host/port/unitId + message 組合，避免不同錯誤互相吞掉。
- */
 const DEVICE_ERROR_COOLDOWN_MS = Number(
   process.env.DEVICE_ERROR_COOLDOWN_MS || 30_000,
 );
-const lastDevice503LogAt = new Map(); // key -> timestamp(ms)
-const lastDeviceErrorAlertAt = new Map(); // key -> timestamp(ms)
+const lastDevice503LogAt = new Map();
+const lastDeviceErrorAlertAt = new Map();
 
-const isPersonnelApiRequest = (req) => {
-  const orig = String(req.originalUrl || req.url || "");
-  const pathJoined = `${req.baseUrl || ""}${req.path || ""}`;
-  return orig.startsWith("/api/personnel") || pathJoined.startsWith("/api/personnel");
-};
-
-/** /api/external-data 在 500／503 時對外固定訊息（與前端一致） */
 const getClientFacingErrorMessage = (req, statusCode, internalMessage) => {
   const external = String(req.originalUrl || req.url || "").includes(
     "/api/external-data",
@@ -38,11 +33,11 @@ const getClientFacingErrorMessage = (req, statusCode, internalMessage) => {
 const getDeviceErrorKey = (req, errorMessage) => {
   const host = req.query?.host ? String(req.query.host) : "";
   const port =
-    req.query?.port !== undefined && req.query.port !== null
+    req.query?.port !== undefined && req.query?.port !== null
       ? String(req.query.port)
       : "";
   const unitId =
-    req.query?.unitId !== undefined && req.query.unitId !== null
+    req.query?.unitId !== undefined && req.query?.unitId !== null
       ? String(req.query.unitId)
       : "";
   return `${req.path}|${host}:${port}:${unitId}|${errorMessage || ""}`;
@@ -55,7 +50,6 @@ const shouldCooldown = (store, key) => {
     return true;
   }
   store.set(key, now);
-  // 簡單清理：避免 Map 無限制成長
   if (store.size > 2000) {
     for (const [k, ts] of store.entries()) {
       if (now - ts > DEVICE_ERROR_COOLDOWN_MS) {
@@ -66,11 +60,6 @@ const shouldCooldown = (store, key) => {
   return false;
 };
 
-/**
- * 記錄設備錯誤（如 Modbus 連接失敗時關聯設備告警）
- * @param {Object} req - Express 請求對象
- * @param {string} errorMessage - 錯誤訊息
- */
 async function recordDeviceError(req, errorMessage) {
   try {
     if (req.path && req.path.startsWith("/api/modbus")) {
@@ -98,85 +87,12 @@ async function recordDeviceError(req, errorMessage) {
   }
 }
 
-/**
- * 判斷錯誤類型並返回對應的 HTTP 狀態碼
- * @param {Error} err - 錯誤對象
- * @returns {number} HTTP 狀態碼
- */
-function getErrorStatusCode(err) {
-  const message = err.message || "";
-
-  // 認證錯誤
-  if (
-    message.includes("未提供認證") ||
-    message.includes("無效的 Token") ||
-    message.includes("認證失敗") ||
-    message.includes("未認證") ||
-    err.statusCode === 401
-  ) {
-    return 401; // Unauthorized
-  }
-
-  // 權限錯誤
-  if (
-    message.includes("權限不足") ||
-    message.includes("只有管理員") ||
-    message.includes("只能修改") ||
-    err.statusCode === 403
-  ) {
-    return 403; // Forbidden
-  }
-
-  // 參數錯誤
-  if (
-    message.includes("must be") ||
-    message.includes("required") ||
-    message.includes("必須") ||
-    message.includes("格式不正確") ||
-    message.includes("已存在") ||
-    message.includes("不存在") ||
-    err.statusCode === 400
-  ) {
-    return 400; // Bad Request
-  }
-
-  // 資源不存在
-  if (err.statusCode === 404) {
-    return 404; // Not Found
-  }
-
-  // 服務不可用（如 Modbus 連接錯誤、設備離線、讀寫逾時）
-  if (
-    message.includes("連接超時") ||
-    message.includes("連接被拒絕") ||
-    message.includes("無法到達設備") ||
-    message.includes("連接已斷開") ||
-    message.includes("超時") ||
-    /timed?\s*out/i.test(message) ||
-    err.statusCode === 503
-  ) {
-    return 503; // Service Unavailable
-  }
-
-  // 預設返回 500
-  return err.statusCode || 500;
-}
-
-/**
- * 統一錯誤處理中間件
- * @param {Error} err - 錯誤對象
- * @param {Object} req - Express 請求對象
- * @param {Object} res - Express 響應對象
- * @param {Function} next - Express next 函數
- */
 async function errorHandler(err, req, res, next) {
-  const statusCode = getErrorStatusCode(err);
+  const statusCode = getHttpStatusFromError(err, req);
   const errorMessage = err.message || "Request failed";
   const clientMessage = getClientFacingErrorMessage(req, statusCode, errorMessage);
 
-  // 記錄錯誤日誌
   if (statusCode === 503) {
-    // 服務不可用（設備離線等）：簡潔日誌
     const isModbusRequest = req.path && req.path.startsWith("/api/modbus");
     if (isModbusRequest) {
       const cooldownKey = getDeviceErrorKey(req, errorMessage);
@@ -198,7 +114,6 @@ async function errorHandler(err, req, res, next) {
 
     await recordDeviceError(req, errorMessage);
   } else if (statusCode >= 500) {
-    // 伺服器錯誤：記錄完整堆疊
     logger.error("伺服器錯誤", {
       error: err.message,
       stack: err.stack,
@@ -207,7 +122,6 @@ async function errorHandler(err, req, res, next) {
       statusCode,
     });
   } else {
-    // 其他錯誤：記錄基本信息
     logger.warn("請求錯誤", {
       error: errorMessage,
       path: req.path,
@@ -216,28 +130,13 @@ async function errorHandler(err, req, res, next) {
     });
   }
 
-  if (isPersonnelApiRequest(req)) {
-    const response = {
-      success: false,
-      error: {
-        code: `HTTP_${statusCode}`,
-        message: clientMessage,
-        details: clientMessage,
-      },
-      timestamp: new Date().toISOString(),
-    };
-    return res.status(statusCode).json(response);
-  }
-
-  // 統一錯誤響應格式（不向客戶端回傳 stack；除錯請看伺服器 logger.error）
-  const response = {
-    error: true,
-    message: clientMessage,
-    details: clientMessage,
-    timestamp: new Date().toISOString(),
-  };
-
-  res.status(statusCode).json(response);
+  res.status(statusCode).json(
+    formatFailurePayload({
+      code: resolveErrorCode(err, statusCode),
+      message: clientMessage,
+      details: resolveErrorDetails(err),
+    }),
+  );
 }
 
 module.exports = errorHandler;

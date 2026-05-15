@@ -9,6 +9,7 @@ const {
   requirePermission,
 } = require("../middleware/authMiddleware");
 const multimediaDashboardService = require("../services/multimedia/multimediaDashboardService");
+const C = require("../utils/apiErrorCodes");
 
 const router = express.Router();
 
@@ -99,7 +100,14 @@ router.post(
   upload.single("file"),
   asyncHandler(async (req, res) => {
     if (!req.file) {
-      return res.status(400).json({ error: "未提供檔案" });
+      return res.sendFailure(
+        {
+          code: C.MULTIMEDIA_UPLOAD_FILE_MISSING,
+          message: "未提供檔案",
+          details: null,
+        },
+        400,
+      );
     }
     const fileUrl = `/uploads/multimedia/${path.basename(req.file.path)}`;
     res.sendSuccess({

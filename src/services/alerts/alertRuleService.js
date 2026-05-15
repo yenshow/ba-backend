@@ -5,6 +5,8 @@
 
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const ruleLogger = logger.createLogger("alertRuleService");
 
@@ -660,7 +662,9 @@ async function createAlertRule(payload) {
 
   const rule = result?.[0] || null;
   if (!rule) {
-    throw new Error("建立警報規則失敗");
+    throwApiError(C.ALERT_RULE_CREATE_FAILED, "建立警報規則失敗", {
+      statusCode: 500,
+    });
   }
 
   if (rule.alert_type === "threshold") {
@@ -683,7 +687,7 @@ async function updateAlertRule(id, updates) {
   );
   const existingRule = existingResult?.[0] || null;
   if (!existingRule) {
-    throw new Error("RULE_NOT_FOUND");
+    throwApiError(C.ALERT_RULE_NOT_FOUND, "找不到指定的規則");
   }
 
   const fields = [];
@@ -805,7 +809,9 @@ async function updateAlertRule(id, updates) {
   const result = await db.query(query, params);
   const updatedRule = result?.[0] || null;
   if (!updatedRule) {
-    throw new Error("更新警報規則失敗");
+    throwApiError(C.ALERT_RULE_UPDATE_FAILED, "更新警報規則失敗", {
+      statusCode: 500,
+    });
   }
 
   const shouldClearThresholdCache =
@@ -833,7 +839,7 @@ async function deleteAlertRule(id) {
   );
   const deletedRule = result?.[0] || null;
   if (!deletedRule) {
-    throw new Error("RULE_NOT_FOUND");
+    throwApiError(C.ALERT_RULE_NOT_FOUND, "找不到指定的規則");
   }
 
   if (deletedRule.alert_type === "threshold") {

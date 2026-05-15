@@ -4,6 +4,8 @@
  * 提供統一的請求參數驗證邏輯
  */
 
+const C = require("../utils/apiErrorCodes");
+
 /**
  * 驗證必填參數
  * @param {...string} requiredFields - 必填欄位名稱
@@ -27,11 +29,14 @@ function validateRequired(...requiredFields) {
     }
 
     if (missing.length > 0) {
-      return res.status(400).json({
-        error: true,
-        message: `缺少必填參數: ${missing.join(", ")}`,
-        missing,
-      });
+      return res.sendFailure(
+        {
+          code: C.VALIDATION_REQUIRED,
+          message: `缺少必填參數: ${missing.join(", ")}`,
+          details: { missing },
+        },
+        400,
+      );
     }
 
     next();
@@ -62,11 +67,14 @@ function validateNumbers(...numberFields) {
     }
 
     if (invalid.length > 0) {
-      return res.status(400).json({
-        error: true,
-        message: `無效的數字參數: ${invalid.join(", ")}`,
-        invalid,
-      });
+      return res.sendFailure(
+        {
+          code: C.VALIDATION_INVALID_NUMBER,
+          message: `無效的數字參數: ${invalid.join(", ")}`,
+          details: { invalid },
+        },
+        400,
+      );
     }
 
     next();
@@ -97,11 +105,14 @@ function validateIntegers(...integerFields) {
     }
 
     if (invalid.length > 0) {
-      return res.status(400).json({
-        error: true,
-        message: `無效的整數參數: ${invalid.join(", ")}`,
-        invalid,
-      });
+      return res.sendFailure(
+        {
+          code: C.VALIDATION_INVALID_INTEGER,
+          message: `無效的整數參數: ${invalid.join(", ")}`,
+          details: { invalid },
+        },
+        400,
+      );
     }
 
     next();
@@ -124,13 +135,14 @@ function validateEnum(field, allowedValues) {
 
     if (value !== undefined && value !== null && value !== "") {
       if (!allowedValues.includes(value)) {
-        return res.status(400).json({
-          error: true,
-          message: `參數 ${field} 的值必須是以下之一: ${allowedValues.join(", ")}`,
-          field,
-          value,
-          allowedValues,
-        });
+        return res.sendFailure(
+          {
+            code: C.VALIDATION_INVALID_ENUM,
+            message: `參數 ${field} 的值必須是以下之一: ${allowedValues.join(", ")}`,
+            details: { field, value, allowedValues },
+          },
+          400,
+        );
       }
     }
 
@@ -162,11 +174,14 @@ function validateDates(...dateFields) {
     }
 
     if (invalid.length > 0) {
-      return res.status(400).json({
-        error: true,
-        message: `無效的日期參數: ${invalid.join(", ")}`,
-        invalid,
-      });
+      return res.sendFailure(
+        {
+          code: C.VALIDATION_INVALID_DATE,
+          message: `無效的日期參數: ${invalid.join(", ")}`,
+          details: { invalid },
+        },
+        400,
+      );
     }
 
     next();
@@ -183,10 +198,14 @@ function validateCustom(validator) {
     const result = validator(req);
 
     if (!result.valid) {
-      return res.status(400).json({
-        error: true,
-        message: result.message || "驗證失敗",
-      });
+      return res.sendFailure(
+        {
+          code: C.VALIDATION_CUSTOM,
+          message: result.message || "驗證失敗",
+          details: null,
+        },
+        400,
+      );
     }
 
     next();
@@ -201,4 +220,3 @@ module.exports = {
   validateDates,
   validateCustom,
 };
-

@@ -3,6 +3,8 @@ const alertRuleService = require("./alertRuleService");
 const logger = require("../../utils/logger");
 
 const trackerLogger = logger.createLogger("errorTracker");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 統一錯誤追蹤服務（重構版）
@@ -120,7 +122,9 @@ async function recordErrorDetailed(
     );
 
     if (!upsertResult || upsertResult.length === 0) {
-      throw new Error("UPSERT 操作失敗");
+      throwApiError(C.ALERT_ERROR_TRACKER_UPSERT_FAILED, "UPSERT 操作失敗", {
+        statusCode: 500,
+      });
     }
 
     const tracking = upsertResult[0];

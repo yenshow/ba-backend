@@ -9,6 +9,8 @@ const {
   validateRequired,
 } = require("../middleware/validation");
 const logger = require("../utils/logger");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrorMeta");
 
 const router = express.Router();
 
@@ -20,11 +22,17 @@ const parseAddressParams = (req) => {
   const length = req.query.length !== undefined ? Number(req.query.length) : 1;
 
   if (!Number.isInteger(address) || address < 0) {
-    throw new Error("address must be a non-negative integer");
+    throwApiError(
+      C.MODBUS_INVALID_ADDRESS,
+      "address must be a non-negative integer",
+    );
   }
 
   if (!Number.isInteger(length) || length <= 0 || length > 125) {
-    throw new Error("length must be an integer between 1 and 125");
+    throwApiError(
+      C.MODBUS_INVALID_LENGTH,
+      "length must be an integer between 1 and 125",
+    );
   }
 
   return { address, length };
@@ -38,26 +46,30 @@ const parseDeviceParams = (req) => {
     typeof req.query.host !== "string" ||
     req.query.host.trim() === ""
   ) {
-    throw new Error("host is required (device IP address)");
+    throwApiError(C.MODBUS_HOST_REQUIRED, "host is required (device IP address)");
   }
   const host = req.query.host.trim();
 
-  // port 是必填
   if (req.query.port === undefined) {
-    throw new Error("port is required");
+    throwApiError(C.MODBUS_PORT_REQUIRED, "port is required");
   }
   const port = Number(req.query.port);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error("port must be an integer between 1 and 65535");
+    throwApiError(
+      C.MODBUS_INVALID_VALUES,
+      "port must be an integer between 1 and 65535",
+    );
   }
 
-  // unitId 是必填
   if (req.query.unitId === undefined) {
-    throw new Error("unitId is required");
+    throwApiError(C.MODBUS_UNIT_ID_REQUIRED, "unitId is required");
   }
   const unitId = Number(req.query.unitId);
   if (!Number.isInteger(unitId) || unitId < 0 || unitId > 255) {
-    throw new Error("unitId must be an integer between 0 and 255");
+    throwApiError(
+      C.MODBUS_INVALID_VALUES,
+      "unitId must be an integer between 0 and 255",
+    );
   }
 
   return { host, port, unitId };
@@ -110,13 +122,13 @@ router.post(
   asyncHandler(async (req, res) => {
     const requests = req.body?.requests;
     if (!Array.isArray(requests)) {
-      return res.sendError("requests must be an array", 400);
+      return res.sendError(C.MODBUS_INVALID_REQUESTS, "requests must be an array", 400);
     }
     if (requests.length === 0) {
       return res.sendSuccess({ results: [] });
     }
     if (requests.length > 2000) {
-      return res.sendError("requests too large (max 2000)", 400);
+      return res.sendError(C.MODBUS_REQUESTS_TOO_LARGE, "requests too large (max 2000)", 400);
     }
 
     const results = await modbusBatchService.batchRead(requests);
@@ -149,7 +161,7 @@ router.put(
       address < 0 ||
       !Number.isInteger(address)
     ) {
-      return res.sendError("address must be a non-negative integer", 400);
+      return res.sendError(C.MODBUS_INVALID_ADDRESS, "address must be a non-negative integer", 400);
     }
 
     // 單個寫入
@@ -169,12 +181,13 @@ router.put(
     if (Array.isArray(values)) {
       if (values.length === 0 || values.length > 125) {
         return res.sendError(
+          C.MODBUS_INVALID_VALUES,
           "values array length must be between 1 and 125",
           400,
         );
       }
       if (!values.every((v) => typeof v === "boolean")) {
-        return res.sendError("all values must be boolean", 400);
+        return res.sendError(C.MODBUS_INVALID_VALUES, "all values must be boolean", 400);
       }
       const success = await modbusClient.writeCoils(
         address,
@@ -193,6 +206,7 @@ router.put(
     }
 
     return res.sendError(
+      C.MODBUS_INVALID_BODY,
       "must provide either value (boolean) or values (boolean[])",
       400,
     );

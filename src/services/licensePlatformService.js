@@ -1,19 +1,41 @@
 const axios = require("axios");
 const config = require("../config");
+const C = require("../utils/apiErrorCodes");
+const { isAppError } = require("../utils/AppError");
+const { throwApiError } = require("../utils/apiErrorMeta");
 
-class LicensePlatformHttpError extends Error {
-  constructor(message, { statusCode, data } = {}) {
-    super(message);
-    this.name = "LicensePlatformHttpError";
-    this.statusCode = statusCode;
-    this.data = data;
-  }
-}
+const platformStatus = (statusCode) =>
+  Number.isFinite(statusCode) && statusCode >= 400 && statusCode <= 599
+    ? statusCode
+    : 502;
+
+const platformCode = (message, statusCode, data) => {
+  const fromData =
+    data && typeof data.code === "string" ? data.code.trim() : "";
+  if (fromData) return fromData;
+  const status = platformStatus(statusCode);
+  const msg = String(message || "");
+  if (status === 403 && msg.includes("使用過")) return C.LICENSE_ALREADY_USED;
+  if (status === 403 && msg.includes("停用")) return C.LICENSE_INACTIVE;
+  return C.LICENSE_PLATFORM_ERROR;
+};
+
+const throwPlatformError = (message, { statusCode, data } = {}) => {
+  const status = platformStatus(statusCode);
+  throwApiError(platformCode(message, status, data), message || "授權平台回傳錯誤", {
+    statusCode: status,
+    details: data ?? null,
+  });
+};
 
 const getClient = () => {
   const baseURL = config.license?.platformApiBaseUrl;
   if (!baseURL) {
-    throw new Error("LICENSE_PLATFORM_API_BASE_URL 未設定");
+    throwApiError(
+      C.LICENSE_PLATFORM_API_BASE_URL_MISSING,
+      "LICENSE_PLATFORM_API_BASE_URL 未設定",
+      { statusCode: 500 },
+    );
   }
   return axios.create({
     baseURL,
@@ -27,20 +49,26 @@ const unwrapResult = (data) => {
     return data.result;
   }
   if (data.success === false) {
-    throw new LicensePlatformHttpError(data.message || "授權平台回傳錯誤", {
+    throwPlatformError(data.message || "授權平台回傳錯誤", {
       statusCode: data.statusCode,
       data,
     });
   }
-  throw new LicensePlatformHttpError("授權平台回傳格式不正確", { data });
+  throwPlatformError("授權平台回傳格式不正確", { data });
 };
 
 const activateOnline = async ({ licenseKey, deviceFingerprint } = {}) => {
   if (!licenseKey || typeof licenseKey !== "string") {
-    throw new Error("licenseKey 必須為字串");
+    throwApiError(
+      C.LICENSE_PLATFORM_LICENSE_KEY_REQUIRED,
+      "licenseKey 必須為字串",
+    );
   }
   if (!deviceFingerprint || typeof deviceFingerprint !== "string") {
-    throw new Error("deviceFingerprint 必須為字串");
+    throwApiError(
+      C.LICENSE_PLATFORM_DEVICE_FINGERPRINT_REQUIRED,
+      "deviceFingerprint 必須為字串",
+    );
   }
   const client = getClient();
   const payload = {
@@ -49,17 +77,24 @@ const activateOnline = async ({ licenseKey, deviceFingerprint } = {}) => {
   };
   try {
     const res = await client.post("/activate", payload);
-    return unwrapResult(res.data);
+    const result = unwrapResult(res.data);
+    if (!Array.isArray(result.features)) {
+      throwApiError(
+        C.LICENSE_PLATFORM_INVALID_RESPONSE,
+        "授權平台回傳格式不正確",
+        { statusCode: 502 },
+      );
+    }
+    return result;
   } catch (error) {
-    if (error instanceof LicensePlatformHttpError) throw error;
+    if (isAppError(error)) throw error;
     const statusCode = error?.response?.status;
     const data = error?.response?.data;
     const message = data?.message || error?.message || "授權平台啟用失敗";
-    throw new LicensePlatformHttpError(message, { statusCode, data });
+    throwPlatformError(message, { statusCode, data });
   }
 };
 
 module.exports = {
   activateOnline,
-  LicensePlatformHttpError,
 };

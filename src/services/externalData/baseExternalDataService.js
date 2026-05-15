@@ -1,4 +1,6 @@
 const externalDb = require("../../database/externalDb");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 通用外部資料服務基類
@@ -182,7 +184,11 @@ class BaseExternalDataService {
         },
       };
     } catch (error) {
-      throw new Error(`查詢 ${this.tableName} 失敗: ${error.message}`);
+      throwApiError(
+        C.EXTERNAL_DATA_QUERY_FAILED,
+        `查詢 ${this.tableName} 失敗: ${error.message}`,
+        { statusCode: 500, details: error.message },
+      );
     }
   }
 
@@ -204,7 +210,11 @@ class BaseExternalDataService {
         data: rows[0],
       };
     } catch (error) {
-      throw new Error(`查詢 ${this.tableName} 失敗: ${error.message}`);
+      throwApiError(
+        C.EXTERNAL_DATA_QUERY_FAILED,
+        `查詢 ${this.tableName} 失敗: ${error.message}`,
+        { statusCode: 500, details: error.message },
+      );
     }
   }
 
@@ -231,7 +241,11 @@ class BaseExternalDataService {
         },
       };
     } catch (error) {
-      throw new Error(`查詢 ${this.tableName} 總數失敗: ${error.message}`);
+      throwApiError(
+        C.EXTERNAL_DATA_COUNT_FAILED,
+        `查詢 ${this.tableName} 總數失敗: ${error.message}`,
+        { statusCode: 500, details: error.message },
+      );
     }
   }
 

@@ -8,12 +8,8 @@ const {
   buildPersonnelFilename,
   isJpegByMagicBytes,
 } = require("./personnelFileHelpers");
-
-function createValidationError(message) {
-  const err = new Error(message);
-  err.statusCode = 400;
-  return err;
-}
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 function normalizeKey(k) {
   return String(k || "")
@@ -54,7 +50,7 @@ function rowsFromExcelBuffer(excelBuffer) {
     cellDates: true,
   });
   const firstSheetName = workbook.SheetNames?.[0];
-  if (!firstSheetName) throw createValidationError("Excel 無工作表");
+  if (!firstSheetName) throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"Excel 無工作表");
   const sheet = workbook.Sheets[firstSheetName];
   return XLSX.utils.sheet_to_json(sheet, { defval: "" });
 }
@@ -80,7 +76,7 @@ async function executeBatchImport({
   personnelUploadsDir,
 }) {
   if (!excelBuffer || !Buffer.isBuffer(excelBuffer)) {
-    throw createValidationError("請上傳 Excel 檔（欄位名稱：excel）");
+    throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"請上傳 Excel 檔（欄位名稱：excel）");
   }
 
   const rows = rowsFromExcelBuffer(excelBuffer);
@@ -89,7 +85,7 @@ async function executeBatchImport({
     try {
       zipIndex = buildZipIndexFromBuffer(zipBuffer);
     } catch (_e) {
-      throw createValidationError("圖片 zip 解析失敗");
+      throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"圖片 zip 解析失敗");
     }
   }
 
@@ -146,10 +142,10 @@ async function executeBatchImport({
         const hasBegin = Boolean(beginStr);
         const hasEnd = Boolean(endStr);
         if ((hasBegin && !hasEnd) || (!hasBegin && hasEnd)) {
-          const err = createValidationError(
+          throwApiError(
+            C.PERSONNEL_IMPORT_VALIDATION_FAILED,
             "有效期限需同時提供「有效起始日」與「有效結束日」",
           );
-          throw err;
         }
 
         const password =
@@ -196,10 +192,10 @@ async function executeBatchImport({
             continue;
           }
           if (buffer.length > PERSONNEL_FACE_MAX_BYTES) {
-            throw createValidationError("圖片檔案過大（需 ≤ 200KB）");
+            throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"圖片檔案過大（需 ≤ 200KB）");
           }
           if (!isJpegByMagicBytes(buffer.slice(0, 32))) {
-            throw createValidationError("圖片格式不正確：僅允許 JPEG（JPG）");
+            throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"圖片格式不正確：僅允許 JPEG（JPG）");
           }
 
           const desiredName = buildPersonnelFilename(

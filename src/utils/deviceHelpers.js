@@ -1,5 +1,7 @@
 // 設備相關共用工具函數
 
+const { deviceConfigInvalid } = require("./deviceErrors");
+
 /**
  * 解析 JSON 配置（處理字串或物件格式）
  */
@@ -21,87 +23,104 @@ const stringifyConfig = (config) => {
  */
 const validateDeviceConfig = (config, typeCode) => {
   if (!config || typeof config !== "object") {
-    throw new Error("config 必須是有效的 JSON 物件");
+    deviceConfigInvalid("config 必須是有效的 JSON 物件");
   }
 
   if (config.type !== typeCode) {
-    throw new Error(`config.type 必須為 "${typeCode}"`);
+    deviceConfigInvalid(`config.type 必須為 "${typeCode}"`);
   }
 
   switch (typeCode) {
     case "controller":
       if (!config.host || typeof config.host !== "string") {
-        throw new Error("controller 類型需要 host (string)");
+        deviceConfigInvalid("controller 類型需要 host (string)");
       }
       if (config.port !== undefined && typeof config.port !== "number") {
-        throw new Error("controller 類型的 port 必須是數字");
+        deviceConfigInvalid("controller 類型的 port 必須是數字");
       }
-      // unitId 可選，如果提供則必須是數字
       if (config.unitId !== undefined && typeof config.unitId !== "number") {
-        throw new Error("controller 類型的 unitId 必須是數字");
+        deviceConfigInvalid("controller 類型的 unitId 必須是數字");
       }
       break;
 
-    case "camera":
-      const rtspUrl = config.rtsp_url && typeof config.rtsp_url === "string" ? config.rtsp_url.trim() : "";
+    case "camera": {
+      const rtspUrl =
+        config.rtsp_url && typeof config.rtsp_url === "string"
+          ? config.rtsp_url.trim()
+          : "";
       if (!rtspUrl || !rtspUrl.toLowerCase().startsWith("rtsp://")) {
-        throw new Error("camera 類型需要 rtsp_url (string)，且需以 rtsp:// 開頭，例如 rtsp://admin:xxx@192.168.2.102:554/Streaming/Channels/102");
+        deviceConfigInvalid(
+          "camera 類型需要 rtsp_url (string)，且需以 rtsp:// 開頭，例如 rtsp://admin:xxx@192.168.2.102:554/Streaming/Channels/102",
+        );
       }
       break;
+    }
 
     case "sensor":
       if (
         !config.protocol ||
         !["modbus", "http", "mqtt"].includes(config.protocol)
       ) {
-        throw new Error("sensor 類型需要 protocol (modbus, http, 或 mqtt)");
+        deviceConfigInvalid("sensor 類型需要 protocol (modbus, http, 或 mqtt)");
       }
       if (config.protocol === "modbus") {
         if (!config.host || typeof config.host !== "string") {
-          throw new Error("sensor (modbus) 需要 host (string)");
+          deviceConfigInvalid("sensor (modbus) 需要 host (string)");
         }
-        // port 可選（可由型號或設備填寫，未填時由 service 層補上或拋錯）
-        if (config.port !== undefined && config.port !== null && (typeof config.port !== "number" || config.port < 1 || config.port > 65535)) {
-          throw new Error("sensor (modbus) 的 port 須為 1-65535 的數字");
+        if (
+          config.port !== undefined &&
+          config.port !== null &&
+          (typeof config.port !== "number" || config.port < 1 || config.port > 65535)
+        ) {
+          deviceConfigInvalid("sensor (modbus) 的 port 須為 1-65535 的數字");
         }
-        // unitId 可選，如果提供則必須是數字（可由型號帶入或由系統自動生成）
-        if (config.unitId !== undefined && config.unitId !== null && (typeof config.unitId !== "number" || config.unitId < 1 || config.unitId > 255)) {
-          throw new Error("sensor (modbus) 類型的 unitId 必須是 1-255 的數字");
+        if (
+          config.unitId !== undefined &&
+          config.unitId !== null &&
+          (typeof config.unitId !== "number" ||
+            config.unitId < 1 ||
+            config.unitId > 255)
+        ) {
+          deviceConfigInvalid(
+            "sensor (modbus) 類型的 unitId 必須是 1-255 的數字",
+          );
         }
       } else if (config.protocol === "http") {
         if (!config.api_endpoint || typeof config.api_endpoint !== "string") {
-          throw new Error("sensor (http) 需要 api_endpoint (string)");
+          deviceConfigInvalid("sensor (http) 需要 api_endpoint (string)");
         }
       } else if (config.protocol === "mqtt") {
         if (
           !config.connection_string ||
           typeof config.connection_string !== "string"
         ) {
-          throw new Error("sensor (mqtt) 需要 connection_string (string)");
+          deviceConfigInvalid("sensor (mqtt) 需要 connection_string (string)");
         }
       }
       break;
 
     case "access_control":
       if (!config.host || typeof config.host !== "string") {
-        throw new Error("access_control 類型需要 host (string)");
+        deviceConfigInvalid("access_control 類型需要 host (string)");
       }
       if (!config.username || typeof config.username !== "string") {
-        throw new Error("access_control 類型需要 username (string)");
+        deviceConfigInvalid("access_control 類型需要 username (string)");
       }
       if (!config.password || typeof config.password !== "string") {
-        throw new Error("access_control 類型需要 password (string)");
+        deviceConfigInvalid("access_control 類型需要 password (string)");
       }
       if (config.port !== undefined && config.port !== null) {
         const p = Number(config.port);
         if (Number.isNaN(p) || p < 1 || p > 65535) {
-          throw new Error("access_control 類型的 port 必須為 1–65535 的數字");
+          deviceConfigInvalid(
+            "access_control 類型的 port 必須為 1–65535 的數字",
+          );
         }
       }
       break;
 
     default:
-      throw new Error(`未知的設備類型: ${typeCode}`);
+      deviceConfigInvalid(`未知的設備類型: ${typeCode}`);
   }
 };
 

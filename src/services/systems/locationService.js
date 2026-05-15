@@ -1,6 +1,20 @@
 const db = require("../../database/db");
 const licenseService = require("../licenseService");
 const logger = require("../../utils/logger");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError, throwApiError } = require("../../utils/apiErrorMeta");
+const {
+  rethrowIfApiError,
+  failLocationZoneList,
+  failLocationZoneGet,
+  failLocationZoneCreate,
+  failLocationZoneUpdate,
+  failLocationZoneDelete,
+  failLocationGet,
+  failLocationCreate,
+  failLocationUpdate,
+  failLocationDelete,
+} = require("../../utils/locationErrors");
 
 const locationLogger = logger.createLogger("locationService");
 
@@ -17,35 +31,35 @@ const locationLogger = logger.createLogger("locationService");
 /**
  * 處理唯一性約束錯誤
  */
-function handleUniqueConstraintError(error, constraintName, errorMessage) {
+function handleUniqueConstraintError(error, constraintName, code, errorMessage) {
   if (error.code === "23505" && error.constraint === constraintName) {
-    const duplicateError = new Error(errorMessage);
-    duplicateError.statusCode = 400;
-    throw duplicateError;
+    throwApiError(code, errorMessage);
   }
 }
 
-/**
- * 統一錯誤處理包裝器
- * @param {Function} fn - 異步函數
- * @param {string} errorMessage - 錯誤訊息
- * @param {Function} handleConstraint - 約束錯誤處理函數（可選）
- */
-async function handleErrors(fn, errorMessage, handleConstraint) {
-  try {
-    return await fn();
-  } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
-    if (handleConstraint) {
-      handleConstraint(error);
-    }
-    locationLogger.error(errorMessage, {
-      error: error?.message || String(error),
-      module: "locationService",
-    });
-    throw new Error(errorMessage + error.message);
+const VALID_LOCATION_SYSTEM_TYPES = [
+  "environment",
+  "lighting",
+  "hvac",
+  "air_circulation",
+  "people_counting",
+  "vehicle_access",
+  "drainage",
+  "power",
+  "fire",
+  "emergency_rescue",
+  "smoke_alarm",
+];
+
+function assertValidSystemType(systemType) {
+  if (!systemType) {
+    throwApiError(C.LOCATION_SYSTEM_TYPE_REQUIRED, "系統類型不能為空");
+  }
+  if (!VALID_LOCATION_SYSTEM_TYPES.includes(systemType)) {
+    throwApiError(
+      C.LOCATION_SYSTEM_TYPE_INVALID,
+      `無效的系統類型: ${systemType}`,
+    );
   }
 }
 
@@ -54,10 +68,18 @@ async function handleErrors(fn, errorMessage, handleConstraint) {
  */
 function validateName(name, fieldName = "名稱") {
   if (!name || name.trim().length === 0) {
-    throw new Error(`${fieldName}不能為空`);
+    const code =
+      fieldName === "區域名稱"
+        ? C.LOCATION_ZONE_NAME_REQUIRED
+        : C.LOCATION_NAME_REQUIRED;
+    throwApiError(code, `${fieldName}不能為空`);
   }
   if (name.length > 100) {
-    throw new Error(`${fieldName}長度不能超過 100 字元`);
+    const code =
+      fieldName === "區域名稱"
+        ? C.LOCATION_ZONE_NAME_TOO_LONG
+        : C.LOCATION_NAME_TOO_LONG;
+    throwApiError(code, `${fieldName}長度不能超過 100 字元`);
   }
   return name.trim();
 }
@@ -356,7 +378,10 @@ function formatSystem(system) {
       };
     }
 
-    case "people_counting":
+    case "people_counting": {
+      const {
+        normalizeLogDisplayColumns,
+      } = require("./peopleCounting/logDisplayColumns");
       return {
         ...baseSystem,
         config: {
@@ -390,8 +415,10 @@ function formatSystem(system) {
           cameraChannelId: config.camera_channel_id ?? undefined,
           preferRegion: config.prefer_region ?? undefined,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
+          logDisplayColumns: normalizeLogDisplayColumns(config.log_display_columns),
         },
       };
+    }
 
     case "vehicle_access":
       return {
@@ -647,11 +674,12 @@ async function getZones(filters = {}) {
 
     return { zones: zonesWithLocations };
   } catch (error) {
+    rethrowIfApiError(error);
     locationLogger.error("取得區域列表失敗", {
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("取得區域列表失敗: " + error.message);
+    failLocationZoneList("取得區域列表失敗: " + error.message, error.message);
   }
 }
 
@@ -663,9 +691,7 @@ async function getZoneById(id, systemTypeOrLocationType = null) {
     const zones = await db.query("SELECT * FROM zones WHERE id = $1", [id]);
 
     if (zones.length === 0) {
-      const error = new Error("區域不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
     }
 
     const zone = zones[0];
@@ -675,15 +701,13 @@ async function getZoneById(id, systemTypeOrLocationType = null) {
       zone: formatZone(zone, locations),
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     locationLogger.error("取得區域失敗", {
       id,
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("取得區域失敗: " + error.message);
+    failLocationZoneGet("取得區域失敗: " + error.message, error.message);
   }
 }
 
@@ -814,15 +838,18 @@ async function createZone(zoneData, userId) {
       zone: zoneResult.zone,
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
-    handleUniqueConstraintError(error, "zones_name_key", "區域名稱已存在");
+    rethrowIfApiError(error);
+    handleUniqueConstraintError(
+      error,
+      "zones_name_key",
+      C.LOCATION_ZONE_NAME_DUPLICATE,
+      "區域名稱已存在",
+    );
     locationLogger.error("建立區域失敗", {
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("建立區域失敗: " + error.message);
+    failLocationZoneCreate("建立區域失敗: " + error.message, error.message);
   }
 }
 
@@ -887,9 +914,7 @@ async function updateZone(id, zoneData, userId) {
       [id],
     );
     if (existing.length === 0) {
-      const error = new Error("區域不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
     }
 
     const currentZone = existing[0];
@@ -901,7 +926,7 @@ async function updateZone(id, zoneData, userId) {
       const trimmedName = name.trim();
       if (trimmedName !== currentZoneName) {
         if (!trimmedName || trimmedName.length === 0) {
-          throw new Error("區域名稱不能為空");
+          throwApiError(C.LOCATION_ZONE_NAME_REQUIRED, "區域名稱不能為空");
         }
         const nameCheck = await db.query(
           "SELECT id FROM zones WHERE name = $1 AND id != $2",
@@ -1063,16 +1088,19 @@ async function updateZone(id, zoneData, userId) {
       zone: zoneResult.zone,
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
-    handleUniqueConstraintError(error, "zones_name_key", "區域名稱已存在");
+    rethrowIfApiError(error);
+    handleUniqueConstraintError(
+      error,
+      "zones_name_key",
+      C.LOCATION_ZONE_NAME_DUPLICATE,
+      "區域名稱已存在",
+    );
     locationLogger.error("更新區域失敗", {
       id,
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("更新區域失敗: " + error.message);
+    failLocationZoneUpdate("更新區域失敗: " + error.message, error.message);
   }
 }
 
@@ -1087,29 +1115,26 @@ async function deleteZone(id) {
     );
 
     if (result.length === 0) {
-      const error = new Error("區域不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
     }
 
     return {
       message: "區域刪除成功",
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     if (error.code === "23503") {
-      const constraintError = new Error("無法刪除區域：仍有地點關聯到此區域");
-      constraintError.statusCode = 400;
-      throw constraintError;
+      throwApiError(
+        C.LOCATION_ZONE_DELETE_FORBIDDEN,
+        "無法刪除區域：仍有地點關聯到此區域",
+      );
     }
     locationLogger.error("刪除區域失敗", {
       id,
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("刪除區域失敗: " + error.message);
+    failLocationZoneDelete("刪除區域失敗: " + error.message, error.message);
   }
 }
 
@@ -1125,9 +1150,7 @@ async function getLocationById(id) {
     ]);
 
     if (locations.length === 0) {
-      const error = new Error("地點不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
     }
 
     const location = locations[0];
@@ -1137,15 +1160,13 @@ async function getLocationById(id) {
       location: formatLocation(location, systems),
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     locationLogger.error("取得地點失敗", {
       id,
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("取得地點失敗: " + error.message);
+    failLocationGet("取得地點失敗: " + error.message, error.message);
   }
 }
 
@@ -1267,19 +1288,18 @@ async function createLocation(locationData, userId) {
       location: result.location,
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     handleUniqueConstraintError(
       error,
       "unique_zone_location_name",
+      C.LOCATION_NAME_DUPLICATE,
       "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。",
     );
     locationLogger.error("建立地點失敗", {
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("建立地點失敗: " + error.message);
+    failLocationCreate("建立地點失敗: " + error.message, error.message);
   }
 }
 
@@ -1293,9 +1313,7 @@ async function updateLocation(id, locationData, userId) {
       id,
     ]);
     if (existing.length === 0) {
-      const error = new Error("地點不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
     }
 
     // 使用事務更新地點和系統
@@ -1325,12 +1343,11 @@ async function updateLocation(id, locationData, userId) {
       location: result.location,
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     handleUniqueConstraintError(
       error,
       "unique_zone_location_name",
+      C.LOCATION_NAME_DUPLICATE,
       "該區域已存在同名地點。由於地點是跨系統共用的，請直接使用該地點。",
     );
     locationLogger.error("更新地點失敗", {
@@ -1338,7 +1355,7 @@ async function updateLocation(id, locationData, userId) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("更新地點失敗: " + error.message);
+    failLocationUpdate("更新地點失敗: " + error.message, error.message);
   }
 }
 
@@ -1353,9 +1370,7 @@ async function deleteLocation(id) {
     );
 
     if (result.length === 0) {
-      const error = new Error("地點不存在");
-      error.statusCode = 404;
-      throw error;
+      throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
     }
 
     return {
@@ -1363,15 +1378,13 @@ async function deleteLocation(id) {
       id: String(id),
     };
   } catch (error) {
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     locationLogger.error("刪除地點失敗", {
       id,
       error: error?.message || String(error),
       module: "locationService",
     });
-    throw new Error("刪除地點失敗: " + error.message);
+    failLocationDelete("刪除地點失敗: " + error.message, error.message);
   }
 }
 
@@ -1533,6 +1546,10 @@ function buildSystemConfig(systemType, config) {
       };
 
     case "people_counting": {
+      const {
+        normalizeLogDisplayColumns,
+        toStoredLogDisplayColumns,
+      } = require("./peopleCounting/logDisplayColumns");
       const ids = Array.isArray(config.cameraDeviceIds)
         ? config.cameraDeviceIds
             .map((id) => Number(id))
@@ -1557,6 +1574,12 @@ function buildSystemConfig(systemType, config) {
         camera_channel_id: 1,
         prefer_region: config.preferRegion ?? false,
         access_control_groups: config.accessControlGroups || [], // 相容保留
+        log_display_columns: (() => {
+          const cols = toStoredLogDisplayColumns(
+            normalizeLogDisplayColumns(config.logDisplayColumns),
+          );
+          return cols.length > 0 ? cols : undefined;
+        })(),
       };
     }
 
@@ -1588,19 +1611,15 @@ async function assertSystemLicensed(systemType) {
 
   const activeKeys = licenseService.getActiveFeatureKeys();
   if (!activeKeys.includes(systemType)) {
-    const err = new Error(`不支援的 system_type：${systemType}`);
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.DEVICE_UNSUPPORTED_FEATURE, `不支援的 system_type：${systemType}`);
   }
 
   const licensed =
     Array.isArray(license?.features) && license.features.includes(systemType);
   if (!licensed) {
-    const err = new Error(`未授權功能：${systemType}`);
-    err.statusCode = 403;
-    err.code = "FEATURE_NOT_LICENSED";
-    err.feature = systemType;
-    throw err;
+    throw createApiError(C.FEATURE_NOT_LICENSED, `未授權功能：${systemType}`, {
+      details: { feature: systemType },
+    });
   }
 }
 
@@ -1633,14 +1652,10 @@ async function assertControllerQuotaWithinLimit({
     [Number(nextDeviceId)],
   );
   if (deviceRows.length === 0) {
-    const err = new Error("綁定的設備不存在");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.LOCATION_DEVICE_NOT_FOUND, "綁定的設備不存在");
   }
   if (deviceRows[0].type_code !== "controller") {
-    const err = new Error("此系統僅允許綁定 controller 類型設備");
-    err.statusCode = 400;
-    throw err;
+    throw createApiError(C.LOCATION_DEVICE_NOT_CONTROLLER, "此系統僅允許綁定 controller 類型設備");
   }
 
   const rows = await query(
@@ -1665,13 +1680,9 @@ async function assertControllerQuotaWithinLimit({
   const used = Number(rows?.[0]?.used ?? 0);
   const has = Number(rows?.[0]?.has ?? 0);
   if (used >= max && has === 0) {
-    const err = new Error("已達到授權配額上限");
-    err.statusCode = 403;
-    err.code = "LICENSE_QUOTA_EXCEEDED";
-    err.feature = systemType;
-    err.used = used;
-    err.max = max;
-    throw err;
+    throw createApiError(C.LICENSE_QUOTA_EXCEEDED, "已達到授權配額上限", {
+      details: { feature: systemType, used, max },
+    });
   }
 }
 
@@ -1681,24 +1692,7 @@ async function assertControllerQuotaWithinLimit({
 async function createSystem(query, locationId, system) {
   const { systemType, config = {} } = system;
 
-  if (
-    !systemType ||
-    ![
-      "environment",
-      "lighting",
-      "hvac",
-      "air_circulation",
-      "people_counting",
-      "vehicle_access",
-      "drainage",
-      "power",
-      "fire",
-      "emergency_rescue",
-      "smoke_alarm",
-    ].includes(systemType)
-  ) {
-    throw new Error(`無效的系統類型: ${systemType}`);
-  }
+  assertValidSystemType(systemType);
 
   const systemConfig = buildSystemConfig(systemType, config);
 
@@ -1734,7 +1728,10 @@ async function updateSystem(query, systemId, system) {
     [systemId],
   );
   if (existing.length === 0) {
-    throw new Error(`系統 ID ${systemId} 不存在`);
+    throwApiError(
+      C.LOCATION_SYSTEM_NOT_FOUND,
+      `系統 ID ${systemId} 不存在`,
+    );
   }
 
   const currentSystemType = existing[0].system_type;
@@ -1752,23 +1749,7 @@ async function updateSystem(query, systemId, system) {
     deviceIdsFromDbSystemConfig(currentSystemConfig)[0] ?? null;
   const targetSystemType = systemType || currentSystemType;
 
-  if (
-    ![
-      "environment",
-      "lighting",
-      "hvac",
-      "air_circulation",
-      "people_counting",
-      "vehicle_access",
-      "drainage",
-      "power",
-      "fire",
-      "emergency_rescue",
-      "smoke_alarm",
-    ].includes(targetSystemType)
-  ) {
-    throw new Error(`無效的系統類型: ${targetSystemType}`);
-  }
+  assertValidSystemType(targetSystemType);
 
   let effectiveConfig = config;
   if (
@@ -2043,12 +2024,14 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     for (const system of systems) {
       const { systemType } = system;
       if (!systemType) {
-        throw new Error("系統類型不能為空");
+        throwApiError(C.LOCATION_SYSTEM_TYPE_REQUIRED, "系統類型不能為空");
       }
 
-      // 檢查是否已有相同 system_type 的系統
       if (processedSystemTypes.has(systemType)) {
-        throw new Error(`地點不能有多個相同類型的系統: ${systemType}`);
+        throwApiError(
+          C.LOCATION_SYSTEM_TYPE_DUPLICATE,
+          `地點不能有多個相同類型的系統: ${systemType}`,
+        );
       }
       processedSystemTypes.add(systemType);
 

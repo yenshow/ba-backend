@@ -10,6 +10,9 @@ const {
   validateRequired,
   validateIntegers,
 } = require("../middleware/validation");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrorMeta");
+const yscpFeature = require("../utils/yscpPeopleCountingFeature");
 
 /** 車輛進出系統使用的表：需授權 vehicle_access 才能存取 */
 const VEHICLE_TABLES = [
@@ -53,22 +56,63 @@ function validateTableAndHandler(req, res, next) {
 
   // 驗證存取權限
   if (!validateTableAccess(schema, table)) {
-    return res.status(403).json({
-      success: false,
-      message: `不允許存取 ${schema}.${table}。請確認該資料表是否在白名單中。`,
-    });
+    return res.sendFailure(
+      {
+        code: C.EXTERNAL_DATA_TABLE_FORBIDDEN,
+        message: `不允許存取 ${schema}.${table}。請確認該資料表是否在白名單中。`,
+        details: { schema, table },
+      },
+      403,
+    );
   }
 
   // 檢查處理器是否存在
   if (!handlerFactory.hasHandler(schema, table)) {
-    return res.status(404).json({
-      success: false,
-      message: `找不到 ${schema}.${table} 的處理器。`,
-    });
+    return res.sendFailure(
+      {
+        code: C.EXTERNAL_DATA_HANDLER_NOT_FOUND,
+        message: `找不到 ${schema}.${table} 的處理器。`,
+        details: { schema, table },
+      },
+      404,
+    );
   }
 
   next();
 }
+
+/** YSCP 人流關閉時，略過人流專用外部表（不連 EXTERNAL_DB） */
+function respondIfPeopleCountingExternalDisabled(req, res, next) {
+  const { schema, table, id } = req.params || {};
+  if (!schema || !table) return next();
+  if (!yscpFeature.isBlockedExternalTable(schema, table)) return next();
+
+  if (id !== undefined && id !== null && String(id) !== "") {
+    return res.sendFailure(
+      {
+        code: C.EXTERNAL_DATA_RECORD_NOT_FOUND,
+        message: "YSCP 人流資料源已關閉，無法查詢外部資料",
+      },
+      404,
+    );
+  }
+
+  const path = String(req.path || "");
+  if (path.endsWith("/count")) {
+    return res.sendSuccess(yscpFeature.emptyExternalCountResult());
+  }
+
+  const limit = Math.min(parseInt(req.query?.limit, 10) || 50, 1000);
+  const offset = Math.max(parseInt(req.query?.offset, 10) || 0, 0);
+  return res.sendSuccess(yscpFeature.emptyExternalListResult(limit, offset));
+}
+
+const blockSlotCardRecordsIfDisabled = (req, res, next) => {
+  if (!yscpFeature.isBlockedExternalTable("baseacs", "slot_card_records")) {
+    return next();
+  }
+  return res.sendSuccess(null);
+};
 
 /** 車輛相關表需授權 vehicle_access */
 function requireVehicleAccessIfVehicleTable(req, res, next) {
@@ -124,9 +168,10 @@ router.get(
     const { systemType } = req.params;
 
     if (!systemMapping.hasSystem(systemType)) {
-      return res.sendError(
+      throwApiError(
+        C.EXTERNAL_DATA_SYSTEM_NOT_FOUND,
         `找不到系統 ${systemType}。可用的系統類型：${systemMapping.getAllSystemTypes().join(", ")}`,
-        404,
+        { statusCode: 404 },
       );
     }
 
@@ -188,6 +233,7 @@ router.get(
   authenticate,
   validateRequired("schema", "table"),
   validateTableAndHandler,
+  respondIfPeopleCountingExternalDisabled,
   requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;
@@ -207,6 +253,7 @@ router.get(
   validateRequired("schema", "table"),
   validateIntegers("id"),
   validateTableAndHandler,
+  respondIfPeopleCountingExternalDisabled,
   requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table, id } = req.params;
@@ -214,7 +261,11 @@ router.get(
     const result = await handler.getById(parseInt(id));
 
     if (!result.success) {
-      return res.sendError(result.message || "資料不存在", 404);
+      throwApiError(
+        C.EXTERNAL_DATA_RECORD_NOT_FOUND,
+        result.message || "資料不存在",
+        { statusCode: 404 },
+      );
     }
 
     res.sendSuccess(result);
@@ -230,14 +281,21 @@ router.get(
   "/baseacs/slot_card_records/:id/picture",
   authenticate,
   validateIntegers("id"),
+  blockSlotCardRecordsIfDisabled,
   asyncHandler(async (req, res) => {
     const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
     const result = await handler.getPictureById(parseInt(req.params.id));
 
     if (!result.success) {
-      return res.sendError(
+      throwApiError(
+        C.EXTERNAL_DATA_PICTURE_FAILED,
         result.error || "獲取圖片失敗",
-        result.status || 500,
+        {
+          statusCode:
+            Number.isFinite(result.status) && result.status >= 400
+              ? result.status
+              : 500,
+        },
       );
     }
 
@@ -254,11 +312,12 @@ router.post(
   "/baseacs/slot_card_records/pictures",
   authenticate,
   validateRequired("picUris"),
+  blockSlotCardRecordsIfDisabled,
   asyncHandler(async (req, res) => {
     const { picUris } = req.body;
 
     if (!Array.isArray(picUris) || picUris.length === 0) {
-      return res.sendError("picUris 必須為非空陣列", 400);
+      throwApiError(C.EXTERNAL_DATA_INVALID_PIC_URIS, "picUris 必須為非空陣列");
     }
 
     const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
@@ -283,14 +342,21 @@ router.post(
   "/baseacs/slot_card_records/picture",
   authenticate,
   validateRequired("picUri"),
+  blockSlotCardRecordsIfDisabled,
   asyncHandler(async (req, res) => {
     const handler = handlerFactory.getHandler("baseacs", "slot_card_records");
     const result = await handler.getPictureByUri(req.body.picUri);
 
     if (!result.success) {
-      return res.sendError(
+      throwApiError(
+        C.EXTERNAL_DATA_PICTURE_FAILED,
         result.error || "獲取圖片失敗",
-        result.status || 500,
+        {
+          statusCode:
+            Number.isFinite(result.status) && result.status >= 400
+              ? result.status
+              : 500,
+        },
       );
     }
 
@@ -308,6 +374,7 @@ router.get(
   authenticate,
   validateRequired("schema", "table"),
   validateTableAndHandler,
+  respondIfPeopleCountingExternalDisabled,
   requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;

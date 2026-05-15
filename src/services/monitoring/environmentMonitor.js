@@ -4,6 +4,8 @@
  */
 
 const db = require("../../database/db");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
@@ -64,7 +66,7 @@ async function readValuesByRegisterType(enabledValues, deviceConfig) {
       ]);
       const first = results?.[0];
       if (!first || first.ok !== true) {
-        throw new Error(first?.error || "讀取失敗");
+        throwApiError(C.MONITOR_MODBUS_READ_FAILED, first?.error || "讀取失敗");
       }
       modbusData = first.data;
     } catch (err) {
@@ -236,7 +238,7 @@ async function checkEnvironmentLocations() {
           ]);
           const first = results?.[0];
           if (!first || first.ok !== true) {
-            throw new Error(first?.error || "設備離線");
+            throwApiError(C.MONITOR_MODBUS_READ_FAILED, first?.error || "設備離線");
           }
         }
 

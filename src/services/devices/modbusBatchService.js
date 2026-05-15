@@ -1,4 +1,6 @@
 const modbusClient = require("./modbusClient");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 批次 Modbus 讀取服務
@@ -71,7 +73,10 @@ const readByType = async (registerType, address, length, deviceConfig) => {
   if (registerType === "discrete") return modbusClient.readDiscreteInputs(address, length, deviceConfig);
   if (registerType === "holding") return modbusClient.readHoldingRegisters(address, length, deviceConfig);
   if (registerType === "input") return modbusClient.readInputRegisters(address, length, deviceConfig);
-  throw new Error(`unsupported registerType: ${registerType}`);
+  throwApiError(
+    C.MODBUS_REGISTER_TYPE_UNSUPPORTED,
+    `unsupported registerType: ${registerType}`,
+  );
 };
 
 /**

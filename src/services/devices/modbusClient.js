@@ -2,6 +2,8 @@ const ModbusRTU = require("modbus-serial");
 const EventEmitter = require("events");
 const config = require("../../config");
 const modbusGlobalLimiter = require("./modbusGlobalLimiter");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError } = require("../../utils/apiErrorMeta");
 
 class ModbusClient extends EventEmitter {
   constructor(modbusConfig) {
@@ -17,12 +19,6 @@ class ModbusClient extends EventEmitter {
     });
   }
 
-  createServiceUnavailableError(message) {
-    const err = new Error(message);
-    err.statusCode = 503;
-    return err;
-  }
-
   // 產生連接的 key
   getConnectionKey(host, port, unitId) {
     return `${host}:${port}:${unitId}`;
@@ -31,7 +27,8 @@ class ModbusClient extends EventEmitter {
   // 檢查連接狀態
   checkConnection(client, deviceConfig) {
     if (!client.isOpen) {
-      throw new Error(
+      throw createApiError(
+        C.MODBUS_CONNECTION_CLOSED,
         `連接已斷開: Modbus 設備 ${deviceConfig.host}:${deviceConfig.port} 的連接已關閉，請重新連接。`,
       );
     }
@@ -62,34 +59,41 @@ class ModbusClient extends EventEmitter {
     ) {
       this.cleanupConnection(deviceConfig);
       const operationName = operationType === "read" ? "讀取" : "寫入";
-      throw new Error(
+      throw createApiError(
+        C.MODBUS_CONNECTION_INTERRUPTED,
         `連接已斷開: ${operationName}過程中連接被中斷，請檢查設備狀態。`,
       );
     }
     throw error;
   }
 
-  // 格式化連接錯誤訊息
   formatConnectionError(error, host, port) {
     if (error.code === "ETIMEDOUT") {
-      return new Error(
+      return createApiError(
+        C.MODBUS_CONNECTION_TIMEOUT,
         `連接超時: 無法連接到 Modbus 設備 ${host}:${port}。請檢查設備是否已開啟，網路連線是否正常。`,
       );
     }
     if (error.code === "ECONNREFUSED") {
-      return new Error(
+      return createApiError(
+        C.MODBUS_CONNECTION_REFUSED,
         `連接被拒絕: Modbus 設備 ${host}:${port} 拒絕連接。請確認設備已開啟且 Modbus 服務正在運行。`,
       );
     }
     if (error.code === "EHOSTUNREACH" || error.code === "ENETUNREACH") {
-      return new Error(
+      return createApiError(
+        C.MODBUS_CONNECTION_UNREACHABLE,
         `無法到達設備: Modbus 設備 ${host}:${port} 無法訪問。請檢查網路連線和 IP 位址是否正確。`,
       );
     }
-    if (error.message && error.message.includes("連接超時")) {
-      return new Error(error.message);
+    if (error?.code === C.MODBUS_CONNECTION_TIMEOUT) {
+      return error;
     }
-    return new Error(
+    if (error.message && error.message.includes("連接超時")) {
+      return createApiError(C.MODBUS_CONNECTION_TIMEOUT, error.message);
+    }
+    return createApiError(
+      C.MODBUS_CONNECTION_FAILED,
       `無法連接到 Modbus 設備 ${host}:${port} - ${error.message || error.code || "未知錯誤"}`,
     );
   }
@@ -100,11 +104,11 @@ class ModbusClient extends EventEmitter {
   }
 
   // 為 Promise 添加超時處理
-  async withTimeout(promise, timeout, errorMessage) {
+  async withTimeout(promise, timeout, errorMessage, errorCode = C.MODBUS_CONNECTION_TIMEOUT) {
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
       timeoutId = setTimeout(() => {
-        reject(new Error(errorMessage));
+        reject(createApiError(errorCode, errorMessage));
       }, timeout);
     });
 
@@ -147,7 +151,8 @@ class ModbusClient extends EventEmitter {
       deviceConfig.port === undefined ||
       deviceConfig.unitId === undefined
     ) {
-      throw new Error(
+      throw createApiError(
+        C.MODBUS_DEVICE_CONFIG_REQUIRED,
         "device configuration is required: { host, port, unitId }",
       );
     }
@@ -176,6 +181,7 @@ class ModbusClient extends EventEmitter {
           client.connectTCP(host, { port }),
           this.timeout,
           `連接超時: 無法在 ${this.timeout}ms 內連接到 ${host}:${port}`,
+          C.MODBUS_CONNECTION_TIMEOUT,
         ),
       )
       .then(() => {
@@ -280,12 +286,17 @@ class ModbusClient extends EventEmitter {
       this.checkConnection(client, deviceConfig);
       try {
         const response = await modbusGlobalLimiter.run(() =>
-          this.withTimeout(reader(client), this.timeout, timeoutMsg),
+          this.withTimeout(
+            reader(client),
+            this.timeout,
+            timeoutMsg,
+            C.MODBUS_READ_TIMEOUT,
+          ),
         );
         return response.data;
       } catch (error) {
-        if (this.isTimeoutError(error)) {
-          throw this.createServiceUnavailableError(timeoutMsg);
+        if (this.isTimeoutError(error) || error?.code === C.MODBUS_READ_TIMEOUT) {
+          throw createApiError(C.MODBUS_READ_TIMEOUT, timeoutMsg);
         }
         this.handleOperationError(error, client, deviceConfig, "read");
       } finally {
@@ -306,10 +317,13 @@ class ModbusClient extends EventEmitter {
         client.writeCoil(address, value),
         this.timeout,
         timeoutMsg,
+        C.MODBUS_WRITE_TIMEOUT,
       );
       return response.value === value;
     } catch (error) {
-      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
+      if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
+        throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);
+      }
       this.handleOperationError(error, client, deviceConfig, "write");
     }
   }
@@ -323,10 +337,13 @@ class ModbusClient extends EventEmitter {
         client.writeCoils(address, values),
         this.timeout,
         timeoutMsg,
+        C.MODBUS_WRITE_TIMEOUT,
       );
       return response.address === address && response.length === values.length;
     } catch (error) {
-      if (this.isTimeoutError(error)) throw new Error(timeoutMsg);
+      if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
+        throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);
+      }
       this.handleOperationError(error, client, deviceConfig, "write");
     }
   }
@@ -338,7 +355,8 @@ class ModbusClient extends EventEmitter {
       deviceConfig.port === undefined ||
       deviceConfig.unitId === undefined
     ) {
-      throw new Error(
+      throw createApiError(
+        C.MODBUS_DEVICE_CONFIG_REQUIRED,
         "device configuration is required: { host, port, unitId }",
       );
     }

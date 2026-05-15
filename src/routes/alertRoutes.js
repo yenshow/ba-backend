@@ -16,6 +16,8 @@ const {
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrorMeta");
 
 const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold", "di", "do"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
@@ -555,7 +557,7 @@ router.post(
       allowPartial: false,
     });
     if (validationError) {
-      return res.sendError(validationError, 400);
+      throwApiError(C.ALERT_VALIDATION_FAILED, validationError);
     }
 
     const rule = await alertRuleService.createAlertRule(req.body);
@@ -591,7 +593,9 @@ router.put(
     const body = req.body || {};
 
     const integrationErr = validateRuleIntegrationsPayload(body);
-    if (integrationErr) return res.sendError(integrationErr, 400);
+    if (integrationErr) {
+      throwApiError(C.ALERT_VALIDATION_FAILED, integrationErr);
+    }
 
     // DO linkage
     if (Object.prototype.hasOwnProperty.call(body, "doLinkage")) {
@@ -655,7 +659,7 @@ router.post(
       [ruleId],
     );
     if (!ruleRows?.[0]) {
-      return res.sendError("找不到指定的規則", 404);
+      throwApiError(C.ALERT_RULE_NOT_FOUND, "找不到指定的規則", { statusCode: 404 });
     }
 
     const stored = await alertEmailSubscriptionService.getByRuleId(ruleId);
@@ -665,7 +669,9 @@ router.post(
     );
 
     const errMsg = validateEmailSubscriptionForSmtpTest(merged);
-    if (errMsg) return res.sendError(errMsg, 400);
+    if (errMsg) {
+      throwApiError(C.ALERT_VALIDATION_FAILED, errMsg);
+    }
 
     const security = String(merged.smtp_security || "none")
       .trim()
@@ -719,11 +725,12 @@ router.post(
         msg.includes("SMTP_PORT_REQUIRED") ||
         msg.includes("SMTP_SECURITY_INVALID")
       ) {
-        return res.sendError("SMTP 設定不完整或不合法", 400);
+        throwApiError(C.ALERT_SMTP_INVALID, "SMTP 設定不完整或不合法");
       }
-      return res.sendError(
+      throwApiError(
+        C.ALERT_SMTP_SEND_FAILED,
         `SMTP 測試寄送失敗：${code ? `${code} ` : ""}${msg}`,
-        502,
+        { statusCode: 502 },
       );
     }
   }),
@@ -740,21 +747,14 @@ router.put(
       allowPartial: true,
     });
     if (validationError) {
-      return res.sendError(validationError, 400);
+      throwApiError(C.ALERT_VALIDATION_FAILED, validationError);
     }
 
-    try {
-      const rule = await alertRuleService.updateAlertRule(
-        parseInt(id),
-        req.body,
-      );
-      res.sendSuccess({ rule });
-    } catch (error) {
-      if (error.message === "RULE_NOT_FOUND") {
-        return res.sendError("找不到指定的規則", 404);
-      }
-      throw error;
-    }
+    const rule = await alertRuleService.updateAlertRule(
+      parseInt(id),
+      req.body,
+    );
+    res.sendSuccess({ rule });
   }),
 );
 
@@ -765,15 +765,8 @@ router.delete(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    try {
-      const rule = await alertRuleService.deleteAlertRule(parseInt(id));
-      res.sendSuccess({ rule });
-    } catch (error) {
-      if (error.message === "RULE_NOT_FOUND") {
-        return res.sendError("找不到指定的規則", 404);
-      }
-      throw error;
-    }
+    const rule = await alertRuleService.deleteAlertRule(parseInt(id));
+    res.sendSuccess({ rule });
   }),
 );
 
@@ -801,7 +794,7 @@ router.put(
     const { id } = req.params;
     const userId = req.user?.id;
     if (!userId) {
-      return res.sendError("未提供認證資訊", 401);
+      throwApiError(C.AUTH_CONTEXT_MISSING, "未提供認證資訊", { statusCode: 401 });
     }
     const result = await alertService.unresolveAlert(parseInt(id), userId);
     res.sendSuccess({ alert: result });
@@ -818,7 +811,7 @@ router.post(
     const { source, dimension_key } = req.query; // 可選的系統來源/維度參數
     const userId = req.user?.id;
     if (!userId) {
-      return res.sendError("未提供認證資訊", 401);
+      throwApiError(C.AUTH_CONTEXT_MISSING, "未提供認證資訊", { statusCode: 401 });
     }
 
     const count = await alertService.ignoreAlerts(

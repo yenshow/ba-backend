@@ -11,6 +11,7 @@ const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const systemAlert = require("../services/alerts/systemAlertHelper");
+const C = require("../utils/apiErrorCodes");
 
 // 以下路由皆需登入且具備系統權限
 router.use(authenticate, requirePermission("system.smoke_alarm"));
@@ -109,7 +110,14 @@ router.post(
     const { systemId } = req.params;
     const message = String(req.body?.message ?? req.body?.error ?? "").trim();
     if (!message) {
-      return res.status(400).json({ success: false, error: "message 為必填" });
+      return res.sendFailure(
+        {
+          code: C.SMOKE_ALARM_MESSAGE_REQUIRED,
+          message: "message 為必填",
+          details: null,
+        },
+        400,
+      );
     }
     await systemAlert.recordError("smoke_alarm", Number(systemId), message, {
       origin: { channel: "manual_error_api", actorUserId: req.user?.id ?? null },

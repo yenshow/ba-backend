@@ -5,6 +5,8 @@ const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const logger = require("../utils/logger");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrorMeta");
 
 const routeLogger = logger.createLogger("deploymentEnvRoutes");
 
@@ -31,9 +33,10 @@ function resolveEnvFilePath() {
   const isInside =
     normalizedFile === resolvedCwd || normalizedFile.startsWith(dirWithSep);
   if (!isInside) {
-    const err = new Error("ENV_FILE 必須解析為後端工作目錄內的路徑");
-    err.statusCode = 400;
-    throw err;
+    throwApiError(
+      C.DEPLOYMENT_ENV_INVALID_PATH,
+      "ENV_FILE 必須解析為後端工作目錄內的路徑",
+    );
   }
   return normalizedFile;
 }
@@ -76,27 +79,17 @@ router.put(
   asyncHandler(async (req, res) => {
     const { content } = req.body;
     if (typeof content !== "string") {
-      return res.status(400).json({
-        error: true,
-        message: "content 必須為字串",
-        timestamp: new Date().toISOString(),
-      });
+      throwApiError(C.DEPLOYMENT_ENV_CONTENT_MUST_BE_STRING, "content 必須為字串");
     }
     if (!content.trim()) {
-      return res.status(400).json({
-        error: true,
-        message: "content 不可為空白",
-        timestamp: new Date().toISOString(),
-      });
+      throwApiError(C.DEPLOYMENT_ENV_CONTENT_EMPTY, "content 不可為空白");
     }
 
     const envPath = resolveEnvFilePath();
     const dir = path.dirname(envPath);
     if (!fs.existsSync(dir)) {
-      return res.status(500).json({
-        error: true,
-        message: "無法寫入：目錄不存在",
-        timestamp: new Date().toISOString(),
+      throwApiError(C.DEPLOYMENT_ENV_WRITE_DIR_MISSING, "無法寫入：目錄不存在", {
+        statusCode: 500,
       });
     }
 

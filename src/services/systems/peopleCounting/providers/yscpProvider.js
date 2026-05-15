@@ -14,6 +14,7 @@ const {
   calculateTodayStatsByPhysicalId,
   calculateCurrentCount,
 } = require("../helpers/entryExitStats");
+const { yscpEventLabel } = require("../accessControlLogLabels");
 
 function ensureArray(value) {
   return Array.isArray(value) ? value : [];
@@ -405,6 +406,7 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
       record.physical_id != null ? Number(record.physical_id) : null;
     const deviceName =
       physicalId != null ? (doorNameMap.get(physicalId) ?? "") : "";
+    const resolvedType = eventType || "failed";
     return {
       id: generateRecordIdFn(record.person_id, record.swip_card_rev_time),
       personId: record.person_id,
@@ -415,7 +417,9 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
         record.employee_no != null && String(record.employee_no).trim() !== ""
           ? String(record.employee_no).trim()
           : null,
-      eventType: eventType || "failed",
+      eventType: resolvedType,
+      eventLabel: yscpEventLabel(resolvedType),
+      verifyMethod: null,
       timestamp: record.swip_card_rev_time,
       deviceScreenshotUrl: record.snap_pic_url || "",
       deviceName,

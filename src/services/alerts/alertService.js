@@ -6,6 +6,8 @@ const alertLinkageService = require("./alertLinkageService");
 const { notifyNewAlertByEmail } = require("./alertEmailNotifier");
 const logger = require("../../utils/logger");
 const { getDeviceTypeName } = require("../../constants/deviceTypes");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const alertLogger = logger.createLogger("alertService");
 
@@ -673,17 +675,21 @@ async function createAlert(alertData) {
     const actualSource = device_id ? ALERT_SOURCES.DEVICE : source;
 
     if (!source_id || !alert_type) {
-      throw new Error("source_id（或 device_id）和 alert_type 為必填欄位");
+      throwApiError(
+        C.ALERT_CREATE_VALIDATION_FAILED,
+        "source_id（或 device_id）和 alert_type 為必填欄位",
+      );
     }
 
     // message 必填（errorTracker 會總是提供）
     if (!message) {
-      throw new Error("message 為必填欄位");
+      throwApiError(C.ALERT_CREATE_VALIDATION_FAILED, "message 為必填欄位");
     }
 
     // 驗證來源
     if (!Object.values(ALERT_SOURCES).includes(actualSource)) {
-      throw new Error(
+      throwApiError(
+        C.ALERT_CREATE_VALIDATION_FAILED,
         `無效的 source: ${actualSource}。支援的來源: ${Object.values(
           ALERT_SOURCES,
         ).join(", ")}`,
@@ -692,7 +698,8 @@ async function createAlert(alertData) {
 
     // 驗證警報類型
     if (!Object.values(ALERT_TYPES).includes(alert_type)) {
-      throw new Error(
+      throwApiError(
+        C.ALERT_CREATE_VALIDATION_FAILED,
         `無效的 alert_type: ${alert_type}。支援的類型: ${Object.values(
           ALERT_TYPES,
         ).join(", ")}`,
@@ -701,7 +708,8 @@ async function createAlert(alertData) {
 
     // 驗證嚴重程度
     if (!Object.values(SEVERITIES).includes(severity)) {
-      throw new Error(
+      throwApiError(
+        C.ALERT_CREATE_VALIDATION_FAILED,
         `無效的 severity: ${severity}。支援的級別: ${Object.values(
           SEVERITIES,
         ).join(", ")}`,
@@ -893,7 +901,7 @@ async function unresolveAlert(id, userId = null) {
     );
 
     if (!currentAlert || currentAlert.length === 0) {
-      throw new Error(`警報 ID ${id} 不存在`);
+      throwApiError(C.ALERT_NOT_FOUND, `警報 ID ${id} 不存在`);
     }
 
     const oldStatus = currentAlert[0].status;
@@ -910,7 +918,7 @@ async function unresolveAlert(id, userId = null) {
     const result = await db.query(query, [ALERT_STATUS.ACTIVE, id]);
 
     if (!result || result.length === 0) {
-      throw new Error(`警報 ID ${id} 不存在`);
+      throwApiError(C.ALERT_NOT_FOUND, `警報 ID ${id} 不存在`);
     }
 
     const alert = result[0];
@@ -1104,7 +1112,7 @@ async function updateAlertStatus(
 ) {
   try {
     if (!Object.values(ALERT_STATUS).includes(newStatus)) {
-      throw new Error(`無效的狀態: ${newStatus}`);
+      throwApiError(C.ALERT_STATUS_INVALID, `無效的狀態: ${newStatus}`);
     }
     const normalizedDimensionKey = options.dimensionKey
       ? normalizeDimensionValue(options.dimensionKey)
@@ -1128,7 +1136,8 @@ async function updateAlertStatus(
     );
 
     if (!currentAlerts || currentAlerts.length === 0) {
-      throw new Error(
+      throwApiError(
+        C.ALERT_NOT_FOUND,
         `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
       );
     }
@@ -1180,7 +1189,8 @@ async function updateAlertStatus(
     const result = await db.query(query, params);
 
     if (!result || result.length === 0) {
-      throw new Error(
+      throwApiError(
+        C.ALERT_NOT_FOUND,
         `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
       );
     }
@@ -1599,7 +1609,7 @@ async function getAlertById(id) {
     const result = await db.query(query, [id]);
 
     if (!result || result.length === 0) {
-      throw new Error(`警報 ID ${id} 不存在`);
+      throwApiError(C.ALERT_NOT_FOUND, `警報 ID ${id} 不存在`);
     }
 
     const row = result[0];

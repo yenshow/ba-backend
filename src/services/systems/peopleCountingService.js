@@ -5,9 +5,11 @@
  * 兩大流程：data_source = 'yscp'（YSCP 資料庫，人員/統計來自外部）；data_source = 'access_control'（門禁設備本系統，人員與權限由人員管理 API 處理）。
  */
 
-const config = require("../../config");
+const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 const locationService = require("./locationService");
 const logger = require("../../utils/logger");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError, rethrowIfApiError } = require("../../utils/apiErrorMeta");
 const yscpProvider = require("./peopleCounting/providers/yscpProvider");
 const accessControlProvider = require("./peopleCounting/providers/accessControlProvider");
 const isapiCameraProvider = require("./peopleCounting/providers/isapiCameraProvider");
@@ -16,6 +18,9 @@ const {
   parseEventType,
   countEntryExitFromSorted,
 } = require("./peopleCounting/helpers/entryExitStats");
+const {
+  normalizeLogDisplayColumns,
+} = require("./peopleCounting/logDisplayColumns");
 
 const PROVIDERS = {
   yscp: yscpProvider,
@@ -34,17 +39,6 @@ const getProvider = (dataSource) =>
 // ========== 統一錯誤處理和驗證工具 ==========
 
 /**
- * 創建驗證錯誤
- * @param {string} message - 錯誤訊息
- * @returns {Error} 帶有 statusCode 的錯誤對象
- */
-function createValidationError(message) {
-  const error = new Error(message);
-  error.statusCode = 400;
-  return error;
-}
-
-/**
  * 統一錯誤處理包裝器
  * 用於業務邏輯錯誤（關鍵錯誤，需要拋出）
  * @param {Function} fn - 異步函數
@@ -56,16 +50,17 @@ async function handleServiceError(fn, errorMessage, context = {}) {
   try {
     return await fn();
   } catch (error) {
-    // 如果錯誤已經有 statusCode（驗證錯誤等），直接拋出
-    if (error.statusCode) {
-      throw error;
-    }
+    rethrowIfApiError(error);
     logger.error(errorMessage, {
       error,
       ...context,
       module: "peopleCountingService",
     });
-    throw new Error(errorMessage + ": " + error.message);
+    throwApiError(
+      C.PEOPLE_COUNTING_OPERATION_FAILED,
+      errorMessage + ": " + error.message,
+      { statusCode: 500, details: error.message },
+    );
   }
 }
 
@@ -117,10 +112,10 @@ function validateLocationData(locationData, isUpdate = false) {
   } = locationData;
 
   if (!name?.trim()) {
-    throw createValidationError("地點名稱不能為空");
+    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"地點名稱不能為空");
   }
   if (!isUpdate && !zoneId) {
-    throw createValidationError("區域 ID 不能為空");
+    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"區域 ID 不能為空");
   }
 
   const effectiveDataSource =
@@ -130,28 +125,35 @@ function validateLocationData(locationData, isUpdate = false) {
         ? "isapi_camera"
         : "yscp";
 
+  if (yscpFeature.shouldSkipYscp(effectiveDataSource)) {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "YSCP 人流資料源已關閉（ENABLE_YSCP_PEOPLE_COUNTING=false），請改用門禁設備或攝影機人流",
+    );
+  }
+
   if (effectiveDataSource === "yscp") {
     if (!isUpdate) {
       if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
-        throw createValidationError("至少需要選擇一個進場單位");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個進場單位");
       }
       if (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0) {
-        throw createValidationError("至少需要選擇一個入口設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個入口設備");
       }
       if (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0) {
-        throw createValidationError("至少需要選擇一個出口設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個出口設備");
       }
     }
     if (isUpdate && personGroupIds !== undefined) {
       if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
-        throw createValidationError("至少需要選擇一個進場單位");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個進場單位");
       }
     }
     if (entryDoorIds !== undefined && (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0)) {
-      throw createValidationError("至少需要選擇一個入口設備");
+      throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個入口設備");
     }
     if (exitDoorIds !== undefined && (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0)) {
-      throw createValidationError("至少需要選擇一個出口設備");
+      throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個出口設備");
     }
     const entrySet = new Set(
       (Array.isArray(entryDoorIds) ? entryDoorIds : [])
@@ -165,22 +167,22 @@ function validateLocationData(locationData, isUpdate = false) {
     );
     for (const id of entrySet) {
       if (exitSet.has(id)) {
-        throw createValidationError("入口和出口不能包含同一個設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"入口和出口不能包含同一個設備");
       }
     }
   } else {
     if (effectiveDataSource === "access_control") {
       if (!isUpdate && (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)) {
-        throw createValidationError("至少需要選擇一個門禁入口設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁入口設備");
       }
       if (!isUpdate && (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)) {
-        throw createValidationError("至少需要選擇一個門禁出口設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁出口設備");
       }
       if (isUpdate && entryDeviceIds !== undefined && (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)) {
-        throw createValidationError("至少需要選擇一個門禁入口設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁入口設備");
       }
       if (isUpdate && exitDeviceIds !== undefined && (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)) {
-        throw createValidationError("至少需要選擇一個門禁出口設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁出口設備");
       }
       const entrySet = new Set(
         (Array.isArray(entryDeviceIds) ? entryDeviceIds : [])
@@ -194,7 +196,7 @@ function validateLocationData(locationData, isUpdate = false) {
       );
       for (const id of entrySet) {
         if (exitSet.has(id)) {
-          throw createValidationError("入口和出口不能包含同一個設備");
+          throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"入口和出口不能包含同一個設備");
         }
       }
     }
@@ -206,10 +208,10 @@ function validateLocationData(locationData, isUpdate = false) {
         : [];
 
       if (!isUpdate && cameraIds.length === 0) {
-        throw createValidationError("至少需要選擇一台攝影機設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一台攝影機設備");
       }
       if (isUpdate && cameraDeviceIds !== undefined && cameraIds.length === 0) {
-        throw createValidationError("至少需要選擇一台攝影機設備");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一台攝影機設備");
       }
     }
   }
@@ -278,7 +280,7 @@ async function getPeopleCountingLocationById(id) {
       );
 
       if (!hasPeopleCountingSystem) {
-        throw createValidationError("地點類型不正確");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"地點類型不正確");
       }
 
       return { location };
@@ -532,8 +534,7 @@ async function getSites() {
     const isapiCameraList = [];
     for (const loc of allLocations) {
       const ds = getPeopleCountingConfig(loc).dataSource || "yscp";
-      if (ds === "yscp" && config.features?.enableYscpPeopleCounting === false)
-        continue;
+      if (yscpFeature.shouldSkipYscp(ds)) continue;
       if (ds === "access_control") accessControlList.push(loc);
       else if (ds === "isapi_camera") isapiCameraList.push(loc);
       else yscpList.push(loc);
@@ -604,9 +605,12 @@ async function getSites() {
 async function getSiteStats(siteId) {
   return handleServiceError(
     async () => {
-      const { dataSource, ...config } = await getSiteConfig(siteId);
+      const { dataSource, ...siteCfg } = await getSiteConfig(siteId);
+      if (yscpFeature.shouldSkipYscp(dataSource)) {
+        return yscpFeature.emptySiteStats();
+      }
       const provider = getProvider(dataSource);
-      const data = await provider.getSiteData(siteId, config);
+      const data = await provider.getSiteData(siteId, siteCfg);
       return {
         entryCount: data.entryCount,
         exitCount: data.exitCount,
@@ -626,10 +630,7 @@ async function getSiteLogs(siteId, options = {}) {
   return handleServiceError(
     async () => {
       const { dataSource, ...siteConfig } = await getSiteConfig(siteId);
-      if (
-        dataSource === "yscp" &&
-        config.features?.enableYscpPeopleCounting === false
-      ) {
+      if (yscpFeature.shouldSkipYscp(dataSource)) {
         return { logs: [] };
       }
       const provider = getProvider(dataSource);
@@ -654,30 +655,26 @@ const YSCP_FALLBACK_CONFIG = {
 async function getUnitPersonnel(unitId, siteId = null) {
   return handleServiceError(
     async () => {
-      if (!siteId)
-        return await yscpProvider.getUnitPersonnel(
-          unitId,
+      let dataSource = "yscp";
+      let cfg = YSCP_FALLBACK_CONFIG;
+
+      if (siteId) {
+        const siteConfig = await handleNonCriticalError(
+          async () => await getSiteConfig(siteId),
+          "無法取得工地配置，使用預設值",
           null,
-          YSCP_FALLBACK_CONFIG,
+          { siteId, unitId },
         );
-      const siteConfig = await handleNonCriticalError(
-        async () => await getSiteConfig(siteId),
-        "無法取得工地配置，使用預設值",
-        null,
-        { siteId, unitId },
-      );
-      if (!siteConfig)
-        return await yscpProvider.getUnitPersonnel(
-          unitId,
-          null,
-          YSCP_FALLBACK_CONFIG,
-        );
-      const { dataSource, ...cfg } = siteConfig;
-      return await getProvider(dataSource).getUnitPersonnel(
-        unitId,
-        siteId,
-        cfg,
-      );
+        if (siteConfig) {
+          ({ dataSource, ...cfg } = siteConfig);
+        }
+      }
+
+      if (yscpFeature.shouldSkipYscp(dataSource)) {
+        return yscpFeature.emptyUnitPersonnel();
+      }
+
+      return getProvider(dataSource).getUnitPersonnel(unitId, siteId, cfg);
     },
     "取得單位人員列表失敗",
     { unitId, siteId },
@@ -711,6 +708,9 @@ function getPeopleCountingConfig(location) {
     preferRegion: peopleCountingSystem?.config?.preferRegion ?? false,
     accessControlGroups: ensureArray(
       peopleCountingSystem?.config?.accessControlGroups,
+    ),
+    logDisplayColumns: normalizeLogDisplayColumns(
+      peopleCountingSystem?.config?.logDisplayColumns,
     ),
   };
 }

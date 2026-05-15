@@ -3,14 +3,36 @@
  * 提供統一的 API 響應格式，確保所有響應遵循相同結構
  */
 
+const { formatFailurePayload } = require("../utils/apiErrorFormatter");
+const { httpStatusForCode } = require("../utils/apiErrorMeta");
+
+/**
+ * 送出標準錯誤回應
+ * @param {Object} res - Express 響應對象
+ * @param {{ code: string, message: string, details?: unknown }} payload
+ * @param {number} statusCode
+ */
+function sendFailure(res, payload, statusCode) {
+  return res.status(statusCode).json(formatFailurePayload(payload));
+}
+
+/**
+ * 語意化錯誤（路由／middleware 建議使用）
+ * @param {Object} res
+ * @param {string} code - apiErrorCodes 常數
+ * @param {string} message
+ * @param {number} [statusCode] - 省略時依 code 查表
+ * @param {unknown} [details]
+ */
+function sendError(res, code, message, statusCode, details = null) {
+  const status = statusCode ?? httpStatusForCode(code);
+  return sendFailure(res, { code, message, details }, status);
+}
+
 /**
  * 統一成功響應格式
- * @param {Object} res - Express 響應對象
- * @param {*} data - 響應數據
- * @param {number} statusCode - HTTP 狀態碼（預設 200）
  */
 function sendSuccess(res, data, statusCode = 200) {
-  // 如果 data 已經是完整的響應對象（包含 success、error 等），直接返回
   if (data && typeof data === "object" && (data.success !== undefined || data.error !== undefined)) {
     return res.status(statusCode).json({
       ...data,
@@ -18,14 +40,11 @@ function sendSuccess(res, data, statusCode = 200) {
     });
   }
 
-  // 常見響應結構的鍵名列表
   const commonKeys = ['zones', 'zone', 'locations', 'location', 'users', 'user', 'alerts', 'alert', 'devices', 'device', 'device_models', 'device_model'];
   
-  // 檢查是否是常見的響應結構（如 { zones: [...] }、{ devices: [...] }）
   const hasCommonStructure = data && typeof data === "object" && !Array.isArray(data) && 
     Object.keys(data).some(key => commonKeys.includes(key));
 
-  // 常見結構或包含 message 的對象直接返回並添加 timestamp，其他包裝為標準格式
   if (hasCommonStructure || (data && typeof data === "object" && data.message)) {
     return res.status(statusCode).json({
       ...data,
@@ -33,7 +52,6 @@ function sendSuccess(res, data, statusCode = 200) {
     });
   }
 
-  // 其他情況包裝為標準格式
   return res.status(statusCode).json({
     success: true,
     data,
@@ -41,28 +59,6 @@ function sendSuccess(res, data, statusCode = 200) {
   });
 }
 
-/**
- * 統一錯誤響應格式（應使用 errorHandler 中間件）
- * @param {Object} res - Express 響應對象
- * @param {string} message - 錯誤訊息
- * @param {number} statusCode - HTTP 狀態碼（預設 400）
- */
-function sendError(res, message, statusCode = 400) {
-  res.status(statusCode).json({
-    error: true,
-    message,
-    timestamp: new Date().toISOString(),
-  });
-}
-
-/**
- * 統一分頁響應格式
- * @param {Object} res - Express 響應對象
- * @param {Array} items - 數據列表
- * @param {number} total - 總數
- * @param {number} page - 當前頁碼
- * @param {number} limit - 每頁數量
- */
 function sendPaginated(res, items, total, page, limit) {
   res.json({
     success: true,
@@ -77,16 +73,11 @@ function sendPaginated(res, items, total, page, limit) {
   });
 }
 
-/**
- * 擴展 Express 響應對象
- * @param {Object} req - Express 請求對象
- * @param {Object} res - Express 響應對象
- * @param {Function} next - Express next 函數
- */
 function responseHandler(req, res, next) {
-  // 擴展 res 對象，添加統一的響應方法
   res.sendSuccess = (data, statusCode) => sendSuccess(res, data, statusCode);
-  res.sendError = (message, statusCode) => sendError(res, message, statusCode);
+  res.sendError = (code, message, statusCode, details) =>
+    sendError(res, code, message, statusCode, details);
+  res.sendFailure = (payload, statusCode) => sendFailure(res, payload, statusCode);
   res.sendPaginated = (items, total, page, limit) =>
     sendPaginated(res, items, total, page, limit);
 
@@ -96,5 +87,5 @@ function responseHandler(req, res, next) {
 module.exports = responseHandler;
 module.exports.sendSuccess = sendSuccess;
 module.exports.sendError = sendError;
+module.exports.sendFailure = sendFailure;
 module.exports.sendPaginated = sendPaginated;
-

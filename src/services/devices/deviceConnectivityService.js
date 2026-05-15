@@ -4,6 +4,8 @@ const modbusBatchService = require("./modbusBatchService");
 const { createIsapiClient } = require("../accessControl/isapiClient");
 const net = require("net");
 const { URL } = require("url");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * In-memory connectivity snapshot.
@@ -89,7 +91,7 @@ async function rtspOptionsProbe(rtspUrl) {
   const host = url.hostname;
   const port = url.port ? Number(url.port) : 554;
   if (!host || !Number.isFinite(port)) {
-    throw new Error("RTSP URL 無效（host/port）");
+    throw createApiError(C.DEVICE_CONNECTIVITY_RTSP_URL_INVALID, "RTSP URL 無效（host/port）");
   }
 
   return await new Promise((resolve, reject) => {
@@ -106,12 +108,21 @@ async function rtspOptionsProbe(rtspUrl) {
     };
 
     const timer = setTimeout(() => {
-      done(new Error("RTSP 連線超時"), false);
+      done(
+        createApiError(C.DEVICE_CONNECTIVITY_RTSP_TIMEOUT, "RTSP 連線超時"),
+        false,
+      );
     }, CONNECTIVITY_TIMEOUT_MS);
 
     socket.once("error", (e) => {
       clearTimeout(timer);
-      done(new Error(e?.message || "RTSP 連線失敗"), false);
+      done(
+        createApiError(
+          C.DEVICE_CONNECTIVITY_RTSP_FAILED,
+          e?.message || "RTSP 連線失敗",
+        ),
+        false,
+      );
     });
 
     socket.connect(port, host, () => {
@@ -133,7 +144,13 @@ async function rtspOptionsProbe(rtspUrl) {
         if (/^RTSP\/1\.\d\s+\d{3}/m.test(buf)) {
           done(null, true);
         } else {
-          done(new Error("RTSP 回應格式不正確"), false);
+          done(
+            createApiError(
+              C.DEVICE_CONNECTIVITY_RTSP_RESPONSE_INVALID,
+              "RTSP 回應格式不正確",
+            ),
+            false,
+          );
         }
       }
     });
@@ -145,7 +162,10 @@ async function modbusHealthCheck(deviceConfig) {
   const port = Number(deviceConfig?.port);
   const unitId = Number(deviceConfig?.unitId ?? deviceConfig?.unit_id ?? 1);
   if (!host || !Number.isFinite(port) || !Number.isFinite(unitId)) {
-    throw new Error("Modbus 配置不完整（host/port/unitId）");
+    throw createApiError(
+      C.DEVICE_CONNECTIVITY_MODBUS_CONFIG_INCOMPLETE,
+      "Modbus 配置不完整（host/port/unitId）",
+    );
   }
   const results = await modbusBatchService.batchRead([
     {
@@ -160,14 +180,22 @@ async function modbusHealthCheck(deviceConfig) {
   ]);
   const first = results?.[0];
   if (!first || first.ok !== true) {
-    throw new Error(first?.error || "Modbus 健康檢查失敗");
+    throw createApiError(
+      C.DEVICE_CONNECTIVITY_MODBUS_FAILED,
+      first?.error || "Modbus 健康檢查失敗",
+    );
   }
   return true;
 }
 
 async function isapiHealthCheck(deviceConfig) {
   const host = String(deviceConfig?.host || "").trim();
-  if (!host) throw new Error("ISAPI 配置不完整（host）");
+  if (!host) {
+    throw createApiError(
+      C.DEVICE_CONNECTIVITY_ISAPI_CONFIG_INCOMPLETE,
+      "ISAPI 配置不完整（host）",
+    );
+  }
   const client = createIsapiClient({
     host,
     port: deviceConfig?.port ?? 80,
@@ -215,7 +243,12 @@ async function checkSingleDeviceConnectivity(deviceRow) {
 
   if (typeCode === "camera") {
     const rtspUrl = String(cfg?.rtsp_url || "").trim();
-    if (!rtspUrl) throw new Error("攝影機未設定 rtsp_url");
+    if (!rtspUrl) {
+      throw createApiError(
+        C.DEVICE_CONNECTIVITY_CAMERA_RTSP_MISSING,
+        "攝影機未設定 rtsp_url",
+      );
+    }
     await rtspOptionsProbe(rtspUrl);
     return { deviceId, ok: true, nextStatus: "online" };
   }
@@ -243,7 +276,10 @@ async function checkSingleDeviceConnectivity(deviceRow) {
       isapiHealthCheck(cfg),
       new Promise((_, reject) =>
         setTimeout(
-          () => reject(new Error("ISAPI 連線超時")),
+          () =>
+            reject(
+              createApiError(C.DEVICE_CONNECTIVITY_ISAPI_TIMEOUT, "ISAPI 連線超時"),
+            ),
           CONNECTIVITY_TIMEOUT_MS,
         ),
       ),
@@ -267,7 +303,11 @@ async function mapWithConcurrency(items, worker) {
         try {
           results[my] = await worker(list[my], my);
         } catch (e) {
-          results[my] = { ok: false, error: e?.message || String(e) };
+          results[my] = {
+            ok: false,
+            error: e?.message || String(e),
+            code: e?.code || null,
+          };
         }
       }
     });
@@ -304,6 +344,7 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
         ok: false,
         deviceId: Number(row?.id),
         error: e?.message || String(e),
+        code: e?.code || null,
       };
     }
   });
@@ -389,6 +430,7 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
         ok: false,
         deviceId: Number(row?.id),
         error: e?.message || String(e),
+        code: e?.code || null,
       };
     }
   });
@@ -451,6 +493,7 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
       skipped: Boolean(c?.skipped),
       next_status: c?.nextStatus || null,
       error: c?.ok ? null : c?.error || null,
+      code: c?.ok ? null : c?.code || null,
     })),
   };
 }

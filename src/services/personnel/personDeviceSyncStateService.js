@@ -2,6 +2,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const db = require("../../database/db");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const STEP_COLUMNS = {
   userInfo: { hash: "user_info_hash", status: "user_info_status", at: "user_info_synced_at" },
@@ -129,7 +131,12 @@ async function upsertStepState(params) {
   } = params || {};
 
   const cols = STEP_COLUMNS[step];
-  if (!cols) throw new Error(`未知同步步驟: ${String(step)}`);
+  if (!cols) {
+    throwApiError(
+      C.PERSONNEL_SYNC_UNKNOWN_STEP,
+      `未知同步步驟: ${String(step)}`,
+    );
+  }
 
   const did = Number(deviceId);
   const eno = String(employeeNo);

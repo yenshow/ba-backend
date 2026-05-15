@@ -2,6 +2,8 @@ const db = require("../../database/db");
 const modbusClient = require("../devices/modbusClient");
 const modbusBatchService = require("../devices/modbusBatchService");
 const logger = require("../../utils/logger");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const linkageLogger = logger.createLogger("alertLinkageService");
 
@@ -341,14 +343,14 @@ function mapLinkageRowFromJoin(row) {
 async function assertRuleExists(ruleId) {
   const id = Number(ruleId);
   if (!Number.isInteger(id) || id <= 0) {
-    throw new Error("rule_id 不合法");
+    throwApiError(C.ALERT_LINKAGE_RULE_ID_INVALID, "rule_id 不合法");
   }
   const rows = await db.query(
     `SELECT id FROM alert_rules WHERE id = ? LIMIT 1`,
     [id],
   );
   if (!Array.isArray(rows) || rows.length === 0) {
-    throw new Error(`警報規則不存在: rule_id=${id}`);
+    throwApiError(C.ALERT_RULE_NOT_FOUND, `警報規則不存在: rule_id=${id}`);
   }
 }
 
@@ -459,7 +461,7 @@ async function createLinkage(payload, userId = null) {
 async function updateLinkage(id, updates, _userId = null) {
   const linkageId = Number(id);
   if (!Number.isInteger(linkageId) || linkageId <= 0) {
-    throw new Error("linkage id 不合法");
+    throwApiError(C.ALERT_LINKAGE_ID_INVALID, "linkage id 不合法");
   }
 
   if (updates?.rule_id !== undefined) {
@@ -572,7 +574,7 @@ async function updateLinkage(id, updates, _userId = null) {
 async function deleteLinkage(id) {
   const linkageId = Number(id);
   if (!Number.isInteger(linkageId) || linkageId <= 0) {
-    throw new Error("linkage id 不合法");
+    throwApiError(C.ALERT_LINKAGE_ID_INVALID, "linkage id 不合法");
   }
 
   const rows = await db.query(
@@ -626,19 +628,21 @@ async function processLinkagesForNewAlert(alert, { createdBy = null } = {}) {
 
 async function manualTriggerLinkage(linkageId, userId = null) {
   const id = Number(linkageId);
-  if (!Number.isInteger(id) || id <= 0) throw new Error("linkage id 不合法");
+  if (!Number.isInteger(id) || id <= 0) {
+    throwApiError(C.ALERT_LINKAGE_ID_INVALID, "linkage id 不合法");
+  }
 
   const rows = await db.query(
     `SELECT * FROM alert_linkages WHERE id = ? LIMIT 1`,
     [id],
   );
   const linkage = rows?.[0] || null;
-  if (!linkage) throw new Error("連動規則不存在");
+  if (!linkage) throwApiError(C.ALERT_LINKAGE_NOT_FOUND, "連動規則不存在");
 
   const doDeviceId = linkage?.do_device_id;
   const doAddress = linkage?.do_address;
   if (doDeviceId == null || doAddress == null)
-    throw new Error("此連動未設定 DO 目標");
+    throwApiError(C.ALERT_LINKAGE_DO_TARGET_MISSING, "此連動未設定 DO 目標");
 
   // 手動觸發：依此連動的「觸發時輸出」寫入一次（不建立 override）
   const result = await writeDo({

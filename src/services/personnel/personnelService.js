@@ -6,25 +6,21 @@ const fs = require("fs").promises;
 const db = require("../../database/db");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const VALID_STATUSES = ["active", "inactive", "deleted"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
 
-function createValidationError(message) {
-  const err = new Error(message);
-  err.statusCode = 400;
-  return err;
-}
-
 async function ensurePersonGroupExists(personGroupId) {
   if (personGroupId == null) return null;
   const id = Number(personGroupId);
-  if (Number.isNaN(id)) throw createValidationError("群組無效");
+  if (Number.isNaN(id)) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組無效");
   const rows = await db.query(
     "SELECT id, parent_id FROM person_groups WHERE id = ? LIMIT 1",
     [id],
   );
-  if (!rows || rows.length === 0) throw createValidationError("群組不存在");
+  if (!rows || rows.length === 0) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組不存在");
   return rows[0];
 }
 
@@ -52,7 +48,7 @@ async function ensureMainGroupIdOrNull(parentId) {
   const row = await ensurePersonGroupExists(parentId);
   // 二層規則：主群組的 parent_id 必須為 null
   if (row.parent_id != null)
-    throw createValidationError("主群組無效：不可選擇子群組作為主群組");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組無效：不可選擇子群組作為主群組");
   return row.id;
 }
 
@@ -97,16 +93,16 @@ async function getPersonGroups(filters = {}) {
 async function getPersonGroupById(id) {
   const rows = await db.query("SELECT * FROM person_groups WHERE id = ?", [id]);
   if (!rows || rows.length === 0) {
-    const err = new Error("人員群組不存在");
-    err.statusCode = 404;
-    throw err;
+    throwApiError(C.PERSONNEL_PERSON_GROUP_NOT_FOUND, "人員群組不存在", {
+      statusCode: 404,
+    });
   }
   return rows[0];
 }
 
 async function createPersonGroup(data, createdBy = null) {
   const name = (data.name || "").trim();
-  if (!name) throw createValidationError("群組名稱不能為空");
+  if (!name) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組名稱不能為空");
   const description = data.description ? String(data.description).trim() : null;
   const parentId = await ensureMainGroupIdOrNull(
     data.parentId ?? data.parent_id,
@@ -124,7 +120,7 @@ async function updatePersonGroup(id, data) {
   const params = [];
   if (data.name !== undefined) {
     const name = (data.name || "").trim();
-    if (!name) throw createValidationError("群組名稱不能為空");
+    if (!name) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組名稱不能為空");
     updates.push("name = ?");
     params.push(name);
   }
@@ -133,7 +129,7 @@ async function updatePersonGroup(id, data) {
       data.parentId ?? data.parent_id,
     );
     if (nextParentId != null && nextParentId === existing.id) {
-      throw createValidationError("主群組無效：不可選擇自己");
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組無效：不可選擇自己");
     }
     updates.push("parent_id = ?");
     params.push(nextParentId);
@@ -158,14 +154,14 @@ async function deletePersonGroup(id) {
     [id],
   );
   if (child && child.length > 0) {
-    throw createValidationError("該主群組下尚有子群組，無法刪除");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"該主群組下尚有子群組，無法刪除");
   }
   const refs = await db.query(
     "SELECT id FROM persons WHERE person_group_id = ? LIMIT 1",
     [id],
   );
   if (refs && refs.length > 0) {
-    throw createValidationError("該群組下尚有人員，無法刪除");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"該群組下尚有人員，無法刪除");
   }
   await db.query("DELETE FROM person_groups WHERE id = ?", [id]);
   return { success: true };
@@ -173,11 +169,11 @@ async function deletePersonGroup(id) {
 
 async function ensureLocationExists(locationId) {
   const id = Number(locationId);
-  if (Number.isNaN(id)) throw createValidationError("地點無效");
+  if (Number.isNaN(id)) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"地點無效");
   const rows = await db.query("SELECT id FROM locations WHERE id = ? LIMIT 1", [
     id,
   ]);
-  if (!rows || rows.length === 0) throw createValidationError("地點不存在");
+  if (!rows || rows.length === 0) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"地點不存在");
   return id;
 }
 
@@ -196,7 +192,7 @@ async function ensureLocationIsSyncable(locationId) {
     [id],
   );
   if (!rows || rows.length === 0) {
-    throw createValidationError("地點不可同步（需在人流統計設定門禁入口設備）");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"地點不可同步（需在人流統計設定門禁入口設備）");
   }
   return id;
 }
@@ -263,7 +259,7 @@ async function getPersonGroupMemberIds(personGroupId) {
 async function getChildGroupIdsByMainGroupId(mainGroupId) {
   const row = await ensurePersonGroupExists(mainGroupId);
   // 二層規則：主群組的 parent_id 必須為 null
-  if (row.parent_id != null) throw createValidationError("主群組無效");
+  if (row.parent_id != null) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組無效");
   const rows = await db.query(
     "SELECT id FROM person_groups WHERE parent_id = ?",
     [row.id],
@@ -274,7 +270,7 @@ async function getChildGroupIdsByMainGroupId(mainGroupId) {
 async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
   const group = await ensurePersonGroupExists(personGroupId);
   if (group.parent_id == null) {
-    throw createValidationError("主群組不可直接設定成員，請操作子群組");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組不可直接設定成員，請操作子群組");
   }
   const id = group.id;
 
@@ -285,7 +281,7 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
     : [];
   const nextIds = Array.from(new Set(rawIds));
   if (nextIds.length > MAX_PERSON_GROUP_MEMBER_IDS) {
-    throw createValidationError(
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,
       `群組成員人數上限為 ${MAX_PERSON_GROUP_MEMBER_IDS} 人（目前 ${nextIds.length} 人）`,
     );
   }
@@ -298,7 +294,7 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
     const existing = new Set((rows || []).map((r) => r.id));
     const missing = nextIds.filter((pid) => !existing.has(pid));
     if (missing.length > 0) {
-      throw createValidationError(`人員不存在：${missing.join(", ")}`);
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED,`人員不存在：${missing.join(", ")}`);
     }
   }
 
@@ -403,7 +399,7 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
     const existing = new Set((rows || []).map((r) => r.id));
     const missing = nextIds.filter((pid) => !existing.has(pid));
     if (missing.length > 0) {
-      throw createValidationError(`人員不存在：${missing.join(", ")}`);
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED,`人員不存在：${missing.join(", ")}`);
     }
   }
 
@@ -524,7 +520,7 @@ async function getPersonsPaged(filters = {}, options = {}) {
     const uniqueIds = Array.from(new Set(ids));
     // 避免 silent truncate（會造成查詢結果「少人但不報錯」），改成明確限制
     if (uniqueIds.length > 5000) {
-      throw createValidationError(
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED,
         `personGroupIds 過多（最多 5000 筆），請改用 mainGroupId 或縮小範圍`,
       );
     }
@@ -610,9 +606,7 @@ async function getPersonById(id) {
     [id],
   );
   if (!rows || rows.length === 0) {
-    const err = new Error("人員不存在");
-    err.statusCode = 404;
-    throw err;
+    throwApiError(C.PERSONNEL_PERSON_NOT_FOUND, "人員不存在", { statusCode: 404 });
   }
   return rows[0];
 }
@@ -643,15 +637,15 @@ async function createPerson(data, createdBy = null) {
     Object.prototype.hasOwnProperty.call(data || {}, "personGroupId") ||
     Object.prototype.hasOwnProperty.call(data || {}, "person_group_id")
   ) {
-    throw createValidationError(
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,
       "建立人員不支援設定群組（請至「人員群組」管理成員）",
     );
   }
 
   const employeeNo = (data.employeeNo || "").toString().trim();
-  if (!employeeNo) throw createValidationError("員工編號不能為空");
+  if (!employeeNo) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號不能為空");
   const fullNameRaw = data.fullName != null ? String(data.fullName).trim() : "";
-  if (!fullNameRaw) throw createValidationError("姓名為必填");
+  if (!fullNameRaw) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"姓名為必填");
 
   const status =
     data.status && VALID_STATUSES.includes(data.status)
@@ -667,7 +661,7 @@ async function createPerson(data, createdBy = null) {
   const userId = data.userId != null ? data.userId : null;
 
   const existing = await getPersonByEmployeeNo(employeeNo);
-  if (existing) throw createValidationError("員工編號已存在");
+  if (existing) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號已存在");
 
   const rows = await db.query(
     `INSERT INTO persons (employee_no, full_name, person_group_id, status, face_url, config, created_by, user_id)
@@ -694,7 +688,7 @@ async function updatePerson(id, data) {
     Object.prototype.hasOwnProperty.call(data || {}, "personGroupId") ||
     Object.prototype.hasOwnProperty.call(data || {}, "person_group_id")
   ) {
-    throw createValidationError(
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,
       "更新人員不支援修改群組（請至「人員群組」管理成員）",
     );
   }
@@ -703,22 +697,22 @@ async function updatePerson(id, data) {
   const params = [];
   if (data.employeeNo !== undefined) {
     const v = String(data.employeeNo).trim();
-    if (!v) throw createValidationError("員工編號不能為空");
+    if (!v) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號不能為空");
     const existing = await getPersonByEmployeeNo(v);
     if (existing && existing.id !== id)
-      throw createValidationError("員工編號已存在");
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號已存在");
     updates.push("employee_no = ?");
     params.push(v);
   }
   if (data.fullName !== undefined) {
     const v = data.fullName != null ? String(data.fullName).trim() : "";
-    if (!v) throw createValidationError("姓名為必填");
+    if (!v) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"姓名為必填");
     updates.push("full_name = ?");
     params.push(v);
   }
   if (data.status !== undefined) {
     if (!VALID_STATUSES.includes(data.status))
-      throw createValidationError("無效的狀態");
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED,"無效的狀態");
     updates.push("status = ?");
     params.push(data.status);
   }
@@ -800,7 +794,7 @@ function upsertFingerPrint(list, params = {}) {
   const fpIdRaw = params.fingerPrintID == null ? 1 : params.fingerPrintID;
   const fpId = Number.parseInt(String(fpIdRaw), 10);
   if (Number.isNaN(fpId) || fpId < 1 || fpId > 10) {
-    throw createValidationError("fingerPrintID 無效（允許範圍 1~10）");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"fingerPrintID 無效（允許範圍 1~10）");
   }
   const next = Array.isArray(list)
     ? list.filter((x) => x && Number(x.fingerPrintID) !== fpId)
@@ -832,9 +826,9 @@ function buildValidityPayload(params = {}) {
   }
 
   if (!beginTime || !endTime)
-    throw createValidationError("請提供有效期限（beginTime / endTime）");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"請提供有效期限（beginTime / endTime）");
   if (!isBeginBeforeEnd(beginTime, endTime)) {
-    throw createValidationError(
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED,
       "有效期限起訖不正確（beginTime 必須小於等於 endTime）",
     );
   }
@@ -872,10 +866,10 @@ async function setPersonAccessControlConfig(personId, params = {}) {
     const pwRaw = params.password;
     const pw = pwRaw == null ? null : String(pwRaw).trim();
     if (pw != null) {
-      if (!pw) throw createValidationError("密碼不能為空");
-      if (!/^\d+$/.test(pw)) throw createValidationError("密碼僅允許數字");
+      if (!pw) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"密碼不能為空");
+      if (!/^\d+$/.test(pw)) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"密碼僅允許數字");
       if (pw.length < 4 || pw.length > 12)
-        throw createValidationError("密碼長度需為 4~12 碼");
+        throwApiError(C.PERSONNEL_VALIDATION_FAILED,"密碼長度需為 4~12 碼");
     }
     if (pw == null) delete config.access_control.password;
     else config.access_control.password = pw;

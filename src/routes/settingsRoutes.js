@@ -6,8 +6,8 @@ const settingsService = require("../services/settingsService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
-const config = require("../config");
 const logger = require("../utils/logger");
+const C = require("../utils/apiErrorCodes");
 
 const routeLogger = logger.createLogger("settingsRoutes");
 
@@ -81,12 +81,9 @@ router.get("/", authenticate, asyncHandler(async (req, res) => {
  */
 router.get("/:key", authenticate, asyncHandler(async (req, res) => {
 	const { key } = req.params;
-	const setting = await settingsService.getSettingByKey(key);
-	
-	if (!setting) {
-		return res.status(404).json({ error: `設定不存在: ${key}` });
-	}
-	
+	const setting = await settingsService.getSettingByKey(key, {
+		throwIfNotFound: true,
+	});
 	res.sendSuccess({ setting });
 }));
 
@@ -100,7 +97,14 @@ router.post("/batch", authenticate, asyncHandler(async (req, res) => {
 	const { keys } = req.body;
 	
 	if (!Array.isArray(keys) || keys.length === 0) {
-		return res.status(400).json({ error: "keys 必須為非空陣列" });
+		return res.sendFailure(
+			{
+				code: C.SETTINGS_INVALID_BATCH_KEYS,
+				message: "keys 必須為非空陣列",
+				details: null,
+			},
+			400,
+		);
 	}
 	
 	const settings = await settingsService.getSettingsByKeys(keys);
@@ -129,14 +133,28 @@ router.put("/:key", authenticate, requireAdmin, validateRequired("value"), async
  */
 router.post("/upload", authenticate, requireAdmin, upload.single("file"), asyncHandler(async (req, res) => {
 	if (!req.file) {
-		return res.status(400).json({ error: "未提供檔案" });
+		return res.sendFailure(
+			{
+				code: C.SETTINGS_UPLOAD_FILE_MISSING,
+				message: "未提供檔案",
+				details: null,
+			},
+			400,
+		);
 	}
 	
 	const { key } = req.body;
 	if (!key) {
 		// 如果上傳成功但沒有 key，刪除已上傳的檔案
 		fs.unlinkSync(req.file.path);
-		return res.status(400).json({ error: "設定鍵名 (key) 為必填" });
+		return res.sendFailure(
+			{
+				code: C.SETTINGS_UPLOAD_KEY_MISSING,
+				message: "設定鍵名 (key) 為必填",
+				details: null,
+			},
+			400,
+		);
 	}
 	
 	// 先刪除該 key 的舊有上傳檔案，避免孤兒檔案累積
@@ -205,7 +223,14 @@ router.delete("/:key", authenticate, requireAdmin, asyncHandler(async (req, res)
 	
 	const deleted = await settingsService.deleteSetting(key);
 	if (!deleted) {
-		return res.status(404).json({ error: `設定不存在: ${key}` });
+		return res.sendFailure(
+			{
+				code: C.SETTINGS_KEY_NOT_FOUND,
+				message: `設定不存在: ${key}`,
+				details: { key },
+			},
+			404,
+		);
 	}
 	
 	res.sendSuccess({ message: "設定已刪除" });
