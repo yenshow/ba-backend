@@ -3,7 +3,7 @@ const { applyDefaultTimeFilters } = require("../../../utils/dateRangeUtils");
 const axios = require("axios");
 const https = require("https");
 const crypto = require("crypto");
-const config = require("../../../config");
+const runtimeConfigService = require("../../runtimeConfigService");
 const logger = require("../../../utils/logger");
 
 /**
@@ -95,21 +95,22 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
 
     try {
       // 構建 URL 路徑
-      const urlPath = `/artemis/api/eventService/${config.yscp.apiVersion}/image_data`;
-      const fullUrl = `${config.yscp.host}${urlPath}`;
+      const yscp = runtimeConfigService.getYscp();
+      const urlPath = `/artemis/api/eventService/${yscp.apiVersion}/image_data`;
+      const fullUrl = `${yscp.host}${urlPath}`;
 
       // 構建簽名
       const accept = "application/json";
       const contentType = "application/json;charset=UTF-8";
       const textToSign = `POST\n${accept}\n${contentType}\n${urlPath}`;
       const signature = crypto
-        .createHmac("sha256", config.yscp.secretKey)
+        .createHmac("sha256", yscp.secretKey)
         .update(textToSign)
         .digest("base64");
 
       // 配置 HTTPS Agent 以處理自簽名證書
       const httpsAgent = new https.Agent({
-        rejectUnauthorized: config.yscp.rejectUnauthorized,
+        rejectUnauthorized: yscp.rejectUnauthorized,
       });
 
       // 發送請求
@@ -120,7 +121,7 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
           headers: {
             Accept: accept,
             "Content-Type": contentType,
-            "X-Ca-Key": config.yscp.accessKey,
+            "X-Ca-Key": yscp.accessKey,
             "X-Ca-Signature": signature,
           },
           httpsAgent,

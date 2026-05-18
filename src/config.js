@@ -100,23 +100,6 @@ const monitoring = {
 };
 
 /**
- * 外部 CMS（YSCP）：YSCP_HOST 為 IP／hostname（勿含 https://）；埠／使用者／庫名固定
- */
-const yscpHost = getEnv("YSCP_HOST", "192.168.2.2")
-  .replace(/^https?:\/\//i, "")
-  .split("/")[0]
-  .split(":")[0];
-
-const externalDatabase = {
-  host: yscpHost,
-  port: 5432,
-  user: "postgres",
-  password: getEnv("YSCP_DB_PASSWORD", ""),
-  database: "cms",
-  connectionLimit: 10,
-};
-
-/**
  * CORS 配置
  */
 const cors = {
@@ -164,35 +147,6 @@ const license = {
   platformTimeoutMs: 10000,
   // 離線授權回應檔驗簽用（HMAC-SHA256）
   signSecret: getEnv("LICENSE_SIGN_SECRET", ""),
-};
-
-/**
- * YSCP HTTP API 配置（與 externalDatabase 共用 YSCP_HOST）
- */
-const yscp = {
-  host: `https://${yscpHost}`,
-  accessKey: getEnv("YSCP_AK", ""),
-  secretKey: getEnv("YSCP_SK", ""),
-  apiVersion: "v1",
-  rejectUnauthorized: false, // 是否拒絕自簽名證書（預設為 false，允許自簽名證書）
-};
-
-/**
- * 警報每日結案（日界線）：批次 active→resolved、連動 DO 復歸、忽視僅當曆日阻擋
- */
-const alerts = {
-  /** 警報結案（resolved）時是否依 rule_id 復歸 alert_linkages DO（預設開） */
-  linkageRevertOnResolve: true,
-  dailyRolloverEnabled: true,
-  dailyRolloverTimezone: getEnv("ALERT_DAILY_ROLLOVER_TZ", "Asia/Taipei"),
-  dailyRolloverLocalHour: Math.min(
-    23,
-    Math.max(0, toNumber(getEnv("ALERT_DAILY_ROLLOVER_LOCAL_HOUR"), 0)),
-  ),
-  dailyRolloverLocalMinute: Math.min(
-    59,
-    Math.max(0, toNumber(getEnv("ALERT_DAILY_ROLLOVER_LOCAL_MINUTE"), 5)),
-  ),
 };
 
 /** 1–65535 埠；優先讀 PORT 鍵，否則從舊版 *_BASE_URL 解析（相容） */
@@ -246,11 +200,8 @@ module.exports = {
   database,
   jwt,
   monitoring,
-  externalDatabase,
   features,
   license,
-  yscp,
-  alerts,
   mediaMTX,
   cors,
   // 向後兼容：保留舊的配置結構

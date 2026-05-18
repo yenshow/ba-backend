@@ -5,7 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const db = require("../../database/db");
-const backupConfig = require("./backupConfig");
+const { getBackupConfig } = require("./backupConfig");
 const logger = require("../../utils/logger");
 
 const backupLogger = logger.createLogger("backupService");
@@ -158,7 +158,8 @@ async function exportData(tableName, data, outputDir, options = {}) {
 
 function getCategoryDir(category) {
   return (
-    backupConfig.directories[category] || backupConfig.directories.root
+    getBackupConfig().directories[category] ||
+      getBackupConfig().directories.root
   );
 }
 
@@ -323,8 +324,9 @@ async function backupTable(options) {
  * 遞迴清理 backups/ 下過期檔案（含已停用的子目錄，依 mtime）
  */
 async function purgeOldArchiveFiles(retentionDays = null) {
-  const retention = retentionDays ?? backupConfig.retention.backupFileDays;
-  const root = backupConfig.directories.root;
+  const cfg = getBackupConfig();
+  const retention = retentionDays ?? cfg.retention.backupFileDays;
+  const root = cfg.directories.root;
 
   if (!fs.existsSync(root)) {
     return 0;

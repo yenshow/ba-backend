@@ -1,5 +1,6 @@
 const db = require("../../database/db");
 const config = require("../../config");
+const runtimeConfigService = require("../runtimeConfigService");
 const { getCalendarDateKeyInTimeZone } = require("../../utils/alertRolloverTz");
 const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");
@@ -13,7 +14,7 @@ const alertLogger = logger.createLogger("alertService");
 
 /** 忽視「僅當曆日」：設定時區下今日之 YYYY-MM-DD */
 function ignoreEffectiveTodayKey() {
-  const tz = config.alerts.dailyRolloverTimezone;
+  const tz = runtimeConfigService.getAlerts().dailyRolloverTimezone;
   return { tz, todayKey: getCalendarDateKeyInTimeZone(new Date(), tz) };
 }
 
@@ -1239,7 +1240,7 @@ async function updateAlertStatus(
 
         if (
           effectiveStatus === ALERT_STATUS.RESOLVED &&
-          config.alerts?.linkageRevertOnResolve !== false &&
+          runtimeConfigService.getAlerts()?.linkageRevertOnResolve !== false &&
           alertResults &&
           alertResults.length > 0
         ) {
@@ -1499,7 +1500,7 @@ function emitUnresolvedAlertCount() {
  * @returns {Promise<{ resolvedCount: number }>}
  */
 async function resolveAllActiveForDailyRollover() {
-  const tz = config.alerts.dailyRolloverTimezone;
+  const tz = runtimeConfigService.getAlerts().dailyRolloverTimezone;
   const occurredAt = new Date().toISOString();
   const snapshot = await db.query(`SELECT * FROM alerts WHERE status = ?`, [
     ALERT_STATUS.ACTIVE,

@@ -42,7 +42,8 @@ const accessControlRoutes = require("./routes/accessControlRoutes");
 const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
-const deploymentEnvRoutes = require("./routes/deploymentEnvRoutes");
+const runtimeConfigRoutes = require("./routes/runtimeConfigRoutes");
+const { bootstrapRuntimeInfrastructure } = require("./services/runtimeConfigApply");
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const permissionRoutes = require("./routes/permissionRoutes");
@@ -173,7 +174,7 @@ app.use("/api/access-control", accessControlRoutes);
 app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
-app.use("/api/deployment", deploymentEnvRoutes); // 部署用：後端 .env（僅 admin）
+app.use("/api/runtime-config", runtimeConfigRoutes);
 app.use(
   "/api/multimedia",
   requireFeature("multimedia"),
@@ -266,12 +267,16 @@ async function startServer() {
       serverLogger.info("資料庫連線成功");
     }
 
-    // 測試外部資料庫連線
-    const externalDbConnected = await externalDb.testConnection();
-    if (!externalDbConnected) {
-      serverLogger.warn("外部資料庫連線失敗，外部資料功能可能無法使用");
+    if (dbConnected) {
+      await bootstrapRuntimeInfrastructure();
+      const externalDbConnected = await externalDb.testConnection();
+      if (!externalDbConnected) {
+        serverLogger.warn("外部資料庫連線失敗，外部資料功能可能無法使用");
+      } else {
+        serverLogger.info("外部資料庫連線成功");
+      }
     } else {
-      serverLogger.info("外部資料庫連線成功");
+      serverLogger.warn("主資料庫未連線，略過 runtime 設定載入");
     }
 
     // 註冊並啟動背景監控任務（固定啟用）
@@ -287,12 +292,11 @@ async function startServer() {
     backgroundMonitor.startMonitoring();
     serverLogger.info("背景監控服務已啟用");
 
-    // 啟動備份排程
-    backupScheduler.startScheduler();
+    global.__backupSchedulerHandle = backupScheduler.startScheduler();
     serverLogger.info("備份排程已啟用");
 
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
-    serverLogger.info("警報日界線排程已啟用（依 ALERT_DAILY_ROLLOVER_*）");
+    serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
 
     // 環境彙總：每小時寫入「上一小時」hour（日／月由備份日執行）
     const runHourAgg = () =>
@@ -437,6 +441,16 @@ async function gracefulShutdown(signal) {
     if (global.__envDayAggIntervalId) {
       clearInterval(global.__envDayAggIntervalId);
       global.__envDayAggIntervalId = null;
+    }
+
+    if (typeof global.__alertRolloverStop === "function") {
+      global.__alertRolloverStop();
+      global.__alertRolloverStop = null;
+    }
+
+    if (global.__backupSchedulerHandle?.stop) {
+      global.__backupSchedulerHandle.stop();
+      global.__backupSchedulerHandle = null;
     }
 
     if (global.__httpServer) {

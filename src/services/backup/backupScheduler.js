@@ -3,7 +3,7 @@
  */
 
 const backupService = require("./backupService");
-const backupConfig = require("./backupConfig");
+const { getBackupConfig } = require("./backupConfig");
 const alertService = require("../alerts/alertService");
 const peopleCountingSyncService = require("../systems/peopleCountingSyncService");
 const vehicleAccessSyncService = require("../systems/vehicleAccessSyncService");
@@ -24,14 +24,12 @@ const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 
 const backupLogger = logger.createLogger("backupScheduler");
 
-const CUTOFF_DAYS = backupConfig.retention.databaseDays;
-const FILE_RETENTION_DAYS = backupConfig.retention.backupFileDays;
-
 let isBackupRunning = false;
 
 function cutoffBeforeDate() {
+  const cutoffDays = getBackupConfig().retention.databaseDays;
   const before = new Date();
-  before.setDate(before.getDate() - CUTOFF_DAYS);
+  before.setDate(before.getDate() - cutoffDays);
   return before;
 }
 
@@ -107,7 +105,10 @@ async function runBackup() {
     if (yscpFeature.isEnabled()) {
       await runOptionalSync("人流統計", [
         () => peopleCountingSyncService.syncYesterday(),
-        () => peopleCountingSyncService.syncDayAgo(CUTOFF_DAYS + 1),
+        () =>
+          peopleCountingSyncService.syncDayAgo(
+            getBackupConfig().retention.databaseDays + 1,
+          ),
       ]);
       peopleResult = await runBackupJob("人流統計", async () => {
         const peopleRows =
@@ -139,7 +140,10 @@ async function runBackup() {
 
     await runOptionalSync("車輛進出", [
       () => vehicleAccessSyncService.syncYesterday(),
-      () => vehicleAccessSyncService.syncDayAgo(CUTOFF_DAYS + 1),
+      () =>
+        vehicleAccessSyncService.syncDayAgo(
+          getBackupConfig().retention.databaseDays + 1,
+        ),
     ]);
     const vehicleResult = await runBackupJob("車輛進出", async () =>
       backupService.backupTable({
@@ -155,7 +159,7 @@ async function runBackup() {
     );
 
     const deletedFiles = await backupService.purgeOldArchiveFiles(
-      FILE_RETENTION_DAYS,
+      getBackupConfig().retention.backupFileDays,
     );
 
     const { backed, deleted } = sumCounts(
@@ -211,7 +215,8 @@ function scheduleBackupRun(onError) {
 }
 
 function startScheduler() {
-  const interval = backupConfig.scheduler.interval;
+  const { scheduler, retention } = getBackupConfig();
+  const interval = scheduler.interval;
   const onError = (err) =>
     backupLogger.error("備份任務失敗", {
       error: err?.message || String(err),
@@ -223,8 +228,8 @@ function startScheduler() {
 
   backupLogger.info("備份排程已啟動", {
     intervalHours: interval / 1000 / 60 / 60,
-    databaseCutoffDays: CUTOFF_DAYS,
-    archiveFileRetentionDays: FILE_RETENTION_DAYS,
+    databaseCutoffDays: retention.databaseDays,
+    archiveFileRetentionDays: retention.backupFileDays,
     module: "backupScheduler",
   });
 

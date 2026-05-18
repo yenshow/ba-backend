@@ -1,5 +1,5 @@
 const { DateTime } = require("luxon");
-const config = require("../../config");
+const runtimeConfigService = require("../runtimeConfigService");
 const logger = require("../../utils/logger");
 const alertService = require("./alertService");
 
@@ -15,13 +15,14 @@ function scheduleNextRollover() {
     clearTimeout(rolloverTimer);
     rolloverTimer = null;
   }
-  if (!config.alerts.dailyRolloverEnabled) {
+  const alerts = runtimeConfigService.getAlerts();
+  if (!alerts.dailyRolloverEnabled) {
     return;
   }
 
-  const tz = config.alerts.dailyRolloverTimezone;
-  const h = config.alerts.dailyRolloverLocalHour;
-  const m = config.alerts.dailyRolloverLocalMinute;
+  const tz = alerts.dailyRolloverTimezone;
+  const h = alerts.dailyRolloverLocalHour;
+  const m = alerts.dailyRolloverLocalMinute;
 
   const now = DateTime.now().setZone(tz);
   let next = now.set({ hour: h, minute: m, second: 0, millisecond: 0 });
@@ -51,7 +52,7 @@ function scheduleNextRollover() {
 }
 
 function startAlertDailyRolloverScheduler() {
-  if (!config.alerts.dailyRolloverEnabled) {
+  if (!runtimeConfigService.getAlerts().dailyRolloverEnabled) {
     rolloverLogger.info("警報日界線排程已停用");
     return () => {};
   }

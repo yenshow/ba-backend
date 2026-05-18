@@ -1,23 +1,46 @@
 const { Pool } = require("pg");
-const config = require("../config");
 const logger = require("../utils/logger");
 
 const externalDbLogger = logger.createLogger("externalDb");
 
-// 建立外部資料庫連線池
-const externalPool = new Pool({
-  host: config.externalDatabase.host,
-  port: config.externalDatabase.port,
-  user: config.externalDatabase.user,
-  password: config.externalDatabase.password,
-  database: config.externalDatabase.database,
-  max: config.externalDatabase.connectionLimit,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+/** @type {import("pg").Pool | null} */
+let externalPool = null;
 
-// 測試連線
+const createPool = (credentials) =>
+  new Pool({
+    host: credentials.host,
+    port: credentials.port,
+    user: credentials.user,
+    password: credentials.password,
+    database: credentials.database,
+    max: credentials.connectionLimit ?? 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+  });
+
+async function reconnect(credentials) {
+  if (externalPool) {
+    try {
+      await externalPool.end();
+    } catch (err) {
+      externalDbLogger.warn("關閉舊外部資料庫連線池時發生錯誤", {
+        error: err?.message || String(err),
+      });
+    }
+    externalPool = null;
+  }
+  externalPool = createPool(credentials);
+  externalDbLogger.info("外部資料庫連線池已重建", {
+    host: credentials.host,
+    module: "externalDb",
+  });
+}
+
 async function testConnection() {
+  if (!externalPool) {
+    externalDbLogger.warn("外部資料庫連線池尚未初始化", { module: "externalDb" });
+    return false;
+  }
   try {
     await externalPool.query("SELECT NOW()");
     externalDbLogger.info("外部資料庫連線成功", { module: "externalDb" });
@@ -31,7 +54,6 @@ async function testConnection() {
   }
 }
 
-// 將 ? 佔位符轉換為 PostgreSQL 的 $1, $2, ...
 function convertQueryParams(sql, params) {
   if (!params || params.length === 0) {
     return { sql, params: [] };
@@ -41,8 +63,10 @@ function convertQueryParams(sql, params) {
   return { sql: convertedSql, params };
 }
 
-// 執行查詢
 async function query(sql, params = []) {
+  if (!externalPool) {
+    throw new Error("外部資料庫連線池尚未初始化");
+  }
   try {
     const { sql: convertedSql, params: convertedParams } = convertQueryParams(
       sql,
@@ -61,14 +85,18 @@ async function query(sql, params = []) {
   }
 }
 
-// 關閉連線池
 async function close() {
+  if (!externalPool) return;
   await externalPool.end();
+  externalPool = null;
   externalDbLogger.info("外部資料庫連線池已關閉", { module: "externalDb" });
 }
 
 module.exports = {
-  pool: externalPool,
+  get pool() {
+    return externalPool;
+  },
+  reconnect,
   query,
   testConnection,
   close,
