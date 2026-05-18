@@ -100,14 +100,19 @@ const monitoring = {
 };
 
 /**
- * 外部資料庫配置
+ * 外部 CMS（YSCP）：YSCP_HOST 為 IP／hostname（勿含 https://）；埠／使用者／庫名固定
  */
+const yscpHost = getEnv("YSCP_HOST", "192.168.2.2")
+  .replace(/^https?:\/\//i, "")
+  .split("/")[0]
+  .split(":")[0];
+
 const externalDatabase = {
-  host: getEnv("EXTERNAL_DB_HOST", "192.168.2.2"),
-  port: toNumber(getEnv("EXTERNAL_DB_PORT"), 5432),
-  user: getEnv("EXTERNAL_DB_USER", "postgres"),
-  password: getEnv("EXTERNAL_DB_PASSWORD", ""),
-  database: getEnv("EXTERNAL_DB_NAME", "cms"),
+  host: yscpHost,
+  port: 5432,
+  user: "postgres",
+  password: getEnv("YSCP_DB_PASSWORD", ""),
+  database: "cms",
   connectionLimit: 10,
 };
 
@@ -162,13 +167,13 @@ const license = {
 };
 
 /**
- * YSCP API 配置
+ * YSCP HTTP API 配置（與 externalDatabase 共用 YSCP_HOST）
  */
 const yscp = {
-  host: getEnv("YSCP_HOST", "https://192.168.2.2"),
+  host: `https://${yscpHost}`,
   accessKey: getEnv("YSCP_AK", ""),
   secretKey: getEnv("YSCP_SK", ""),
-  apiVersion: getEnv("YSCP_API_VER", "v1"),
+  apiVersion: "v1",
   rejectUnauthorized: false, // 是否拒絕自簽名證書（預設為 false，允許自簽名證書）
 };
 
@@ -190,17 +195,49 @@ const alerts = {
   ),
 };
 
+/** 1–65535 埠；優先讀 PORT 鍵，否則從舊版 *_BASE_URL 解析（相容） */
+const mediaMtxPort = (portKey, legacyUrlKey, fallback) => {
+  const fromPort = getEnv(portKey, "").trim();
+  if (fromPort) {
+    return Math.min(65535, Math.max(1, toNumber(fromPort, fallback)));
+  }
+  const legacy = getEnv(legacyUrlKey, "").trim();
+  if (legacy) {
+    try {
+      const u = new URL(legacy);
+      if (u.port) {
+        return Math.min(65535, Math.max(1, toNumber(u.port, fallback)));
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return fallback;
+};
+
+/** 選填：非 loopback 的 MEDIAMTX_WEBRTC_BASE_URL → 固定 WHEP 主機（進階） */
+const mediaMtxWebRtcFixedBase = () => {
+  const raw = getEnv("MEDIAMTX_WEBRTC_BASE_URL", "").trim();
+  if (!raw || raw.toLowerCase() === "auto") return null;
+  try {
+    const host = new URL(raw).hostname;
+    if (host === "127.0.0.1" || host === "localhost") return null;
+  } catch {
+    return raw.replace(/\/$/, "");
+  }
+  return raw.replace(/\/$/, "");
+};
+
 /**
- * MediaMTX 配置（RTSP ingest + WebRTC 分發）
- * 用於攝影機串流：後端依 deviceId 呼叫 API 增刪 path，回傳 webrtcUrl 給前端
+ * MediaMTX（後端 Control API 固定本機；瀏覽器 WHEP 埠由前端帶入目前 hostname）
  */
 const mediaMTX = {
-  // Control API 位址（例：http://127.0.0.1:9997）
-  apiBaseUrl: getEnv("MEDIAMTX_API_BASE_URL", "http://127.0.0.1:9997"),
-  // WebRTC WHEP 基礎 URL（瀏覽器連線用，例：http://192.168.2.8:8889）
-  webrtcBaseUrl: getEnv("MEDIAMTX_WEBRTC_BASE_URL", "http://127.0.0.1:8889"),
+  apiPort: mediaMtxPort("MEDIAMTX_API_PORT", "MEDIAMTX_API_BASE_URL", 9997),
+  webrtcPort: mediaMtxPort("MEDIAMTX_WEBRTC_PORT", "MEDIAMTX_WEBRTC_BASE_URL", 8889),
+  webrtcBaseUrl: mediaMtxWebRtcFixedBase(),
   timeoutMs: 10000,
 };
+mediaMTX.apiBaseUrl = `http://127.0.0.1:${mediaMTX.apiPort}`;
 
 module.exports = {
   server,

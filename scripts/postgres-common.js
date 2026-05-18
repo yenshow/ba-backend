@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * PostgreSQL 可攜式安裝共用模組
+ * PostgreSQL 可攜式安裝共用模組（Windows 打包／部署）
  * 提供路徑、配置讀取等共用功能
  */
+
+/** 與 scripts/build-and-package.ps1 的 $PgTarRelative 檔名須一致 */
+const PG_VERSION = "16.11.0";
+const PG_TARGET_TRIPLE = "x86_64-pc-windows-msvc";
+const PG_OFFLINE_ARCHIVE_NAME = `postgresql-${PG_VERSION}-${PG_TARGET_TRIPLE}.tar.gz`;
 
 const fs = require("fs");
 const path = require("path");
@@ -69,16 +74,24 @@ function getBinPath(name) {
 	return path.join(BIN_DIR, `${name}${binExtension}`);
 }
 
+function getOfflineArchivePath() {
+	return path.join(POSTGRES_DIR, PG_OFFLINE_ARCHIVE_NAME);
+}
+
 module.exports = {
 	PROJECT_DIR,
 	POSTGRES_DIR,
 	BIN_DIR,
 	DATA_DIR,
 	LOG_DIR,
+	PG_VERSION,
+	PG_TARGET_TRIPLE,
+	PG_OFFLINE_ARCHIVE_NAME,
 	binExtension,
 	getPostgresqlConfPath,
 	getPostgresPort,
 	isPostgresDownloaded,
 	isDatabaseInitialized,
-	getBinPath
+	getBinPath,
+	getOfflineArchivePath,
 };

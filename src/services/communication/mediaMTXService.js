@@ -9,8 +9,17 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const API_BASE = (config.mediaMTX?.apiBaseUrl ?? "http://127.0.0.1:9997").replace(/\/$/, "");
-const WEBRTC_BASE = (config.mediaMTX?.webrtcBaseUrl ?? "http://127.0.0.1:8889").replace(/\/$/, "");
 const TIMEOUT_MS = config.mediaMTX?.timeoutMs ?? 10000;
+
+/** @returns {{ webrtcUrl: string, webrtcPort?: number }} */
+function buildWebrtcPlayback(pathName) {
+  const whepPath = `/${pathName}/whep`;
+  const fixedBase = config.mediaMTX?.webrtcBaseUrl?.replace(/\/$/, "");
+  if (fixedBase) {
+    return { webrtcUrl: `${fixedBase}${whepPath}` };
+  }
+  return { webrtcUrl: whepPath, webrtcPort: config.mediaMTX?.webrtcPort ?? 8889 };
+}
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -91,8 +100,7 @@ async function addPath(pathName, rtspUrl) {
       }
     }
   });
-  const webrtcUrl = `${WEBRTC_BASE}/${pathName}/whep`;
-  return { webrtcUrl };
+  return buildWebrtcPlayback(pathName);
 }
 
 /**
@@ -138,5 +146,5 @@ module.exports = {
   addPath,
   removePath,
   listPaths,
-  WEBRTC_BASE,
+  buildWebrtcPlayback,
 };

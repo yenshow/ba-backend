@@ -54,7 +54,7 @@ async function startStream(deviceId) {
   const { device, rtspUrl } = await getCameraRtspUrl(deviceId);
   const pathName = mediaMTXService.pathNameFromDeviceId(deviceId);
   // 若 path 已存在，直接回覆 running，避免重複 addPath 造成 MediaMTX 多次 reload
-  const webrtcUrl = `${mediaMTXService.WEBRTC_BASE}/${pathName}/whep`;
+  const playback = mediaMTXService.buildWebrtcPlayback(pathName);
 
   const items = await mediaMTXService.listPaths();
   if (items.some((p) => p.name === pathName)) {
@@ -62,7 +62,8 @@ async function startStream(deviceId) {
     return {
       streamId: pathName,
       pathName,
-      webrtcUrl,
+      webrtcUrl: playback.webrtcUrl,
+      webrtcPort: playback.webrtcPort,
       status: "running",
     };
   }
@@ -74,7 +75,8 @@ async function startStream(deviceId) {
   return {
     streamId: pathName,
     pathName,
-    webrtcUrl,
+    webrtcUrl: playback.webrtcUrl,
+    webrtcPort: playback.webrtcPort,
     status: "running",
   };
   })();
@@ -108,12 +110,13 @@ async function stopStream(deviceId) {
 async function getStreamStatus(deviceId) {
   await getCameraDevice(deviceId);
   const pathName = mediaMTXService.pathNameFromDeviceId(deviceId);
-  const webrtcUrl = `${mediaMTXService.WEBRTC_BASE}/${pathName}/whep`;
+  const playback = mediaMTXService.buildWebrtcPlayback(pathName);
   const items = await mediaMTXService.listPaths();
   const found = items.some((p) => p.name === pathName);
   return {
     streamId: pathName,
-    webrtcUrl,
+    webrtcUrl: playback.webrtcUrl,
+    webrtcPort: playback.webrtcPort,
     status: found ? "running" : "stopped",
   };
 }
