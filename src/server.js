@@ -43,7 +43,7 @@ const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const runtimeConfigRoutes = require("./routes/runtimeConfigRoutes");
-const { bootstrapRuntimeInfrastructure } = require("./services/runtimeConfigApply");
+const { bootstrapRuntimeInfrastructure } = require("./services/platform/runtimeConfigApply");
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const permissionRoutes = require("./routes/permissionRoutes");
@@ -68,7 +68,7 @@ const {
   startAlertDailyRolloverScheduler,
 } = require("./services/alerts/alertRolloverScheduler");
 // 環境彙總排程（時／日／月）
-const environmentAggregationService = require("./services/systems/environmentAggregationService");
+const environmentAggregationService = require("./services/environment/environmentAggregationService");
 // 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
 const isapiSubscribeService = require("./services/accessControl/isapiSubscribeService");
 // 攝影機 ISAPI PeopleCounting 訂閱服務

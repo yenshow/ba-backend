@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticate } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
-const moduleRegistryService = require("../services/moduleRegistryService");
+const moduleRegistryService = require("../services/platform/moduleRegistryService");
 
 /**
  * GET /api/modules/registry

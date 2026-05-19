@@ -4,7 +4,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrorMeta");
-const runtimeConfigService = require("../services/runtimeConfigService");
+const runtimeConfigService = require("../services/platform/runtimeConfigService");
 const logger = require("../utils/logger");
 
 const routeLogger = logger.createLogger("runtimeConfigRoutes");
@@ -89,8 +89,14 @@ router.put(
   validateRequired("values"),
   asyncHandler(async (req, res) => {
     const { values } = req.body;
-    if (typeof values !== "object" || values === null || Array.isArray(values)) {
-      throwApiError(C.VALIDATION_CUSTOM, "values 必須為物件", { statusCode: 400 });
+    if (
+      typeof values !== "object" ||
+      values === null ||
+      Array.isArray(values)
+    ) {
+      throwApiError(C.VALIDATION_CUSTOM, "values 必須為物件", {
+        statusCode: 400,
+      });
     }
 
     await runtimeConfigService.init();

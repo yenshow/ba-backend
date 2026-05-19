@@ -15,22 +15,10 @@ const statusByDeviceId = new Map(); // deviceId -> { status, updatedAt, failCoun
 
 const VALID_STATUSES = new Set(["online", "offline"]);
 
-const toInt = (v, fallback) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.floor(n) : fallback;
-};
-
-const FAIL_THRESHOLD = Math.max(
-  1,
-  toInt(process.env.DEVICE_CONNECTIVITY_FAIL_THRESHOLD, 1),
-);
+const FAIL_THRESHOLD = 1;
 // Unified timeout for connectivity probes (RTSP / ISAPI).
-// Modbus timeout is controlled by MODBUS_TIMEOUT (modbusClient).
 const CONNECTIVITY_TIMEOUT_MS = 5000;
-const CONCURRENCY = Math.max(
-  1,
-  toInt(process.env.DEVICE_CONNECTIVITY_CONCURRENCY, 8),
-);
+const CONCURRENCY = 8;
 
 function nowIso() {
   return new Date().toISOString();

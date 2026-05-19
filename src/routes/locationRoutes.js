@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const locationService = require("../services/systems/locationService");
+const locationService = require("../services/location/locationService");
 const { authenticate, requirePermission } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");

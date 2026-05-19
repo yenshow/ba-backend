@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const userService = require("../services/userService");
-const permissionService = require("../services/permissionService");
+const userService = require("../services/platform/userService");
+const permissionService = require("../services/platform/permissionService");
 const {
   authenticate,
   requireAdmin,

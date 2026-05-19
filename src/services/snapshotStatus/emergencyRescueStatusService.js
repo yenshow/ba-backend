@@ -3,7 +3,7 @@
  * API `raw`：觸發（含舊鍵與 fault）合併為 **running**。
  */
 
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
@@ -17,12 +17,7 @@ const {
 
 const statusLogger = logger.createLogger("emergencyRescueStatusService");
 
-const DEVICE_CFG_CACHE_TTL_MS = Number(
-  process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
-);
-const DEVICE_CFG_CACHE_TTL = Number.isFinite(DEVICE_CFG_CACHE_TTL_MS)
-  ? Math.max(1000, Math.floor(DEVICE_CFG_CACHE_TTL_MS))
-  : 60_000;
+const DEVICE_CFG_CACHE_TTL = 60_000;
 const deviceCfgCache = new Map();
 
 function getCachedDeviceCfg(deviceId) {

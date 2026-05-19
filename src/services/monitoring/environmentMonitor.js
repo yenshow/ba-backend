@@ -12,10 +12,10 @@ const websocketService = require("../websocket/websocketService");
 const alertRuleService = require("../alerts/alertRuleService");
 const alertService = require("../alerts/alertService");
 const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
-const environmentReadingsService = require("../systems/environmentReadingsService");
+const environmentReadingsService = require("../environment/environmentReadingsService");
 const {
   computeDerivedMetrics,
-} = require("../systems/environmentDerivedMetrics");
+} = require("../environment/environmentDerivedMetrics");
 const logger = require("../../utils/logger");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）

@@ -1,8 +1,8 @@
 const axios = require("axios");
-const config = require("../config");
-const C = require("../utils/apiErrorCodes");
-const { isAppError } = require("../utils/AppError");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const config = require("../../config");
+const C = require("../../utils/apiErrorCodes");
+const { isAppError } = require("../../utils/AppError");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const platformStatus = (statusCode) =>
   Number.isFinite(statusCode) && statusCode >= 400 && statusCode <= 599

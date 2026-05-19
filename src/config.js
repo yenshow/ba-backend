@@ -93,13 +93,6 @@ const jwt = {
 };
 
 /**
- * 監控配置
- */
-const monitoring = {
-  enabled: true,
-};
-
-/**
  * CORS 配置
  */
 const cors = {
@@ -199,7 +192,6 @@ module.exports = {
   modbus,
   database,
   jwt,
-  monitoring,
   features,
   license,
   mediaMTX,

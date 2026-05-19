@@ -14,9 +14,7 @@ const {
   resolveErrorDetails,
 } = require("../utils/apiErrorFormatter");
 
-const DEVICE_ERROR_COOLDOWN_MS = Number(
-  process.env.DEVICE_ERROR_COOLDOWN_MS || 30_000,
-);
+const DEVICE_ERROR_COOLDOWN_MS = 30_000;
 const lastDevice503LogAt = new Map();
 const lastDeviceErrorAlertAt = new Map();
 

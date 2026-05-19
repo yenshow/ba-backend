@@ -5,10 +5,10 @@
 const backupService = require("./backupService");
 const { getBackupConfig } = require("./backupConfig");
 const alertService = require("../alerts/alertService");
-const peopleCountingSyncService = require("../systems/peopleCountingSyncService");
-const vehicleAccessSyncService = require("../systems/vehicleAccessSyncService");
-const environmentReadingsService = require("../systems/environmentReadingsService");
-const environmentAggregationService = require("../systems/environmentAggregationService");
+const peopleCountingSyncService = require("../peopleCounting/peopleCountingSyncService");
+const vehicleAccessSyncService = require("../vehicleAccess/vehicleAccessSyncService");
+const environmentReadingsService = require("../environment/environmentReadingsService");
+const environmentAggregationService = require("../environment/environmentAggregationService");
 const { transformAlertsToReportFormat } = require("./alertsReportFormat");
 const {
   transformPeopleCountingToReportFormat,

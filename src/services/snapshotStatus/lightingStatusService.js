@@ -9,7 +9,7 @@
 const db = require("../../database/db");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
-const { collectLightingDiDoReadSpecs } = require("./modbusDiDoConfig");
+const { collectLightingDiDoReadSpecs } = require("../devices/modbusDiDoConfig");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
 const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
@@ -18,12 +18,7 @@ const logger = require("../../utils/logger");
 
 const statusLogger = logger.createLogger("lightingStatusService");
 
-const DEVICE_CFG_CACHE_TTL_MS = Number(
-  process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
-);
-const DEVICE_CFG_CACHE_TTL = Number.isFinite(DEVICE_CFG_CACHE_TTL_MS)
-  ? Math.max(1000, Math.floor(DEVICE_CFG_CACHE_TTL_MS))
-  : 60_000;
+const DEVICE_CFG_CACHE_TTL = 60_000;
 const deviceCfgCache = new Map();
 
 function getCachedDeviceCfg(deviceId) {

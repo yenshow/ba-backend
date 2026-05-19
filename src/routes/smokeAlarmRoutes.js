@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const locationService = require("../services/systems/locationService");
-const smokeAlarmStatusService = require("../services/systems/smokeAlarmStatusService");
+const locationService = require("../services/location/locationService");
+const smokeAlarmStatusService = require("../services/snapshotStatus/smokeAlarmStatusService");
 const {
   authenticate,
   requireAdminOrOperator,

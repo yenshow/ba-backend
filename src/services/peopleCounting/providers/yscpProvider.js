@@ -3,11 +3,11 @@
  * 實作 getSiteData、getSiteLogs、getUnitPersonnel；資料來源為外部 DB（platform.person、baseacs.slot_card_records）。
  */
 
-const externalDb = require("../../../../database/externalDb");
-const yscpPersonService = require("../../../yscp/yscpPersonService");
-const peopleCountingSyncService = require("../../peopleCountingSyncService");
-const { getTodayTimeRange } = require("../../../../utils/dateRangeUtils");
-const logger = require("../../../../utils/logger");
+const externalDb = require("../../../database/externalDb");
+const yscpPersonService = require("../../yscp/yscpPersonService");
+const peopleCountingSyncService = require("../peopleCountingSyncService");
+const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
+const logger = require("../../../utils/logger");
 const {
   parseEventType,
   sortRecordsByTime,

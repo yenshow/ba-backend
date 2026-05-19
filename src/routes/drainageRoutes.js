@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const drainageStatusService = require("../services/systems/drainageStatusService");
-const locationService = require("../services/systems/locationService");
+const drainageStatusService = require("../services/snapshotStatus/drainageStatusService");
+const locationService = require("../services/location/locationService");
 const {
   authenticate,
   requireAdminOrOperator,

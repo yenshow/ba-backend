@@ -1,4 +1,4 @@
-const userService = require("../src/services/userService");
+const userService = require("../src/services/platform/userService");
 const db = require("../src/database/db");
 
 const ADMIN_USERNAME = "admin";

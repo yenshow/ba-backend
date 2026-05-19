@@ -6,21 +6,21 @@
  */
 
 const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError, rethrowIfApiError } = require("../../utils/apiErrorMeta");
-const yscpProvider = require("./peopleCounting/providers/yscpProvider");
-const accessControlProvider = require("./peopleCounting/providers/accessControlProvider");
-const isapiCameraProvider = require("./peopleCounting/providers/isapiCameraProvider");
+const yscpProvider = require("./providers/yscpProvider");
+const accessControlProvider = require("./providers/accessControlProvider");
+const isapiCameraProvider = require("./providers/isapiCameraProvider");
 const isapiSubscribeService = require("../accessControl/isapiSubscribeService");
 const {
   parseEventType,
   countEntryExitFromSorted,
-} = require("./peopleCounting/helpers/entryExitStats");
+} = require("./helpers/entryExitStats");
 const {
   normalizeLogDisplayColumns,
-} = require("./peopleCounting/logDisplayColumns");
+} = require("./logDisplayColumns");
 
 const PROVIDERS = {
   yscp: yscpProvider,

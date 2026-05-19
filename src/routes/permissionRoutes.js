@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const permissionService = require("../services/permissionService");
+const permissionService = require("../services/platform/permissionService");
 const { authenticate } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 

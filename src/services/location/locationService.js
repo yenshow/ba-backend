@@ -1,5 +1,5 @@
 const db = require("../../database/db");
-const licenseService = require("../licenseService");
+const licenseService = require("../license/licenseService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError, throwApiError } = require("../../utils/apiErrorMeta");
@@ -381,7 +381,7 @@ function formatSystem(system) {
     case "people_counting": {
       const {
         normalizeLogDisplayColumns,
-      } = require("./peopleCounting/logDisplayColumns");
+      } = require("../peopleCounting/logDisplayColumns");
       return {
         ...baseSystem,
         config: {
@@ -1549,7 +1549,7 @@ function buildSystemConfig(systemType, config) {
       const {
         normalizeLogDisplayColumns,
         toStoredLogDisplayColumns,
-      } = require("./peopleCounting/logDisplayColumns");
+      } = require("../peopleCounting/logDisplayColumns");
       const ids = Array.isArray(config.cameraDeviceIds)
         ? config.cameraDeviceIds
             .map((id) => Number(id))

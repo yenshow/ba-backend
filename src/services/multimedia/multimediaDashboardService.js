@@ -1,11 +1,11 @@
-const settingsService = require("../settingsService");
+const settingsService = require("../platform/settingsService");
 const db = require("../../database/db");
 const modbusBatchService = require("../devices/modbusBatchService");
 const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
-const environmentReadingsService = require("../systems/environmentReadingsService");
+const environmentReadingsService = require("../environment/environmentReadingsService");
 const {
   computeDerivedMetrics,
-} = require("../systems/environmentDerivedMetrics");
+} = require("../environment/environmentDerivedMetrics");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 

@@ -4,8 +4,8 @@ const {
   requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
-const locationService = require("../services/systems/locationService");
-const hvacStatusService = require("../services/systems/hvacStatusService");
+const locationService = require("../services/location/locationService");
+const hvacStatusService = require("../services/snapshotStatus/hvacStatusService");
 const systemAlert = require("../services/alerts/systemAlertHelper");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");

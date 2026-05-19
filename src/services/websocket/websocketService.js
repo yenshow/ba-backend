@@ -3,9 +3,10 @@
  * 使用 Socket.IO 提供即時推送功能
  */
 
+const config = require("../../config");
 const logger = require("../../utils/logger");
-const userService = require("../userService");
-const permissionService = require("../permissionService");
+const userService = require("../platform/userService");
+const permissionService = require("../platform/permissionService");
 
 let ioInstance = null;
 const wsLogger = logger.createLogger("WebSocket");
@@ -22,7 +23,9 @@ const PERM_ROOM_PREFIX = "perm:";
 function isAvailable() {
   if (!ioInstance) {
     // 避免在啟動初期刷屏，僅用 warn，並保持結構化欄位
-    wsLogger.warn("Socket.IO 實例尚未初始化，跳過事件推送", { event: "ws:emit:skip" });
+    wsLogger.warn("Socket.IO 實例尚未初始化，跳過事件推送", {
+      event: "ws:emit:skip",
+    });
     return false;
   }
   return true;
@@ -55,7 +58,9 @@ function safeEmit(eventName, data, options = {}) {
     const targetRooms =
       Array.isArray(rooms) && rooms.length > 0 ? rooms : ROOMS_ALL_APPS;
 
-    const uniqueRooms = Array.from(new Set([...targetRooms, ROOM_LEGACY])).filter(Boolean);
+    const uniqueRooms = Array.from(
+      new Set([...targetRooms, ROOM_LEGACY]),
+    ).filter(Boolean);
     for (const room of uniqueRooms) {
       ioInstance.to(room).emit(eventName, data);
     }
@@ -79,10 +84,9 @@ function initializeWebSocket(httpServer) {
   const { Server } = require("socket.io");
 
   // 解析允許的來源（與 Express CORS 配置一致）
-  const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const allowedOrigins = config.cors.origins.length
+    ? config.cors.origins
+    : ["http://localhost:3000"];
 
   ioInstance = new Server(httpServer, {
     cors: {
@@ -125,7 +129,10 @@ function initializeWebSocket(httpServer) {
         if (!decoded?.id) return;
 
         const role = decoded.role || null;
-        const result = await permissionService.getEffectivePermissionsForUser(decoded.id, role);
+        const result = await permissionService.getEffectivePermissionsForUser(
+          decoded.id,
+          role,
+        );
         const codes = Array.isArray(result?.codes) ? result.codes : [];
 
         socket.data.userId = decoded.id;
@@ -156,7 +163,10 @@ function initializeWebSocket(httpServer) {
     })();
 
     if (logConnections) {
-      wsLogger.info("客戶端已連接", { socketId: socket.id, event: "ws:connect" });
+      wsLogger.info("客戶端已連接", {
+        socketId: socket.id,
+        event: "ws:connect",
+      });
     }
 
     // App 識別（向下相容：未發送仍留在 legacy）
@@ -251,7 +261,7 @@ function emitAlertUpdated(alert, oldStatus, newStatus) {
     },
     {
       logMessage: `警報 ID: ${alert.id}, ${oldStatus} -> ${newStatus}`,
-    }
+    },
   );
 }
 
@@ -260,11 +270,7 @@ function emitAlertUpdated(alert, oldStatus, newStatus) {
  * @param {number} count - 未解決警報數量
  */
 function emitAlertCount(count) {
-  safeEmit(
-    "alert:count",
-    { count, timestamp: new Date().toISOString() },
-    {},
-  );
+  safeEmit("alert:count", { count, timestamp: new Date().toISOString() }, {});
 }
 
 /**
@@ -332,7 +338,7 @@ function emitDeviceStatus(system, sourceId, status, deviceId = null) {
     },
     {
       logMessage: `${system}, ${sourceId}, ${status}`,
-    }
+    },
   );
 }
 
@@ -378,7 +384,7 @@ function emitBatchDeviceStatus(updates) {
       },
       {
         logMessage: `${group.system} (${group.status}): ${group.updates.length} 個設備`,
-      }
+      },
     );
   });
 }
@@ -415,7 +421,7 @@ function emitDeviceCreated(data) {
     },
     {
       logMessage: `設備 ID: ${data.device?.id}`,
-    }
+    },
   );
 }
 
@@ -437,7 +443,7 @@ function emitDeviceUpdated(data) {
     },
     {
       logMessage: `設備 ID: ${data.device?.id}`,
-    }
+    },
   );
 }
 
@@ -457,7 +463,7 @@ function emitDeviceDeleted(data) {
     },
     {
       logMessage: `設備 ID: ${data.deviceId}`,
-    }
+    },
   );
 }
 
@@ -481,7 +487,7 @@ function emitDeviceStatusChanged(data) {
     },
     {
       logMessage: `設備 ID: ${data.deviceId}, ${data.oldStatus} -> ${data.newStatus}`,
-    }
+    },
   );
 }
 
@@ -517,7 +523,11 @@ function emitIsapiAccessEvent() {
 function emitIsapiPeopleCountingEvent(data) {
   safeEmit(
     "people-counting:isapi-camera:event",
-    { ...(data || {}), source: "isapi_camera", timestamp: new Date().toISOString() },
+    {
+      ...(data || {}),
+      source: "isapi_camera",
+      timestamp: new Date().toISOString(),
+    },
     { logMessage: "攝影機人流事件已寫入" },
   );
 }

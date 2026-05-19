@@ -4,7 +4,7 @@
  * - warning：未連線／無讀值
  */
 
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
@@ -18,20 +18,10 @@ const {
 
 const statusLogger = logger.createLogger("airCirculationStatusService");
 
-const DEVICE_CFG_CACHE_TTL_MS = Number(
-  process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
-);
-const DEVICE_CFG_CACHE_TTL = Number.isFinite(DEVICE_CFG_CACHE_TTL_MS)
-  ? Math.max(1000, Math.floor(DEVICE_CFG_CACHE_TTL_MS))
-  : 60_000;
+const DEVICE_CFG_CACHE_TTL = 60_000;
 const deviceCfgCache = new Map();
 
-const RAW_STATUS_TIMEOUT_MS = Number(
-  process.env.STATUS_SNAPSHOT_ITEM_TIMEOUT_MS || 4000,
-);
-const STATUS_SNAPSHOT_ITEM_TIMEOUT_MS = Number.isFinite(RAW_STATUS_TIMEOUT_MS)
-  ? Math.max(500, Math.floor(RAW_STATUS_TIMEOUT_MS))
-  : 4000;
+const STATUS_SNAPSHOT_ITEM_TIMEOUT_MS = 4000;
 
 function getCachedDeviceCfg(deviceId) {
   const hit = deviceCfgCache.get(String(deviceId));

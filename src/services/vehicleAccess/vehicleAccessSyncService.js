@@ -5,7 +5,7 @@
 
 const externalDb = require("../../database/externalDb");
 const db = require("../../database/db");
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 
 /**
  * 取得 lane_id -> { zoneName, locationName, locationId } 映射

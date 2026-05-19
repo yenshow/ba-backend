@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const environmentService = require("../services/systems/environmentService");
+const environmentService = require("../services/environment/environmentService");
 const { authenticate, requirePermission } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -92,12 +92,13 @@ router.get(
   noCache,
   asyncHandler(async (req, res) => {
     const { locationId } = req.params;
-    const { startTime, endTime, limit } = req.query;
+    const { startTime, endTime, limit, order } = req.query;
 
     const options = {};
     if (startTime) options.startTime = startTime;
     if (endTime) options.endTime = endTime;
     if (limit) options.limit = parseInt(limit);
+    if (order === "desc" || order === "asc") options.order = order;
 
     const result = await environmentService.getReadings(locationId, options);
     res.sendSuccess(result);

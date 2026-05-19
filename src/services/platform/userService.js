@@ -1,10 +1,10 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const db = require("../database/db");
-const config = require("../config");
+const db = require("../../database/db");
+const config = require("../../config");
 const permissionService = require("./permissionService");
-const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 async function hashPassword(password) {
   const saltRounds = 10;

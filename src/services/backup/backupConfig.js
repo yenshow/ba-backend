@@ -3,7 +3,7 @@
  */
 
 const path = require("path");
-const runtimeConfigService = require("../runtimeConfigService");
+const runtimeConfigService = require("../platform/runtimeConfigService");
 
 const BACKUP_ROOT = path.join(process.cwd(), "backups");
 

@@ -9,11 +9,7 @@
  *   await modbusGlobalLimiter.run(() => doModbusWork());
  */
 
-const getGlobalConcurrency = () => {
-  const raw = Number(process.env.MODBUS_GLOBAL_CONCURRENCY || 12);
-  if (!Number.isFinite(raw)) return 12;
-  return Math.max(1, Math.floor(raw));
-};
+const GLOBAL_CONCURRENCY = 12;
 
 const createLimiter = (concurrency) => {
   const limit = Math.max(1, Number(concurrency) || 1);
@@ -50,8 +46,7 @@ const createLimiter = (concurrency) => {
   return { run, getStats };
 };
 
-// 啟動時取一次，避免 runtime 反覆讀 env（需要調整時重啟服務）
-const limiter = createLimiter(getGlobalConcurrency());
+const limiter = createLimiter(GLOBAL_CONCURRENCY);
 
 module.exports = limiter;
 

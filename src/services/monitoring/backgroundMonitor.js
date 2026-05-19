@@ -23,36 +23,16 @@ const clampInt = (n, min, max) => {
   return Math.max(min, Math.min(max, Math.floor(x)));
 };
 
-const BASE_INTERVAL_MS = clampInt(
-  process.env.MONITORING_INTERVAL_MS || 15000,
-  1000,
-  10 * 60 * 1000,
-);
-const MIN_INTERVAL_MS = clampInt(
-  process.env.MONITORING_MIN_INTERVAL_MS || BASE_INTERVAL_MS,
-  1000,
-  10 * 60 * 1000,
-);
-const MAX_INTERVAL_MS = clampInt(
-  process.env.MONITORING_MAX_INTERVAL_MS || 60000,
-  MIN_INTERVAL_MS,
-  60 * 60 * 1000,
-);
+const BASE_INTERVAL_MS = clampInt(15_000, 1000, 10 * 60 * 1000);
+const MIN_INTERVAL_MS = clampInt(BASE_INTERVAL_MS, 1000, 10 * 60 * 1000);
+const MAX_INTERVAL_MS = clampInt(60_000, MIN_INTERVAL_MS, 60 * 60 * 1000);
 const MAX_BACKOFF_INTERVAL_MS = clampInt(
-  process.env.MONITORING_MAX_BACKOFF_INTERVAL_MS || 5 * 60 * 1000,
+  5 * 60 * 1000,
   MIN_INTERVAL_MS,
   60 * 60 * 1000,
 );
-const BACKOFF_FACTOR = (() => {
-  const raw = Number(process.env.MONITORING_BACKOFF_FACTOR || 2);
-  if (!Number.isFinite(raw)) return 2;
-  return Math.max(1.2, Math.min(10, raw));
-})();
-const SUCCESS_RAMP_STEP_MS = clampInt(
-  process.env.MONITORING_SUCCESS_RAMP_STEP_MS || 5000,
-  0,
-  10 * 60 * 1000,
-);
+const BACKOFF_FACTOR = 2;
+const SUCCESS_RAMP_STEP_MS = clampInt(5000, 0, 10 * 60 * 1000);
 
 // 監控任務註冊表
 const monitoringTasks = [];

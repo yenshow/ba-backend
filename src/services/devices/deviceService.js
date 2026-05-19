@@ -7,8 +7,8 @@ const {
 } = require("../../utils/deviceHelpers");
 const websocketService = require("../websocket/websocketService");
 const alertService = require("../alerts/alertService");
-const licenseService = require("../licenseService");
-const licenseQuotaService = require("../licenseQuotaService");
+const licenseService = require("../license/licenseService");
+const licenseQuotaService = require("../license/licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");

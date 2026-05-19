@@ -9,7 +9,7 @@ const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 
 const syncLogger = logger.createLogger("peopleCountingSyncService");
 const db = require("../../database/db");
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 
 /**
  * 取得 physical_id -> location_id 映射

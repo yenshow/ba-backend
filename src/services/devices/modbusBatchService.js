@@ -9,17 +9,12 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
  *
  * 注意：
  * - 目前依照 modbusRoutes 的限制，單次讀取 length 上限為 125
- * - 合併策略預設以「連續 address」為主；可透過 MODBUS_BATCH_MAX_GAP 允許小 gap 合併
+ * - 合併策略預設以「連續 address」為主（MAX_GAP=0）
  */
 
 const MAX_LENGTH = 125;
-const MAX_GAP = (() => {
-  const raw = Number(process.env.MODBUS_BATCH_MAX_GAP || 0);
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(20, Math.floor(raw)));
-})();
-const CACHE_TTL_MS = Number(process.env.MODBUS_SNAPSHOT_TTL_MS || 4500);
-const CACHE_TTL = Number.isFinite(CACHE_TTL_MS) ? Math.max(250, Math.floor(CACHE_TTL_MS)) : 4500;
+const MAX_GAP = 0;
+const CACHE_TTL = 4500;
 
 const cache = new Map(); // key -> { ts, data }
 const inflight = new Map(); // key -> Promise

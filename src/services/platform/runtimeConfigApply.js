@@ -2,14 +2,14 @@
  * 將 runtime 設定變更套用至連線池與背景排程（由 server 啟動時註冊）
  */
 
-const externalDb = require("../database/externalDb");
+const externalDb = require("../../database/externalDb");
 const runtimeConfigService = require("./runtimeConfigService");
-const backupScheduler = require("./backup/backupScheduler");
+const backupScheduler = require("../backup/backupScheduler");
 const {
   startAlertDailyRolloverScheduler,
   stopAlertDailyRolloverScheduler,
-} = require("./alerts/alertRolloverScheduler");
-const logger = require("../utils/logger");
+} = require("../alerts/alertRolloverScheduler");
+const logger = require("../../utils/logger");
 
 const applyLogger = logger.createLogger("runtimeConfigApply");
 

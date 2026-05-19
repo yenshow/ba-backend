@@ -4,7 +4,7 @@
 
 const express = require("express");
 const router = express.Router();
-const peopleCountingService = require("../services/systems/peopleCountingService");
+const peopleCountingService = require("../services/peopleCounting/peopleCountingService");
 const { authenticate, requirePermission } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");

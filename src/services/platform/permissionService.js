@@ -1,6 +1,6 @@
-const db = require("../database/db");
-const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const db = require("../../database/db");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
 
 /**
  * 取得權限定義（樹狀或扁平），供權限設定頁與 API 使用

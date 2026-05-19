@@ -18,7 +18,7 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
  * - **液位**：`coverAlarm`、`highLevel`、`lowLevel` + `running`
  * - **發電機**：`fault`、`highOil`、`lowOil` + `running`
  *
- * 注意：此語意原本位於 `services/systems/statusRawSemantics.js`，為集中「監控快照」領域概念，
+ * 注意：快照 raw 語意與 `services/monitoring/systemSnapshotStatusFields.js` 等為「監控快照」領域概念，
  * 併入 monitoring 域（SSOT）。
  */
 function truthy(v) {

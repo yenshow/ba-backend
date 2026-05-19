@@ -4,7 +4,7 @@
  */
 
 const settingsService = require("./settingsService");
-const logger = require("../utils/logger");
+const logger = require("../../utils/logger");
 
 const runtimeLogger = logger.createLogger("runtimeConfigService");
 
@@ -22,6 +22,9 @@ const RUNTIME_KEYS = [
 ];
 
 const RUNTIME_KEY_SET = new Set(RUNTIME_KEYS);
+
+/** 空字串表示「不變更」 */
+const SECRET_KEYS = new Set(["YSCP_DB_PASSWORD", "YSCP_AK", "YSCP_SK"]);
 
 const YSCP_KEYS = ["YSCP_HOST", "YSCP_DB_PASSWORD", "YSCP_AK", "YSCP_SK"];
 
@@ -203,6 +206,8 @@ async function updateBatch(partial) {
     if (!RUNTIME_KEY_SET.has(key)) continue;
 
     const val = String(raw ?? "").trim();
+    if (SECRET_KEYS.has(key) && val === "") continue;
+
     if (key === "YSCP_HOST") {
       next[key] = normalizeYscpHost(val);
     } else {
@@ -215,8 +220,8 @@ async function updateBatch(partial) {
 
   const err = validateValues(next);
   if (err) {
-    const { throwApiError } = require("../utils/apiErrorMeta");
-    const C = require("../utils/apiErrorCodes");
+    const { throwApiError } = require("../../utils/apiErrorMeta");
+    const C = require("../../utils/apiErrorCodes");
     throwApiError(C.VALIDATION_CUSTOM, err, { statusCode: 400 });
   }
 

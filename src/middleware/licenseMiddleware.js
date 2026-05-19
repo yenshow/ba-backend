@@ -1,4 +1,4 @@
-const licenseService = require("../services/licenseService");
+const licenseService = require("../services/license/licenseService");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrorMeta");
 

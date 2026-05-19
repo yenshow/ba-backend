@@ -1,5 +1,5 @@
-const userService = require("../services/userService");
-const permissionService = require("../services/permissionService");
+const userService = require("../services/platform/userService");
+const permissionService = require("../services/platform/permissionService");
 const C = require("../utils/apiErrorCodes");
 
 // 驗證 JWT Token 中間件

@@ -3,11 +3,11 @@
  * 實作 getSiteData、getSiteLogs、getUnitPersonnel；資料來源為本系統 persons、isapi_access_events。
  */
 
-const db = require("../../../../database/db");
-const deviceService = require("../../../devices/deviceService");
-const personnelService = require("../../../personnel/personnelService");
-const { getTodayTimeRange } = require("../../../../utils/dateRangeUtils");
-const logger = require("../../../../utils/logger");
+const db = require("../../../database/db");
+const deviceService = require("../../devices/deviceService");
+const personnelService = require("../../personnel/personnelService");
+const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
+const logger = require("../../../utils/logger");
 const {
   extractSubEventType,
   resolveAccessControlEvent,

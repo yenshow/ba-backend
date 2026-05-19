@@ -1,5 +1,5 @@
-const config = require("../config");
-const settingsService = require("./settingsService");
+const config = require("../../config");
+const settingsService = require("../platform/settingsService");
 
 const SETTINGS_KEYS = {
   features: "license_features",

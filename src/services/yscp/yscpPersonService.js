@@ -3,7 +3,7 @@ const https = require("https");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const runtimeConfigService = require("../runtimeConfigService");
+const runtimeConfigService = require("../platform/runtimeConfigService");
 const logger = require("../../utils/logger");
 
 const serviceLogger = logger.createLogger("YSCP Person Service");

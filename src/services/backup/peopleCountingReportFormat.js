@@ -22,7 +22,7 @@ const {
 } = require("./reportFormatUtils");
 const {
   countEntryExitFromSorted,
-} = require("../systems/peopleCountingService");
+} = require("../peopleCounting/peopleCountingService");
 
 const sep = "\x00";
 

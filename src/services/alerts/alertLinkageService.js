@@ -676,7 +676,13 @@ async function getSingleLinkageByRuleId(ruleId) {
 
 async function getLatestLinkagesByRuleIds(ruleIds) {
   const ids = Array.isArray(ruleIds)
-    ? [...new Set(ruleIds.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))]
+    ? [
+        ...new Set(
+          ruleIds
+            .map((v) => Number(v))
+            .filter((n) => Number.isInteger(n) && n > 0),
+        ),
+      ]
     : [];
   if (ids.length === 0) return [];
 

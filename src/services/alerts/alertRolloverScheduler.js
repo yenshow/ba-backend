@@ -1,5 +1,5 @@
 const { DateTime } = require("luxon");
-const runtimeConfigService = require("../runtimeConfigService");
+const runtimeConfigService = require("../platform/runtimeConfigService");
 const logger = require("../../utils/logger");
 const alertService = require("./alertService");
 

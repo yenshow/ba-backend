@@ -9,7 +9,7 @@ const {
   getPeopleCountingLocations,
   getPeopleCountingConfig,
   parseEventType,
-} = require("../systems/peopleCountingService");
+} = require("../peopleCounting/peopleCountingService");
 const logger = require("../../utils/logger");
 
 // 追蹤最後檢查的時間戳（用於查詢新記錄）

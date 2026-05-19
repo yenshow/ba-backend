@@ -104,13 +104,7 @@ function createLocationJobReporter(job, locationId = null) {
   };
 
   let runningSeq = 0;
-  const runningSampleRateRaw =
-    process.env.JOB_TAIL_RUNNING_SAMPLE_RATE != null
-      ? Number(process.env.JOB_TAIL_RUNNING_SAMPLE_RATE)
-      : 0;
-  const runningSampleRate = Number.isFinite(runningSampleRateRaw)
-    ? Math.max(0, Math.floor(runningSampleRateRaw))
-    : 0;
+  const runningSampleRate = 0;
 
   const startOp = ({ employeeNo, deviceId, action, stage }) => {
     const startedAt = Date.now();
@@ -119,7 +113,7 @@ function createLocationJobReporter(job, locationId = null) {
     set("currentEmployeeNo", employeeNo ?? null);
     set("currentAction", action ?? null);
     set("currentStage", stage ?? null);
-    // running 事件：預設不寫入 DB（避免寫入放大）；需要時可用 JOB_TAIL_RUNNING_SAMPLE_RATE 降頻記錄
+    // running 事件：預設不寫入 DB（避免寫入放大）
     if (runningSampleRate > 0) {
       runningSeq += 1;
       if (runningSeq % runningSampleRate === 0) {
@@ -939,13 +933,7 @@ async function syncLocation(locationId, reporter = null) {
   });
 
   // 讀設備全量 employeeNo 清單成本高：同一個 job 內加 TTL cache，避免重試/二次流程又打一次
-  const employeeNosCacheTtlMsRaw =
-    process.env.PERSONNEL_DEVICE_EMPLOYEENO_LIST_TTL_MS != null
-      ? Number(process.env.PERSONNEL_DEVICE_EMPLOYEENO_LIST_TTL_MS)
-      : 60_000;
-  const employeeNosCacheTtlMs = Number.isFinite(employeeNosCacheTtlMsRaw)
-    ? Math.max(0, Math.floor(employeeNosCacheTtlMsRaw))
-    : 60_000;
+  const employeeNosCacheTtlMs = 60_000;
   const employeeNosCache = new Map(); // deviceId -> { at:number, list:string[] }
   const fetchAllEmployeeNosFromDeviceCached = async (deviceId) => {
     const now = Date.now();

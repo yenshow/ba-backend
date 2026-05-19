@@ -2,7 +2,7 @@
  * 電力系統：依 location_systems 讀取 Modbus 並合成 uiStatus（發電機／ATS）
  */
 
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
@@ -23,7 +23,7 @@ const {
   resolveLocationSystemStatusFields,
   buildAlertSemanticsMetaBySystemId,
   deriveSnapshotAggregateRunningUiStatus,
-} = require("./systemSnapshotStatusFields");
+} = require("../monitoring/systemSnapshotStatusFields");
 
 const statusLogger = logger.createLogger("powerStatusService");
 
@@ -32,12 +32,7 @@ const POWER_STATUS_FIELD_DEFAULTS = {
   viewCategory: "generator",
 };
 
-const DEVICE_CFG_CACHE_TTL_MS = Number(
-  process.env.DEVICE_CFG_CACHE_TTL_MS || 60_000,
-);
-const DEVICE_CFG_CACHE_TTL = Number.isFinite(DEVICE_CFG_CACHE_TTL_MS)
-  ? Math.max(1000, Math.floor(DEVICE_CFG_CACHE_TTL_MS))
-  : 60_000;
+const DEVICE_CFG_CACHE_TTL = 60_000;
 const deviceCfgCache = new Map();
 
 function getCachedDeviceCfg(deviceId) {

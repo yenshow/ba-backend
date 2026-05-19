@@ -1,5 +1,5 @@
 const db = require("../../database/db");
-const locationService = require("./locationService");
+const locationService = require("../location/locationService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
@@ -133,7 +133,8 @@ async function deleteZone(id) {
 
 async function getReadings(locationId, options = {}) {
   try {
-    const { startTime, endTime, limit = 1000 } = options;
+    const { startTime, endTime, limit = 1000, order = "asc" } = options;
+    const orderDir = String(order).toLowerCase() === "desc" ? "DESC" : "ASC";
 
     let query = `
       SELECT recorded_at as timestamp, data
@@ -153,7 +154,7 @@ async function getReadings(locationId, options = {}) {
       params.push(new Date(endTime));
     }
 
-    query += ` ORDER BY recorded_at ASC LIMIT $${paramIndex}`;
+    query += ` ORDER BY recorded_at ${orderDir} LIMIT $${paramIndex}`;
     params.push(limit);
 
     const rows = await db.query(query, params);

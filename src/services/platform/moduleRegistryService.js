@@ -1,5 +1,5 @@
-const config = require("../config");
-const yscpFeature = require("../utils/yscpPeopleCountingFeature");
+const config = require("../../config");
+const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 
 /**
  * 模組 Registry（SSOT）

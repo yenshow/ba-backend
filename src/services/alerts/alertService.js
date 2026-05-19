@@ -1,6 +1,5 @@
 const db = require("../../database/db");
-const config = require("../../config");
-const runtimeConfigService = require("../runtimeConfigService");
+const runtimeConfigService = require("../platform/runtimeConfigService");
 const { getCalendarDateKeyInTimeZone } = require("../../utils/alertRolloverTz");
 const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");

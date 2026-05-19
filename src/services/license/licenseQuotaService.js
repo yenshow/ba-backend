@@ -1,4 +1,4 @@
-const db = require("../database/db");
+const db = require("../../database/db");
 
 /**
  * v1 quota 計數策略（避免先做 schema migration）：

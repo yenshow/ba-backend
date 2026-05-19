@@ -1,12 +1,12 @@
 const { createSystemSnapshotMonitor } = require("./systemSnapshotMonitorFactory");
-const lightingStatusService = require("../systems/lightingStatusService");
-const hvacStatusService = require("../systems/hvacStatusService");
-const drainageStatusService = require("../systems/drainageStatusService");
-const powerStatusService = require("../systems/powerStatusService");
-const fireStatusService = require("../systems/fireStatusService");
-const emergencyRescueStatusService = require("../systems/emergencyRescueStatusService");
-const airCirculationStatusService = require("../systems/airCirculationStatusService");
-const smokeAlarmStatusService = require("../systems/smokeAlarmStatusService");
+const lightingStatusService = require("../snapshotStatus/lightingStatusService");
+const hvacStatusService = require("../snapshotStatus/hvacStatusService");
+const drainageStatusService = require("../snapshotStatus/drainageStatusService");
+const powerStatusService = require("../snapshotStatus/powerStatusService");
+const fireStatusService = require("../snapshotStatus/fireStatusService");
+const emergencyRescueStatusService = require("../snapshotStatus/emergencyRescueStatusService");
+const airCirculationStatusService = require("../snapshotStatus/airCirculationStatusService");
+const smokeAlarmStatusService = require("../snapshotStatus/smokeAlarmStatusService");
 
 const drainageSnapshotMonitor = createSystemSnapshotMonitor({
   systemKey: "drainage",

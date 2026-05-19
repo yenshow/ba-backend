@@ -3,7 +3,7 @@ const { applyDefaultTimeFilters } = require("../../../utils/dateRangeUtils");
 const axios = require("axios");
 const https = require("https");
 const crypto = require("crypto");
-const runtimeConfigService = require("../../runtimeConfigService");
+const runtimeConfigService = require("../../platform/runtimeConfigService");
 const logger = require("../../../utils/logger");
 
 /**

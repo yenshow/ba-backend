@@ -3,9 +3,9 @@ const os = require("os");
 const express = require("express");
 const router = express.Router();
 
-const licenseService = require("../services/licenseService");
-const licensePlatformService = require("../services/licensePlatformService");
-const licenseQuotaService = require("../services/licenseQuotaService");
+const licenseService = require("../services/license/licenseService");
+const licensePlatformService = require("../services/license/licensePlatformService");
+const licenseQuotaService = require("../services/license/licenseQuotaService");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { verifyLicensePayload } = require("../utils/licenseSign");
