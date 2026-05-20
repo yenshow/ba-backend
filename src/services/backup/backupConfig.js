@@ -1,21 +1,30 @@
 /**
- * 備份系統配置（目錄固定；保留天數與排程間隔由 runtimeConfigService 提供）
+ * 備份系統配置
+ * - 優先：runtime（system_settings）BACKUP_ROOT_DIR（可由 /core/env 修改，立即生效）
+ * - fallback：{cwd}/backups
  */
 
 const path = require("path");
 const runtimeConfigService = require("../platform/runtimeConfigService");
 
-const BACKUP_ROOT = path.join(process.cwd(), "backups");
+const resolveBackupRoot = () => {
+  const fromRuntime = String(runtimeConfigService.getBackup?.()?.rootDir || "").trim();
+  if (fromRuntime) {
+    return path.resolve(fromRuntime);
+  }
+  return path.join(process.cwd(), "backups");
+};
 
 function getBackupConfig() {
   const runtime = runtimeConfigService.getBackup();
+  const root = resolveBackupRoot();
   return {
     directories: {
-      root: BACKUP_ROOT,
-      alerts: path.join(BACKUP_ROOT, "alerts"),
-      environmentReadings: path.join(BACKUP_ROOT, "environment_readings"),
-      peopleCounting: path.join(BACKUP_ROOT, "people_counting"),
-      vehicleAccess: path.join(BACKUP_ROOT, "vehicle_access"),
+      root,
+      alerts: path.join(root, "alerts"),
+      environmentReadings: path.join(root, "environment_readings"),
+      peopleCounting: path.join(root, "people_counting"),
+      vehicleAccess: path.join(root, "vehicle_access"),
     },
     retention: runtime.retention,
     scheduler: runtime.scheduler,
@@ -24,5 +33,4 @@ function getBackupConfig() {
 
 module.exports = {
   getBackupConfig,
-  BACKUP_ROOT,
 };

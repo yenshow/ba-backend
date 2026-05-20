@@ -5,6 +5,8 @@
 
 const settingsService = require("./settingsService");
 const logger = require("../../utils/logger");
+const fs = require("fs");
+const path = require("path");
 
 const runtimeLogger = logger.createLogger("runtimeConfigService");
 
@@ -16,6 +18,7 @@ const RUNTIME_KEYS = [
   "ALERT_DAILY_ROLLOVER_TZ",
   "ALERT_DAILY_ROLLOVER_LOCAL_HOUR",
   "ALERT_DAILY_ROLLOVER_LOCAL_MINUTE",
+  "BACKUP_ROOT_DIR",
   "BACKUP_DATABASE_CUTOFF_DAYS",
   "BACKUP_ARCHIVE_FILE_RETENTION_DAYS",
   "BACKUP_SCHEDULER_INTERVAL",
@@ -35,10 +38,19 @@ const ALERT_KEYS = [
 ];
 
 const BACKUP_KEYS = [
+  "BACKUP_ROOT_DIR",
   "BACKUP_DATABASE_CUTOFF_DAYS",
   "BACKUP_ARCHIVE_FILE_RETENTION_DAYS",
   "BACKUP_SCHEDULER_INTERVAL",
 ];
+
+const buildDefaultBackupRootDir = () => {
+  const programData =
+    process.env.ProgramData ||
+    process.env.PROGRAMDATA ||
+    "C:\\ProgramData";
+  return path.join(programData, "Yenshow", "BA System", "backups");
+};
 
 const DEFAULTS = {
   YSCP_HOST: "192.168.2.2",
@@ -48,6 +60,7 @@ const DEFAULTS = {
   ALERT_DAILY_ROLLOVER_TZ: "Asia/Taipei",
   ALERT_DAILY_ROLLOVER_LOCAL_HOUR: "0",
   ALERT_DAILY_ROLLOVER_LOCAL_MINUTE: "5",
+  BACKUP_ROOT_DIR: buildDefaultBackupRootDir(),
   BACKUP_DATABASE_CUTOFF_DAYS: "30",
   BACKUP_ARCHIVE_FILE_RETENTION_DAYS: "365",
   BACKUP_SCHEDULER_INTERVAL: String(24 * 60 * 60 * 1000),
@@ -121,6 +134,7 @@ const getAlerts = () => ({
 });
 
 const getBackup = () => ({
+  rootDir: cache.BACKUP_ROOT_DIR || DEFAULTS.BACKUP_ROOT_DIR,
   retention: {
     databaseDays: Math.max(1, toNumber(cache.BACKUP_DATABASE_CUTOFF_DAYS, 30)),
     backupFileDays: Math.max(
@@ -176,6 +190,18 @@ function validateValues(merged) {
   const intervalRaw = merged.BACKUP_SCHEDULER_INTERVAL?.trim() ?? "";
   if (intervalRaw && !positiveInt(intervalRaw)) {
     return "BACKUP_SCHEDULER_INTERVAL 須為大於 0 的整數（毫秒）";
+  }
+
+  const rootDir = merged.BACKUP_ROOT_DIR?.trim() ?? "";
+  if (rootDir) {
+    if (!path.isAbsolute(rootDir)) {
+      return "BACKUP_ROOT_DIR 必須為絕對路徑";
+    }
+    try {
+      fs.mkdirSync(rootDir, { recursive: true });
+    } catch (e) {
+      return `BACKUP_ROOT_DIR 無法建立或不可寫入：${e?.message || String(e)}`;
+    }
   }
   const h = merged.ALERT_DAILY_ROLLOVER_LOCAL_HOUR?.trim() ?? "";
   if (h) {

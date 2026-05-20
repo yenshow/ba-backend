@@ -43,6 +43,11 @@ const FORM_SCHEMA = {
       title: "備份排程",
       fields: [
         {
+          key: "BACKUP_ROOT_DIR",
+          label: "備份目錄",
+          kind: "text",
+        },
+        {
           key: "BACKUP_DATABASE_CUTOFF_DAYS",
           label: "線上資料保留天數",
           kind: "number",

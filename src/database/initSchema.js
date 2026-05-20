@@ -418,7 +418,32 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_device_models_port ON device_models(port);
 		`);
 
+    // 這裡採用 (type_code, name) 唯一即可（型號字串本身為 SSOT，大小寫固定）
+    await targetPool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_device_models_type_name
+      ON device_models (type_code, name);
+    `);
+
     schemaLogger.info("device_models 表已建立", { module: "initSchema" });
+
+    // 種子：門禁設備預設型號（可重跑，不重複）
+    const accessControlModelSeeds = [
+      { name: "YS AC-02F", type_code: "access_control" },
+      { name: "YS AC-07", type_code: "access_control" },
+    ];
+    for (const m of accessControlModelSeeds) {
+      await targetPool.query(
+        `
+          INSERT INTO device_models (name, type_code, description, config)
+          VALUES ($1, $2, $3, $4::jsonb)
+          ON CONFLICT (type_code, name) DO NOTHING
+        `,
+        [m.name, m.type_code, "門禁設備預設型號", "{}"],
+      );
+    }
+    schemaLogger.info("device_models：門禁預設型號種子已插入", {
+      module: "initSchema",
+    });
 
     // 建立 devices 表
     await targetPool.query(`
@@ -615,9 +640,12 @@ async function initSchema() {
           OR (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_ids')
         )
     `);
-    schemaLogger.info("location_systems：已套用 system_config（device_ids／camera_device_ids）migration", {
-      module: "initSchema",
-    });
+    schemaLogger.info(
+      "location_systems：已套用 system_config（device_ids／camera_device_ids）migration",
+      {
+        module: "initSchema",
+      },
+    );
 
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
