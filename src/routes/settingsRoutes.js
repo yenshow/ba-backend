@@ -3,7 +3,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const settingsService = require("../services/platform/settingsService");
-const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const logger = require("../utils/logger");
@@ -117,7 +117,7 @@ router.post("/batch", authenticate, asyncHandler(async (req, res) => {
  * Body: { value: "...", description?: "..." }
  * 需要管理員權限
  */
-router.put("/:key", authenticate, requireAdmin, validateRequired("value"), asyncHandler(async (req, res) => {
+router.put("/:key", authenticate, requireAdminOrOperator, validateRequired("value"), asyncHandler(async (req, res) => {
 	const { key } = req.params;
 	const { value, description } = req.body;
 	
@@ -131,7 +131,7 @@ router.put("/:key", authenticate, requireAdmin, validateRequired("value"), async
  * FormData: { key: "setting_key", file: <File> }
  * 需要管理員權限
  */
-router.post("/upload", authenticate, requireAdmin, upload.single("file"), asyncHandler(async (req, res) => {
+router.post("/upload", authenticate, requireAdminOrOperator, upload.single("file"), asyncHandler(async (req, res) => {
 	if (!req.file) {
 		return res.sendFailure(
 			{
@@ -197,7 +197,7 @@ router.post("/upload", authenticate, requireAdmin, upload.single("file"), asyncH
  * DELETE /api/settings/:key
  * 需要管理員權限
  */
-router.delete("/:key", authenticate, requireAdmin, asyncHandler(async (req, res) => {
+router.delete("/:key", authenticate, requireAdminOrOperator, asyncHandler(async (req, res) => {
 	const { key } = req.params;
 	
 	// 先取得設定值，如果是檔案 URL，則刪除檔案

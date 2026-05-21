@@ -5,7 +5,11 @@
 const express = require("express");
 const router = express.Router();
 const peopleCountingService = require("../services/peopleCounting/peopleCountingService");
-const { authenticate, requirePermission } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requirePermission,
+  requireAdminOrOperator,
+} = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -48,6 +52,7 @@ router.get(
 // 建立地點
 router.post(
   "/locations",
+  requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const result = await peopleCountingService.createPeopleCountingLocation(
       req.body,
@@ -60,6 +65,7 @@ router.post(
 // 更新地點
 router.put(
   "/locations/:id",
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -75,6 +81,7 @@ router.put(
 // 刪除地點
 router.delete(
   "/locations/:id",
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

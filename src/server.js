@@ -46,7 +46,6 @@ const runtimeConfigRoutes = require("./routes/runtimeConfigRoutes");
 const { bootstrapRuntimeInfrastructure } = require("./services/platform/runtimeConfigApply");
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
-const permissionRoutes = require("./routes/permissionRoutes");
 const moduleRegistryRoutes = require("./routes/moduleRegistryRoutes");
 
 // 授權（Feature Gate）
@@ -137,7 +136,6 @@ app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
 // 註冊路由（授權僅控：人流、照明、排水、消防、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
-app.use("/api/permissions", permissionRoutes);
 app.use("/api/license", licenseRoutes);
 app.use("/api/modules", moduleRegistryRoutes);
 app.use("/api/devices", deviceRoutes);

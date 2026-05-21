@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const environmentService = require("../services/environment/environmentService");
-const { authenticate, requirePermission } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requirePermission,
+  requireAdminOrOperator,
+} = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -33,18 +37,20 @@ router.get(
   }),
 );
 
-// 建立區域（需要認證）
+// 建立區域
 router.post(
   "/zones",
+  requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const result = await environmentService.createZone(req.body, req.user.id);
     res.sendSuccess(result, 201);
   }),
 );
 
-// 更新區域（需要認證）
+// 更新區域
 router.put(
   "/zones/:id",
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -57,9 +63,10 @@ router.put(
   }),
 );
 
-// 刪除區域（需要認證）
+// 刪除區域
 router.delete(
   "/zones/:id",
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

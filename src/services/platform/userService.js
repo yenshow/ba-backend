@@ -174,15 +174,61 @@ async function getUserById(userId) {
   return users[0];
 }
 
+async function createManagedUser(creator, body) {
+  const { username, password, role = "viewer", overrides = [] } = body;
+
+  if (!username || !password) {
+    throwApiError(C.USER_CREDENTIALS_REQUIRED, "username、password 為必填欄位");
+  }
+  if (password.length < 6) {
+    throwApiError(C.USER_PASSWORD_TOO_SHORT, "密碼長度至少需要 6 個字元");
+  }
+  validateRole(role);
+
+  if (creator.role === "operator" && role === "admin") {
+    throwApiError(
+      C.USER_FORBIDDEN_ROLE_STATUS,
+      "操作員無法建立管理員帳號",
+    );
+  }
+
+  const existingUser = await db.query("SELECT id FROM users WHERE username = ?", [
+    username,
+  ]);
+  if (existingUser.length > 0) {
+    throwApiError(C.USER_USERNAME_EXISTS, "用戶名已存在");
+  }
+
+  const passwordHash = await hashPassword(password);
+  const userId = await db.transaction(async (clientQuery) => {
+    const result = await clientQuery(
+      "INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, ?, 'active') RETURNING id",
+      [username, passwordHash, role],
+    );
+    const id = result[0].id;
+    if (role !== "admin" && Array.isArray(overrides)) {
+      await permissionService.replaceUserPermissionOverrides(
+        id,
+        overrides,
+        clientQuery,
+      );
+    }
+    return id;
+  });
+  const user = await getUserById(userId);
+  return { user };
+}
+
 async function updateUser(userId, updateData, currentUser) {
   const { username, role, status } = updateData;
 
-  const existingRows = await db.query("SELECT id FROM users WHERE id = ?", [
+  const existingRows = await db.query("SELECT id, role FROM users WHERE id = ?", [
     userId,
   ]);
   if (existingRows.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
   }
+  const previousRole = existingRows[0].role;
 
   const canManageOthers =
     currentUser.role === "admin" || currentUser.role === "operator";
@@ -194,6 +240,16 @@ async function updateUser(userId, updateData, currentUser) {
   }
   if (!canManageOthers && currentUser.id !== userId) {
     throwApiError(C.USER_FORBIDDEN_UPDATE_OTHERS, "只能修改自己的資料");
+  }
+
+  if (role !== undefined) {
+    validateRole(role);
+    if (currentUser.role === "operator" && role === "admin") {
+      throwApiError(
+        C.USER_FORBIDDEN_ROLE_STATUS,
+        "操作員無法將用戶設為管理員",
+      );
+    }
   }
 
   const updates = [];
@@ -212,7 +268,6 @@ async function updateUser(userId, updateData, currentUser) {
   }
 
   if (role !== undefined) {
-    validateRole(role);
     updates.push("role = ?");
     params.push(role);
   }
@@ -228,6 +283,11 @@ async function updateUser(userId, updateData, currentUser) {
 
   params.push(userId);
   await db.query(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`, params);
+
+  if (role !== undefined && role !== previousRole) {
+    await permissionService.clearUserPermissionOverrides(userId);
+  }
+
   return await getUserById(userId);
 }
 
@@ -296,6 +356,7 @@ async function deleteUser(userId, currentUser) {
 
 module.exports = {
   registerUser,
+  createManagedUser,
   loginUser,
   getUsers,
   getUserById,

@@ -67,7 +67,30 @@ router.get(
   }),
 );
 
-// 管理員或操作員：取得／寫入某用戶的權限設定
+// 管理員或操作員：建立用戶；非 admin 須帶 overrides[]（手動勾選之頁面進入權限）
+router.post(
+  "/",
+  authenticate,
+  requireAdminOrOperator,
+  validateRequired("username", "password"),
+  asyncHandler(async (req, res) => {
+    const result = await userService.createManagedUser(req.user, req.body);
+    res.sendSuccess(result, 201);
+  }),
+);
+
+// 管理員或操作員：權限定義清單（建立／編輯用戶時勾選模組）
+router.get(
+  "/permission-definitions",
+  authenticate,
+  requireAdminOrOperator,
+  asyncHandler(async (req, res) => {
+    const definitions = await permissionService.getDefinitions({ tree: false });
+    res.sendSuccess({ definitions });
+  }),
+);
+
+// 管理員或操作員：取得用戶已儲存之頁面進入權限（overridesByPermId）
 router.get(
   "/:id/permissions",
   authenticate,
@@ -75,11 +98,12 @@ router.get(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const settings = await permissionService.getUserPermissionSettings(userId);
-    res.sendSuccess(settings);
+    const data = await permissionService.getUserPermissionOverrides(userId);
+    res.sendSuccess(data);
   }),
 );
 
+// 管理員或操作員：寫入用戶頁面進入權限（全量 overrides，與 UI 勾選一致）
 router.put(
   "/:id/permissions",
   authenticate,
@@ -87,12 +111,9 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const overrides = Array.isArray(req.body.overrides)
-      ? req.body.overrides
-      : [];
+    const overrides = Array.isArray(req.body.overrides) ? req.body.overrides : [];
     await permissionService.setUserPermissionOverrides(userId, overrides);
-    const settings = await permissionService.getUserPermissionSettings(userId);
-    res.sendSuccess(settings);
+    res.sendSuccess({ message: "權限已更新" });
   }),
 );
 

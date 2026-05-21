@@ -83,10 +83,13 @@ function requireAdmin(req, res, next) {
 	return authorize("admin")(req, res, next);
 }
 
-// 檢查是否為管理員或操作員
+// 檢查是否為管理員或操作員（頁面寫入操作：CRUD、設定儲存等）
 function requireAdminOrOperator(req, res, next) {
 	return authorize("admin", "operator")(req, res, next);
 }
+
+/** 語意別名：與 requireAdminOrOperator 相同，表示「可寫入」角色 */
+const requireWriteRole = requireAdminOrOperator;
 
 /**
  * 檢查是否具備指定權限（精細權限）
@@ -144,5 +147,6 @@ module.exports = {
 	authorize,
 	requireAdmin,
 	requireAdminOrOperator,
-	requirePermission
+	requireWriteRole,
+	requirePermission,
 };

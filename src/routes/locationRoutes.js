@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const locationService = require("../services/location/locationService");
-const { authenticate, requirePermission } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requirePermission,
+  requireAdminOrOperator,
+} = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -43,6 +47,7 @@ router.get(
 router.post(
   "/zones",
   requirePermission("system.area_point_map"),
+  requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const result = await locationService.createZone(req.body, req.user.id);
     res.sendSuccess(result, 201);
@@ -53,6 +58,7 @@ router.post(
 router.put(
   "/zones/:id",
   requirePermission("system.area_point_map"),
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -69,6 +75,7 @@ router.put(
 router.delete(
   "/zones/:id",
   requirePermission("system.area_point_map"),
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -106,6 +113,7 @@ router.get(
 router.post(
   "/",
   requirePermission("system.area_point_map"),
+  requireAdminOrOperator,
   asyncHandler(async (req, res) => {
     const result = await locationService.createLocation(req.body, req.user.id);
     res.sendSuccess(result, 201);
@@ -116,6 +124,7 @@ router.post(
 router.put(
   "/:id",
   requirePermission("system.area_point_map"),
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -132,6 +141,7 @@ router.put(
 router.delete(
   "/:id",
   requirePermission("system.area_point_map"),
+  requireAdminOrOperator,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

@@ -161,23 +161,6 @@ async function initSchema() {
     });
 
     await targetPool.query(`
-      CREATE TABLE IF NOT EXISTS role_default_permissions (
-        id SERIAL PRIMARY KEY,
-        role user_role NOT NULL,
-        permission_id INTEGER NOT NULL REFERENCES permission_definitions(id) ON DELETE CASCADE,
-        granted BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(role, permission_id)
-      )
-    `);
-    await targetPool.query(`
-      CREATE INDEX IF NOT EXISTS idx_role_default_permissions_role ON role_default_permissions(role);
-    `);
-    schemaLogger.info("role_default_permissions 表已建立", {
-      module: "initSchema",
-    });
-
-    await targetPool.query(`
       CREATE TABLE IF NOT EXISTS user_permission_overrides (
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -195,7 +178,7 @@ async function initSchema() {
     });
 
     // 清理：移除已淘汰且未實作的權限碼（避免舊環境殘留造成 UI/規格漂移）
-    // - permission_definitions.id 會被 role_default_permissions / user_permission_overrides 參照，FK 設定為 ON DELETE CASCADE
+    // - permission_definitions.id 會被 user_permission_overrides 參照，FK 設定為 ON DELETE CASCADE
     const deprecatedPermissionCodes = [
       // 已淘汰且未實作的權限碼（避免舊環境殘留造成 UI/規格漂移）
       "system.user_management",
@@ -349,50 +332,6 @@ async function initSchema() {
       );
     }
     schemaLogger.info("權限定義種子已插入", { module: "initSchema" });
-
-    // 種子：角色預設權限（admin 全開由邏輯處理；此處為 operator/viewer 預設）
-    const defRows = await targetPool.query(
-      "SELECT id, code FROM permission_definitions",
-    );
-    const operatorGranted = [
-      "system.equipment_management",
-      "system.personnel",
-      "system.alert_log",
-      "system.area_point_map",
-      "system.people_counting",
-      "system.video_surveillance",
-      "system.environment",
-      "system.vehicle_access",
-      "system.lighting",
-      "system.hvac",
-      "system.air_circulation",
-      "system.drainage",
-      "system.power",
-      "system.fire",
-      "system.emergency_rescue",
-      "system.smoke_alarm",
-      "system.multimedia",
-    ];
-    const viewerGranted = [
-      "system.area_point_map",
-      "system.people_counting",
-      "system.video_surveillance",
-    ];
-    for (const row of defRows.rows) {
-      await targetPool.query(
-        `INSERT INTO role_default_permissions (role, permission_id, granted)
-         VALUES ('operator', $1, $2)
-         ON CONFLICT (role, permission_id) DO NOTHING`,
-        [row.id, operatorGranted.includes(row.code)],
-      );
-      await targetPool.query(
-        `INSERT INTO role_default_permissions (role, permission_id, granted)
-         VALUES ('viewer', $1, $2)
-         ON CONFLICT (role, permission_id) DO NOTHING`,
-        [row.id, viewerGranted.includes(row.code)],
-      );
-    }
-    schemaLogger.info("角色預設權限種子已插入", { module: "initSchema" });
 
     // 建立 device_models 表（通用設備型號表）
     await targetPool.query(`
