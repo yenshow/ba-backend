@@ -68,16 +68,14 @@ function buildUserQueryConditions(filters) {
   return { whereClause, params };
 }
 
-async function registerUser(userData) {
-  const { username, password, role = "viewer" } = userData;
-
+/** 僅安裝腳本用：建立首位 admin（無 HTTP 端點；role 固定 admin） */
+async function createBootstrapAdminUser({ username, password }) {
   if (!username || !password) {
     throwApiError(C.USER_CREDENTIALS_REQUIRED, "username、password 為必填欄位");
   }
   if (password.length < 6) {
     throwApiError(C.USER_PASSWORD_TOO_SHORT, "密碼長度至少需要 6 個字元");
   }
-  validateRole(role);
 
   const existingUser = await db.query("SELECT id FROM users WHERE username = ?", [
     username,
@@ -88,8 +86,8 @@ async function registerUser(userData) {
 
   const passwordHash = await hashPassword(password);
   const result = await db.query(
-    "INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, ?, 'active') RETURNING id",
-    [username, passwordHash, role],
+    "INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, 'admin', 'active') RETURNING id",
+    [username, passwordHash],
   );
   const user = await db.query(
     "SELECT id, username, role, status, created_at, updated_at FROM users WHERE id = ?",
@@ -291,13 +289,46 @@ async function updateUser(userId, updateData, currentUser) {
   return await getUserById(userId);
 }
 
-async function updatePassword(userId, oldPassword, newPassword, currentUser) {
-  const canManageOthers =
-    currentUser.role === "admin" || currentUser.role === "operator";
-  if (!canManageOthers && currentUser.id !== userId) {
-    throwApiError(C.USER_FORBIDDEN_PASSWORD_OTHERS, "只能修改自己的密碼");
+function assertPasswordChangeAllowed(currentUser, targetUser) {
+  const isSelf = currentUser.id === targetUser.id;
+
+  if (isSelf) {
+    if (currentUser.role === "admin") {
+      throwApiError(
+        C.USER_FORBIDDEN_PASSWORD_SELF,
+        "管理員無法自行變更密碼，請由其他管理員於用戶管理重設",
+      );
+    }
+    return { requireOldPassword: true };
   }
 
+  if (currentUser.role === "admin") {
+    if (targetUser.role !== "operator" && targetUser.role !== "viewer") {
+      throwApiError(
+        C.USER_FORBIDDEN_PASSWORD_TARGET,
+        "無法重設此用戶密碼（僅能重設操作員或檢視者）",
+      );
+    }
+    return { requireOldPassword: false };
+  }
+
+  if (currentUser.role === "operator") {
+    if (targetUser.role !== "viewer") {
+      throwApiError(
+        C.USER_FORBIDDEN_PASSWORD_TARGET,
+        "操作員僅能重設檢視者密碼",
+      );
+    }
+    return { requireOldPassword: false };
+  }
+
+  throwApiError(C.USER_FORBIDDEN_PASSWORD_OTHERS, "只能修改自己的密碼");
+}
+
+async function updatePassword(userId, oldPassword, newPassword, currentUser) {
+  if (!newPassword || typeof newPassword !== "string") {
+    throwApiError(C.USER_CREDENTIALS_REQUIRED, "newPassword 為必填欄位");
+  }
   if (newPassword.length < 6) {
     throwApiError(C.USER_PASSWORD_TOO_SHORT, "新密碼長度至少需要 6 個字元");
   }
@@ -306,10 +337,21 @@ async function updatePassword(userId, oldPassword, newPassword, currentUser) {
   if (users.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
   }
-  const user = users[0];
+  const targetUser = users[0];
 
-  if (!canManageOthers) {
-    const isValidPassword = await verifyPassword(oldPassword, user.password_hash);
+  const { requireOldPassword } = assertPasswordChangeAllowed(
+    currentUser,
+    targetUser,
+  );
+
+  if (requireOldPassword) {
+    if (!oldPassword || typeof oldPassword !== "string" || !oldPassword.trim()) {
+      throwApiError(C.USER_OLD_PASSWORD_REQUIRED, "請提供舊密碼");
+    }
+    const isValidPassword = await verifyPassword(
+      oldPassword,
+      targetUser.password_hash,
+    );
     if (!isValidPassword) {
       throwApiError(C.USER_OLD_PASSWORD_INVALID, "舊密碼不正確");
     }
@@ -355,7 +397,7 @@ async function deleteUser(userId, currentUser) {
 }
 
 module.exports = {
-  registerUser,
+  createBootstrapAdminUser,
   createManagedUser,
   loginUser,
   getUsers,

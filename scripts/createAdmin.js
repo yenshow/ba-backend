@@ -19,10 +19,9 @@ async function createAdmin() {
 		}
 
 		console.log(`正在建立管理員... (${ADMIN_USERNAME})`);
-		const user = await userService.registerUser({
+		const user = await userService.createBootstrapAdminUser({
 			username: ADMIN_USERNAME,
 			password: ADMIN_PASSWORD,
-			role: "admin"
 		});
 
 		console.log();

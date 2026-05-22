@@ -311,13 +311,9 @@ async function checkEnvironmentLocations() {
                 }
                 websocketService.emitEnvironmentReading({
                   locationId: location.location_id,
-                  reading: {
-                    id: `monitor_${location.location_id}_${Date.now()}`,
-                    locationId: String(location.location_id),
-                    timestamp: ts,
-                    data: derived,
-                    createdAt: ts,
-                  },
+                  recordedAt: ts,
+                  data: derived,
+                  devices: [{ deviceId, status: "online" }],
                 });
               }
             }
@@ -413,6 +409,18 @@ async function checkEnvironmentLocations() {
           false,
           errorMessage,
         );
+
+        const failedDeviceId = location.device_id
+          ? parseInt(location.device_id, 10)
+          : null;
+        if (Number.isFinite(failedDeviceId)) {
+          websocketService.emitEnvironmentReading({
+            locationId: location.location_id,
+            recordedAt: new Date().toISOString(),
+            data: {},
+            devices: [{ deviceId: failedDeviceId, status: "offline" }],
+          });
+        }
 
         return {
           systemId: location.system_id,

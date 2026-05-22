@@ -492,19 +492,35 @@ function emitDeviceStatusChanged(data) {
 }
 
 /**
- * 推送環境感測器讀數事件
- * @param {Object} data - 事件資料
+ * 推送環境感測器讀數事件（方案 B 統一契約）
+ * @param {Object} data
  * @param {number} data.locationId - 位置 ID
- * @param {Object} data.reading - 讀數資料
+ * @param {string} data.recordedAt - 讀數時間（ISO）
+ * @param {Object} data.data - 感測值（含 derived）
+ * @param {Array<{deviceId:number,status:'online'|'offline'}>} data.devices - 本次相關設備連線狀態
  */
 function emitEnvironmentReading(data) {
+  const recordedAt = data.recordedAt || new Date().toISOString();
+  const payloadData =
+    data.data && typeof data.data === "object" ? data.data : {};
+
+  const devices = Array.isArray(data.devices)
+    ? data.devices
+        .map((d) => ({
+          deviceId: Number(d.deviceId ?? d.device_id),
+          status: String(d.status || "").toLowerCase() === "online" ? "online" : "offline",
+        }))
+        .filter((d) => Number.isFinite(d.deviceId))
+    : [];
+
   const eventData = {
     locationId: data.locationId,
-    reading: data.reading,
+    recordedAt,
+    data: payloadData,
+    devices,
     timestamp: new Date().toISOString(),
   };
 
-  // 廣播給所有連接的客戶端
   safeEmit("environment:reading:new", eventData, {
     logMessage: `位置 ID: ${data.locationId}`,
   });

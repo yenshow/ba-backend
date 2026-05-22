@@ -13,16 +13,6 @@ const {
   validateIntegers,
 } = require("../middleware/validation");
 
-// 公開路由：註冊（無 email；登入僅以用戶名辨識）
-router.post(
-  "/register",
-  validateRequired("username", "password"),
-  asyncHandler(async (req, res) => {
-    const user = await userService.registerUser(req.body);
-    res.sendSuccess({ user }, 201);
-  }),
-);
-
 // 公開路由：登入
 router.post(
   "/login",
@@ -146,7 +136,7 @@ router.put(
   "/:id/password",
   authenticate,
   validateIntegers("id"),
-  validateRequired("oldPassword", "newPassword"),
+  validateRequired("newPassword"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
     const { oldPassword, newPassword } = req.body;
