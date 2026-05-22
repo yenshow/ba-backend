@@ -212,12 +212,12 @@ router.get(
       filters.personGroupIds = String(req.query.personGroupIds);
     if (req.query.mainGroupId != null)
       filters.mainGroupId = parseInt(req.query.mainGroupId, 10);
+    if (req.query.ungroupedOnly != null)
+      filters.ungroupedOnly = req.query.ungroupedOnly;
     if (req.query.status) filters.status = req.query.status;
     if (req.query.employeeNo) filters.employeeNo = req.query.employeeNo;
     if (req.query.fullName) filters.fullName = req.query.fullName;
     if (req.query.q) filters.q = String(req.query.q);
-    const sortBy =
-      req.query.sortBy != null ? String(req.query.sortBy) : undefined;
     const sortOrder =
       req.query.sortOrder != null ? String(req.query.sortOrder) : undefined;
     const limit =
@@ -232,7 +232,6 @@ router.get(
     const result = await personnelService.getPersonsPaged(filters, {
       limit,
       offset,
-      sortBy,
       sortOrder,
     });
     res.sendSuccess(result);

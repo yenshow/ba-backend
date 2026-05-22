@@ -9,8 +9,34 @@ const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
-const VALID_STATUSES = ["active", "inactive", "deleted"];
+const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
+/** GET /persons?personGroupIds= 上限（群組數量有限） */
+const MAX_PERSON_GROUP_IDS_FILTER = 64;
+
+function applyPersonStatusFilter(whereParts, params, filters) {
+  if (filters.status) {
+    params.push(String(filters.status).trim());
+    whereParts.push("p.status = ?");
+    return;
+  }
+  params.push("active");
+  whereParts.push("p.status = ?");
+}
+
+/** 人員歸屬群組：null＝未分組；非 null 必須為子群組 id */
+async function resolvePersonGroupIdForPerson(raw) {
+  if (raw == null || raw === "") return null;
+  const id = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(id)) {
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED, "群組無效");
+  }
+  const group = await ensurePersonGroupExists(id);
+  if (group.parent_id == null) {
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED, "人員只能歸屬子群組");
+  }
+  return group.id;
+}
 
 async function ensurePersonGroupExists(personGroupId) {
   if (personGroupId == null) return null;
@@ -103,13 +129,10 @@ async function getPersonGroupById(id) {
 async function createPersonGroup(data, createdBy = null) {
   const name = (data.name || "").trim();
   if (!name) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組名稱不能為空");
-  const description = data.description ? String(data.description).trim() : null;
-  const parentId = await ensureMainGroupIdOrNull(
-    data.parentId ?? data.parent_id,
-  );
+  const parentId = await ensureMainGroupIdOrNull(data.parentId);
   const rows = await db.query(
-    "INSERT INTO person_groups (name, parent_id, description, created_by) VALUES (?, ?, ?, ?) RETURNING *",
-    [name, parentId, description, createdBy],
+    "INSERT INTO person_groups (name, parent_id, created_by) VALUES (?, ?, ?) RETURNING *",
+    [name, parentId, createdBy],
   );
   return rows[0];
 }
@@ -124,19 +147,13 @@ async function updatePersonGroup(id, data) {
     updates.push("name = ?");
     params.push(name);
   }
-  if (data.parentId !== undefined || data.parent_id !== undefined) {
-    const nextParentId = await ensureMainGroupIdOrNull(
-      data.parentId ?? data.parent_id,
-    );
+  if (data.parentId !== undefined) {
+    const nextParentId = await ensureMainGroupIdOrNull(data.parentId);
     if (nextParentId != null && nextParentId === existing.id) {
       throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組無效：不可選擇自己");
     }
     updates.push("parent_id = ?");
     params.push(nextParentId);
-  }
-  if (data.description !== undefined) {
-    updates.push("description = ?");
-    params.push(data.description ? String(data.description).trim() : null);
   }
   if (updates.length === 0) return getPersonGroupById(id);
   params.push(id);
@@ -148,20 +165,34 @@ async function updatePersonGroup(id, data) {
 }
 
 async function deletePersonGroup(id) {
-  await getPersonGroupById(id);
-  const child = await db.query(
-    "SELECT id FROM person_groups WHERE parent_id = ? LIMIT 1",
-    [id],
-  );
-  if (child && child.length > 0) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"該主群組下尚有子群組，無法刪除");
+  const group = await getPersonGroupById(id);
+
+  if (group.parent_id == null) {
+    const children = await db.query(
+      "SELECT id FROM person_groups WHERE parent_id = ?",
+      [id],
+    );
+    const groupIds = [id, ...(children || []).map((r) => r.id)];
+    const refs = await db.query(
+      `SELECT id FROM persons WHERE person_group_id IN (${groupIds.map(() => "?").join(",")}) LIMIT 1`,
+      groupIds,
+    );
+    if (refs && refs.length > 0) {
+      throwApiError(
+        C.PERSONNEL_VALIDATION_FAILED,
+        "該主群組或子群組下尚有人員，無法刪除",
+      );
+    }
+    await db.query("DELETE FROM person_groups WHERE id = ?", [id]);
+    return { success: true };
   }
+
   const refs = await db.query(
     "SELECT id FROM persons WHERE person_group_id = ? LIMIT 1",
     [id],
   );
   if (refs && refs.length > 0) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"該群組下尚有人員，無法刪除");
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED, "該群組下尚有人員，無法刪除");
   }
   await db.query("DELETE FROM person_groups WHERE id = ?", [id]);
   return { success: true };
@@ -205,15 +236,13 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
     max: Number.MAX_SAFE_INTEGER,
     fallback: 0,
   });
-  const status = options.status ? String(options.status).trim() : "";
   const q = options.q != null ? String(options.q).trim() : "";
 
   const whereParts = ["p.person_group_id = ?"];
   const params = [group.id];
-  if (status) {
-    params.push(status);
-    whereParts.push("p.status = ?");
-  }
+  applyPersonStatusFilter(whereParts, params, {
+    status: options.status ? String(options.status).trim() : undefined,
+  });
   if (q) {
     params.push(`%${q}%`);
     params.push(`%${q}%`);
@@ -467,47 +496,31 @@ async function getPersonsPaged(filters = {}, options = {}) {
     fallback: 0,
   });
 
-  const sortByRaw = options.sortBy != null ? String(options.sortBy).trim() : "";
   const sortOrderRaw =
     options.sortOrder != null ? String(options.sortOrder).trim() : "";
-  const sortBy = sortByRaw || "employeeNo";
   const sortOrder = ["asc", "desc"].includes(sortOrderRaw.toLowerCase())
     ? sortOrderRaw.toLowerCase()
     : "asc";
 
-  const SORT_COLUMNS = {
-    employeeNo: "p.employee_no",
-    employee_no: "p.employee_no",
-  };
-  const orderColumn = SORT_COLUMNS[sortBy] || SORT_COLUMNS.employeeNo;
-  const orderSql = `${orderColumn} ${sortOrder.toUpperCase()}, p.id ASC`;
+  const orderSql = `p.employee_no ${sortOrder.toUpperCase()}, p.id ASC`;
 
   const whereParts = ["1=1"];
   const params = [];
 
-  const hasMainGroupFilter = filters.mainGroupId != null;
-  // 若指定 mainGroupId，則忽略 personGroupId / personGroupIds，避免互相疊加造成「意外變成交集」的隱性行為
-  if (!hasMainGroupFilter && filters.personGroupId != null) {
+  if (normalizeBoolean(filters.ungroupedOnly)) {
+    whereParts.push("p.person_group_id IS NULL");
+  } else if (filters.personGroupId != null) {
     params.push(filters.personGroupId);
     whereParts.push("p.person_group_id = ?");
-  }
-  // mainGroupId：避免前端把所有子群組 ID 攤平成 personGroupIds（有 200 隱性上限）
-  if (filters.mainGroupId != null) {
+  } else if (filters.mainGroupId != null) {
     const childIds = await getChildGroupIdsByMainGroupId(filters.mainGroupId);
-    // 人員理論上只會掛在子群組，但仍允許包含 mainGroupId 以防資料異常或舊資料
-    const ids = Array.from(
-      new Set(
-        [Number(filters.mainGroupId), ...childIds].filter((x) =>
-          Number.isFinite(Number(x)),
-        ),
-      ),
-    );
-    if (ids.length > 0) {
-      whereParts.push(`p.person_group_id IN (${ids.map(() => "?").join(",")})`);
-      params.push(...ids);
+    if (childIds.length > 0) {
+      whereParts.push(`p.person_group_id IN (${childIds.map(() => "?").join(",")})`);
+      params.push(...childIds);
+    } else {
+      whereParts.push("1=0");
     }
-  }
-  if (!hasMainGroupFilter && filters.personGroupIds != null) {
+  } else if (filters.personGroupIds != null) {
     const raw = Array.isArray(filters.personGroupIds)
       ? filters.personGroupIds
       : String(filters.personGroupIds || "")
@@ -518,10 +531,10 @@ async function getPersonsPaged(filters = {}, options = {}) {
       .map((x) => Number.parseInt(String(x), 10))
       .filter((x) => Number.isFinite(x));
     const uniqueIds = Array.from(new Set(ids));
-    // 避免 silent truncate（會造成查詢結果「少人但不報錯」），改成明確限制
-    if (uniqueIds.length > 5000) {
-      throwApiError(C.PERSONNEL_VALIDATION_FAILED,
-        `personGroupIds 過多（最多 5000 筆），請改用 mainGroupId 或縮小範圍`,
+    if (uniqueIds.length > MAX_PERSON_GROUP_IDS_FILTER) {
+      throwApiError(
+        C.PERSONNEL_VALIDATION_FAILED,
+        `personGroupIds 過多（最多 ${MAX_PERSON_GROUP_IDS_FILTER} 筆），請改用 mainGroupId 或縮小範圍`,
       );
     }
     if (uniqueIds.length > 0) {
@@ -531,10 +544,8 @@ async function getPersonsPaged(filters = {}, options = {}) {
       params.push(...uniqueIds);
     }
   }
-  if (filters.status) {
-    params.push(filters.status);
-    whereParts.push("p.status = ?");
-  }
+
+  applyPersonStatusFilter(whereParts, params, filters);
   if (filters.employeeNo) {
     params.push(`%${filters.employeeNo}%`);
     whereParts.push("p.employee_no ILIKE ?");
@@ -632,16 +643,6 @@ function parseJson(value, fallback) {
 }
 
 async function createPerson(data, createdBy = null) {
-  // 群組成員管理已集中到 /api/personnel/groups/:id/members（SSOT: persons.person_group_id）
-  if (
-    Object.prototype.hasOwnProperty.call(data || {}, "personGroupId") ||
-    Object.prototype.hasOwnProperty.call(data || {}, "person_group_id")
-  ) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED,
-      "建立人員不支援設定群組（請至「人員群組」管理成員）",
-    );
-  }
-
   const employeeNo = (data.employeeNo || "").toString().trim();
   if (!employeeNo) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號不能為空");
   const fullNameRaw = data.fullName != null ? String(data.fullName).trim() : "";
@@ -663,13 +664,18 @@ async function createPerson(data, createdBy = null) {
   const existing = await getPersonByEmployeeNo(employeeNo);
   if (existing) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號已存在");
 
+  let personGroupId = null;
+  if (Object.prototype.hasOwnProperty.call(data || {}, "personGroupId")) {
+    personGroupId = await resolvePersonGroupIdForPerson(data.personGroupId);
+  }
+
   const rows = await db.query(
     `INSERT INTO persons (employee_no, full_name, person_group_id, status, face_url, config, created_by, user_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     [
       employeeNo,
       fullNameRaw,
-      null,
+      personGroupId,
       status,
       faceUrl || null,
       config ? JSON.stringify(config) : null,
@@ -683,18 +689,19 @@ async function createPerson(data, createdBy = null) {
 async function updatePerson(id, data) {
   const existingPerson = await getPersonById(id);
 
-  // 群組成員管理已集中到 /api/personnel/groups/:id/members（SSOT: persons.person_group_id）
-  if (
-    Object.prototype.hasOwnProperty.call(data || {}, "personGroupId") ||
-    Object.prototype.hasOwnProperty.call(data || {}, "person_group_id")
-  ) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED,
-      "更新人員不支援修改群組（請至「人員群組」管理成員）",
-    );
-  }
-
   const updates = [];
   const params = [];
+  if (Object.prototype.hasOwnProperty.call(data || {}, "personGroupId")) {
+    const nextGroupId = await resolvePersonGroupIdForPerson(data.personGroupId);
+    const prevGroupId =
+      existingPerson.person_group_id != null
+        ? Number(existingPerson.person_group_id)
+        : null;
+    if (prevGroupId !== nextGroupId) {
+      updates.push("person_group_id = ?");
+      params.push(nextGroupId);
+    }
+  }
   if (data.employeeNo !== undefined) {
     const v = String(data.employeeNo).trim();
     if (!v) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號不能為空");

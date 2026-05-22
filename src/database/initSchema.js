@@ -1001,7 +1001,6 @@ async function initSchema() {
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         parent_id INTEGER REFERENCES person_groups(id) ON DELETE CASCADE,
-        description TEXT,
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -1013,6 +1012,20 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_person_groups_parent_id ON person_groups(parent_id);
     `);
     schemaLogger.info("person_groups 表已建立", { module: "initSchema" });
+
+    await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_groups'
+            AND column_name = 'description'
+        ) THEN
+          ALTER TABLE person_groups DROP COLUMN description;
+        END IF;
+      END $BODY$;
+    `);
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS persons (
