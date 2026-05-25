@@ -1019,6 +1019,7 @@ async function syncLocation(locationId, reporter = null) {
       });
       warnings.push({
         type: "sync",
+        locationId: Number(locationId),
         deviceId,
         deviceName: deviceNameById.get(Number(deviceId)) || null,
         message: `讀取設備人員清單失敗：${message}`,

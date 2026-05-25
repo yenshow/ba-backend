@@ -42,12 +42,9 @@ function validateRole(role) {
 }
 
 function validateStatus(status) {
-  const validStatuses = ["active", "inactive", "suspended"];
+  const validStatuses = ["active", "inactive"];
   if (!validStatuses.includes(status)) {
-    throwApiError(
-      C.USER_STATUS_INVALID,
-      "狀態必須為 active, inactive 或 suspended",
-    );
+    throwApiError(C.USER_STATUS_INVALID, "狀態必須為 active 或 inactive");
   }
 }
 
@@ -112,7 +109,7 @@ async function loginUser(credentials) {
 
   const user = users[0];
   if (user.status !== "active") {
-    throwApiError(C.USER_ACCOUNT_INACTIVE, "帳號已被停用或暫停");
+    throwApiError(C.USER_ACCOUNT_INACTIVE, "帳號已被停用");
   }
 
   const isValidPassword = await verifyPassword(password, user.password_hash);

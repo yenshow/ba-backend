@@ -322,14 +322,16 @@ async function getUnitPersonnel(unitId, siteId, config) {
 
   const lastEntryByNo = new Map();
   const lastExitByNo = new Map();
+  const setLatest = (map, key, ts) => {
+    const prev = map.get(key);
+    if (!prev || new Date(ts) > new Date(prev)) map.set(key, ts);
+  };
   for (const log of todayLogs) {
     const no = log.employeeId || "";
     if (!employeeNosInUnit.has(no)) continue;
     const ts = log.timestamp;
-    if (log.eventType === "entry" && !lastEntryByNo.has(no))
-      lastEntryByNo.set(no, ts);
-    if (log.eventType === "exit" && !lastExitByNo.has(no))
-      lastExitByNo.set(no, ts);
+    if (log.eventType === "entry") setLatest(lastEntryByNo, no, ts);
+    else if (log.eventType === "exit") setLatest(lastExitByNo, no, ts);
   }
 
   const personnel = list.map((p) => {
@@ -338,8 +340,8 @@ async function getUnitPersonnel(unitId, siteId, config) {
     const lastExit = lastExitByNo.get(no);
     const entryDate = lastEntry ? new Date(lastEntry) : null;
     const exitDate = lastExit ? new Date(lastExit) : null;
-    const isPresent =
-      lastEntry && (!lastExit || new Date(lastExit) < new Date(lastEntry));
+    const isInside =
+      !!lastEntry && (!lastExit || exitDate < entryDate);
     const isTodayEntry =
       entryDate && entryDate >= todayStart && entryDate <= todayEnd;
     const faceUrl = p.face_url != null ? String(p.face_url).trim() : "";
@@ -355,7 +357,7 @@ async function getUnitPersonnel(unitId, siteId, config) {
       employeeId: no,
       name: p.full_name || p.employee_no || "",
       photoUrl,
-      isPresent: !!isPresent,
+      isInside,
       lastEntryTime: lastEntry || null,
       lastExitTime: lastExit || null,
       lastEntryDate: entryDate ? entryDate.toISOString().slice(0, 10) : null,

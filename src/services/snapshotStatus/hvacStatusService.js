@@ -8,9 +8,14 @@
  */
 
 const locationService = require("../location/locationService");
-const deviceService = require("../devices/deviceService");
 const { pickPrimaryDiDoBitRead } = require("../devices/modbusDiDoConfig");
 const modbusBatchService = require("../devices/modbusBatchService");
+const {
+  ALLOWED_REGISTER_TYPES,
+  resolveDeviceConfig,
+  normalizeRegisterType,
+  deriveConnectivityUiStatus: deriveUiStatus,
+} = require("./modbusSnapshotHelpers");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
 const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
@@ -18,70 +23,6 @@ const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
 const logger = require("../../utils/logger");
 
 const statusLogger = logger.createLogger("hvacStatusService");
-
-const DEVICE_CFG_CACHE_TTL = 60_000;
-const deviceCfgCache = new Map();
-
-function getCachedDeviceCfg(deviceId) {
-  const hit = deviceCfgCache.get(String(deviceId));
-  if (!hit) return null;
-  if (Date.now() - hit.ts > DEVICE_CFG_CACHE_TTL) {
-    deviceCfgCache.delete(String(deviceId));
-    return null;
-  }
-  return hit.cfg || null;
-}
-
-function setCachedDeviceCfg(deviceId, cfg) {
-  deviceCfgCache.set(String(deviceId), { ts: Date.now(), cfg: cfg || null });
-}
-
-const ALLOWED_REGISTER_TYPES = new Set([
-  "coil",
-  "discrete",
-  "holding",
-  "input",
-]);
-
-function parseInlineModbus(modbus) {
-  if (!modbus || typeof modbus !== "object") return null;
-  const { host, port, unitId = 1 } = modbus;
-  if (!host || port === undefined || port === null) return null;
-  return { host, port: Number(port), unitId: Number(unitId) };
-}
-
-async function resolveDeviceConfig(deviceId, modbus) {
-  if (deviceId != null && deviceId !== "") {
-    try {
-      const cached = getCachedDeviceCfg(deviceId);
-      if (cached) return cached;
-
-      const { device } = await deviceService.getDeviceById(Number(deviceId));
-      const c = device.config || {};
-      if (c.host != null && c.port !== undefined && c.port !== null) {
-        const cfg = {
-          host: c.host,
-          port: Number(c.port),
-          unitId: Number(c.unitId ?? 1),
-        };
-        setCachedDeviceCfg(deviceId, cfg);
-        return cfg;
-      }
-    } catch (_) {
-      /* fallback inline */
-    }
-  }
-  return parseInlineModbus(modbus);
-}
-
-function normalizeRegisterType(pointDef) {
-  let registerType = String(pointDef.registerType || pointDef.type || "")
-    .toLowerCase()
-    .trim();
-  if (registerType === "di") registerType = "discrete";
-  if (registerType === "do") registerType = "coil";
-  return registerType;
-}
 
 async function readPrimaryBitPoint(modbus, cfgDeviceId) {
   const primary = pickPrimaryDiDoBitRead(modbus);
@@ -199,19 +140,6 @@ async function hasResolvableDeviceForPoints(
     if (c) return true;
   }
   return false;
-}
-
-function deriveUiStatus(raw, hadDeviceConfig, pointKeysConfigured) {
-  if (!hadDeviceConfig) return "offline";
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0)
-    return "unknown";
-
-  const anyRead = pointKeysConfigured.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
-  );
-  if (!anyRead) return "warning";
-  // HVAC 對齊 lighting：只做連線/可讀性健康判定，不在此層做 alarm 分級
-  return "normal";
 }
 
 async function syncConnectivityAlert(

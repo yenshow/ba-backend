@@ -65,7 +65,7 @@ async function initSchema() {
 
     const enums = [
       ["user_role", ["admin", "operator", "viewer"]],
-      ["user_status", ["active", "inactive", "suspended"]],
+      ["user_status", ["active", "inactive"]],
       ["device_status", ["active", "inactive", "error"]],
       ["register_type", ["coil", "discrete", "holding", "input"]],
       ["alert_type", ["offline", "error", "threshold"]],
@@ -129,6 +129,10 @@ async function initSchema() {
 
     // 為 users 表建立觸發器
     await createUpdatedAtTrigger(targetPool, "users");
+
+    await targetPool.query(
+      `UPDATE users SET status = 'inactive' WHERE status::text = 'suspended'`,
+    );
 
     // 建立索引
     await targetPool.query(`

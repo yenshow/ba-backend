@@ -3,8 +3,12 @@
  */
 
 const locationService = require("../location/locationService");
-const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
+const {
+  ALLOWED_REGISTER_TYPES,
+  resolveDeviceConfig,
+  normalizeRegisterType,
+} = require("./modbusSnapshotHelpers");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
 const {
@@ -30,71 +34,6 @@ const FIRE_STATUS_FIELD_DEFAULTS = {
   equipmentKind: "pump",
   viewCategory: "sprinkler",
 };
-
-// deviceId -> { ts, cfg }
-const DEVICE_CFG_CACHE_TTL = 60_000;
-const deviceCfgCache = new Map();
-
-function getCachedDeviceCfg(deviceId) {
-  const hit = deviceCfgCache.get(String(deviceId));
-  if (!hit) return null;
-  if (Date.now() - hit.ts > DEVICE_CFG_CACHE_TTL) {
-    deviceCfgCache.delete(String(deviceId));
-    return null;
-  }
-  return hit.cfg || null;
-}
-
-function setCachedDeviceCfg(deviceId, cfg) {
-  deviceCfgCache.set(String(deviceId), { ts: Date.now(), cfg: cfg || null });
-}
-
-const ALLOWED_REGISTER_TYPES = new Set([
-  "coil",
-  "discrete",
-  "holding",
-  "input",
-]);
-
-function parseInlineModbus(modbus) {
-  if (!modbus || typeof modbus !== "object") return null;
-  const { host, port, unitId = 1 } = modbus;
-  if (!host || port === undefined || port === null) return null;
-  return { host, port: Number(port), unitId: Number(unitId) };
-}
-
-async function resolveDeviceConfig(deviceId, modbus) {
-  if (deviceId != null && deviceId !== "") {
-    try {
-      const cached = getCachedDeviceCfg(deviceId);
-      if (cached) return cached;
-
-      const { device } = await deviceService.getDeviceById(Number(deviceId));
-      const c = device.config || {};
-      if (c.host != null && c.port !== undefined && c.port !== null) {
-        const cfg = {
-          host: c.host,
-          port: Number(c.port),
-          unitId: Number(c.unitId ?? 1),
-        };
-        setCachedDeviceCfg(deviceId, cfg);
-        return cfg;
-      }
-    } catch (_) {
-      /* 設備不存在或離線時改試 inline */
-    }
-  }
-  return parseInlineModbus(modbus);
-}
-
-function normalizeRegisterType(pointDef) {
-  let registerType = String(pointDef.registerType || pointDef.type || "")
-    .toLowerCase()
-    .trim();
-  if (registerType === "di") registerType = "discrete";
-  if (registerType === "do") registerType = "coil";
-  return registerType;
-}
 
 /**
  * 讀取 statusPoints 物件中每個鍵對應的點位（可每點獨立 deviceId），失敗的鍵略過

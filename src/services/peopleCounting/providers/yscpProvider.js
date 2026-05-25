@@ -500,10 +500,8 @@ async function getUnitPersonnel(unitId, siteId, config) {
     } else if (lastExitRecord) {
       exitTimeStr = formatTime(new Date(lastExitRecord.swip_card_rev_time));
     }
-    let isPresent = false;
-    if (lastEntryRecord && isTodayEntry) {
-      isPresent = !exitTimeStr;
-    }
+    const isInside =
+      !!(lastEntryRecord && isTodayEntry && !exitTimeStr);
     return {
       id: person.id,
       employeeId:
@@ -512,8 +510,7 @@ async function getUnitPersonnel(unitId, siteId, config) {
           : "",
       name: person.full_name || "",
       photoUrl,
-      isInside: isPresent,
-      isPresent,
+      isInside,
       lastEntryTime: lastEntryRecord
         ? lastEntryRecord.swip_card_rev_time
         : null,

@@ -7,8 +7,11 @@
  */
 
 const db = require("../../database/db");
-const deviceService = require("../devices/deviceService");
 const modbusBatchService = require("../devices/modbusBatchService");
+const {
+  resolveDeviceConfig,
+  deriveConnectivityUiStatus: deriveUiStatus,
+} = require("./modbusSnapshotHelpers");
 const { collectLightingDiDoReadSpecs } = require("../devices/modbusDiDoConfig");
 const systemAlert = require("../alerts/systemAlertHelper");
 const alertService = require("../alerts/alertService");
@@ -17,72 +20,6 @@ const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
 const logger = require("../../utils/logger");
 
 const statusLogger = logger.createLogger("lightingStatusService");
-
-const DEVICE_CFG_CACHE_TTL = 60_000;
-const deviceCfgCache = new Map();
-
-function getCachedDeviceCfg(deviceId) {
-  const hit = deviceCfgCache.get(String(deviceId));
-  if (!hit) return null;
-  if (Date.now() - hit.ts > DEVICE_CFG_CACHE_TTL) {
-    deviceCfgCache.delete(String(deviceId));
-    return null;
-  }
-  return hit.cfg || null;
-}
-
-function setCachedDeviceCfg(deviceId, cfg) {
-  deviceCfgCache.set(String(deviceId), { ts: Date.now(), cfg: cfg || null });
-}
-
-function parseInlineModbus(modbus) {
-  if (!modbus || typeof modbus !== "object") return null;
-  const { host, port, unitId = 1 } = modbus;
-  if (!host || port === undefined || port === null) return null;
-  return { host, port: Number(port), unitId: Number(unitId) };
-}
-
-async function resolveDeviceConfig(deviceId, modbus) {
-  if (deviceId != null && deviceId !== "") {
-    try {
-      const cached = getCachedDeviceCfg(deviceId);
-      if (cached) return cached;
-
-      const { device } = await deviceService.getDeviceById(Number(deviceId));
-      const c = device?.config || {};
-      if (c.host != null && c.port !== undefined && c.port !== null) {
-        const cfg = {
-          host: c.host,
-          port: Number(c.port),
-          unitId: Number(c.unitId ?? 1),
-        };
-        setCachedDeviceCfg(deviceId, cfg);
-        return cfg;
-      }
-    } catch (err) {
-      statusLogger.debug?.("resolveDeviceConfig: device lookup failed", {
-        deviceId,
-        error: err?.message || String(err || ""),
-      });
-    }
-  }
-  return parseInlineModbus(modbus);
-}
-
-/**
- * 與 hvacStatusService 一致：只做連線／可讀性健康判定（不在此層做 alarm 分級）
- */
-function deriveUiStatus(raw, hadDeviceConfig, pointKeysConfigured) {
-  if (!hadDeviceConfig) return "offline";
-  if (!pointKeysConfigured || pointKeysConfigured.length === 0)
-    return "unknown";
-
-  const anyRead = pointKeysConfigured.some(
-    (k) => raw[k] !== undefined && raw[k] !== null,
-  );
-  if (!anyRead) return "warning";
-  return "normal";
-}
 
 function mergeLightingRawFromBitResults(specs, results) {
   const raw = {};
@@ -204,7 +141,9 @@ async function buildLightingSnapshotItem(row, options = {}) {
         readError,
       );
     }
-    const hadCfg = Boolean(await resolveDeviceConfig(deviceId, modbusConfigRaw));
+    const hadCfg = Boolean(
+      await resolveDeviceConfig(deviceId, modbusConfigRaw, { logger: statusLogger }),
+    );
     return {
       ...baseItem,
       error: readError,
@@ -212,7 +151,9 @@ async function buildLightingSnapshotItem(row, options = {}) {
     };
   }
 
-  const deviceConfig = await resolveDeviceConfig(deviceId, modbusConfigRaw);
+  const deviceConfig = await resolveDeviceConfig(deviceId, modbusConfigRaw, {
+    logger: statusLogger,
+  });
   const hadDeviceConfig = Boolean(deviceConfig);
   if (!deviceConfig) {
     const readError = "配置不完整";
