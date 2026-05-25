@@ -43,12 +43,18 @@ function parseInlineModbus(modbus) {
  */
 async function resolveDeviceConfig(deviceId, modbus, options = {}) {
   const log = options.logger;
-  if (deviceId != null && deviceId !== "") {
+  const numericId = Number(deviceId);
+  if (
+    deviceId != null &&
+    deviceId !== "" &&
+    Number.isFinite(numericId) &&
+    numericId > 0
+  ) {
     try {
-      const cached = getCachedDeviceCfg(deviceId);
+      const cached = getCachedDeviceCfg(numericId);
       if (cached) return cached;
 
-      const { device } = await deviceService.getDeviceById(Number(deviceId));
+      const { device } = await deviceService.getDeviceById(numericId);
       const c = device?.config || {};
       if (c.host != null && c.port !== undefined && c.port !== null) {
         const cfg = {
@@ -56,12 +62,12 @@ async function resolveDeviceConfig(deviceId, modbus, options = {}) {
           port: Number(c.port),
           unitId: Number(c.unitId ?? 1),
         };
-        setCachedDeviceCfg(deviceId, cfg);
+        setCachedDeviceCfg(numericId, cfg);
         return cfg;
       }
     } catch (err) {
       log?.debug?.("resolveDeviceConfig: device lookup failed", {
-        deviceId,
+        deviceId: numericId,
         error: err?.message || String(err || ""),
       });
     }

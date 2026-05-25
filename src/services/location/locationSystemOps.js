@@ -13,6 +13,7 @@ const {
   assignFlatControllerFields,
   deviceIdsFromApiSystemConfig,
   deviceIdsFromDbSystemConfig,
+  stripLegacyModbusDeviceId,
   deleteEmptyZoneIfNeeded,
 } = shared;
 
@@ -73,7 +74,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
       };
 
     case "hvac":
@@ -81,7 +82,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         status_points: config.statusPoints || {},
       };
 
@@ -90,7 +91,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         equipment_kind: config.equipmentKind || "pump",
         view_category:
           config.viewCategory === undefined || config.viewCategory === null
@@ -104,7 +105,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         equipment_kind: config.equipmentKind || "pump",
         view_category:
           config.viewCategory === undefined || config.viewCategory === null
@@ -118,7 +119,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         equipment_kind: config.equipmentKind || "generator",
         view_category:
           config.viewCategory === undefined || config.viewCategory === null
@@ -132,7 +133,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         equipment_kind: config.equipmentKind || "pump",
         view_category:
           config.viewCategory === undefined || config.viewCategory === null
@@ -146,7 +147,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         equipment_kind: config.equipmentKind || "pump",
         view_category:
           config.viewCategory === undefined || config.viewCategory === null
@@ -160,7 +161,7 @@ function buildSystemConfig(systemType, config) {
         device_ids: deviceIdsFromApiSystemConfig(config),
         location_x: config.location?.x || 50.0,
         location_y: config.location?.y || 50.0,
-        modbus_config: config.modbus || {},
+        modbus_config: stripLegacyModbusDeviceId(config.modbus) || {},
         equipment_kind: config.equipmentKind || "detector",
         view_category:
           config.viewCategory === undefined || config.viewCategory === null

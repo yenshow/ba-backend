@@ -20,6 +20,82 @@ async function getEnvironmentLocationIds() {
  * 單次 SQL 聚合（location_id + 每個 numeric key 平均），並一次性 upsert
  * - data: JSONB（含 derived 指標 aqi/heatIndex；依「平均值」語意落地）
  */
+const BUCKET_TRUNC = {
+  hour: "hour",
+  day: "day",
+  month: "month",
+};
+
+function mapRowsToAggregatedReadings(locationId, bucket, rows) {
+  return (rows || []).map((r) => {
+    const data =
+      typeof r.data === "object" ? r.data : r.data ? JSON.parse(r.data) : {};
+    const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+    return {
+      id: `agg_${locationId}_${bucket}_${ts.getTime()}`,
+      locationId: String(locationId),
+      timestamp: ts.toISOString(),
+      data,
+      createdAt: ts.toISOString(),
+    };
+  });
+}
+
+/**
+ * 由 raw 即時計算彙總列（不寫入 aggregated 表；供 API fallback 與查詢）
+ */
+async function computeAggregatedReadingsFromRaw(
+  locationId,
+  bucketType,
+  startTime,
+  endTime,
+) {
+  const trunc = BUCKET_TRUNC[bucketType];
+  if (!trunc) return [];
+
+  const locId = parseInt(locationId, 10);
+  if (!Number.isFinite(locId)) return [];
+
+  const start = startTime ? new Date(startTime) : null;
+  const end = endTime ? new Date(endTime) : null;
+  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return [];
+  }
+
+  const rows = await db.query(
+    `
+      WITH src AS (
+        SELECT
+          er.location_id,
+          date_trunc($4, er.recorded_at) AS bucket_at,
+          e.key AS k,
+          AVG((e.value)::numeric) AS avg_value
+        FROM environment_readings er
+        CROSS JOIN LATERAL jsonb_each_text(er.data) AS e(key, value)
+        WHERE er.location_id = $1
+          AND er.recorded_at >= $2
+          AND er.recorded_at < $3
+          AND (e.value ~ '^-?\\d+(\\.\\d+)?$')
+        GROUP BY er.location_id, date_trunc($4, er.recorded_at), e.key
+      ),
+      agg AS (
+        SELECT
+          location_id,
+          bucket_at,
+          jsonb_object_agg(k, to_jsonb(ROUND(avg_value::numeric, 1))) AS data
+        FROM src
+        GROUP BY location_id, bucket_at
+      )
+      SELECT bucket_at AS timestamp, data
+      FROM agg
+      ORDER BY bucket_at ASC
+    `,
+    [locId, start, end, trunc],
+  );
+
+  return mapRowsToAggregatedReadings(locationId, bucketType, rows);
+}
+
 async function upsertAggregatedBySql({ locationIds, bucketType, bucketAt, periodEnd }) {
   const ids = Array.isArray(locationIds)
     ? locationIds.map((x) => Number(x)).filter((n) => Number.isFinite(n))
@@ -74,6 +150,46 @@ async function computeAndSaveHour() {
   const bucketAt = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours() - 1, 0, 0, 0));
   const periodEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0, 0));
   await computeAndSaveBucket("hour", bucketAt, periodEnd);
+  await upsertPartialCurrentHour();
+}
+
+/**
+ * 補寫今日 00:00 UTC 至目前為止的每個「已完成」小時 hour 桶
+ */
+async function backfillTodayHours() {
+  const locationIds = await getEnvironmentLocationIds();
+  if (locationIds.length === 0) return;
+
+  const now = new Date();
+  const todayStart = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
+  );
+  const currentHourStart = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0, 0),
+  );
+
+  for (
+    let bucketAt = new Date(todayStart);
+    bucketAt.getTime() < currentHourStart.getTime();
+    bucketAt = new Date(bucketAt.getTime() + 60 * 60 * 1000)
+  ) {
+    const periodEnd = new Date(bucketAt.getTime() + 60 * 60 * 1000);
+    await upsertAggregatedBySql({
+      locationIds,
+      bucketType: "hour",
+      bucketAt,
+      periodEnd,
+    });
+  }
+}
+
+/** 寫入進行中 UTC 小時的 partial hour 桶（供「日」趨勢顯示當前時段） */
+async function upsertPartialCurrentHour() {
+  const now = new Date();
+  const bucketAt = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0, 0),
+  );
+  await computeAndSaveBucket("hour", bucketAt, now);
 }
 
 async function computeAndSaveDay() {
@@ -136,10 +252,13 @@ async function computeAndSaveDayAndMonth() {
 
 module.exports = {
   getEnvironmentLocationIds,
+  computeAggregatedReadingsFromRaw,
   computeAndSaveHour,
   computeAndSaveDay,
   computeAndSaveDayByOffset,
   backfillRecentDays,
+  backfillTodayHours,
+  upsertPartialCurrentHour,
   computeAndSaveMonth,
   computeAndSaveDayAndMonth,
 };

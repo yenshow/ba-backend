@@ -60,6 +60,13 @@ function validateName(name, fieldName = "名稱") {
   return name.trim();
 }
 
+/** modbus_config 僅保留點位／連線；設備 ID 以 `device_ids` / API `deviceId` 為 SSOT */
+function stripLegacyModbusDeviceId(modbus) {
+  if (!modbus || typeof modbus !== "object") return undefined;
+  const { deviceId: _legacy, ...rest } = modbus;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 /** DB SSOT：`system_config.device_ids`（不再讀 `device_id` / `deviceId`） */
 function deviceIdsFromDbSystemConfig(config) {
   if (!config || typeof config !== "object") return [];
@@ -149,10 +156,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
         },
       };
     }
@@ -168,10 +172,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           statusPoints:
             spHvac &&
             typeof spHvac === "object" &&
@@ -193,10 +194,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           equipmentKind: config.equipment_kind || "pump",
           viewCategory:
             config.view_category === null || config.view_category === undefined
@@ -221,10 +219,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           equipmentKind: config.equipment_kind || "pump",
           viewCategory:
             config.view_category === null || config.view_category === undefined
@@ -249,10 +244,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           equipmentKind: config.equipment_kind || "generator",
           viewCategory:
             config.view_category === null || config.view_category === undefined
@@ -277,10 +269,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           equipmentKind: config.equipment_kind || "pump",
           viewCategory:
             config.view_category === null || config.view_category === undefined
@@ -307,10 +296,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           equipmentKind: config.equipment_kind || "pump",
           viewCategory:
             config.view_category === null || config.view_category === undefined
@@ -335,10 +321,7 @@ function formatSystem(system) {
             x: config.location_x || 50.0,
             y: config.location_y || 50.0,
           },
-          modbus:
-            config.modbus_config && Object.keys(config.modbus_config).length > 0
-              ? config.modbus_config
-              : undefined,
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
           equipmentKind: config.equipment_kind || "detector",
           viewCategory:
             config.view_category === null || config.view_category === undefined
@@ -604,6 +587,7 @@ module.exports = {
   handleUniqueConstraintError,
   assertValidSystemType,
   validateName,
+  stripLegacyModbusDeviceId,
   deviceIdsFromDbSystemConfig,
   deviceIdsFromApiSystemConfig,
   assignFlatSystemDeviceFields,

@@ -297,15 +297,38 @@ async function startServer() {
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
 
     // 環境彙總：每小時寫入「上一小時」hour（日／月由備份日執行）
-    const runHourAgg = () =>
-      environmentAggregationService
-        .computeAndSaveHour()
-        .catch((err) =>
-          serverLogger.warn("環境彙總 hour 執行失敗", { error: err.message }),
-        );
-    setImmediate(runHourAgg);
+    const runHourAgg = async () => {
+      try {
+        await environmentAggregationService.computeAndSaveHour();
+      } catch (err) {
+        serverLogger.warn("環境彙總 hour 執行失敗", { error: err.message });
+      }
+    };
+    const runTodayHourBackfill = async () => {
+      try {
+        await environmentAggregationService.backfillTodayHours();
+        serverLogger.info("環境彙總 hour 今日補寫完成");
+      } catch (err) {
+        serverLogger.warn("環境彙總 hour 今日補寫失敗", { error: err.message });
+      }
+    };
+    setImmediate(async () => {
+      await runHourAgg();
+      await runTodayHourBackfill();
+    });
     global.__envHourAggIntervalId = setInterval(runHourAgg, 60 * 60 * 1000);
-    serverLogger.info("環境彙總排程已啟用（每小時）");
+    global.__envPartialHourAggIntervalId = setInterval(
+      () =>
+        environmentAggregationService
+          .upsertPartialCurrentHour()
+          .catch((err) =>
+            serverLogger.warn("環境彙總 partial hour 失敗", {
+              error: err.message,
+            }),
+          ),
+      15 * 60 * 1000,
+    );
+    serverLogger.info("環境彙總排程已啟用（每小時 + 每 15 分鐘 partial hour）");
 
     // 環境彙總（日）：獨立於備份排程，避免備份停擺導致 week/month 趨勢缺洞
     // - 啟動時先補寫最近 7 天（不含今日）

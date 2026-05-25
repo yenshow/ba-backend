@@ -1,11 +1,26 @@
 const db = require("../../database/db");
 const locationService = require("../location/locationService");
+const environmentAggregationService = require("./environmentAggregationService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const { rethrowIfApiError } = require("../../utils/apiErrorMeta");
 
 const envServiceLogger = logger.createLogger("environmentService");
+
+const mapAggregatedRows = (locationId, bucket, rows) =>
+  (rows || []).map((r) => {
+    const data =
+      typeof r.data === "object" ? r.data : r.data ? JSON.parse(r.data) : {};
+    const ts = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+    return {
+      id: `agg_${locationId}_${bucket}_${ts.getTime()}`,
+      locationId: String(locationId),
+      timestamp: ts.toISOString(),
+      data,
+      createdAt: ts.toISOString(),
+    };
+  });
 
 async function getZones() {
   try {
@@ -216,20 +231,33 @@ async function getReadingsAggregated(locationId, options = {}) {
     }
     query += ` ORDER BY bucket_at ASC`;
     const rows = await db.query(query, params);
+    let readings = mapAggregatedRows(locationId, bucket, rows);
+    let source = "aggregated";
+
+    if (
+      readings.length === 0 &&
+      startTime &&
+      endTime
+    ) {
+      const computed =
+        await environmentAggregationService.computeAggregatedReadingsFromRaw(
+          locationId,
+          bucket,
+          startTime,
+          endTime,
+        );
+      if (computed.length > 0) {
+        readings = computed;
+        source = "raw_computed";
+      }
+    }
+
     return {
-      readings: (rows || []).map((r) => {
-        const data =
-          typeof r.data === "object" ? r.data : r.data ? JSON.parse(r.data) : {};
-        const ts =
-          r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
-        return {
-          id: `agg_${locationId}_${bucket}_${ts.getTime()}`,
-          locationId: String(locationId),
-          timestamp: ts.toISOString(),
-          data,
-          createdAt: ts.toISOString(),
-        };
-      }),
+      readings,
+      meta: {
+        source,
+        count: readings.length,
+      },
     };
   } catch (error) {
     rethrowIfApiError(error);
