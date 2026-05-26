@@ -18,6 +18,21 @@ const {
 } = shared;
 
 const locationLogger = logger.createLogger("locationSystemOps");
+const {
+  validateVehicleAccessConfig,
+} = require("../vehicleAccess/vehicleAccessValidation");
+const {
+  assertPeopleCountingIsapiCamerasAvailable,
+  ensureIntArray,
+} = require("./cameraDeviceConflict");
+
+async function validatePeopleCountingIsapiIfNeeded(systemConfig, locationId) {
+  if ((systemConfig?.data_source || "yscp") !== "isapi_camera") return;
+  await assertPeopleCountingIsapiCamerasAvailable(
+    ensureIntArray(systemConfig.camera_device_ids),
+    locationId != null ? Number(locationId) : null,
+  );
+}
 
 function peopleCountingRowConfigToMergeInput(raw) {
   if (!raw || typeof raw !== "object") return {};
@@ -208,11 +223,32 @@ function buildSystemConfig(systemType, config) {
       };
     }
 
-    case "vehicle_access":
+    case "vehicle_access": {
+      const entryCam = Array.isArray(config.entryCameraDeviceIds)
+        ? config.entryCameraDeviceIds
+            .map((id) => Number(id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : [];
+      const exitCam = Array.isArray(config.exitCameraDeviceIds)
+        ? config.exitCameraDeviceIds
+            .map((id) => Number(id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : [];
+      const ch =
+        config.cameraChannelId != null &&
+        Number.isFinite(Number(config.cameraChannelId))
+          ? Math.trunc(Number(config.cameraChannelId))
+          : 1;
       return {
+        data_source:
+          config.dataSource === "isapi_camera" ? "isapi_camera" : "yscp",
         entry_lane_id: config.entryLaneId ?? null,
         exit_lane_id: config.exitLaneId ?? null,
+        entry_camera_device_ids: entryCam,
+        exit_camera_device_ids: exitCam,
+        camera_channel_id: ch,
       };
+    }
 
     default:
       return config || {};
@@ -321,6 +357,11 @@ async function createSystem(query, locationId, system) {
 
   const systemConfig = buildSystemConfig(systemType, config);
 
+  if (systemType === "vehicle_access") {
+    await validateVehicleAccessConfig(systemConfig, locationId);
+  }
+  await validatePeopleCountingIsapiIfNeeded(systemConfig, locationId);
+
   // 授權/Quota（做法 B）：controller 類系統的用量以 location_systems 綁定計數
   await assertSystemLicensed(systemType);
   await assertControllerQuotaWithinLimit({
@@ -337,6 +378,10 @@ async function createSystem(query, locationId, system) {
      RETURNING id`,
     [locationId, systemType, JSON.stringify(systemConfig)],
   );
+
+  if (systemType === "vehicle_access") {
+    require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+  }
 
   return result[0].id;
 }
@@ -390,6 +435,18 @@ async function updateSystem(query, systemId, system) {
 
   const systemConfig = buildSystemConfig(targetSystemType, effectiveConfig);
 
+  const locRows = await query(
+    "SELECT location_id FROM location_systems WHERE id = $1",
+    [systemId],
+  );
+  const vaLocationId =
+    locRows[0]?.location_id != null ? Number(locRows[0].location_id) : null;
+
+  if (targetSystemType === "vehicle_access") {
+    await validateVehicleAccessConfig(systemConfig, vaLocationId);
+  }
+  await validatePeopleCountingIsapiIfNeeded(systemConfig, vaLocationId);
+
   await assertSystemLicensed(targetSystemType);
   await assertControllerQuotaWithinLimit({
     query,
@@ -408,6 +465,10 @@ async function updateSystem(query, systemId, system) {
      WHERE id = $3`,
     [targetSystemType, JSON.stringify(systemConfig), systemId],
   );
+
+  if (targetSystemType === "vehicle_access") {
+    require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+  }
 }
 
 /**
@@ -435,6 +496,9 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
       accessControlGroups,
       entryLaneId,
       exitLaneId,
+      entryCameraDeviceIds,
+      exitCameraDeviceIds,
+      cameraChannelId,
       config,
       equipmentKind,
       viewCategory,
@@ -491,6 +555,13 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
         case "vehicle_access":
           if (entryLaneId !== undefined) systemConfig.entryLaneId = entryLaneId;
           if (exitLaneId !== undefined) systemConfig.exitLaneId = exitLaneId;
+          if (dataSource !== undefined) systemConfig.dataSource = dataSource;
+          if (entryCameraDeviceIds !== undefined)
+            systemConfig.entryCameraDeviceIds = entryCameraDeviceIds;
+          if (exitCameraDeviceIds !== undefined)
+            systemConfig.exitCameraDeviceIds = exitCameraDeviceIds;
+          if (cameraChannelId !== undefined)
+            systemConfig.cameraChannelId = cameraChannelId;
           break;
       }
 

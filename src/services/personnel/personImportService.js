@@ -64,6 +64,16 @@ const getValidEndFromRow = (row) =>
 const getPasswordFromRow = (row) =>
   pick(row, ["門禁密碼", "password", "密碼"]);
 const getCardNoFromRow = (row) => pick(row, ["卡號", "cardNo", "card_no"]);
+const getLicensePlatesFromRow = (row) =>
+  pick(row, ["車牌", "licensePlates", "license_plates", "plateNumber"]);
+
+function parseLicensePlatesFromCell(raw) {
+  if (raw == null || String(raw).trim() === "") return [];
+  return String(raw)
+    .split(/[,;，、\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 /**
  * 批次匯入（Excel + 選填圖片 zip）
@@ -107,6 +117,8 @@ async function executeBatchImport({
     const validEndRaw = getValidEndFromRow(row);
     const passwordRaw = getPasswordFromRow(row);
     const cardNoRaw = getCardNoFromRow(row);
+    const licensePlatesRaw = getLicensePlatesFromRow(row);
+    const licensePlates = parseLicensePlatesFromCell(licensePlatesRaw);
 
     if (!employeeNo) {
       errors.push({ row: i + 2, message: "員工編號不能為空" });
@@ -124,11 +136,13 @@ async function executeBatchImport({
       const person = isUpdate
         ? await personnelService.updatePerson(existing.id, {
             fullName,
+            ...(licensePlates.length > 0 ? { licensePlates } : {}),
           })
         : await personnelService.createPerson(
             {
               employeeNo,
               fullName,
+              ...(licensePlates.length > 0 ? { licensePlates } : {}),
             },
             createdBy,
           );
@@ -259,6 +273,7 @@ function getImportTemplateXlsxBuffer() {
       有效結束日: "2030-12-31",
       門禁密碼: "1234",
       卡號: "0000123456",
+      車牌: "ABC1234,XYZ5678",
     },
     {
       工號: "A0002",
@@ -267,12 +282,13 @@ function getImportTemplateXlsxBuffer() {
       有效結束日: "",
       門禁密碼: "",
       卡號: "",
+      車牌: "",
     },
   ];
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows, {
-    header: ["工號", "姓名", "有效起始日", "有效結束日", "門禁密碼", "卡號"],
+    header: ["工號", "姓名", "有效起始日", "有效結束日", "門禁密碼", "卡號", "車牌"],
   });
   XLSX.utils.book_append_sheet(wb, ws, "template");
 

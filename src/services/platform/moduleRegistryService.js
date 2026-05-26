@@ -1,5 +1,6 @@
 const config = require("../../config");
-const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
+const yscpPeopleFeature = require("../../utils/yscpPeopleCountingFeature");
+const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 
 /**
  * 模組 Registry（SSOT）
@@ -255,7 +256,8 @@ const getRegistry = () => {
     profile,
     modules: getModulesForProfile(profile),
     serverFeatures: {
-      enableYscpPeopleCounting: yscpFeature.isEnabled(),
+      enableYscpPeopleCounting: yscpPeopleFeature.isEnabled(),
+      enableYscpVehicleAccess: yscpVehicleFeature.isEnabled(),
     },
   };
 };

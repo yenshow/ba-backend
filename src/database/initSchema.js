@@ -659,7 +659,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 車輛進出過車記錄快取表（同步自外部 vehiclebiz.passageway_log_data，供備份）
+    // 車輛進出過車記錄（YSCP 同步 + ISAPI ANPR 落地）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS vehicle_passageway_logs (
         id BIGSERIAL PRIMARY KEY,
@@ -676,6 +676,12 @@ async function initSchema() {
         zone_name VARCHAR(255),
         location_name VARCHAR(255),
         location_id INTEGER,
+        data_source VARCHAR(32) NOT NULL DEFAULT 'yscp',
+        device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+        anpr_line VARCHAR(64),
+        picture_path TEXT,
+        file_count INTEGER NOT NULL DEFAULT 0,
+        payload JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -686,6 +692,55 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_location
       ON vehicle_passageway_logs(location_id);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_location_time
+      ON vehicle_passageway_logs(location_id, trigger_time DESC);
+    `);
+    await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'data_source'
+        ) THEN
+          ALTER TABLE vehicle_passageway_logs ADD COLUMN data_source VARCHAR(32) NOT NULL DEFAULT 'yscp';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'device_id'
+        ) THEN
+          ALTER TABLE vehicle_passageway_logs ADD COLUMN device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'anpr_line'
+        ) THEN
+          ALTER TABLE vehicle_passageway_logs ADD COLUMN anpr_line VARCHAR(64);
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'picture_path'
+        ) THEN
+          ALTER TABLE vehicle_passageway_logs ADD COLUMN picture_path TEXT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'file_count'
+        ) THEN
+          ALTER TABLE vehicle_passageway_logs ADD COLUMN file_count INTEGER NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'payload'
+        ) THEN
+          ALTER TABLE vehicle_passageway_logs ADD COLUMN payload JSONB;
+        END IF;
+      END $BODY$;
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_data_source
+      ON vehicle_passageway_logs(data_source);
     `);
     schemaLogger.info("vehicle_passageway_logs 表已建立", {
       module: "initSchema",
@@ -1053,6 +1108,25 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_persons_employee_no ON persons(employee_no);
     `);
     schemaLogger.info("persons 表已建立", { module: "initSchema" });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_license_plates (
+        id SERIAL PRIMARY KEY,
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        plate_number VARCHAR(32) NOT NULL,
+        plate_normalized VARCHAR(32) NOT NULL,
+        is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (person_id, plate_normalized)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "person_license_plates");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_license_plates_normalized
+      ON person_license_plates(plate_normalized);
+    `);
+    schemaLogger.info("person_license_plates 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_location_access (

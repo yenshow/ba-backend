@@ -1,32 +1,29 @@
 /**
- * ISAPI subscribeEvent Probe（用於實機測試事件串流）
+ * ISAPI subscribeEvent 探測（對齊後端佈防：預設 eventMode=all）
  *
- * 用法（PowerShell）：
- *  - node .\scripts\isapiSubscribeProde.js
+ * 用法：
+ *   set ISAPI_PASSWORD=你的密碼
+ *   node .\scripts\isapiSubscribeProde.js
  *
- * 可用環境變數覆蓋（預設為寫死值，方便直接測）：
- *  - ISAPI_HOST=192.168.2.138
- *  - ISAPI_PORT=80
- *  - ISAPI_USERNAME=admin
- *  - ISAPI_PASSWORD=your_password
- *  - ISAPI_CHANNEL_ID=1
- *  - ISAPI_EVENT_TYPES=PeopleCounting,ANPR  （逗號分隔；留空則只訂閱 PeopleCounting）
- *  - ISAPI_HEARTBEAT=10
- *  - ISAPI_MAX_PARTS=20
- *  - ISAPI_EXIT_AFTER_MS=60000
+ * 環境變數：
+ *   ISAPI_HOST, ISAPI_PORT, ISAPI_USERNAME, ISAPI_PASSWORD（必填）
+ *   ISAPI_SUBSCRIBE_MODE=all|list  （預設 all，與門禁／車輛 isapiVehicleSubscribeService 相同）
+ *   ISAPI_CHANNEL_ID, ISAPI_EVENT_TYPES（僅 list 模式）, ISAPI_HEARTBEAT
+ *   ISAPI_MAX_PARTS, ISAPI_EXIT_AFTER_MS
  */
 
 /* eslint-disable no-console */
 
 const { createIsapiClient } = require("../src/services/accessControl/isapiClient");
-const util = require("util");
-const stream = require("stream");
 
 const CRLF = Buffer.from("\r\n");
 const CRLFCRLF = Buffer.from("\r\n\r\n");
 
-// 依需求可「寫死帳密」直接測試（請勿提交真實密碼到公開 repo）
-const DEFAULT_PASSWORD = "Aa83124007";
+const SUBSCRIBE_XML_ALL = `<?xml version="1.0" encoding="UTF-8"?>
+<SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+    <heartbeat>30</heartbeat>
+    <eventMode>all</eventMode>
+</SubscribeEvent>`;
 
 const ensureInt = (v) => {
   const n = Number(v);
@@ -39,10 +36,13 @@ const parseCsv = (s) =>
     .map((x) => x.trim())
     .filter(Boolean);
 
-const buildSubscribeXml = ({ channelId, eventTypes, heartbeat }) => {
+const buildSubscribeXmlList = ({ channelId, eventTypes, heartbeat }) => {
   const ch = ensureInt(channelId) ?? 1;
   const hb = ensureInt(heartbeat) ?? 10;
-  const types = Array.isArray(eventTypes) && eventTypes.length > 0 ? eventTypes : ["PeopleCounting"];
+  const types =
+    Array.isArray(eventTypes) && eventTypes.length > 0
+      ? eventTypes
+      : ["PeopleCounting"];
   const eventsXml = types
     .map(
       (t) => `
@@ -73,53 +73,37 @@ const toPreviewText = (buf, maxLen = 800) => {
 const extractAxiosErrorDetails = (err) => {
   const status = err?.response?.status;
   const statusText = err?.response?.statusText;
-  const headers = err?.response?.headers;
   const data = err?.response?.data;
-
-  const tryExtractBufferedBody = (maybeStream) => {
-    if (!maybeStream) return null;
-    const bufList = maybeStream?._readableState?.buffer;
-    if (!Array.isArray(bufList) || bufList.length === 0) return null;
-
-    // Node 的 internal buffer 可能是 Buffer 或 { data: Buffer }
-    const first = bufList[0];
-    if (Buffer.isBuffer(first)) return first;
-    if (Buffer.isBuffer(first?.data)) return first.data;
-    return null;
-  };
-
-  let bodyPreview = "";
-  if (data != null) {
-    if (Buffer.isBuffer(data)) bodyPreview = toPreviewText(data);
-    else if (typeof data === "string") bodyPreview = toPreviewText(data);
-    else {
-      try {
-        // 若是 http.IncomingMessage/Readable，優先從 buffer 抽出內容（通常就是 XML 錯誤回應）
-        const buffered = tryExtractBufferedBody(data);
-        if (buffered) bodyPreview = toPreviewText(buffered);
-        else if (data instanceof stream.Readable) bodyPreview = "(response stream; no buffered body)";
-        else bodyPreview = toPreviewText(JSON.stringify(data));
-      } catch (_e) {
-        const buffered = tryExtractBufferedBody(data);
-        if (buffered) bodyPreview = toPreviewText(buffered);
-        else bodyPreview = util.inspect(data, { depth: 2, maxArrayLength: 20 });
-      }
-    }
+  let bodyPreview = null;
+  if (Buffer.isBuffer(data)) bodyPreview = toPreviewText(data, 1200);
+  else if (typeof data === "string") bodyPreview = toPreviewText(Buffer.from(data), 1200);
+  else if (data && typeof data.pipe === "function") {
+    try {
+      const chunks = [];
+      data.on("data", (c) => chunks.push(c));
+      data.on("end", () => {
+        bodyPreview = toPreviewText(Buffer.concat(chunks), 1200);
+      });
+    } catch (_e) {}
   }
-
-  return { status, statusText, headers, bodyPreview };
+  return { status, statusText, bodyPreview };
 };
 
-const parseContentType = (headerStr) => {
-  const m = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
-  return (m?.[1] || "").trim();
-};
+const parseContentType = (headerStr) =>
+  (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
 
-const consumeMultipartStream = async ({ stream, contentType, maxParts, onPart }) => {
-  const boundaryMatch = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
-  const rawBoundary = boundaryMatch ? (boundaryMatch[1] || boundaryMatch[2]).trim() : null;
+const consumeMultipartStream = async ({
+  stream: inputStream,
+  contentType,
+  maxParts,
+  onPart,
+}) => {
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
+  const rawBoundary = boundaryMatch
+    ? (boundaryMatch[1] || boundaryMatch[2]).trim()
+    : null;
   if (!rawBoundary) {
-    throw new Error(`無法從 content-type 解析 boundary：${String(contentType || "")}`);
+    return { parts: 0, ended: "no-boundary" };
   }
 
   const boundary = rawBoundary.replace(/^["']|["']$/g, "");
@@ -128,62 +112,57 @@ const consumeMultipartStream = async ({ stream, contentType, maxParts, onPart })
   let buffer = Buffer.alloc(0);
   let partCount = 0;
 
-  const tryConsumeOnePart = () => {
-    if (maxParts != null && partCount >= maxParts) return false;
+  const tryConsumeOnePart = async () => {
     if (buffer.length === 0) return false;
-
-    let start = buffer.indexOf(sep);
-    if (start === -1) return false;
-
-    const afterStart = start + sep.length;
-    if (buffer.length < afterStart + 2) return false;
-    if (buffer[afterStart] === 0x2d && buffer[afterStart + 1] === 0x2d) {
-      return false;
+    let start = buffer.indexOf(sepWithCRLF);
+    let skip = sepWithCRLF.length;
+    if (start === -1) {
+      if (buffer.length >= sep.length && buffer.slice(0, sep.length).equals(sep)) {
+        start = 0;
+        skip = sep.length;
+      } else return false;
+    } else if (start > 0) {
+      buffer = buffer.slice(start);
+      skip = sepWithCRLF.length;
     }
-
-    // 跳過起始 boundary + CRLF
-    let pos = afterStart;
-    if (buffer[pos] === 0x0d && buffer[pos + 1] === 0x0a) pos += 2;
-
-    const headerEnd = buffer.indexOf(CRLFCRLF, pos);
-    if (headerEnd === -1) return false;
-    const headerStr = buffer.slice(pos, headerEnd).toString("utf8");
-
-    const bodyStart = headerEnd + CRLFCRLF.length;
+    const afterBoundary = buffer.slice(skip);
+    const headEnd = afterBoundary.indexOf(CRLFCRLF);
+    if (headEnd === -1) return false;
+    const headerStr = afterBoundary.slice(0, headEnd).toString("utf8");
+    const bodyStart = skip + headEnd + CRLFCRLF.length;
     let next = buffer.indexOf(sepWithCRLF, bodyStart);
-    if (next === -1) {
-      next = buffer.indexOf(sep, bodyStart);
-    }
+    if (next === -1) next = buffer.indexOf(sep, bodyStart);
     if (next === -1) return false;
-
     let bodyEnd = next;
-    if (buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d) {
-      bodyEnd -= 2;
-    }
+    if (buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d) bodyEnd -= 2;
     const body = buffer.slice(bodyStart, bodyEnd);
-
-    partCount += 1;
-    onPart?.({ index: partCount, headerStr, body }).catch?.(() => {});
-
     buffer = buffer.slice(next);
+    partCount += 1;
+    await onPart({ index: partCount, headerStr, body });
     return true;
   };
 
   return new Promise((resolve, reject) => {
-    stream.on("data", (chunk) => {
+    inputStream.on("data", async (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
-      while (tryConsumeOnePart()) {}
-      if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
-      if (maxParts != null && partCount >= maxParts) {
-        try {
-          stream.destroy();
-        } catch (_e) {}
-        resolve({ parts: partCount, ended: "maxParts" });
+      try {
+        while (buffer.length > 0 && (await tryConsumeOnePart())) {
+          if (partCount >= maxParts) {
+            try {
+              inputStream.destroy();
+            } catch (_e) {}
+            resolve({ parts: partCount, ended: "maxParts" });
+            return;
+          }
+        }
+        if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
+      } catch (e) {
+        reject(e);
       }
     });
-    stream.on("error", reject);
-    stream.on("end", () => resolve({ parts: partCount, ended: "end" }));
-    stream.on("close", () => resolve({ parts: partCount, ended: "close" }));
+    inputStream.on("error", reject);
+    inputStream.on("end", () => resolve({ parts: partCount, ended: "end" }));
+    inputStream.on("close", () => resolve({ parts: partCount, ended: "close" }));
   });
 };
 
@@ -191,45 +170,59 @@ async function main() {
   const host = process.env.ISAPI_HOST || "192.168.2.138";
   const port = ensureInt(process.env.ISAPI_PORT) ?? 80;
   const username = process.env.ISAPI_USERNAME || "admin";
-  const password = process.env.ISAPI_PASSWORD || DEFAULT_PASSWORD;
+  const password = process.env.ISAPI_PASSWORD || "";
+  const subscribeMode = String(process.env.ISAPI_SUBSCRIBE_MODE || "all")
+    .trim()
+    .toLowerCase();
   const channelId = ensureInt(process.env.ISAPI_CHANNEL_ID) ?? 1;
   const eventTypes = parseCsv(process.env.ISAPI_EVENT_TYPES);
-  const heartbeat = ensureInt(process.env.ISAPI_HEARTBEAT) ?? 10;
+  const heartbeat = ensureInt(process.env.ISAPI_HEARTBEAT) ?? 30;
   const maxParts = ensureInt(process.env.ISAPI_MAX_PARTS) ?? 20;
   const exitAfterMs = ensureInt(process.env.ISAPI_EXIT_AFTER_MS) ?? 60_000;
 
-  if (!password) throw new Error("缺少 ISAPI_PASSWORD（或 DEFAULT_PASSWORD 為空）。");
+  if (!password) {
+    throw new Error("請設定環境變數 ISAPI_PASSWORD（勿將密碼寫入程式碼）。");
+  }
+
+  const xmlBody =
+    subscribeMode === "list"
+      ? buildSubscribeXmlList({ channelId, eventTypes, heartbeat })
+      : SUBSCRIBE_XML_ALL;
 
   const client = createIsapiClient({ host, port, username, password });
-  const xmlBody = buildSubscribeXml({ channelId, eventTypes, heartbeat });
 
   console.log("[ISAPI Probe] subscribeEvent start", {
     host,
     port,
     username,
-    channelId,
-    eventTypes: eventTypes.length > 0 ? eventTypes : ["PeopleCounting"],
-    heartbeat,
+    subscribeMode,
+    channelId: subscribeMode === "list" ? channelId : undefined,
+    eventTypes:
+      subscribeMode === "list"
+        ? eventTypes.length > 0
+          ? eventTypes
+          : ["PeopleCounting"]
+        : "(all)",
+    heartbeat: subscribeMode === "list" ? heartbeat : 30,
     maxParts,
     exitAfterMs,
   });
-  console.log("[ISAPI Probe] subscribe XML:");
-  console.log(xmlBody);
+  console.log("[ISAPI Probe] subscribe XML:\n", xmlBody);
 
   const res = await client.requestSubscribeStream(xmlBody);
   const ct = res.headers?.["content-type"] || "";
   console.log("[ISAPI Probe] connected", { status: res.status, contentType: ct });
 
-  const stream = res.data;
+  const inputStream = res.data;
   const timer = setTimeout(() => {
     try {
-      stream.destroy();
+      inputStream.destroy();
     } catch (_e) {}
   }, exitAfterMs);
 
   try {
     const result = await consumeMultipartStream({
-      stream,
+      stream: inputStream,
       contentType: ct,
       maxParts,
       onPart: async ({ index, headerStr, body }) => {
@@ -238,7 +231,10 @@ async function main() {
         const isJson = /json/i.test(partCt);
         const isImage = /image\//i.test(partCt);
 
-        console.log(`\n[ISAPI Probe] part #${index}`, { contentType: partCt || "(unknown)", bytes: body.length });
+        console.log(`\n[ISAPI Probe] part #${index}`, {
+          contentType: partCt || "(unknown)",
+          bytes: body.length,
+        });
         if (isImage) {
           console.log("[ISAPI Probe] image bytes only");
           return;
@@ -247,7 +243,6 @@ async function main() {
           console.log(toPreviewText(body));
           return;
         }
-        // fallback：嘗試當文字印出
         const preview = toPreviewText(body);
         if (preview) console.log(preview);
       },
@@ -260,15 +255,16 @@ async function main() {
 
 main().catch((err) => {
   const details = extractAxiosErrorDetails(err);
-  if (details.status) {
-    console.error("[ISAPI Probe] failed", {
-      message: err?.message || String(err),
-      status: details.status,
-      statusText: details.statusText,
-      bodyPreview: details.bodyPreview,
-    });
-  } else {
-    console.error("[ISAPI Probe] failed", err?.message || err);
+  console.error("[ISAPI Probe] failed", {
+    message: err?.message || String(err),
+    status: details.status,
+    statusText: details.statusText,
+    bodyPreview: details.bodyPreview,
+  });
+  if (details.status === 500 && String(process.env.ISAPI_SUBSCRIBE_MODE || "all") === "list") {
+    console.error(
+      "[ISAPI Probe] 提示：車牌機請改用 ISAPI_SUBSCRIBE_MODE=all（與後端車輛訂閱相同），list+PeopleCounting 可能回 500。",
+    );
   }
   process.exitCode = 1;
 });

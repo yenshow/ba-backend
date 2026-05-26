@@ -19,8 +19,13 @@ const {
 const {
   transformEnvironmentReadingsToReportFormat,
 } = require("./environmentReadingsReportFormat");
+const {
+  transformIsapiAccessEventsToReportFormat,
+  transformIsapiPeopleCountingToReportFormat,
+} = require("./isapiEventsReportFormat");
 const logger = require("../../utils/logger");
-const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
+const yscpPeopleFeature = require("../../utils/yscpPeopleCountingFeature");
+const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 
 const backupLogger = logger.createLogger("backupScheduler");
 
@@ -68,6 +73,26 @@ function sumCounts(...results) {
   );
 }
 
+async function backupIsapiEventTable(label, beforeDate, options) {
+  const {
+    tableName,
+    fetchRows,
+    csvTransform,
+    category = "peopleCounting",
+  } = options;
+  return runBackupJob(label, async () =>
+    backupService.backupTable({
+      tableName,
+      data: await fetchRows(beforeDate),
+      deleteQuery: `DELETE FROM ${tableName} WHERE event_time < $1`,
+      deleteParams: [beforeDate],
+      category,
+      deleteAfterBackup: true,
+      csvTransform,
+    }),
+  );
+}
+
 async function runBackup() {
   const beforeDate = cutoffBeforeDate();
 
@@ -101,16 +126,16 @@ async function runBackup() {
       csvTransform: transformAlertsToReportFormat,
     });
 
-    let peopleResult = { skipped: true };
-    if (yscpFeature.isEnabled()) {
-      await runOptionalSync("人流統計", [
+    let peopleYscpResult = { skipped: true };
+    if (yscpPeopleFeature.isEnabled()) {
+      await runOptionalSync("人流統計（YSCP）", [
         () => peopleCountingSyncService.syncYesterday(),
         () =>
           peopleCountingSyncService.syncDayAgo(
             getBackupConfig().retention.databaseDays + 1,
           ),
       ]);
-      peopleResult = await runBackupJob("人流統計", async () => {
+      peopleYscpResult = await runBackupJob("人流統計（YSCP）", async () => {
         const peopleRows =
           await backupService.getPeopleCountingForBackup(beforeDate);
         const physicalIds = [
@@ -138,24 +163,68 @@ async function runBackup() {
       });
     }
 
-    await runOptionalSync("車輛進出", [
-      () => vehicleAccessSyncService.syncYesterday(),
-      () =>
-        vehicleAccessSyncService.syncDayAgo(
-          getBackupConfig().retention.databaseDays + 1,
-        ),
-    ]);
-    const vehicleResult = await runBackupJob("車輛進出", async () =>
-      backupService.backupTable({
-        tableName: "vehicle_passageway_logs",
-        data: await backupService.getVehiclePassagewayForBackup(beforeDate),
-        deleteQuery:
-          "DELETE FROM vehicle_passageway_logs WHERE trigger_time < $1",
-        deleteParams: [beforeDate],
-        category: "vehicleAccess",
-        deleteAfterBackup: true,
-        csvTransform: transformVehicleAccessToReportFormat,
-      }),
+    const peopleAccessIsapiResult = await backupIsapiEventTable(
+      "人流門禁（ISAPI）",
+      beforeDate,
+      {
+        tableName: "isapi_access_events",
+        fetchRows: backupService.getIsapiAccessEventsForBackup,
+        csvTransform: transformIsapiAccessEventsToReportFormat,
+      },
+    );
+
+    const peopleCameraIsapiResult = await backupIsapiEventTable(
+      "人流攝影機（ISAPI）",
+      beforeDate,
+      {
+        tableName: "isapi_people_counting_events",
+        fetchRows: backupService.getIsapiPeopleCountingEventsForBackup,
+        csvTransform: transformIsapiPeopleCountingToReportFormat,
+      },
+    );
+
+    let vehicleYscpResult = { skipped: true };
+    if (yscpVehicleFeature.isEnabled()) {
+      await runOptionalSync("車輛進出（YSCP）", [
+        () => vehicleAccessSyncService.syncYesterday(),
+        () =>
+          vehicleAccessSyncService.syncDayAgo(
+            getBackupConfig().retention.databaseDays + 1,
+          ),
+      ]);
+      vehicleYscpResult = await runBackupJob("車輛進出（YSCP）", async () =>
+        backupService.backupTable({
+          tableName: "vehicle_passageway_logs",
+          data: await backupService.getVehiclePassagewayForBackup(
+            beforeDate,
+            "yscp",
+          ),
+          deleteQuery: `DELETE FROM vehicle_passageway_logs
+            WHERE trigger_time < $1 AND COALESCE(data_source, 'yscp') = 'yscp'`,
+          deleteParams: [beforeDate],
+          category: "vehicleAccess",
+          deleteAfterBackup: true,
+          csvTransform: transformVehicleAccessToReportFormat,
+        }),
+      );
+    }
+
+    const vehicleIsapiResult = await runBackupJob(
+      "車輛進出（ISAPI）",
+      async () =>
+        backupService.backupTable({
+          tableName: "vehicle_passageway_logs_isapi",
+          data: await backupService.getVehiclePassagewayForBackup(
+            beforeDate,
+            "isapi_camera",
+          ),
+          deleteQuery: `DELETE FROM vehicle_passageway_logs
+            WHERE trigger_time < $1 AND data_source = 'isapi_camera'`,
+          deleteParams: [beforeDate],
+          category: "vehicleAccess",
+          deleteAfterBackup: true,
+          csvTransform: transformVehicleAccessToReportFormat,
+        }),
     );
 
     const deletedFiles = await backupService.purgeOldArchiveFiles(
@@ -165,15 +234,21 @@ async function runBackup() {
     const { backed, deleted } = sumCounts(
       envResult,
       alertResult,
-      peopleResult,
-      vehicleResult,
+      peopleYscpResult,
+      peopleAccessIsapiResult,
+      peopleCameraIsapiResult,
+      vehicleYscpResult,
+      vehicleIsapiResult,
     );
 
     const results = {
       environment_readings: envResult,
       alerts: alertResult,
-      people_counting_logs: peopleResult,
-      vehicle_passageway_logs: vehicleResult,
+      people_counting_logs: peopleYscpResult,
+      isapi_access_events: peopleAccessIsapiResult,
+      isapi_people_counting_events: peopleCameraIsapiResult,
+      vehicle_passageway_logs: vehicleYscpResult,
+      vehicle_passageway_logs_isapi: vehicleIsapiResult,
       deletedFiles,
     };
 

@@ -548,6 +548,19 @@ function emitIsapiPeopleCountingEvent(data) {
   );
 }
 
+/** 車輛 ISAPI ANPR 事件寫入後推送 */
+function emitVehicleAccessIsapiEvent(data) {
+  safeEmit(
+    "vehicle-access:isapi-camera:event",
+    {
+      ...(data || {}),
+      source: "isapi_camera",
+      timestamp: new Date().toISOString(),
+    },
+    { logMessage: "車輛 ANPR 事件已寫入" },
+  );
+}
+
 function emitYscpEvent(type) {
   const eventMap = {
     vehicle_access: "yscp:event:vehicle",
@@ -591,5 +604,6 @@ module.exports = {
   emitEnvironmentReading,
   emitIsapiAccessEvent,
   emitIsapiPeopleCountingEvent,
+  emitVehicleAccessIsapiEvent,
   emitYscpEvent,
 };

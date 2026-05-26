@@ -4,6 +4,7 @@
 const path = require("path");
 const fs = require("fs").promises;
 const db = require("../../database/db");
+const personLicensePlateService = require("./personLicensePlateService");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
@@ -619,7 +620,9 @@ async function getPersonById(id) {
   if (!rows || rows.length === 0) {
     throwApiError(C.PERSONNEL_PERSON_NOT_FOUND, "人員不存在", { statusCode: 404 });
   }
-  return rows[0];
+  const person = rows[0];
+  const licensePlates = await personLicensePlateService.listByPersonId(id);
+  return { ...person, license_plates: licensePlates };
 }
 
 async function getPersonByEmployeeNo(employeeNo) {
@@ -683,7 +686,15 @@ async function createPerson(data, createdBy = null) {
       userId || null,
     ],
   );
-  return rows[0];
+  const created = rows[0];
+  if (Object.prototype.hasOwnProperty.call(data || {}, "licensePlates")) {
+    await personLicensePlateService.replacePlatesForPerson(
+      created.id,
+      data.licensePlates,
+    );
+    return getPersonById(created.id);
+  }
+  return { ...created, license_plates: [] };
 }
 
 async function updatePerson(id, data) {
@@ -763,6 +774,13 @@ async function updatePerson(id, data) {
     updates.push("user_id = ?");
     params.push(data.userId ?? null);
   }
+  if (Object.prototype.hasOwnProperty.call(data || {}, "licensePlates")) {
+    await personLicensePlateService.replacePlatesForPerson(
+      id,
+      data.licensePlates,
+    );
+  }
+
   if (updates.length === 0) return getPersonById(id);
   params.push(id);
   await db.query(

@@ -103,12 +103,16 @@ const cors = {
 };
 
 /**
- * 功能旗標（YSCP 人流資料源）
- * 預設 true；設為 false 時見 peopleCountingService（略過 data_source=yscp）。
+ * 功能旗標（YSCP 外部資料源）
+ * 預設 true；設為 false 時略過對應 data_source=yscp 與外部 DB 查詢。
  */
 const features = {
   enableYscpPeopleCounting: toBoolean(
     getEnv("ENABLE_YSCP_PEOPLE_COUNTING"),
+    true,
+  ),
+  enableYscpVehicleAccess: toBoolean(
+    getEnv("ENABLE_YSCP_VEHICLE_ACCESS"),
     true,
   ),
 };

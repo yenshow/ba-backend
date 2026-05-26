@@ -12,7 +12,8 @@ const {
 } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrorMeta");
-const yscpFeature = require("../utils/yscpPeopleCountingFeature");
+const yscpPeopleFeature = require("../utils/yscpPeopleCountingFeature");
+const yscpVehicleFeature = require("../utils/yscpVehicleAccessFeature");
 
 /** 車輛進出系統使用的表：需授權 vehicle_access 才能存取 */
 const VEHICLE_TABLES = [
@@ -85,7 +86,7 @@ function validateTableAndHandler(req, res, next) {
 function respondIfPeopleCountingExternalDisabled(req, res, next) {
   const { schema, table, id } = req.params || {};
   if (!schema || !table) return next();
-  if (!yscpFeature.isBlockedExternalTable(schema, table)) return next();
+  if (!yscpPeopleFeature.isBlockedExternalTable(schema, table)) return next();
 
   if (id !== undefined && id !== null && String(id) !== "") {
     return res.sendFailure(
@@ -99,16 +100,42 @@ function respondIfPeopleCountingExternalDisabled(req, res, next) {
 
   const path = String(req.path || "");
   if (path.endsWith("/count")) {
-    return res.sendSuccess(yscpFeature.emptyExternalCountResult());
+    return res.sendSuccess(yscpPeopleFeature.emptyExternalCountResult());
   }
 
   const limit = Math.min(parseInt(req.query?.limit, 10) || 50, 1000);
   const offset = Math.max(parseInt(req.query?.offset, 10) || 0, 0);
-  return res.sendSuccess(yscpFeature.emptyExternalListResult(limit, offset));
+  return res.sendSuccess(yscpPeopleFeature.emptyExternalListResult(limit, offset));
+}
+
+/** YSCP 車輛關閉時，略過 vehiclebiz / anpr 等外部表 */
+function respondIfVehicleAccessExternalDisabled(req, res, next) {
+  const { schema, table, id } = req.params || {};
+  if (!schema || !table) return next();
+  if (!yscpVehicleFeature.isBlockedExternalTable(schema, table)) return next();
+
+  if (id !== undefined && id !== null && String(id) !== "") {
+    return res.sendFailure(
+      {
+        code: C.EXTERNAL_DATA_RECORD_NOT_FOUND,
+        message: "YSCP 車輛資料源已關閉，無法查詢外部資料",
+      },
+      404,
+    );
+  }
+
+  const path = String(req.path || "");
+  if (path.endsWith("/count")) {
+    return res.sendSuccess(yscpVehicleFeature.emptyExternalCountResult());
+  }
+
+  const limit = Math.min(parseInt(req.query?.limit, 10) || 50, 1000);
+  const offset = Math.max(parseInt(req.query?.offset, 10) || 0, 0);
+  return res.sendSuccess(yscpVehicleFeature.emptyExternalListResult(limit, offset));
 }
 
 const blockSlotCardRecordsIfDisabled = (req, res, next) => {
-  if (!yscpFeature.isBlockedExternalTable("baseacs", "slot_card_records")) {
+  if (!yscpPeopleFeature.isBlockedExternalTable("baseacs", "slot_card_records")) {
     return next();
   }
   return res.sendSuccess(null);
@@ -218,6 +245,9 @@ router.get(
   requireFeature("vehicle_access"),
   requirePermission("system.vehicle_access"),
   asyncHandler(async (req, res) => {
+    if (!yscpVehicleFeature.isEnabled()) {
+      return res.sendSuccess(yscpVehicleFeature.emptyVehicleGroups());
+    }
     const result = await vehicleGroupAggregateService.getVehicleGroups();
     res.sendSuccess(result);
   }),
@@ -234,6 +264,7 @@ router.get(
   validateRequired("schema", "table"),
   validateTableAndHandler,
   respondIfPeopleCountingExternalDisabled,
+  respondIfVehicleAccessExternalDisabled,
   requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;
@@ -254,6 +285,7 @@ router.get(
   validateIntegers("id"),
   validateTableAndHandler,
   respondIfPeopleCountingExternalDisabled,
+  respondIfVehicleAccessExternalDisabled,
   requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table, id } = req.params;
@@ -375,6 +407,7 @@ router.get(
   validateRequired("schema", "table"),
   validateTableAndHandler,
   respondIfPeopleCountingExternalDisabled,
+  respondIfVehicleAccessExternalDisabled,
   requireVehicleAccessIfVehicleTable,
   asyncHandler(async (req, res) => {
     const { schema, table } = req.params;

@@ -18,6 +18,7 @@
 | `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
 | `backup/` | 8 | 備份排程與各系統報表格式 |
 | `accessControl/` | 5 | 門禁業務、ISAPI 訂閱／持久化 |
+| `isapi/` | 2 | **佈防訂閱中心** `isapiSubscribeHub`（見 `isapi/README.md`） |
 | `externalData/` | 14 | 外部 DB handler 與車輛群組彙總 |
 | `communication/` | 2 | MediaMTX 串流（對應 license `surveillance`） |
 | `personnel/` | 7 | 人員、匯入、人臉、同步 job |

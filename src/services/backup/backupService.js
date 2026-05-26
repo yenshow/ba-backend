@@ -16,7 +16,10 @@ const DATE_FIELD_BY_TABLE = {
   environment_readings: "recorded_at",
   alerts: "created_at",
   people_counting_logs: "swip_card_rev_time",
+  isapi_access_events: "event_time",
+  isapi_people_counting_events: "event_time",
   vehicle_passageway_logs: "trigger_time",
+  vehicle_passageway_logs_isapi: "trigger_time",
 };
 
 // --- CSV 匯出（與前端 backupStyle 一致：引號包格、逗號改分號）---
@@ -197,14 +200,60 @@ async function getPeopleCountingForBackup(beforeDate) {
   return rows || [];
 }
 
-async function getVehiclePassagewayForBackup(beforeDate) {
+/**
+ * @param {Date} beforeDate
+ * @param {"yscp"|"isapi_camera"} dataSource
+ */
+async function getIsapiAccessEventsForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT id, device_ip, event_time, event_type, payload, file_count, picture_path
+     FROM isapi_access_events
+     WHERE event_time < $1
+     ORDER BY event_time ASC`,
+    [beforeDate],
+  );
+  return rows || [];
+}
+
+async function getIsapiPeopleCountingEventsForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT
+       e.id,
+       e.location_id,
+       e.device_id,
+       e.region_name,
+       e.event_time,
+       e.enter,
+       e."exit",
+       e.enter_delta,
+       e.exit_delta,
+       l.name AS location_name,
+       z.name AS zone_name
+     FROM isapi_people_counting_events e
+     LEFT JOIN locations l ON e.location_id = l.id
+     LEFT JOIN zones z ON l.zone_id = z.id
+     WHERE e.event_time < $1
+     ORDER BY e.event_time ASC`,
+    [beforeDate],
+  );
+  return rows || [];
+}
+
+async function getVehiclePassagewayForBackup(beforeDate, dataSource = "yscp") {
+  const isIsapi = dataSource === "isapi_camera";
   const rows = await db.query(
     `SELECT 
        trigger_time, lane_id, lane_name, license_plate, owner_name,
        allow_result, lane_type, vehicle_list_id, vehicle_list_name,
-       zone_name, location_name, location_id
+       zone_name, location_name, location_id, data_source,
+       device_id, anpr_line, picture_path
      FROM vehicle_passageway_logs
      WHERE trigger_time < $1
+       AND ${
+         isIsapi
+           ? "data_source = 'isapi_camera'"
+           : "COALESCE(data_source, 'yscp') = 'yscp'"
+       }
      ORDER BY trigger_time ASC`,
     [beforeDate],
   );
@@ -388,5 +437,7 @@ module.exports = {
   purgeOldArchiveFiles,
   validateBackup,
   getPeopleCountingForBackup,
+  getIsapiAccessEventsForBackup,
+  getIsapiPeopleCountingEventsForBackup,
   getVehiclePassagewayForBackup,
 };

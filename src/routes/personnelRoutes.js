@@ -295,6 +295,22 @@ router.put(
   }),
 );
 
+router.put(
+  "/persons/:id/license-plates",
+  authenticate,
+  requirePermission("system.personnel"),
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const personId = parseInt(req.params.id, 10);
+    const personLicensePlateService = require("../services/personnel/personLicensePlateService");
+    const plates = req.body?.licensePlates ?? req.body?.plates ?? [];
+    await personLicensePlateService.replacePlatesForPerson(personId, plates);
+    const person = await personnelService.getPersonById(personId);
+    res.sendSuccess({ licensePlates: person.license_plates || [] });
+  }),
+);
+
 /**
  * 一次更新人員門禁設定（整合卡片/指紋/密碼/validity；僅存平台）
  * PUT /api/personnel/persons/:personId/access-control-config

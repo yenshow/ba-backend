@@ -36,6 +36,7 @@ const smokeAlarmRoutes = require("./routes/smokeAlarmRoutes");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
+const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
 const accessControlRoutes = require("./routes/accessControlRoutes");
@@ -69,9 +70,7 @@ const {
 // 環境彙總排程（時／日／月）
 const environmentAggregationService = require("./services/environment/environmentAggregationService");
 // 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
-const isapiSubscribeService = require("./services/accessControl/isapiSubscribeService");
-// 攝影機 ISAPI PeopleCounting 訂閱服務
-const isapiPeopleCountingSubscribeService = require("./services/peopleCounting/isapiPeopleCountingSubscribeService");
+const isapiSubscribeHub = require("./services/isapi/isapiSubscribeHub");
 
 const app = express();
 
@@ -166,6 +165,11 @@ app.use(
   requireFeature("people_counting"),
   peopleCountingRoutes,
 ); // 人流統計
+app.use(
+  "/api/vehicle-access",
+  requireFeature("vehicle_access"),
+  vehicleAccessRoutes,
+);
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes); // 車輛相關路由在 externalDataRoutes 內依 requireFeature(vehicle_access) 控管
 app.use("/api/access-control", accessControlRoutes);
@@ -384,20 +388,11 @@ async function startServer() {
 
     global.__httpServer = httpServer;
 
-    // 門禁佈防訂閱：全面改為佈防模式，後端主動向門禁設備訂閱事件
-    isapiSubscribeService.start().catch((err) => {
-      serverLogger.warn(
-        "門禁佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
-        { error: err.message },
-      );
-    });
-
-    // 攝影機人流（ISAPI PeopleCounting）佈防訂閱：依 people_counting 地點配置 isapi_camera 啟動
-    isapiPeopleCountingSubscribeService.start().catch((err) => {
-      serverLogger.warn(
-        "攝影機人流佈防訂閱服務啟動時發生錯誤（將不影響其他功能）",
-        { error: err.message },
-      );
+    // ISAPI 佈防訂閱中心（門禁 / 人流 PeopleCounting / 車牌 ANPR）
+    isapiSubscribeHub.start().catch((err) => {
+      serverLogger.warn("ISAPI 佈防訂閱中心啟動時發生錯誤（將不影響其他功能）", {
+        error: err.message,
+      });
     });
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
@@ -441,13 +436,8 @@ async function gracefulShutdown(signal) {
     await backgroundMonitor.stopMonitoring();
     shutdownLogger.info("背景監控服務已停止");
 
-    // 停止門禁佈防訂閱服務
-    isapiSubscribeService.stop();
-    shutdownLogger.info("門禁佈防訂閱服務已停止");
-
-    // 停止攝影機人流佈防訂閱服務
-    isapiPeopleCountingSubscribeService.stop();
-    shutdownLogger.info("攝影機人流佈防訂閱服務已停止");
+    isapiSubscribeHub.stop();
+    shutdownLogger.info("ISAPI 佈防訂閱中心已停止");
 
     if (global.__envHourAggIntervalId) {
       clearInterval(global.__envHourAggIntervalId);

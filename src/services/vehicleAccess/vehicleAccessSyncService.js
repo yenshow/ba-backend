@@ -5,13 +5,14 @@
 
 const externalDb = require("../../database/externalDb");
 const db = require("../../database/db");
-const locationService = require("../location/locationService");
+const getLocationService = () => require("../location/locationService");
+const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 
 /**
  * 取得 lane_id -> { zoneName, locationName, locationId } 映射
  */
 async function getLaneIdToLocationMap() {
-  const result = await locationService.getZones({ locationType: "vehicle_access" });
+  const result = await getLocationService().getZones({ locationType: "vehicle_access" });
   const map = new Map();
 
   for (const zone of result.zones || []) {
@@ -39,6 +40,7 @@ async function getLaneIdToLocationMap() {
  * @returns {Promise<{ synced: number }>}
  */
 async function syncRecords(start, end) {
+  if (!yscpVehicleFeature.isEnabled()) return { synced: 0 };
   const laneMap = await getLaneIdToLocationMap();
 
   const sql = `
@@ -76,7 +78,7 @@ async function syncRecords(start, end) {
     const locationId = info?.locationId ?? null;
 
     values.push(
-      `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
+      `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
     );
     params.push(
       row.external_id ?? null,
@@ -91,7 +93,8 @@ async function syncRecords(start, end) {
       (row.vehicle_list_name ?? "").trim() || null,
       zoneName,
       locationName,
-      locationId
+      locationId,
+      "yscp",
     );
   }
 
@@ -99,7 +102,7 @@ async function syncRecords(start, end) {
     INSERT INTO vehicle_passageway_logs (
       external_id, trigger_time, lane_id, lane_name, license_plate, owner_name,
       allow_result, lane_type, vehicle_list_id, vehicle_list_name,
-      zone_name, location_name, location_id
+      zone_name, location_name, location_id, data_source
     )
     VALUES ${values.join(", ")}
     ON CONFLICT (external_id) DO NOTHING

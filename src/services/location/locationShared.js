@@ -383,8 +383,21 @@ function formatSystem(system) {
       return {
         ...baseSystem,
         config: {
+          dataSource:
+            config.data_source === "isapi_camera" ? "isapi_camera" : "yscp",
           entryLaneId: config.entry_lane_id ?? undefined,
           exitLaneId: config.exit_lane_id ?? undefined,
+          entryCameraDeviceIds: Array.isArray(config.entry_camera_device_ids)
+            ? config.entry_camera_device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          exitCameraDeviceIds: Array.isArray(config.exit_camera_device_ids)
+            ? config.exit_camera_device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          cameraChannelId: config.camera_channel_id ?? 1,
         },
       };
 
