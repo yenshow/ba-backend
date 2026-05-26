@@ -31,7 +31,7 @@ const router = express.Router();
 const isapiEventLogger = logger.createLogger("ISAPI Event");
 
 const uploadsBase = path.join(process.cwd(), "uploads");
-["personnel", "isapi-events"].forEach((dir) => {
+["personnel", "access-events"].forEach((dir) => {
   const full = path.join(uploadsBase, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });

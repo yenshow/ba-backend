@@ -78,4 +78,35 @@ function getStatus() {
   };
 }
 
-module.exports = { start, stop, refresh, getStatus };
+/**
+ * 各設備目前參與的 ISAPI 佈防 profile（供設備管理頁顯示）
+ * @returns {{ hubStarted: boolean, byDevice: Record<string, string[]> }}
+ */
+function getDeviceProfileMap() {
+  const byDevice = {};
+  const add = (deviceId, profileKey) => {
+    const id = Number(deviceId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const key = String(id);
+    if (!byDevice[key]) byDevice[key] = [];
+    if (!byDevice[key].includes(profileKey)) byDevice[key].push(profileKey);
+  };
+
+  for (const { key, service } of PROFILES) {
+    if (typeof service.getSubscribeStatus !== "function") continue;
+    const status = service.getSubscribeStatus();
+    if (key === "people_counting") {
+      for (const sub of status.subs || []) {
+        if (sub?.deviceId != null) add(sub.deviceId, key);
+      }
+      continue;
+    }
+    for (const deviceId of status.deviceIds || []) {
+      add(deviceId, key);
+    }
+  }
+
+  return { hubStarted, byDevice };
+}
+
+module.exports = { start, stop, refresh, getStatus, getDeviceProfileMap };

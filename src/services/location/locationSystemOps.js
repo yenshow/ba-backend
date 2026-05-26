@@ -21,6 +21,7 @@ const locationLogger = logger.createLogger("locationSystemOps");
 const {
   validateVehicleAccessConfig,
 } = require("../vehicleAccess/vehicleAccessValidation");
+const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const {
   assertPeopleCountingIsapiCamerasAvailable,
   ensureIntArray,
@@ -224,6 +225,10 @@ function buildSystemConfig(systemType, config) {
     }
 
     case "vehicle_access": {
+      const {
+        normalizeLogDisplayColumns,
+        toStoredLogDisplayColumns,
+      } = require("../vehicleAccess/logDisplayColumns");
       const entryCam = Array.isArray(config.entryCameraDeviceIds)
         ? config.entryCameraDeviceIds
             .map((id) => Number(id))
@@ -239,6 +244,16 @@ function buildSystemConfig(systemType, config) {
         Number.isFinite(Number(config.cameraChannelId))
           ? Math.trunc(Number(config.cameraChannelId))
           : 1;
+      const vehicleGroupIds = Array.isArray(config.vehicleGroupIds)
+        ? config.vehicleGroupIds
+            .map((id) => Number(id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : [];
+      const personGroupIds = Array.isArray(config.personGroupIds)
+        ? config.personGroupIds
+            .map((id) => Number(id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : [];
       return {
         data_source:
           config.dataSource === "isapi_camera" ? "isapi_camera" : "yscp",
@@ -247,6 +262,14 @@ function buildSystemConfig(systemType, config) {
         entry_camera_device_ids: entryCam,
         exit_camera_device_ids: exitCam,
         camera_channel_id: ch,
+        vehicle_group_ids: vehicleGroupIds,
+        person_group_ids: personGroupIds,
+        log_display_columns: (() => {
+          const cols = toStoredLogDisplayColumns(
+            normalizeLogDisplayColumns(config.logDisplayColumns),
+          );
+          return cols.length > 0 ? cols : undefined;
+        })(),
       };
     }
 
@@ -357,6 +380,16 @@ async function createSystem(query, locationId, system) {
 
   const systemConfig = buildSystemConfig(systemType, config);
 
+  if (
+    systemType === "vehicle_access" &&
+    yscpVehicleFeature.shouldSkipYscp(systemConfig.data_source)
+  ) {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "YSCP 車輛資料源已關閉（ENABLE_YSCP_VEHICLE_ACCESS=false），請改用 ISAPI 車牌攝影機",
+    );
+  }
+
   if (systemType === "vehicle_access") {
     await validateVehicleAccessConfig(systemConfig, locationId);
   }
@@ -441,6 +474,13 @@ async function updateSystem(query, systemId, system) {
   );
   const vaLocationId =
     locRows[0]?.location_id != null ? Number(locRows[0].location_id) : null;
+
+  if (
+    targetSystemType === "vehicle_access" &&
+    yscpVehicleFeature.shouldSkipYscp(systemConfig.data_source)
+  ) {
+    return;
+  }
 
   if (targetSystemType === "vehicle_access") {
     await validateVehicleAccessConfig(systemConfig, vaLocationId);

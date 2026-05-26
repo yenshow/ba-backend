@@ -81,7 +81,7 @@ async function getSiteStats(siteId, _config, options = {}) {
 
 async function getSiteLogs(siteId, _config, options = {}) {
   const { start, end } = resolveTimeRange(options);
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 200);
+  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 10000);
   const offset = Math.max(Number(options.offset) || 0, 0);
   const search = options.search ? String(options.search).trim() : "";
 

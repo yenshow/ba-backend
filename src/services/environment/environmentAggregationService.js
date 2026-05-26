@@ -75,7 +75,7 @@ async function computeAggregatedReadingsFromRaw(
         WHERE er.location_id = $1
           AND er.recorded_at >= $2
           AND er.recorded_at < $3
-          AND (e.value ~ '^-?\\d+(\\.\\d+)?$')
+          AND (e.value ~ '^(-){0,1}[0-9]+(\\.[0-9]+){0,1}$')
         GROUP BY er.location_id, date_trunc($4, er.recorded_at), e.key
       ),
       agg AS (
@@ -114,7 +114,7 @@ async function upsertAggregatedBySql({ locationIds, bucketType, bucketAt, period
         WHERE er.location_id = ANY($1::int[])
           AND er.recorded_at >= $2
           AND er.recorded_at < $3
-          AND (e.value ~ '^-?\\d+(\\.\\d+)?$')
+          AND (e.value ~ '^(-){0,1}[0-9]+(\\.[0-9]+){0,1}$')
         GROUP BY er.location_id, e.key
       ),
       agg AS (

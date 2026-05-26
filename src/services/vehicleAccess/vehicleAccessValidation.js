@@ -31,6 +31,8 @@ function parseConfig(config) {
       c.camera_channel_id != null && Number.isFinite(Number(c.camera_channel_id))
         ? Math.trunc(Number(c.camera_channel_id))
         : 1,
+    vehicleGroupIds: ensureIntArray(c.vehicle_group_ids),
+    personGroupIds: ensureIntArray(c.person_group_ids),
   };
 }
 
@@ -40,14 +42,16 @@ function parseConfig(config) {
  */
 async function validateVehicleAccessConfig(systemConfig, excludeLocationId = null) {
   const cfg = parseConfig(systemConfig);
-  if (yscpVehicleFeature.shouldSkipYscp(cfg.dataSource)) {
+  // YSCP（含功能關閉時略過寫入）：群組來自外部資料表，不在此驗證
+  if (yscpVehicleFeature.shouldSkipYscp(cfg.dataSource) || cfg.dataSource === "yscp") {
+    return cfg;
+  }
+
+  if (cfg.personGroupIds.length === 0) {
     throwApiError(
       C.PEOPLE_COUNTING_VALIDATION_FAILED,
-      "YSCP 車輛資料源已關閉（ENABLE_YSCP_VEHICLE_ACCESS=false），請改用 ISAPI 車牌攝影機",
+      "ISAPI 車輛地點至少需要選擇一個人員群組",
     );
-  }
-  if (cfg.dataSource === "yscp") {
-    return cfg;
   }
 
   if (cfg.entryCameraDeviceIds.length === 0) {

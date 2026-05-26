@@ -157,7 +157,7 @@ async function getSiteLogs(siteId, config, options = {}) {
   const end = options.endTime
     ? new Date(options.endTime)
     : getTodayTimeRange().end;
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 200);
+  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 10000);
   const offset = Math.max(Number(options.offset) || 0, 0);
 
   // 已移除 global 寫入：logs 固定以 region 列為準

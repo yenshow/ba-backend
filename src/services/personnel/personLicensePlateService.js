@@ -8,10 +8,10 @@ const { normalizePlate } = require("../../utils/vehiclePlateUtils");
 
 async function listByPersonId(personId) {
   const rows = await db.query(
-    `SELECT id, person_id, plate_number, plate_normalized, is_primary, created_at, updated_at
+    `SELECT id, person_id, plate_number, plate_normalized, created_at, updated_at
      FROM person_license_plates
      WHERE person_id = ?
-     ORDER BY is_primary DESC, id ASC`,
+     ORDER BY id ASC`,
     [personId],
   );
   return rows || [];
@@ -35,24 +35,7 @@ async function replacePlatesForPerson(personId, platesInput) {
     const plateNormalized = normalizePlate(plateNumber);
     if (!plateNormalized || seen.has(plateNormalized)) continue;
     seen.add(plateNormalized);
-    const isPrimary = !!(
-      typeof item === "object" &&
-      item &&
-      (item.isPrimary === true || item.is_primary === true)
-    );
-    normalized.push({ plateNumber, plateNormalized, isPrimary });
-  }
-
-  if (normalized.length > 0 && !normalized.some((p) => p.isPrimary)) {
-    normalized[0].isPrimary = true;
-  }
-  for (const p of normalized) {
-    if (p.isPrimary) {
-      for (const o of normalized) {
-        if (o !== p) o.isPrimary = false;
-      }
-      break;
-    }
+    normalized.push({ plateNumber, plateNormalized });
   }
 
   await db.query(`DELETE FROM person_license_plates WHERE person_id = ?`, [
@@ -61,9 +44,9 @@ async function replacePlatesForPerson(personId, platesInput) {
 
   for (const p of normalized) {
     await db.query(
-      `INSERT INTO person_license_plates (person_id, plate_number, plate_normalized, is_primary)
-       VALUES (?, ?, ?, ?)`,
-      [pid, p.plateNumber, p.plateNormalized, p.isPrimary],
+      `INSERT INTO person_license_plates (person_id, plate_number, plate_normalized)
+       VALUES (?, ?, ?)`,
+      [pid, p.plateNumber, p.plateNormalized],
     );
   }
 

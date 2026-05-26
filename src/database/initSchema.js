@@ -1115,7 +1115,6 @@ async function initSchema() {
         person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
         plate_number VARCHAR(32) NOT NULL,
         plate_normalized VARCHAR(32) NOT NULL,
-        is_primary BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (person_id, plate_normalized)
@@ -1125,6 +1124,19 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_person_license_plates_normalized
       ON person_license_plates(plate_normalized);
+    `);
+    await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'is_primary'
+        ) THEN
+          ALTER TABLE person_license_plates DROP COLUMN is_primary;
+        END IF;
+      END $BODY$;
     `);
     schemaLogger.info("person_license_plates 表已建立", { module: "initSchema" });
 
@@ -1251,7 +1263,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // ISAPI 監聽主機收到之門禁事件（非 heartBeat），payload 存巢狀 AccessControllerEvent；附圖存 uploads/isapi-events，路徑存 picture_path
+    // ISAPI 監聽主機收到之門禁事件（非 heartBeat），payload 存巢狀 AccessControllerEvent；附圖存 uploads/access-events，路徑存 picture_path
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS isapi_access_events (
         id BIGSERIAL PRIMARY KEY,

@@ -23,7 +23,7 @@ const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </SubscribeEvent>`;
 
 const RE_CONNECT_DELAY_MS = 10000;
-const UPLOADS_ISAPI_DIR = path.join(process.cwd(), "uploads", "isapi-events");
+const UPLOADS_ISAPI_DIR = path.join(process.cwd(), "uploads", "access-events");
 
 /**
  * 目前各設備的訂閱迴圈控制器（用於 refresh/stop 中止串流並停止重連）
@@ -32,7 +32,7 @@ const UPLOADS_ISAPI_DIR = path.join(process.cwd(), "uploads", "isapi-events");
  */
 const deviceLoopControllers = new Map();
 
-/** 確保 uploads/isapi-events 存在 */
+/** 確保 uploads/access-events 存在 */
 function ensureUploadsDir() {
   if (!fs.existsSync(UPLOADS_ISAPI_DIR)) {
     fs.mkdirSync(UPLOADS_ISAPI_DIR, { recursive: true });

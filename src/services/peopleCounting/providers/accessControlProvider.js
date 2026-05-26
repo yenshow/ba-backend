@@ -119,7 +119,7 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
 
   const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
   const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
-  const limitNum = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const limitNum = Math.min(Math.max(Number(limit) || 50, 1), 10000);
   const offsetNum = Math.max(Number(offset) || 0, 0);
 
   const placeholders = allIpsArray.map(() => "?").join(",");

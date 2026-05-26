@@ -1,6 +1,6 @@
 /**
  * 門禁 ISAPI 事件寫入（佈防訂閱使用，先 JSON 後圖）
- * 寫入 isapi_access_events；附圖由 attachPictureToEvent 寫入 uploads/isapi-events
+ * 寫入 isapi_access_events；附圖由 attachPictureToEvent 寫入 uploads/access-events
  */
 const path = require("path");
 const fs = require("fs");
@@ -77,7 +77,7 @@ async function attachPictureToEvent(eventId, pictureBuffer, uploadsDir) {
   const basename = `${safeIp}_${rawTime}.jpg`;
   const filePath = path.join(uploadsDir, basename);
   fs.writeFileSync(filePath, pictureBuffer);
-  const picturePath = `/uploads/isapi-events/${basename}`;
+  const picturePath = `/uploads/access-events/${basename}`;
   await db.query(
     `UPDATE isapi_access_events SET picture_path = ?, file_count = 1 WHERE id = ?`,
     [picturePath, eventId],

@@ -14,7 +14,7 @@ async function lookupPersonByPlate(licensePlate) {
       INNER JOIN persons p ON p.id = plp.person_id
       LEFT JOIN person_groups pg ON pg.id = p.person_group_id
       WHERE plp.plate_normalized = ?
-      ORDER BY plp.is_primary DESC, plp.id ASC
+      ORDER BY plp.id ASC
       LIMIT 1
     `,
     [norm],

@@ -11,7 +11,7 @@ const { lookupPersonByPlate } = require("./vehiclePlateEnrichment");
 const UPLOADS_VEHICLE_DIR = path.join(
   process.cwd(),
   "uploads",
-  "isapi-vehicle-events",
+  "vehicle-events",
 );
 
 function ensureUploadsDir() {
@@ -135,7 +135,7 @@ async function attachLicensePlatePicture(logId, pictureBuffer) {
   const basename = `${host}_${rawTime}_${logId}.jpg`;
   const filePath = path.join(UPLOADS_VEHICLE_DIR, basename);
   fs.writeFileSync(filePath, pictureBuffer);
-  const picturePath = `/uploads/isapi-vehicle-events/${basename}`;
+  const picturePath = `/uploads/vehicle-events/${basename}`;
   await db.query(
     `UPDATE vehicle_passageway_logs SET picture_path = ?, file_count = 1 WHERE id = ?`,
     [picturePath, logId],

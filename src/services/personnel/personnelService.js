@@ -581,7 +581,8 @@ async function getPersonsPaged(filters = {}, options = {}) {
       SELECT
         p.*,
         pg.name AS group_name,
-        COALESCE(al.access_locations, '[]'::json) AS access_locations
+        COALESCE(al.access_locations, '[]'::json) AS access_locations,
+        COALESCE(lp.license_plate_count, 0)::int AS license_plate_count
       FROM persons p
       LEFT JOIN person_groups pg ON p.person_group_id = pg.id
       LEFT JOIN LATERAL (
@@ -599,6 +600,11 @@ async function getPersonsPaged(filters = {}, options = {}) {
         INNER JOIN zones z ON l.zone_id = z.id
         WHERE pla.person_id = p.id
       ) al ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS license_plate_count
+        FROM person_license_plates plp
+        WHERE plp.person_id = p.id
+      ) lp ON TRUE
       ${whereSql}
       ORDER BY ${orderSql}
       LIMIT ? OFFSET ?

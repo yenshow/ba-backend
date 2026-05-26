@@ -379,7 +379,10 @@ function formatSystem(system) {
       };
     }
 
-    case "vehicle_access":
+    case "vehicle_access": {
+      const {
+        normalizeLogDisplayColumns,
+      } = require("../vehicleAccess/logDisplayColumns");
       return {
         ...baseSystem,
         config: {
@@ -398,8 +401,22 @@ function formatSystem(system) {
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
           cameraChannelId: config.camera_channel_id ?? 1,
+          vehicleGroupIds: Array.isArray(config.vehicle_group_ids)
+            ? config.vehicle_group_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          personGroupIds: Array.isArray(config.person_group_ids)
+            ? config.person_group_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          logDisplayColumns: normalizeLogDisplayColumns(
+            config.log_display_columns,
+          ),
         },
       };
+    }
 
     default:
       return {
