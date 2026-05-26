@@ -262,16 +262,36 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
 
   const rows = await db.query(
     `
-      SELECT p.*, pg.name AS group_name
+      SELECT
+        p.*,
+        pg.name AS group_name,
+        COALESCE(lp.license_plates, '[]'::json) AS license_plates
       FROM persons p
       LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', plp.id,
+            'person_id', plp.person_id,
+            'plate_number', plp.plate_number,
+            'plate_normalized', plp.plate_normalized
+          )
+          ORDER BY plp.id ASC
+        ) AS license_plates
+        FROM person_license_plates plp
+        WHERE plp.person_id = p.id
+      ) lp ON TRUE
       WHERE ${whereParts.join(" AND ")}
       ORDER BY p.employee_no ASC
       LIMIT ? OFFSET ?
     `,
     [...params, limit, offset],
   );
-  return { items: rows || [], total, limit, offset };
+  const items = (rows || []).map((row) => ({
+    ...row,
+    license_plates: parseJson(row.license_plates, []),
+  }));
+  return { items, total, limit, offset };
 }
 
 async function getPersonGroupMemberIds(personGroupId) {
