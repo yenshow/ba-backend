@@ -44,6 +44,7 @@ const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const runtimeConfigRoutes = require("./routes/runtimeConfigRoutes");
+const entryExitRoutes = require("./routes/entryExitRoutes");
 const { bootstrapRuntimeInfrastructure } = require("./services/platform/runtimeConfigApply");
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
@@ -177,6 +178,7 @@ app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 app.use("/api/runtime-config", runtimeConfigRoutes);
+app.use("/api/entry-exit", entryExitRoutes);
 app.use(
   "/api/multimedia",
   requireFeature("multimedia"),

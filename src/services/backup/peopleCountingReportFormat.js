@@ -20,9 +20,7 @@ const {
   formatDateZhTW,
   formatZoneLocation,
 } = require("./reportFormatUtils");
-const {
-  countEntryExitFromSorted,
-} = require("../peopleCounting/peopleCountingService");
+const { computeTransitionStats } = require("../entryExit/stats");
 
 const sep = "\x00";
 
@@ -56,17 +54,21 @@ function buildStatsSection(rows, directionMap) {
       (a, b) => new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
     );
     const getDirection = (r) => directionMap.get(Number(r.physical_id));
-    const { entryCount, exitCount } = countEntryExitFromSorted(
+    const { entryCount, exitCount, currentCount } = computeTransitionStats(
       sorted,
-      getDirection,
+      {
+        getKey: (r) => (r.person_id === -1 ? null : r.person_id),
+        getDirection,
+        getTime: (r) => r.swip_card_rev_time,
+        sortByTime: false,
+      },
     );
-    const current = Math.max(0, entryCount - exitCount);
     sectionRows.push({
       日期: dateStr,
       "區域-地點": zoneLoc,
       進場人數: String(entryCount),
       出場人數: String(exitCount),
-      在場人數: String(current),
+      在場人數: String(currentCount),
     });
   }
   return sectionRows;
@@ -101,18 +103,22 @@ function buildUnitStatsSection(rows, directionMap) {
           new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
       );
       const getDirection = (r) => directionMap.get(Number(r.physical_id));
-      const { entryCount, exitCount } = countEntryExitFromSorted(
+      const { entryCount, exitCount, currentCount } = computeTransitionStats(
         sorted,
-        getDirection,
+        {
+          getKey: (r) => (r.person_id === -1 ? null : r.person_id),
+          getDirection,
+          getTime: (r) => r.swip_card_rev_time,
+          sortByTime: false,
+        },
       );
-      const current = Math.max(0, entryCount - exitCount);
       sectionRows.push({
         日期: dateStr,
         "區域-地點": zoneLoc,
         單位名稱: unitName,
         進場人數: String(entryCount),
         出場人數: String(exitCount),
-        在場人數: String(current),
+        在場人數: String(currentCount),
       });
     }
   }

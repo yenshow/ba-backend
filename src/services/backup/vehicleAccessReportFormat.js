@@ -7,6 +7,9 @@
  */
 
 const { formatDateTimeZhTW, formatDateZhTW, formatZoneLocation } = require("./reportFormatUtils");
+const { normalizePlate } = require("../../utils/vehiclePlateUtils");
+const { computeTransitionStats } = require("../entryExit/stats");
+const { normalizeVehicleDirection } = require("../vehicleAccess/normalizeVehicleDirection");
 
 const sep = "\x00";
 
@@ -22,16 +25,21 @@ function groupByDayLocation(rows) {
   return groups;
 }
 
-/** 進場/出場計數：allow_result=1 且 lane_type 1=進 2=出 */
+/** 進場/出場/在場：transition（車牌為主體） */
 function countEntryExit(recs) {
-  let entry = 0;
-  let exit = 0;
-  for (const r of recs) {
-    if (r.allow_result !== 1) continue;
-    if (r.lane_type === 1) entry += 1;
-    else if (r.lane_type === 2) exit += 1;
-  }
-  return { entry, exit, current: Math.max(0, entry - exit) };
+  const sorted = [...recs].sort(
+    (a, b) => new Date(a.trigger_time) - new Date(b.trigger_time),
+  );
+  const { entryCount, exitCount, currentCount } = computeTransitionStats(
+    sorted,
+    {
+      getKey: (r) => normalizePlate(r.license_plate),
+      getDirection: normalizeVehicleDirection,
+      getTime: (r) => r.trigger_time,
+      sortByTime: false,
+    },
+  );
+  return { entry: entryCount, exit: exitCount, current: currentCount };
 }
 
 /** 進出統計：每日每區一列，5 欄 */

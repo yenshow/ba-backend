@@ -5,7 +5,6 @@ const deviceTypeService = require("../services/devices/deviceTypeService");
 const deviceModelService = require("../services/devices/deviceModelService");
 const deviceStreamService = require("../services/devices/deviceStreamService");
 const deviceConnectivityService = require("../services/devices/deviceConnectivityService");
-const isapiSubscribeHub = require("../services/isapi/isapiSubscribeHub");
 const {
   authenticate,
   requireAdminOrOperator,
@@ -108,18 +107,6 @@ router.delete(
 );
 
 // ========== 設備 API ==========
-
-/**
- * ISAPI 佈防訂閱狀態（依設備 ID 彙總 profile）
- * GET /api/devices/isapi-subscribe-status
- */
-router.get(
-  "/isapi-subscribe-status",
-  noCache,
-  asyncHandler(async (req, res) => {
-    res.sendSuccess(isapiSubscribeHub.getDeviceProfileMap());
-  }),
-);
 
 // 取得設備連線狀態快照（不落 DB；供設備管理頁 initial render）
 // - 可用 type_code 篩選（回該類型全部設備的狀態）

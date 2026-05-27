@@ -9,7 +9,14 @@
  * - enter_delta／exit_delta 僅供 getSiteLogs 判斷進／離，不參與統計
  */
 const db = require("../../../database/db");
-const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
+const {
+  computeCumulativeStats,
+  sumCumulativeParts,
+} = require("../../entryExit/stats");
+const {
+  ENTRY_EXIT_MAX_RECORDS,
+  resolveStatsTimeRange,
+} = require("../../entryExit/resolveTimeOptions");
 const C = require("../../../utils/apiErrorCodes");
 const { throwApiError } = require("../../../utils/apiErrorMeta");
 
@@ -101,7 +108,7 @@ async function getLatestRegionTotalsByName(
 
 async function getSiteData(siteId, config) {
   const { deviceIds, channelId } = await getSiteConfigOrThrow(siteId, config);
-  const today = getTodayTimeRange();
+  const today = resolveStatsTimeRange({});
   // 站點統計：依「分區累計」彙總（不使用 global 列）
   let entryCount = 0;
   let exitCount = 0;
@@ -126,38 +133,31 @@ async function getSiteData(siteId, config) {
     units = sorted.map((r, idx) => {
       const ent = ensureInt(r.enter) ?? 0;
       const ex = ensureInt(r.exit) ?? 0;
-      const present = Math.max(0, ent - ex);
+      const unitStats = computeCumulativeStats(ent, ex);
       const name = String(r.region_name || "").trim() || "未命名區域";
       return {
         id: stableUnitIdFromName(name) || idx + 1,
         name,
-        currentCount: present,
-        entryCount: ent,
-        exitCount: ex,
+        currentCount: unitStats.currentCount,
+        entryCount: unitStats.entryCount,
+        exitCount: unitStats.exitCount,
         totalCount: Math.max(0, ent),
       };
     });
   }
 
-  entryCount = units.reduce(
-    (sum, u) => sum + (ensureInt(u.entryCount) ?? 0),
-    0,
-  );
-  exitCount = units.reduce((sum, u) => sum + (ensureInt(u.exitCount) ?? 0), 0);
-  currentCount = Math.max(0, entryCount - exitCount);
+  const totals = sumCumulativeParts(units);
+  entryCount = totals.entryCount;
+  exitCount = totals.exitCount;
+  currentCount = totals.currentCount;
 
   return { entryCount, exitCount, currentCount, units };
 }
 
 async function getSiteLogs(siteId, config, options = {}) {
   const { deviceIds, channelId } = await getSiteConfigOrThrow(siteId, config);
-  const start = options.startTime
-    ? new Date(options.startTime)
-    : getTodayTimeRange().start;
-  const end = options.endTime
-    ? new Date(options.endTime)
-    : getTodayTimeRange().end;
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 10000);
+  const { start, end } = resolveStatsTimeRange(options);
+  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
   const offset = Math.max(Number(options.offset) || 0, 0);
 
   // 已移除 global 寫入：logs 固定以 region 列為準

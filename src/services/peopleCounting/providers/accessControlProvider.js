@@ -6,13 +6,17 @@
 const db = require("../../../database/db");
 const deviceService = require("../../devices/deviceService");
 const personnelService = require("../../personnel/personnelService");
-const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
 const logger = require("../../../utils/logger");
 const {
   extractSubEventType,
   resolveAccessControlEvent,
   resolveVerifyMethodLabel,
 } = require("../accessControlLogLabels");
+const { computeTransitionStats } = require("../../entryExit/stats");
+const {
+  ENTRY_EXIT_MAX_RECORDS,
+  resolveStatsTimeRange,
+} = require("../../entryExit/resolveTimeOptions");
 
 function normalizeDeviceHost(host) {
   if (!host || typeof host !== "string") return "";
@@ -21,43 +25,18 @@ function normalizeDeviceHost(host) {
   return m ? m[1] : trimmed;
 }
 
-/**
- * 從門禁進出紀錄計算今日進場/出場/在場人數
- */
-function calculateEntryExitCurrentFromAccessControlLogs(logs) {
-  if (!logs || logs.length === 0) {
-    return { entryCount: 0, exitCount: 0, currentCount: 0 };
-  }
-  const sorted = [...logs].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
-  const lastByPerson = new Map();
-  let entryCount = 0;
-  let exitCount = 0;
-  for (const log of sorted) {
-    const key = log.employeeId || "";
-    if (!key || log.eventType === "failed") continue;
-    const dir =
-      log.eventType === "entry" || log.eventType === "exit"
-        ? log.eventType
-        : null;
-    if (!dir) continue;
-    const prev = lastByPerson.get(key);
-    if (prev === undefined && dir === "exit") continue;
-    if (prev !== dir) {
-      if (dir === "entry") entryCount++;
-      else exitCount++;
-    }
-    lastByPerson.set(key, dir);
-  }
-  const currentCount = [...lastByPerson.values()].filter(
-    (d) => d === "entry",
-  ).length;
-  return { entryCount, exitCount, currentCount };
-}
-
-function currentCountFromAccessControlLogs(logs) {
-  return calculateEntryExitCurrentFromAccessControlLogs(logs).currentCount;
+function statsFromAccessControlLogs(logs) {
+  return computeTransitionStats(logs || [], {
+    getKey: (log) => log.employeeId,
+    getDirection: (log) => {
+      if (log.eventType === "failed") return null;
+      if (log.eventType === "entry" || log.eventType === "exit") {
+        return log.eventType;
+      }
+      return null;
+    },
+    getTime: (log) => log.timestamp,
+  });
 }
 
 /**
@@ -117,9 +96,11 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
   const allIpsArray = [...allIps];
   if (allIpsArray.length === 0) return [];
 
-  const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
-  const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
-  const limitNum = Math.min(Math.max(Number(limit) || 50, 1), 10000);
+  const { start, end } = resolveStatsTimeRange({
+    startTime: optStart,
+    endTime: optEnd,
+  });
+  const limitNum = Math.min(Math.max(Number(limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
   const offsetNum = Math.max(Number(offset) || 0, 0);
 
   const placeholders = allIpsArray.map(() => "?").join(",");
@@ -230,7 +211,7 @@ async function getSiteData(siteId, config) {
       if (!byGroup.has(gname)) byGroup.set(gname, []);
       byGroup.get(gname).push(p);
     }
-    const { start, end } = getTodayTimeRange();
+    const { start, end } = resolveStatsTimeRange({});
     const todayLogs =
       entryDeviceIds.length > 0 || exitDeviceIds.length > 0
         ? await getAccessControlSiteLogs(siteId, {
@@ -238,11 +219,11 @@ async function getSiteData(siteId, config) {
             exitDeviceIds,
             startTime: start.toISOString(),
             endTime: end.toISOString(),
-            limit: 2000,
+            limit: ENTRY_EXIT_MAX_RECORDS,
             offset: 0,
           })
         : [];
-    const siteStats = calculateEntryExitCurrentFromAccessControlLogs(todayLogs);
+    const siteStats = statsFromAccessControlLogs(todayLogs);
     entryCount = siteStats.entryCount;
     exitCount = siteStats.exitCount;
     currentCount = siteStats.currentCount;
@@ -255,7 +236,7 @@ async function getSiteData(siteId, config) {
       return {
         id: ++idx,
         name,
-        currentCount: currentCountFromAccessControlLogs(unitLogs),
+        currentCount: statsFromAccessControlLogs(unitLogs).currentCount,
         totalCount: list.length,
       };
     });
@@ -302,7 +283,7 @@ async function getUnitPersonnel(unitId, siteId, config) {
   const [, list] = group;
   const employeeNosInUnit = new Set(list.map((p) => String(p.employee_no)));
 
-  const { start: todayStart, end: todayEnd } = getTodayTimeRange();
+  const { start: todayStart, end: todayEnd } = resolveStatsTimeRange({});
   const todayLogs = await getAccessControlSiteLogs(siteId, {
     entryDeviceIds: config.entryDeviceIds,
     exitDeviceIds: config.exitDeviceIds,
@@ -311,14 +292,12 @@ async function getUnitPersonnel(unitId, siteId, config) {
     limit: 500,
     offset: 0,
   });
-  const entryCount = todayLogs.filter(
-    (log) =>
-      log.eventType === "entry" && employeeNosInUnit.has(log.employeeId || ""),
-  ).length;
-  const exitCount = todayLogs.filter(
-    (log) =>
-      log.eventType === "exit" && employeeNosInUnit.has(log.employeeId || ""),
-  ).length;
+  const unitLogs = todayLogs.filter((log) =>
+    employeeNosInUnit.has(log.employeeId || ""),
+  );
+  const unitStats = statsFromAccessControlLogs(unitLogs);
+  const entryCount = unitStats.entryCount;
+  const exitCount = unitStats.exitCount;
 
   const lastEntryByNo = new Map();
   const lastExitByNo = new Map();

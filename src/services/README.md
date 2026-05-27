@@ -12,7 +12,8 @@
 | `snapshotStatus/` | 8 | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
 | `environment/` | 4 | 環境讀數、衍生指標、彙總排程 |
 | `peopleCounting/` | 11 | 人流 API、sync、providers；含 ISAPI 攝影機訂閱（`isapiPeopleCounting*`） |
-| `vehicleAccess/` | 1 | 車輛進出日同步（備份排程用） |
+| `vehicleAccess/` | 2 | 車輛進出日同步（備份排程用）、方向正規化 |
+| `entryExit/` | 7 | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 10 | 設備 CRUD、Modbus、`modbusDiDoConfig` |
 | `monitoring/` | 8 | 背景監控、`systemSnapshotStatusFields`、`snapshotTaskRegistry` |
 | `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
@@ -36,7 +37,7 @@
 | `licenseRoutes` | `license/*` |
 | `locationRoutes` | `location/locationService` |
 | `environmentRoutes` | `environment/environmentService` |
-| `peopleCountingRoutes` | `peopleCounting/peopleCountingService` |
+| `peopleCountingRoutes` | `peopleCounting/peopleCountingService`、`entryExit/resolveTimeOptions` |
 | `lighting`～`smokeAlarm` Routes（狀態 API） | `snapshotStatus/*StatusService` + `location/locationService` |
 | `deviceRoutes` / `modbusRoutes` | `devices/*` |
 | `alertRoutes` | `alerts/*` |
@@ -61,6 +62,7 @@
 | 有 `getStatusSnapshot` 的 Modbus 基礎設施 | `snapshotStatus/<name>StatusService.js` + 在 `monitoring/snapshotTaskRegistry.js` 註冊 |
 | 區域／地點設定延伸 | 改 `location/locationService.js` 的 `formatSystem` |
 | 獨立 feature（環境、人流、車輛） | `environment/`、`peopleCounting/`、`vehicleAccess/` 或新開同層資料夾 |
+| 跨 feature 共用（進出統計、營運日） | `entryExit/`（路由：`routes/entryExitRoutes.js`） |
 | 平台／授權 | `platform/`、`license/` |
 
 詳細擴充 checklist 見 `docs/00-decisions/infrastructure-layout-design.md`。

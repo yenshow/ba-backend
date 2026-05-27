@@ -2,15 +2,16 @@
  * YSCP 車輛進出（外部 vehiclebiz.passageway_log_data）
  */
 const handlerFactory = require("../../externalData/handlerFactory");
-const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
 const yscpVehicleFeature = require("../../../utils/yscpVehicleAccessFeature");
-
-function ensureIntArray(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((v) => Number(v))
-    .filter((n) => Number.isFinite(n) && n > 0);
-}
+const { normalizePlate } = require("../../../utils/vehiclePlateUtils");
+const { computeTransitionStats } = require("../../entryExit/stats");
+const {
+  resolveStatsTimeRange,
+  resolveTimeOptions,
+  ENTRY_EXIT_MAX_RECORDS,
+} = require("../../entryExit/resolveTimeOptions");
+const { normalizeVehicleDirection } = require("../normalizeVehicleDirection");
+const logger = require("../../../utils/logger");
 
 function getLaneIds(config) {
   const ids = [];
@@ -19,14 +20,28 @@ function getLaneIds(config) {
   return ids.filter((n) => Number.isFinite(n));
 }
 
-async function countLogs(filters) {
+async function listPassageLogsForStats(filters) {
   const handler = handlerFactory.getHandler("vehiclebiz", "passageway_log_data");
-  const result = await handler.getCount(filters);
-  const raw = result.data;
-  return typeof raw === "number" ? raw : Number(raw?.count ?? 0);
+  const result = await handler.getList({
+    ...filters,
+    limit: ENTRY_EXIT_MAX_RECORDS,
+    offset: 0,
+    orderBy: "trigger_time",
+    orderDirection: "ASC",
+    allow_result: 1,
+  });
+  if (!result.success) return [];
+  const data = result.data || [];
+  if (data.length >= ENTRY_EXIT_MAX_RECORDS) {
+    logger.warn("YSCP 車輛統計紀錄達上限，結果可能不完整", {
+      limit: ENTRY_EXIT_MAX_RECORDS,
+      module: "yscpVehicleProvider",
+    });
+  }
+  return data;
 }
 
-async function getSiteStats(siteId, config, timeRange) {
+async function getSiteStats(siteId, config, options = {}) {
   if (yscpVehicleFeature.shouldSkipYscp("yscp")) {
     return yscpVehicleFeature.emptySiteStats();
   }
@@ -34,16 +49,18 @@ async function getSiteStats(siteId, config, timeRange) {
   if (laneIds.length === 0) {
     return { entryCount: 0, exitCount: 0, currentCount: 0 };
   }
-  const base = { lane_id: laneIds, allow_result: 1, ...timeRange };
-  const [entryCount, exitCount] = await Promise.all([
-    countLogs({ ...base, lane_type: 1 }),
-    countLogs({ ...base, lane_type: 2 }),
-  ]);
-  return {
-    entryCount,
-    exitCount,
-    currentCount: Math.max(0, entryCount - exitCount),
-  };
+  const { start, end } = resolveStatsTimeRange(options);
+  const logs = await listPassageLogsForStats({
+    lane_id: laneIds,
+    startTime: start.toISOString(),
+    endTime: end.toISOString(),
+  });
+  return computeTransitionStats(logs, {
+    getKey: (r) => normalizePlate(r.license_plate),
+    getDirection: normalizeVehicleDirection,
+    getTime: (r) => r.trigger_time,
+    sortByTime: false,
+  });
 }
 
 async function getSiteLogs(siteId, config, options = {}) {
@@ -74,9 +91,9 @@ async function getSiteLogs(siteId, config, options = {}) {
   } else if (timeRange) {
     filters.timeRange = timeRange;
   } else {
-    const today = getTodayTimeRange();
-    filters.startTime = today.start.toISOString();
-    filters.endTime = today.end.toISOString();
+    const { startTime, endTime } = resolveTimeOptions({});
+    filters.startTime = startTime;
+    filters.endTime = endTime;
   }
   if (search) filters.search = search;
 

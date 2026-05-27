@@ -1,121 +1,52 @@
 /**
- * 共用時間範圍工具（UTC，與資料庫時區一致）
+ * 共用時間範圍工具
+ * 「今日」等語意以營運日為準（ALERT_DAILY_ROLLOVER_*），見 services/entryExit/operationalDayRange.js
  */
+const {
+  getOperationalDayTimeRange,
+  getPreviousOperationalDayTimeRange,
+  getLast7OperationalDaysTimeRange,
+} = require("../services/entryExit/operationalDayRange");
 
 /**
- * 取得今日時間範圍（UTC 00:00:00 - 23:59:59.999）
+ * @deprecated 請用 getOperationalDayTimeRange
  * @returns {{ start: Date, end: Date }}
  */
 function getTodayTimeRange() {
-  const now = new Date();
-  const start = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      0,
-      0,
-      0,
-      0,
-    ),
-  );
-  const end = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      23,
-      59,
-      59,
-      999,
-    ),
-  );
-  return { start, end };
+  return getOperationalDayTimeRange();
 }
 
 /**
- * 取得昨日時間範圍（UTC 00:00:00 - 23:59:59.999）
- * @returns {{ start: Date, end: Date }}
+ * @deprecated 請用 getPreviousOperationalDayTimeRange
  */
 function getYesterdayTimeRange() {
-  const now = new Date();
-  const yesterday = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() - 1,
-      0,
-      0,
-      0,
-      0,
-    ),
-  );
-  const start = yesterday;
-  const end = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() - 1,
-      23,
-      59,
-      59,
-      999,
-    ),
-  );
-  return { start, end };
+  return getPreviousOperationalDayTimeRange();
 }
 
 /**
- * 取得最近一週時間範圍（今日起算往前 7 個日曆日：start = 6 天前 00:00，end = 今日 23:59:59.999）
- * @returns {{ start: Date, end: Date }}
+ * @deprecated 請用 getLast7OperationalDaysTimeRange
  */
 function getLast7DaysTimeRange() {
-  const now = new Date();
-  const start = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() - 6,
-      0,
-      0,
-      0,
-      0,
-    ),
-  );
-  const end = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      23,
-      59,
-      59,
-      999,
-    ),
-  );
-  return { start, end };
+  return getLast7OperationalDaysTimeRange();
 }
 
 /**
- * 將 API 的 timeRange/startTime/endTime 寫入 filters 的 startKey/endKey，未指定時預設今天
+ * 將 API 的 timeRange/startTime/endTime 寫入 filters 的 startKey/endKey，未指定時預設營運日
  * timeRange 支援：today、yesterday、last7days
- * @param {Object} filters - 篩選物件（會被修改）
- * @param {string} startKey - 開始時間欄位名（如 trigger_time_start）
- * @param {string} endKey - 結束時間欄位名（如 trigger_time_end）
  */
 function applyDefaultTimeFilters(filters, startKey, endKey) {
   const applyToday = () => {
-    const { start, end } = getTodayTimeRange();
+    const { start, end } = getOperationalDayTimeRange();
     filters[startKey] = start.toISOString();
     filters[endKey] = end.toISOString();
   };
   const applyYesterday = () => {
-    const { start, end } = getYesterdayTimeRange();
+    const { start, end } = getPreviousOperationalDayTimeRange();
     filters[startKey] = start.toISOString();
     filters[endKey] = end.toISOString();
   };
   const applyLast7Days = () => {
-    const { start, end } = getLast7DaysTimeRange();
+    const { start, end } = getLast7OperationalDaysTimeRange();
     filters[startKey] = start.toISOString();
     filters[endKey] = end.toISOString();
   };
@@ -142,5 +73,8 @@ module.exports = {
   getTodayTimeRange,
   getYesterdayTimeRange,
   getLast7DaysTimeRange,
+  getOperationalDayTimeRange,
+  getPreviousOperationalDayTimeRange,
+  getLast7OperationalDaysTimeRange,
   applyDefaultTimeFilters,
 };

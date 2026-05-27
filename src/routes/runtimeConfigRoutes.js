@@ -24,7 +24,7 @@ const FORM_SCHEMA = {
       ],
     },
     {
-      title: "警報日界線",
+      title: "警報日界線（亦為人流／車輛進出營運日）",
       fields: [
         { key: "ALERT_DAILY_ROLLOVER_TZ", label: "時區", kind: "text" },
         {

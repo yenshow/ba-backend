@@ -16,7 +16,6 @@ const isapiCameraProvider = require("./providers/isapiCameraProvider");
 const isapiSubscribeService = require("../accessControl/isapiSubscribeService");
 const {
   parseEventType,
-  countEntryExitFromSorted,
 } = require("./helpers/entryExitStats");
 const {
   normalizeLogDisplayColumns,
@@ -760,7 +759,6 @@ module.exports = {
   getPeopleCountingConfig,
   generateRecordId,
   parseEventType,
-  countEntryExitFromSorted,
   // 業務邏輯 API
   getSites,
   getSiteStats,

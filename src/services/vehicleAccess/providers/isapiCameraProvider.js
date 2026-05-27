@@ -2,8 +2,14 @@
  * ISAPI 車輛進出（vehicle_passageway_logs, data_source=isapi_camera）
  */
 const db = require("../../../database/db");
-const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
 const { enrichLogsWithPerson } = require("../vehiclePlateEnrichment");
+const { normalizePlate } = require("../../../utils/vehiclePlateUtils");
+const { computeTransitionStats } = require("../../entryExit/stats");
+const {
+  resolveStatsTimeRange,
+  ENTRY_EXIT_MAX_RECORDS,
+} = require("../../entryExit/resolveTimeOptions");
+const { normalizeVehicleDirection } = require("../normalizeVehicleDirection");
 
 function mapRow(row) {
   const payload =
@@ -37,51 +43,28 @@ function mapRow(row) {
   };
 }
 
-function resolveTimeRange(options = {}) {
-  const { startTime, endTime, timeRange } = options;
-  if (startTime && endTime) {
-    return { start: new Date(startTime), end: new Date(endTime) };
-  }
-  if (timeRange === "yesterday") {
-    const today = getTodayTimeRange();
-    const start = new Date(today.start);
-    start.setUTCDate(start.getUTCDate() - 1);
-    const end = new Date(today.end);
-    end.setUTCDate(end.getUTCDate() - 1);
-    return { start, end };
-  }
-  return getTodayTimeRange();
-}
-
 async function getSiteStats(siteId, _config, options = {}) {
-  const { start, end } = resolveTimeRange(options);
-  const baseParams = [siteId, start.toISOString(), end.toISOString()];
-  const entryRows = await db.query(
-    `SELECT COUNT(*)::int AS c FROM vehicle_passageway_logs
+  const { start, end } = resolveStatsTimeRange(options);
+  const rows = await db.query(
+    `SELECT license_plate, allow_result, lane_type, trigger_time
+     FROM vehicle_passageway_logs
      WHERE location_id = ? AND data_source = 'isapi_camera'
        AND trigger_time >= ? AND trigger_time <= ?
-       AND allow_result = 1 AND lane_type = 1`,
-    baseParams,
+       AND allow_result = 1 AND lane_type IN (1, 2)
+     ORDER BY trigger_time ASC`,
+    [siteId, start.toISOString(), end.toISOString()],
   );
-  const exitRows = await db.query(
-    `SELECT COUNT(*)::int AS c FROM vehicle_passageway_logs
-     WHERE location_id = ? AND data_source = 'isapi_camera'
-       AND trigger_time >= ? AND trigger_time <= ?
-       AND allow_result = 1 AND lane_type = 2`,
-    baseParams,
-  );
-  const entryCount = Number(entryRows?.[0]?.c ?? 0);
-  const exitCount = Number(exitRows?.[0]?.c ?? 0);
-  return {
-    entryCount,
-    exitCount,
-    currentCount: Math.max(0, entryCount - exitCount),
-  };
+  return computeTransitionStats(rows || [], {
+    getKey: (r) => normalizePlate(r.license_plate),
+    getDirection: normalizeVehicleDirection,
+    getTime: (r) => r.trigger_time,
+    sortByTime: false,
+  });
 }
 
 async function getSiteLogs(siteId, _config, options = {}) {
-  const { start, end } = resolveTimeRange(options);
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 10000);
+  const { start, end } = resolveStatsTimeRange(options);
+  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
   const offset = Math.max(Number(options.offset) || 0, 0);
   const search = options.search ? String(options.search).trim() : "";
 

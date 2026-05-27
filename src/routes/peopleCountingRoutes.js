@@ -12,6 +12,7 @@ const {
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
+const { resolveTimeOptions } = require("../services/entryExit/resolveTimeOptions");
 const {
   validateIntegers,
   validateNumbers,
@@ -180,13 +181,18 @@ router.get(
   validateNumbers("limit", "offset", "unitId"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { limit, offset, unitId, startTime, endTime } = req.query;
+    const { limit, offset, unitId, startTime, endTime, timeRange } = req.query;
+    const resolved = resolveTimeOptions({
+      startTime,
+      endTime,
+      timeRange,
+    });
     const options = {
-      limit: limit ? parseInt(limit) : 50,
-      offset: offset ? parseInt(offset) : 0,
-      unitId: unitId ? parseInt(unitId) : undefined,
-      startTime: startTime || undefined,
-      endTime: endTime || undefined,
+      limit: limit ? parseInt(limit, 10) : 50,
+      offset: offset ? parseInt(offset, 10) : 0,
+      unitId: unitId ? parseInt(unitId, 10) : undefined,
+      startTime: resolved.startTime,
+      endTime: resolved.endTime,
     };
     const result = await peopleCountingService.getSiteLogs(
       parseInt(id),

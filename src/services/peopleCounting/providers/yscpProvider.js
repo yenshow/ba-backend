@@ -6,13 +6,12 @@
 const externalDb = require("../../../database/externalDb");
 const yscpPersonService = require("../../yscp/yscpPersonService");
 const peopleCountingSyncService = require("../peopleCountingSyncService");
-const { getTodayTimeRange } = require("../../../utils/dateRangeUtils");
+const { resolveStatsTimeRange } = require("../../entryExit/resolveTimeOptions");
 const logger = require("../../../utils/logger");
 const {
   parseEventType,
   sortRecordsByTime,
   calculateTodayStatsByPhysicalId,
-  calculateCurrentCount,
 } = require("../helpers/entryExitStats");
 const { yscpEventLabel } = require("../accessControlLogLabels");
 
@@ -57,7 +56,7 @@ async function getTodayRecordsOnly(personIds) {
   if (personIds.length === 0) return [];
   return handleNonCriticalError(
     async () => {
-      const { start, end } = getTodayTimeRange();
+      const { start, end } = resolveStatsTimeRange({});
       const placeholders = generatePlaceholders(personIds);
       const sql = `
         SELECT * FROM baseacs.slot_card_records
@@ -82,8 +81,11 @@ async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
     startTime: optStart,
     endTime: optEnd,
   } = options;
-  const start = optStart ? new Date(optStart) : getTodayTimeRange().start;
-  const end = optEnd ? new Date(optEnd) : getTodayTimeRange().end;
+  const { start, end } = resolveStatsTimeRange({
+    startTime: optStart,
+    endTime: optEnd,
+    timeRange: options.timeRange,
+  });
   const placeholders = generatePlaceholders(physicalIds);
   const baseParamIndex = physicalIds.length + 1;
   const unitFilterSql = unitId
@@ -163,11 +165,11 @@ async function getUnitsByGroupIds(groupIds, records, entryDoorIds, exitDoorIds) 
     const unitRecords = records.filter(
       (r) => r.person_id !== -1 && unitPersonIds.includes(r.person_id),
     );
-    const currentCount = calculateCurrentCount(
+    const currentCount = calculateTodayStatsByPhysicalId(
       unitRecords,
       entryDoorIds,
       exitDoorIds,
-    );
+    ).currentCount;
     units.push({
       id: group.id,
       name: group.name,
@@ -306,11 +308,6 @@ async function getSiteData(siteId, config) {
     entryDoorIds,
     exitDoorIds,
   );
-  const currentCount = calculateCurrentCount(
-    todayRecords,
-    entryDoorIds,
-    exitDoorIds,
-  );
   const units = await getUnitsByGroupIds(
     personGroupIds,
     todayRecords,
@@ -320,7 +317,7 @@ async function getSiteData(siteId, config) {
   return {
     entryCount: stats.entryCount,
     exitCount: stats.exitCount,
-    currentCount,
+    currentCount: stats.currentCount,
     units,
   };
 }
@@ -358,11 +355,7 @@ async function getSitesData(locations, getPeopleCountingConfig) {
     result.set(locationId, {
       entryCount: stats.entryCount,
       exitCount: stats.exitCount,
-      currentCount: calculateCurrentCount(
-        data.records,
-        cfg.entryDoorIds,
-        cfg.exitDoorIds,
-      ),
+      currentCount: stats.currentCount,
       units,
     });
   }
@@ -450,7 +443,7 @@ async function getUnitPersonnel(unitId, siteId, config) {
     entryDoorIds,
     exitDoorIds,
   );
-  const { start: todayStart, end: todayEnd } = getTodayTimeRange();
+  const { start: todayStart, end: todayEnd } = resolveStatsTimeRange({});
   const personTodayRecordsMap = new Map();
   todayRecords.forEach((record) => {
     if (record.person_id !== -1) {
