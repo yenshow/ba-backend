@@ -42,9 +42,10 @@ router.get(
   "/models",
   noCache,
   asyncHandler(async (req, res) => {
-    const { type_code } = req.query;
+    const { type_code, category_code } = req.query;
     const result = await deviceModelService.getAllDeviceModels({
       type_code,
+      category_code,
     });
     res.sendSuccess(result);
   }),

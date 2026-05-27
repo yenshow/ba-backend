@@ -44,7 +44,8 @@ async function getDevices(filters = {}) {
     let query = `
 			SELECT 
 				d.*,
-				dm.name as model_name
+				dm.name as model_name,
+        dm.category_code as model_category_code
 			FROM devices d
 			LEFT JOIN device_models dm ON d.model_id = dm.id
 			WHERE 1=1
@@ -136,9 +137,9 @@ async function getDeviceById(id) {
       `
 			SELECT 
 				d.*,
-				dm.id as model_id,
 				dm.name as model_name,
 				dm.port as model_port,
+        dm.category_code as model_category_code,
 				dm.config as model_config
 			FROM devices d
 			LEFT JOIN device_models dm ON d.model_id = dm.id
@@ -155,19 +156,16 @@ async function getDeviceById(id) {
     device.type_name = getDeviceTypeName(device.type_code);
     device.config = parseConfig(device.config);
 
-    // 如果設備有 model_id，包含完整的 model 資訊（含 config）
     if (device.model_id) {
       device.model = {
         id: device.model_id,
         name: device.model_name,
         port: device.model_port,
+        category_code: device.model_category_code,
         config: parseConfig(device.model_config),
       };
     }
 
-    // 移除臨時欄位
-    delete device.model_id;
-    delete device.model_name;
     delete device.model_port;
     delete device.model_config;
 

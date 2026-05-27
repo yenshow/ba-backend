@@ -26,7 +26,7 @@ function parseOptionalInt(val) {
 
 async function getAllDeviceModels(filters = {}) {
   try {
-    const { type_code } = filters;
+    const { type_code, category_code } = filters;
 
     let query = `
 			SELECT 
@@ -40,8 +40,12 @@ async function getAllDeviceModels(filters = {}) {
       query += " AND dm.type_code = ?";
       params.push(type_code);
     }
+    if (category_code) {
+      query += " AND dm.category_code = ?";
+      params.push(category_code);
+    }
 
-    query += " ORDER BY dm.id";
+    query += " ORDER BY dm.type_code, dm.category_code NULLS LAST, dm.id";
 
     const models = await db.query(query, params);
 
@@ -164,7 +168,8 @@ function validateSensorParametersConfig(config) {
 
 async function createDeviceModel(data, userId) {
   try {
-    const { name, type_code, port, unit_id, description, config } = data;
+    const { name, type_code, category_code, port, unit_id, description, config } =
+      data;
 
     if (!name || name.trim().length === 0) {
       throwApiError(C.DEVICE_MODEL_NAME_REQUIRED, "設備型號名稱不能為空");
@@ -189,6 +194,14 @@ async function createDeviceModel(data, userId) {
 
     const resolvedTypeCode = inputTypeCode;
 
+    const finalCategoryCode =
+      category_code != null && String(category_code).trim()
+        ? String(category_code).trim()
+        : null;
+    if (finalCategoryCode && finalCategoryCode.length > 50) {
+      throwApiError(C.DEVICE_MODEL_CATEGORY_CODE_INVALID, "category_code 長度過長");
+    }
+
     if (config && resolvedTypeCode === "sensor") {
       validateSensorParametersConfig(config);
     }
@@ -205,10 +218,11 @@ async function createDeviceModel(data, userId) {
     }
 
     const result = await db.query(
-      "INSERT INTO device_models (name, type_code, port, unit_id, description, config) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+      "INSERT INTO device_models (name, type_code, category_code, port, unit_id, description, config) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
       [
         name.trim(),
         resolvedTypeCode,
+        finalCategoryCode,
         finalPort,
         finalUnitId,
         description || null,
@@ -246,7 +260,8 @@ async function createDeviceModel(data, userId) {
 
 async function updateDeviceModel(id, data, userId) {
   try {
-    const { name, type_code, port, unit_id, description, config } = data;
+    const { name, type_code, category_code, port, unit_id, description, config } =
+      data;
 
     const existing = await db.query("SELECT * FROM device_models WHERE id = ?", [
       id,
@@ -343,6 +358,21 @@ async function updateDeviceModel(id, data, userId) {
     if (description !== undefined) {
       updates.push("description = ?");
       params.push(description || null);
+    }
+
+    if (category_code !== undefined) {
+      const cc =
+        category_code != null && String(category_code).trim()
+          ? String(category_code).trim()
+          : null;
+      if (cc && cc.length > 50) {
+        throwApiError(
+          C.DEVICE_MODEL_CATEGORY_CODE_INVALID,
+          "category_code 長度過長",
+        );
+      }
+      updates.push("category_code = ?");
+      params.push(cc);
     }
 
     if (config !== undefined) {

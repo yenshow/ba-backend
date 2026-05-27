@@ -343,6 +343,7 @@ async function initSchema() {
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(100) NOT NULL,
 				type_code VARCHAR(20) NOT NULL,
+        category_code VARCHAR(50),
         port INTEGER,
         unit_id INTEGER,
 				description TEXT,
@@ -355,9 +356,26 @@ async function initSchema() {
 
     await createUpdatedAtTrigger(targetPool, "device_models");
 
+    // 既有 DB：補上 category_code 欄位（用於型號分類；供各系統抓取）
+    // 注意：此段必須在建立依 category_code 的索引之前，避免舊環境缺欄位導致 CREATE INDEX 失敗
+    await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'device_models'
+            AND column_name = 'category_code'
+        ) THEN
+          ALTER TABLE device_models ADD COLUMN category_code VARCHAR(50);
+        END IF;
+      END $BODY$;
+    `);
+
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_device_models_name ON device_models(name);
 			CREATE INDEX IF NOT EXISTS idx_device_models_type_code ON device_models(type_code);
+      CREATE INDEX IF NOT EXISTS idx_device_models_category_code ON device_models(category_code);
 			CREATE INDEX IF NOT EXISTS idx_device_models_port ON device_models(port);
 		`);
 
@@ -377,16 +395,105 @@ async function initSchema() {
     for (const m of accessControlModelSeeds) {
       await targetPool.query(
         `
-          INSERT INTO device_models (name, type_code, description, config)
-          VALUES ($1, $2, $3, $4::jsonb)
-          ON CONFLICT (type_code, name) DO NOTHING
+          INSERT INTO device_models (name, type_code, category_code, description, config)
+          VALUES ($1, $2, $3, $4, $5::jsonb)
+          ON CONFLICT (type_code, name) DO UPDATE
+          SET category_code = EXCLUDED.category_code,
+              description = EXCLUDED.description,
+              config = EXCLUDED.config,
+              updated_at = CURRENT_TIMESTAMP
         `,
-        [m.name, m.type_code, "門禁設備預設型號", "{}"],
+        [m.name, m.type_code, null, "門禁設備預設型號", "{}"],
       );
     }
     schemaLogger.info("device_models：門禁預設型號種子已插入", {
       module: "initSchema",
     });
+
+    // 種子：攝影機預設型號（含分類；可重跑、可覆蓋更新）
+    // category_code（互斥單選）：
+    // - people_counting：人流統計
+    // - license_plate_recognition：車牌辨識
+    // - surveillance_2mp / 4mp / 5mp / 6mp / 8mp：影像監控（按解析度）
+    const cameraModelSeeds = [
+      // 人流統計
+      { name: "YS-2CD3046G2H-IU", category_code: "people_counting" },
+      { name: "YS-47-G0", category_code: "people_counting" },
+
+      // 車牌辨識
+      { name: "YS-46-G0", category_code: "license_plate_recognition" },
+      { name: "YS-TCG405-E", category_code: "license_plate_recognition" },
+
+      // 影像監控：2MP
+      { name: "YS-2CD3021G0-IU(2.8mm)", category_code: "surveillance_2mp" },
+      { name: "YS-2CD3321G2-IUF", category_code: "surveillance_2mp" },
+      { name: "YS-2CD3T43G2-2ISU", category_code: "surveillance_2mp" },
+
+      // 影像監控：4MP
+      { name: "YS-2CD3047G2E-LUF", category_code: "surveillance_4mp" },
+      { name: "YS-2CD2043G2-IU(4mm)", category_code: "surveillance_4mp" },
+      { name: "YS-2CD3347G2E-LUF", category_code: "surveillance_4mp" },
+
+      // 影像監控：5MP
+      { name: "YS-2CD3151G0-I", category_code: "surveillance_5mp" },
+      { name: "YS-2CD3051G0-IUF", category_code: "surveillance_5mp" },
+      { name: "YS-2CD3956G2-IS(U)", category_code: "surveillance_5mp" },
+
+      // 影像監控：6MP
+      { name: "YS-2CD3661G2-LIZSU", category_code: "surveillance_6mp" },
+
+      // 影像監控：8MP
+      { name: "YS 4G-55", category_code: "surveillance_8mp" },
+      { name: "YS-2CD3381G2P-LIUF/SL", category_code: "surveillance_8mp" },
+    ];
+    for (const m of cameraModelSeeds) {
+      await targetPool.query(
+        `
+          INSERT INTO device_models (name, type_code, category_code, description, config)
+          VALUES ($1, 'camera', $2, $3, $4::jsonb)
+          ON CONFLICT (type_code, name) DO UPDATE
+          SET category_code = EXCLUDED.category_code,
+              description = EXCLUDED.description,
+              config = EXCLUDED.config,
+              updated_at = CURRENT_TIMESTAMP
+        `,
+        [m.name, m.category_code, "攝影機預設型號", "{}"],
+      );
+    }
+    schemaLogger.info("device_models：攝影機預設型號（含分類）種子已插入", {
+      module: "initSchema",
+    });
+
+    // 舊環境：泛用攝影機型號（如 Yenshow）補上預設分類，避免列表/表單無 model_category_code
+    const legacyGenericCameraModelNames = [
+      "Yenshow",
+      "yenshow",
+      "攝影機",
+      "Camera",
+      "camera",
+    ];
+    for (const legacyName of legacyGenericCameraModelNames) {
+      const patched = await targetPool.query(
+        `
+          UPDATE device_models
+          SET category_code = 'surveillance_2mp',
+              description = COALESCE(NULLIF(TRIM(description), ''), '攝影機預設型號（由 initSchema 補分類）'),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE type_code = 'camera'
+            AND category_code IS NULL
+            AND lower(trim(name)) = lower($1)
+          RETURNING id
+        `,
+        [legacyName],
+      );
+      if (patched.rowCount > 0) {
+        schemaLogger.info("device_models：已為舊泛用攝影機型號補上 category_code", {
+          module: "initSchema",
+          name: legacyName,
+          count: patched.rowCount,
+        });
+      }
+    }
 
     // 建立 devices 表
     await targetPool.query(`
