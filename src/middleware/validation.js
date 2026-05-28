@@ -97,8 +97,12 @@ function validateIntegers(...integerFields) {
       const value = body[field] ?? query[field] ?? params[field];
 
       if (value !== undefined && value !== null && value !== "") {
-        const intValue = parseInt(value, 10);
-        if (isNaN(intValue) || intValue.toString() !== value.toString()) {
+        // 允許 number / string；string 先 trim，並以正規式判斷是否為「純整數」
+        const raw = typeof value === "string" ? value.trim() : value;
+        const isValidIntegerString =
+          typeof raw === "string" ? /^-?\d+$/.test(raw) : Number.isInteger(raw);
+
+        if (!isValidIntegerString) {
           invalid.push(field);
         }
       }

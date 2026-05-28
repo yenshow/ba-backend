@@ -118,6 +118,15 @@ function assignFlatControllerFields(
   if (statusPoints !== undefined) systemConfig.statusPoints = statusPoints;
 }
 
+/** 將任意值陣列轉為正整數陣列（去除 NaN / <=0，並截斷為 int） */
+function ensureIntArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => Number(v))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .map((n) => Math.trunc(n));
+}
+
 /**
  * 格式化系統配置為前端格式
  */
@@ -622,6 +631,7 @@ module.exports = {
   deviceIdsFromApiSystemConfig,
   assignFlatSystemDeviceFields,
   assignFlatControllerFields,
+  ensureIntArray,
   formatSystem,
   formatLocation,
   formatZone,

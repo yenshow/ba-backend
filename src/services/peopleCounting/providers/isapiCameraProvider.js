@@ -19,18 +19,14 @@ const {
 } = require("../../entryExit/resolveTimeOptions");
 const C = require("../../../utils/apiErrorCodes");
 const { throwApiError } = require("../../../utils/apiErrorMeta");
+const { ensureIntArray } = require("../../location/locationShared");
 
 function ensureInt(v) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-function ensureIntArray(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((v) => ensureInt(v))
-    .filter((n) => Number.isFinite(n) && n > 0);
-}
+// 保留 ensureInt 供本檔其他運算使用（若未來需要）；整數陣列正規化由共用 ensureIntArray 統一處理
 
 function stableUnitIdFromName(name) {
   const s = String(name || "").trim();

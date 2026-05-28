@@ -23,16 +23,14 @@ const {
 } = require("../vehicleAccess/vehicleAccessValidation");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const {
-  assertPeopleCountingIsapiCamerasAvailable,
   ensureIntArray,
-} = require("./cameraDeviceConflict");
+} = require("./locationShared");
 
 async function validatePeopleCountingIsapiIfNeeded(systemConfig, locationId) {
   if ((systemConfig?.data_source || "yscp") !== "isapi_camera") return;
-  await assertPeopleCountingIsapiCamerasAvailable(
-    ensureIntArray(systemConfig.camera_device_ids),
-    locationId != null ? Number(locationId) : null,
-  );
+  // 目前規則：允許攝影機跨地點／跨系統重複使用（不在後端擋）。
+  // 保留 ensureIntArray 以維持呼叫點兼容（有需要時可在此加回驗證）。
+  ensureIntArray(systemConfig.camera_device_ids);
 }
 
 function peopleCountingRowConfigToMergeInput(raw) {

@@ -5,10 +5,7 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
-const {
-  ensureIntArray,
-  assertCamerasNotUsedByPeopleCountingIsapi,
-} = require("../location/cameraDeviceConflict");
+const { ensureIntArray } = require("../location/locationShared");
 
 function parseConfig(config) {
   const c =
@@ -28,7 +25,8 @@ function parseConfig(config) {
     entryCameraDeviceIds: ensureIntArray(c.entry_camera_device_ids),
     exitCameraDeviceIds: ensureIntArray(c.exit_camera_device_ids),
     cameraChannelId:
-      c.camera_channel_id != null && Number.isFinite(Number(c.camera_channel_id))
+      c.camera_channel_id != null &&
+      Number.isFinite(Number(c.camera_channel_id))
         ? Math.trunc(Number(c.camera_channel_id))
         : 1,
     vehicleGroupIds: ensureIntArray(c.vehicle_group_ids),
@@ -40,10 +38,16 @@ function parseConfig(config) {
  * @param {object} systemConfig - DB JSON（snake_case）
  * @param {number|null} excludeLocationId
  */
-async function validateVehicleAccessConfig(systemConfig, excludeLocationId = null) {
+async function validateVehicleAccessConfig(
+  systemConfig,
+  excludeLocationId = null,
+) {
   const cfg = parseConfig(systemConfig);
   // YSCP（含功能關閉時略過寫入）：群組來自外部資料表，不在此驗證
-  if (yscpVehicleFeature.shouldSkipYscp(cfg.dataSource) || cfg.dataSource === "yscp") {
+  if (
+    yscpVehicleFeature.shouldSkipYscp(cfg.dataSource) ||
+    cfg.dataSource === "yscp"
+  ) {
     return cfg;
   }
 
@@ -73,30 +77,7 @@ async function validateVehicleAccessConfig(systemConfig, excludeLocationId = nul
   }
 
   const allDevices = [...entrySet, ...exitSet];
-  await assertCamerasNotUsedByPeopleCountingIsapi(allDevices, excludeLocationId);
-
-  const dupRows = await db.query(
-    `
-      SELECT ls.location_id, ls.system_config
-      FROM location_systems ls
-      WHERE ls.system_type = 'vehicle_access'
-        AND COALESCE(ls.system_config->>'data_source', 'yscp') = 'isapi_camera'
-        AND ($1::int IS NULL OR ls.location_id <> $1::int)
-    `,
-    [excludeLocationId],
-  );
-  for (const r of dupRows || []) {
-    const other = parseConfig(r.system_config);
-    const otherIds = [...other.entryCameraDeviceIds, ...other.exitCameraDeviceIds];
-    for (const id of allDevices) {
-      if (otherIds.includes(id)) {
-        throwApiError(
-          C.PEOPLE_COUNTING_VALIDATION_FAILED,
-          `攝影機設備 ${id} 已被其他車輛進出地點使用`,
-        );
-      }
-    }
-  }
+  // 目前規則：允許攝影機跨地點／跨系統重複使用（不在後端擋）。
 
   const typeRows = await db.query(
     `SELECT id, type_code FROM devices WHERE id = ANY(?::int[])`,

@@ -11,7 +11,7 @@ const {
   attachLicensePlatePicture,
   ensureUploadsDir,
 } = require("./isapiVehiclePersistence");
-const { ensureIntArray } = require("../location/cameraDeviceConflict");
+const { ensureIntArray } = require("../location/locationShared");
 
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
