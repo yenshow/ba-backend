@@ -5,6 +5,7 @@
 
 const COLUMN_KEYS = [
   "plate_image",
+  "person_group",
   "license_plate",
   "lane",
   "owner_name",

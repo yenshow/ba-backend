@@ -5,6 +5,7 @@
 
 const PEOPLE_COUNTING_LOG_COLUMN_KEYS = [
   "screenshot",
+  "unit",
   "device_name",
   "name",
   "verify_method",
@@ -14,6 +15,7 @@ const PEOPLE_COUNTING_LOG_COLUMN_KEYS = [
 
 const PEOPLE_COUNTING_LOG_COLUMN_LABELS = {
   screenshot: "設備截圖",
+  unit: "人員群組",
   device_name: "出入口名稱",
   name: "姓名",
   verify_method: "方式",
