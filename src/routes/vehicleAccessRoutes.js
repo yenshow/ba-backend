@@ -12,7 +12,11 @@ const {
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
-const { validateIntegers } = require("../middleware/validation");
+const {
+  resolveTimeOptions,
+  ENTRY_EXIT_MAX_RECORDS,
+} = require("../services/entryExit/resolveTimeOptions");
+const { validateIntegers, validateNumbers } = require("../middleware/validation");
 
 router.use(
   authenticate,
@@ -25,6 +29,30 @@ router.get(
   noCache,
   asyncHandler(async (req, res) => {
     const result = await vehicleAccessService.getSites();
+    res.sendSuccess(result);
+  }),
+);
+
+/**
+ * 跨地點過車紀錄（完整報表）
+ * GET /api/vehicle-access/logs
+ */
+router.get(
+  "/logs",
+  noCache,
+  validateNumbers("siteId", "limit", "offset"),
+  asyncHandler(async (req, res) => {
+    const { limit, offset, siteId, startTime, endTime, timeRange, search } =
+      req.query;
+    const resolved = resolveTimeOptions({ startTime, endTime, timeRange });
+    const result = await vehicleAccessService.getAllSiteLogs({
+      limit: limit ? parseInt(limit, 10) : ENTRY_EXIT_MAX_RECORDS,
+      offset: offset ? parseInt(offset, 10) : 0,
+      siteId: siteId ? parseInt(siteId, 10) : undefined,
+      startTime: resolved.startTime,
+      endTime: resolved.endTime,
+      search: search != null ? String(search).trim() : undefined,
+    });
     res.sendSuccess(result);
   }),
 );

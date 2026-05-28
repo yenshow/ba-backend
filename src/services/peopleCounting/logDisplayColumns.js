@@ -5,21 +5,19 @@
 
 const PEOPLE_COUNTING_LOG_COLUMN_KEYS = [
   "screenshot",
-  "unit",
-  "employee_id",
+  "device_name",
   "name",
-  "event",
   "verify_method",
+  "event",
   "time",
 ];
 
 const PEOPLE_COUNTING_LOG_COLUMN_LABELS = {
   screenshot: "設備截圖",
-  unit: "進場單位",
-  employee_id: "工號",
+  device_name: "出入口名稱",
   name: "姓名",
-  event: "事件",
   verify_method: "方式",
+  event: "事件",
   time: "時間",
 };
 

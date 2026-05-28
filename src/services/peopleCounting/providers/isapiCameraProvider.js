@@ -160,12 +160,27 @@ async function getSiteLogs(siteId, config, options = {}) {
   const limit = Math.min(Math.max(Number(options.limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
   const offset = Math.max(Number(options.offset) || 0, 0);
 
+  const deviceNameById = new Map();
+  try {
+    const deviceRows = await db.query(
+      `SELECT id, name FROM devices WHERE id = ANY(?::int[])`,
+      [deviceIds],
+    );
+    for (const r of deviceRows || []) {
+      if (r?.id != null) deviceNameById.set(Number(r.id), String(r.name || "").trim());
+    }
+  } catch {
+    // ignore: fallback to IP
+  }
+
   // 已移除 global 寫入：logs 固定以 region 列為準
   const regionFilterSql = "AND region_id IS NOT NULL";
 
   const toEvent = (row, eventType, unitName) => {
     const suffix = eventType === "entry" ? "in" : "out";
     const eventLabel = eventType === "entry" ? "進入" : "離開";
+    const deviceName =
+      deviceNameById.get(ensureInt(row.device_id)) || row.device_ip || "";
     return {
       id: `pc-cam-${row.id}-${suffix}`,
       personId: -1,
@@ -178,7 +193,7 @@ async function getSiteLogs(siteId, config, options = {}) {
       verifyMethod: null,
       timestamp: row.event_time,
       deviceScreenshotUrl: "",
-      deviceName: row.device_ip || "",
+      deviceName,
     };
   };
 

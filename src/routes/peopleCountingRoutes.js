@@ -12,7 +12,10 @@ const {
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
-const { resolveTimeOptions } = require("../services/entryExit/resolveTimeOptions");
+const {
+  resolveTimeOptions,
+  ENTRY_EXIT_MAX_RECORDS,
+} = require("../services/entryExit/resolveTimeOptions");
 const {
   validateIntegers,
   validateNumbers,
@@ -94,6 +97,31 @@ router.delete(
 );
 
 // ========== 業務邏輯 API ==========
+
+/**
+ * 跨工地進出場記錄（完整報表）
+ * GET /api/people-counting/logs?startTime=...&endTime=...&timeRange=...&siteId=...&search=...&limit=...&offset=...
+ */
+router.get(
+  "/logs",
+  noCache,
+  validateNumbers("siteId", "limit", "offset"),
+  asyncHandler(async (req, res) => {
+    const { limit, offset, siteId, startTime, endTime, timeRange, search } =
+      req.query;
+    const resolved = resolveTimeOptions({ startTime, endTime, timeRange });
+    const options = {
+      limit: limit ? parseInt(limit, 10) : ENTRY_EXIT_MAX_RECORDS,
+      offset: offset ? parseInt(offset, 10) : 0,
+      siteId: siteId ? parseInt(siteId, 10) : undefined,
+      startTime: resolved.startTime,
+      endTime: resolved.endTime,
+      search: search != null ? String(search).trim() : undefined,
+    };
+    const result = await peopleCountingService.getAllSiteLogs(options);
+    res.sendSuccess(result);
+  }),
+);
 
 /**
  * 取得所有工地列表（含統計）

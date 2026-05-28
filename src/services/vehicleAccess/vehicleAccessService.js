@@ -10,6 +10,8 @@ const yscpProvider = require("./providers/yscpProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
 const isapiVehicleSubscribeService = require("./isapiVehicleSubscribeService");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
+const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
+const logger = require("../../utils/logger");
 
 const PROVIDERS = {
   yscp: yscpProvider,
@@ -95,6 +97,91 @@ async function getSiteLogs(siteId, options = {}) {
   return { logs, total, dataSource };
 }
 
+const ALL_SITE_LOGS_CONCURRENCY = 5;
+
+function filterLogsBySearch(logs, search) {
+  const q = search != null ? String(search).trim().toLowerCase() : "";
+  if (!q) return logs;
+  return logs.filter((log) => {
+    const plate =
+      log.license_plate != null ? String(log.license_plate).trim().toLowerCase() : "";
+    const owner =
+      log.owner_name != null ? String(log.owner_name).trim().toLowerCase() : "";
+    return plate.includes(q) || owner.includes(q);
+  });
+}
+
+/**
+ * 跨地點過車紀錄（完整報表）
+ */
+async function getAllSiteLogs(options = {}) {
+  const { siteId: filterSiteId, search, limit, offset, ...timeOpts } = options;
+  const globalLimit = Math.min(
+    Math.max(Number(limit) || ENTRY_EXIT_MAX_RECORDS, 1),
+    ENTRY_EXIT_MAX_RECORDS,
+  );
+  const offsetNum = Math.max(Number(offset) || 0, 0);
+
+  const result = await getLocationService().getZones({
+    locationType: "vehicle_access",
+  });
+  let allLocations = [];
+  for (const zone of ensureArray(result.zones)) {
+    for (const loc of ensureArray(zone.locations)) {
+      allLocations.push(loc);
+    }
+  }
+
+  if (filterSiteId != null && filterSiteId !== "") {
+    const sid = Number(filterSiteId);
+    allLocations = allLocations.filter((loc) => Number(loc.id) === sid);
+  }
+
+  const siteIds = [];
+  for (const loc of allLocations) {
+    const cfg = getVehicleAccessConfig(loc);
+    if (yscpVehicleFeature.shouldSkipYscp(cfg.dataSource)) continue;
+    const siteId = Number(loc.id);
+    if (Number.isFinite(siteId)) siteIds.push(siteId);
+  }
+
+  const perSiteOpts = {
+    ...timeOpts,
+    limit: ENTRY_EXIT_MAX_RECORDS,
+    offset: 0,
+  };
+
+  const merged = [];
+  for (let i = 0; i < siteIds.length; i += ALL_SITE_LOGS_CONCURRENCY) {
+    const batch = siteIds.slice(i, i + ALL_SITE_LOGS_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (siteId) => {
+        const { logs } = await getSiteLogs(siteId, perSiteOpts);
+        return (logs || []).map((log) => ({ ...log, locationId: siteId }));
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        merged.push(...r.value);
+      } else {
+        logger.warn("跨地點過車紀錄：單站查詢失敗", {
+          error: r.reason?.message || r.reason,
+          module: "vehicleAccessService",
+        });
+      }
+    }
+  }
+
+  merged.sort(
+    (a, b) =>
+      new Date(b.trigger_time || 0).getTime() -
+      new Date(a.trigger_time || 0).getTime(),
+  );
+
+  const filtered = filterLogsBySearch(merged, search);
+  return { logs: filtered.slice(offsetNum, offsetNum + globalLimit) };
+}
+
 async function refreshSubscribeAfterLocationChange() {
   try {
     await isapiVehicleSubscribeService.refresh();
@@ -105,6 +192,7 @@ module.exports = {
   getSites,
   getSiteStats,
   getSiteLogs,
+  getAllSiteLogs,
   getSiteConfig,
   getVehicleAccessConfig,
   refreshSubscribeAfterLocationChange,

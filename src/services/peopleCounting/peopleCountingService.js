@@ -9,17 +9,17 @@ const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
 const locationService = require("../location/locationService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError, rethrowIfApiError } = require("../../utils/apiErrorMeta");
+const {
+  throwApiError,
+  rethrowIfApiError,
+} = require("../../utils/apiErrorMeta");
 const yscpProvider = require("./providers/yscpProvider");
 const accessControlProvider = require("./providers/accessControlProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
 const isapiSubscribeService = require("../accessControl/isapiSubscribeService");
-const {
-  parseEventType,
-} = require("./helpers/entryExitStats");
-const {
-  normalizeLogDisplayColumns,
-} = require("./logDisplayColumns");
+const { parseEventType } = require("./helpers/entryExitStats");
+const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
+const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
 
 const PROVIDERS = {
   yscp: yscpProvider,
@@ -111,10 +111,10 @@ function validateLocationData(locationData, isUpdate = false) {
   } = locationData;
 
   if (!name?.trim()) {
-    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"地點名稱不能為空");
+    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點名稱不能為空");
   }
   if (!isUpdate && !zoneId) {
-    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"區域 ID 不能為空");
+    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "區域 ID 不能為空");
   }
 
   const effectiveDataSource =
@@ -134,25 +134,49 @@ function validateLocationData(locationData, isUpdate = false) {
   if (effectiveDataSource === "yscp") {
     if (!isUpdate) {
       if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個進場單位");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個人員群組",
+        );
       }
       if (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個入口設備");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個入口設備",
+        );
       }
       if (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個出口設備");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個出口設備",
+        );
       }
     }
     if (isUpdate && personGroupIds !== undefined) {
       if (!Array.isArray(personGroupIds) || personGroupIds.length === 0) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個進場單位");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個人員群組",
+        );
       }
     }
-    if (entryDoorIds !== undefined && (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0)) {
-      throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個入口設備");
+    if (
+      entryDoorIds !== undefined &&
+      (!Array.isArray(entryDoorIds) || entryDoorIds.length === 0)
+    ) {
+      throwApiError(
+        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        "至少需要選擇一個入口設備",
+      );
     }
-    if (exitDoorIds !== undefined && (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0)) {
-      throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個出口設備");
+    if (
+      exitDoorIds !== undefined &&
+      (!Array.isArray(exitDoorIds) || exitDoorIds.length === 0)
+    ) {
+      throwApiError(
+        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        "至少需要選擇一個出口設備",
+      );
     }
     const entrySet = new Set(
       (Array.isArray(entryDoorIds) ? entryDoorIds : [])
@@ -166,22 +190,51 @@ function validateLocationData(locationData, isUpdate = false) {
     );
     for (const id of entrySet) {
       if (exitSet.has(id)) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"入口和出口不能包含同一個設備");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "入口和出口不能包含同一個設備",
+        );
       }
     }
   } else {
     if (effectiveDataSource === "access_control") {
-      if (!isUpdate && (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁入口設備");
+      if (
+        !isUpdate &&
+        (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)
+      ) {
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個門禁入口設備",
+        );
       }
-      if (!isUpdate && (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁出口設備");
+      if (
+        !isUpdate &&
+        (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)
+      ) {
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個門禁出口設備",
+        );
       }
-      if (isUpdate && entryDeviceIds !== undefined && (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁入口設備");
+      if (
+        isUpdate &&
+        entryDeviceIds !== undefined &&
+        (!Array.isArray(entryDeviceIds) || entryDeviceIds.length === 0)
+      ) {
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個門禁入口設備",
+        );
       }
-      if (isUpdate && exitDeviceIds !== undefined && (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一個門禁出口設備");
+      if (
+        isUpdate &&
+        exitDeviceIds !== undefined &&
+        (!Array.isArray(exitDeviceIds) || exitDeviceIds.length === 0)
+      ) {
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一個門禁出口設備",
+        );
       }
       const entrySet = new Set(
         (Array.isArray(entryDeviceIds) ? entryDeviceIds : [])
@@ -195,7 +248,10 @@ function validateLocationData(locationData, isUpdate = false) {
       );
       for (const id of entrySet) {
         if (exitSet.has(id)) {
-          throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"入口和出口不能包含同一個設備");
+          throwApiError(
+            C.PEOPLE_COUNTING_VALIDATION_FAILED,
+            "入口和出口不能包含同一個設備",
+          );
         }
       }
     }
@@ -207,10 +263,16 @@ function validateLocationData(locationData, isUpdate = false) {
         : [];
 
       if (!isUpdate && cameraIds.length === 0) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一台攝影機設備");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一台攝影機設備",
+        );
       }
       if (isUpdate && cameraDeviceIds !== undefined && cameraIds.length === 0) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"至少需要選擇一台攝影機設備");
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          "至少需要選擇一台攝影機設備",
+        );
       }
     }
   }
@@ -279,7 +341,7 @@ async function getPeopleCountingLocationById(id) {
       );
 
       if (!hasPeopleCountingSystem) {
-        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED,"地點類型不正確");
+        throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點類型不正確");
       }
 
       return { location };
@@ -641,6 +703,106 @@ async function getSiteLogs(siteId, options = {}) {
   );
 }
 
+const ALL_SITE_LOGS_CONCURRENCY = 5;
+
+function filterLogsBySearch(logs, search) {
+  const q = search != null ? String(search).trim().toLowerCase() : "";
+  if (!q) return logs;
+  return logs.filter((log) => {
+    const emp =
+      log.employeeId != null ? String(log.employeeId).trim().toLowerCase() : "";
+    const name =
+      log.personName != null ? String(log.personName).trim().toLowerCase() : "";
+    return emp.includes(q) || name.includes(q);
+  });
+}
+
+/**
+ * 跨工地進出場記錄（完整報表）
+ * @param {Object} options - startTime, endTime, siteId?, search?, limit?, offset?
+ */
+async function getAllSiteLogs(options = {}) {
+  return handleServiceError(
+    async () => {
+      const {
+        siteId: filterSiteId,
+        search,
+        limit,
+        offset,
+        ...timeOpts
+      } = options;
+      const globalLimit = Math.min(
+        Math.max(Number(limit) || ENTRY_EXIT_MAX_RECORDS, 1),
+        ENTRY_EXIT_MAX_RECORDS,
+      );
+      const offsetNum = Math.max(Number(offset) || 0, 0);
+
+      const locationsResult = await locationService.getZones({
+        locationType: "people_counting",
+      });
+      let allLocations = ensureArray(locationsResult.zones).flatMap((zone) =>
+        ensureArray(zone.locations),
+      );
+
+      if (filterSiteId != null && filterSiteId !== "") {
+        const sid = normalizeId(filterSiteId);
+        allLocations = allLocations.filter(
+          (loc) => normalizeId(loc.id) === sid,
+        );
+      }
+
+      const siteIds = [];
+      for (const loc of allLocations) {
+        const ds = getPeopleCountingConfig(loc).dataSource || "yscp";
+        if (yscpFeature.shouldSkipYscp(ds)) continue;
+        siteIds.push(normalizeId(loc.id));
+      }
+
+      const perSiteOpts = {
+        ...timeOpts,
+        limit: ENTRY_EXIT_MAX_RECORDS,
+        offset: 0,
+      };
+
+      const merged = [];
+      for (let i = 0; i < siteIds.length; i += ALL_SITE_LOGS_CONCURRENCY) {
+        const batch = siteIds.slice(i, i + ALL_SITE_LOGS_CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map(async (siteId) => {
+            const { logs } = await getSiteLogs(siteId, perSiteOpts);
+            return (logs || []).map((log) => ({
+              ...log,
+              locationId: siteId,
+            }));
+          }),
+        );
+        for (const r of results) {
+          if (r.status === "fulfilled") {
+            merged.push(...r.value);
+          } else {
+            logger.warn("跨工地進出場記錄：單站查詢失敗", {
+              error: r.reason?.message || r.reason,
+              module: "peopleCountingService",
+            });
+          }
+        }
+      }
+
+      merged.sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
+
+      const filtered = filterLogsBySearch(merged, search);
+      const page = filtered.slice(offsetNum, offsetNum + globalLimit);
+
+      return { logs: page };
+    },
+    "取得跨工地進出場記錄失敗",
+    { options },
+  );
+}
+
 /**
  * 取得單位人員列表
  * 協調層：依 data_source 委派 provider.getUnitPersonnel
@@ -763,5 +925,6 @@ module.exports = {
   getSites,
   getSiteStats,
   getSiteLogs,
+  getAllSiteLogs,
   getUnitPersonnel,
 };
