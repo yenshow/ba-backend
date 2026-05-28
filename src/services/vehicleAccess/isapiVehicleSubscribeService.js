@@ -107,7 +107,7 @@ async function consumeEventStreamIncremental(
   const sep = Buffer.from(`--${boundary}`, "utf8");
   const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
   let buffer = Buffer.alloc(0);
-  let pendingPicture = { logIds: [], imagePartIndex: 0, licensePlatePictureIndex: -1 };
+  let pendingPicture = { logIds: [], attachFirstImage: false };
   let partChain = Promise.resolve();
 
   const enqueuePart = (fn) => {
@@ -143,23 +143,16 @@ async function consumeEventStreamIncremental(
           plate: parsed.licensePlate,
           count: res.ids.length,
         });
-        pendingPicture = {
-          logIds: res.ids,
-          imagePartIndex: 0,
-          licensePlatePictureIndex: res.licensePlatePictureIndex,
-        };
+        pendingPicture = { logIds: res.ids, attachFirstImage: true };
       });
       return;
     }
 
     if (/image/i.test(ct)) {
       enqueuePart(async () => {
-        if (pendingPicture.logIds.length === 0) return;
-        const idx = pendingPicture.imagePartIndex;
-        pendingPicture.imagePartIndex += 1;
-        if (idx !== pendingPicture.licensePlatePictureIndex) return;
-        const logId = pendingPicture.logIds[0];
-        await attachLicensePlatePicture(logId, body);
+        if (!pendingPicture.attachFirstImage || pendingPicture.logIds.length === 0) return;
+        pendingPicture.attachFirstImage = false;
+        await attachLicensePlatePicture(pendingPicture.logIds[0], body);
       });
     }
   };

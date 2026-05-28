@@ -3,16 +3,17 @@
  * 與頁面一致：
  * 1. 進出統計：日期、區域-地點、進場人數、出場人數、在場人數
  * 2. 單位統計：日期、區域-地點、單位名稱、進場人數、出場人數、在場人數
- * 3. 進出紀錄：設備截圖、進場單位、工號、姓名、事件、方式、時間（與主表欄位一致；YSCP 備份無工號/方式時填 —）
+ * 3. 進出紀錄（完整報表明細）：區域-地點、人員群組、ID、姓名、出入口名稱、方式、刷卡時間、事件
  */
 const DETAIL_LOG_HEADERS = [
-  "設備截圖",
-  "進場單位",
-  "工號",
+  "區域-地點",
+  "人員群組",
+  "ID",
   "姓名",
-  "事件",
+  "出入口名稱",
   "方式",
-  "時間",
+  "刷卡時間",
+  "事件",
 ];
 
 const {
@@ -125,35 +126,13 @@ function buildUnitStatsSection(rows, directionMap) {
   return sectionRows;
 }
 
-/** 進場未出場者：僅最新一筆進場的 record（用於進出紀錄篩選） */
-function getEntryOnlyLastLogMap(sortedRows, getDirection) {
-  const lastByPerson = new Map();
-  const lastLogByPerson = new Map();
-  for (const r of sortedRows) {
-    const dir = getDirection(r);
-    if (dir !== "entry" && dir !== "exit") continue;
-    const personId = r.person_id;
-    const prev = lastByPerson.get(personId);
-    if (prev === undefined && dir === "exit") continue;
-    if (prev !== dir) {
-      lastByPerson.set(personId, dir);
-      lastLogByPerson.set(personId, r);
-    }
-  }
-  const out = new Map();
-  for (const [personId, r] of lastLogByPerson) {
-    if (lastByPerson.get(personId) === "entry") out.set(personId, r);
-  }
-  return out;
-}
-
 function eventLabelFromDirection(dir) {
   if (dir === "entry") return "進入";
   if (dir === "exit") return "離開";
   return "失敗";
 }
 
-/** 進出紀錄：7 欄（與主表一致） */
+/** 進出紀錄（完整報表明細）：8 欄（不含方向） */
 function buildDetailSection(rows, doorNameMap, directionMap) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
@@ -168,26 +147,26 @@ function buildDetailSection(rows, doorNameMap, directionMap) {
     const sorted = [...recs].sort(
       (a, b) => new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
     );
-    const getDirection = (r) => directionMap.get(Number(r.physical_id));
-    const entryOnlyLast = getEntryOnlyLastLogMap(sorted, getDirection);
     for (const r of sorted) {
-      const personId = r.person_id;
-      const isEntryOnly = entryOnlyLast.has(personId);
-      const lastEntryR = entryOnlyLast.get(personId);
       const physicalId = r.physical_id != null ? Number(r.physical_id) : null;
       const dir = directionMap.get(physicalId);
+      const doorName =
+        physicalId != null ? (doorNameMap.get(physicalId) || "") : "";
       result.push({
-        設備截圖: r.snap_pic_url?.trim() ? "有" : "—",
-        進場單位: (r.unit_name ?? "").trim() || "—",
-        工號: "—",
+        "區域-地點": zoneLoc,
+        人員群組: (r.unit_name ?? "").trim() || "—",
+        ID: "—",
         姓名: r.person_name ?? "—",
-        事件: eventLabelFromDirection(dir),
+        出入口名稱: doorName?.trim() || "—",
         方式: "—",
-        時間: formatDateTimeZhTW(r.swip_card_rev_time),
+        刷卡時間: formatDateTimeZhTW(r.swip_card_rev_time),
+        事件: eventLabelFromDirection(dir),
       });
     }
   }
-  return result.sort((a, b) => (b.時間 || "").localeCompare(a.時間 || ""));
+  return result.sort((a, b) =>
+    (b.刷卡時間 || "").localeCompare(a.刷卡時間 || ""),
+  );
 }
 
 function transformPeopleCountingToReportFormat(

@@ -1,5 +1,6 @@
 /**
  * ISAPI ANPR EventNotificationAlert XML 解析
+ * 僅擷取：dateTime、eventType、ANPR.licensePlate、ANPR.listType（見 docs/00-decisions/isapi_anpr.md）
  */
 function extractTag(xml, tag) {
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
@@ -7,25 +8,9 @@ function extractTag(xml, tag) {
   return m ? m[1].trim() : "";
 }
 
-function parsePictureInfoList(xml) {
-  const list = [];
-  const block = extractTag(xml, "pictureInfoList");
-  if (!block) return list;
-  const re = /<pictureInfo>[\s\S]*?<\/pictureInfo>/gi;
-  let m;
-  while ((m = re.exec(block)) !== null) {
-    const part = m[0];
-    list.push({
-      type: extractTag(part, "type"),
-      fileName: extractTag(part, "fileName"),
-    });
-  }
-  return list;
-}
-
 /**
  * @param {string} rawXml
- * @returns {object|null}
+ * @returns {{ dateTime: string, eventType: string, licensePlate: string, listType: string } | null}
  */
 function parseAnprEventXml(rawXml) {
   const raw = String(rawXml || "")
@@ -38,31 +23,14 @@ function parseAnprEventXml(rawXml) {
 
   const anprBlock = extractTag(raw, "ANPR") || raw;
   const licensePlate = extractTag(anprBlock, "licensePlate");
-  const line = extractTag(anprBlock, "line");
-  const direction = extractTag(anprBlock, "direction");
   const listType = extractTag(anprBlock, "listType");
-
   const dateTime = extractTag(raw, "dateTime");
-  const pictureInfoList = parsePictureInfoList(anprBlock);
 
   return {
-    eventType: "ANPR",
     dateTime: dateTime || new Date().toISOString(),
+    eventType: String(eventType).trim() || "ANPR",
     licensePlate,
-    line,
-    direction,
     listType,
-    pictureInfoList,
-    payload: {
-      dateTime,
-      eventType: "ANPR",
-      listType,
-      ANPR: {
-        licensePlate,
-        line,
-        direction,
-      },
-    },
   };
 }
 

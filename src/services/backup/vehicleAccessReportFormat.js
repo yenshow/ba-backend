@@ -3,13 +3,19 @@
  * 與前端完整報表一致：
  * 1. 進出統計：日期、區域-地點、進場車輛、出場車輛、在場車輛
  * 2. 群組統計：日期、區域-地點、群組名稱、進場車輛、出場車輛、在場車輛
- * 3. 過車紀錄：區域-地點、車牌、過車時間、車道名稱、車主名稱、車輛群組、放行結果、方向
+ * 3. 過車紀錄：區域-地點、人員群組、車主名稱、車牌、車道名稱、過車時間、放行結果
  */
 
-const { formatDateTimeZhTW, formatDateZhTW, formatZoneLocation } = require("./reportFormatUtils");
+const {
+  formatDateTimeZhTW,
+  formatDateZhTW,
+  formatZoneLocation,
+} = require("./reportFormatUtils");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
 const { computeTransitionStats } = require("../entryExit/stats");
-const { normalizeVehicleDirection } = require("../vehicleAccess/normalizeVehicleDirection");
+const {
+  normalizeVehicleDirection,
+} = require("../vehicleAccess/normalizeVehicleDirection");
 
 const sep = "\x00";
 
@@ -106,7 +112,7 @@ function buildGroupStatsSection(rows) {
   return sectionRows;
 }
 
-/** 過車紀錄：每筆一列，放行結果與方向依 allow_result、lane_type */
+/** 過車紀錄：每筆一列；放行結果含進出方向 */
 function buildDetailSection(rows) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
@@ -119,33 +125,47 @@ function buildDetailSection(rows) {
     const zoneLoc = key.slice(key.indexOf(sep) + sep.length);
     const recs = groups.get(key);
     const sorted = [...recs].sort(
-      (a, b) => new Date(a.trigger_time) - new Date(b.trigger_time)
+      (a, b) => new Date(a.trigger_time) - new Date(b.trigger_time),
     );
     for (const r of sorted) {
-      const allowLabel = r.allow_result === 1 ? "放行" : "未放行";
-      const directionLabel =
-        r.lane_type === 1 ? "進場" : r.lane_type === 2 ? "出場" : "－";
+      const allowLabel =
+        r.allow_result === 1
+          ? r.lane_type === 1
+            ? "進入"
+            : r.lane_type === 2
+              ? "離開"
+              : "放行"
+          : r.allow_result === 0
+            ? "拒絕"
+            : "陌生";
       result.push({
         "區域-地點": zoneLoc,
-        車牌: (r.license_plate ?? "").trim() || "－",
-        過車時間: formatDateTimeZhTW(r.trigger_time),
-        車道名稱: (r.lane_name ?? "").trim() || "－",
+        人員群組: (r.vehicle_list_name ?? "").trim() || "－",
         車主名稱: (r.owner_name ?? "").trim() || "－",
-        車輛群組: (r.vehicle_list_name ?? "").trim() || "－",
+        車牌: (r.license_plate ?? "").trim() || "－",
+        車道名稱: (r.lane_name ?? "").trim() || "－",
+        過車時間: formatDateTimeZhTW(r.trigger_time),
         放行結果: allowLabel,
-        方向: directionLabel,
       });
     }
   }
   return result.sort((a, b) =>
-    (b.過車時間 || "").localeCompare(a.過車時間 || "")
+    (b.過車時間 || "").localeCompare(a.過車時間 || ""),
   );
 }
 
 const SECTION_HEADERS = {
   stats: ["日期", "區域-地點", "進場車輛", "出場車輛", "在場車輛"],
   group: ["日期", "區域-地點", "群組名稱", "進場車輛", "出場車輛", "在場車輛"],
-  detail: ["區域-地點", "車牌", "過車時間", "車道名稱", "車主名稱", "車輛群組", "放行結果", "方向"],
+  detail: [
+    "區域-地點",
+    "人員群組",
+    "車主名稱",
+    "車牌",
+    "車道名稱",
+    "過車時間",
+    "放行結果",
+  ],
 };
 
 function emptySections() {
@@ -163,9 +183,21 @@ function transformVehicleAccessToReportFormat(rows) {
 
   return {
     sections: [
-      { title: "進出統計", headers: SECTION_HEADERS.stats, rows: buildStatsSection(rows) },
-      { title: "群組統計", headers: SECTION_HEADERS.group, rows: buildGroupStatsSection(rows) },
-      { title: "過車紀錄", headers: SECTION_HEADERS.detail, rows: buildDetailSection(rows) },
+      {
+        title: "進出統計",
+        headers: SECTION_HEADERS.stats,
+        rows: buildStatsSection(rows),
+      },
+      {
+        title: "群組統計",
+        headers: SECTION_HEADERS.group,
+        rows: buildGroupStatsSection(rows),
+      },
+      {
+        title: "過車紀錄",
+        headers: SECTION_HEADERS.detail,
+        rows: buildDetailSection(rows),
+      },
     ],
   };
 }

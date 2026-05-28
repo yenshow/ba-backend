@@ -11,16 +11,17 @@ const {
 } = require("../../entryExit/resolveTimeOptions");
 const { normalizeVehicleDirection } = require("../normalizeVehicleDirection");
 
+/** 顯示用車道名稱：devices.name（寫入時已用 devices.name；此處不做舊「線別 N」相容） */
+function resolveIsapiLaneDisplayName(row) {
+  const deviceName = row.device_name ? String(row.device_name).trim() : "";
+  const laneName = row.lane_name != null ? String(row.lane_name).trim() : "";
+  return deviceName || laneName || null;
+}
+
 function mapRow(row) {
-  const payload =
-    typeof row.payload === "object"
-      ? row.payload
-      : row.payload
-        ? JSON.parse(row.payload)
-        : {};
   return {
     id: Number(row.id),
-    lane_name: row.lane_name,
+    lane_name: resolveIsapiLaneDisplayName(row),
     lane_id: row.lane_id,
     allow_result: row.allow_result != null ? Number(row.allow_result) : null,
     lane_type: row.lane_type != null ? Number(row.lane_type) : null,
@@ -37,7 +38,6 @@ function mapRow(row) {
     person_group_name: null,
     vehicle_category: 0,
     is_blacklist: false,
-    anpr_line: row.anpr_line,
     data_source: "isapi_camera",
     device_id: row.device_id,
   };
@@ -64,7 +64,10 @@ async function getSiteStats(siteId, _config, options = {}) {
 
 async function getSiteLogs(siteId, _config, options = {}) {
   const { start, end } = resolveStatsTimeRange(options);
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
+  const limit = Math.min(
+    Math.max(Number(options.limit) || 50, 1),
+    ENTRY_EXIT_MAX_RECORDS,
+  );
   const offset = Math.max(Number(options.offset) || 0, 0);
   const search = options.search ? String(options.search).trim() : "";
 
@@ -72,25 +75,28 @@ async function getSiteLogs(siteId, _config, options = {}) {
   const params = [siteId, start.toISOString(), end.toISOString()];
   if (search) {
     searchSql = ` AND (
-      license_plate ILIKE ? OR owner_name ILIKE ? OR lane_name ILIKE ? OR anpr_line ILIKE ?
+      vpl.license_plate ILIKE ? OR vpl.owner_name ILIKE ? OR vpl.lane_name ILIKE ? OR d.name ILIKE ?
     )`;
     const q = `%${search}%`;
     params.push(q, q, q, q);
   }
 
   const countRows = await db.query(
-    `SELECT COUNT(*)::int AS c FROM vehicle_passageway_logs
-     WHERE location_id = ? AND data_source = 'isapi_camera'
-       AND trigger_time >= ? AND trigger_time <= ?${searchSql}`,
+    `SELECT COUNT(*)::int AS c FROM vehicle_passageway_logs vpl
+     LEFT JOIN devices d ON vpl.device_id = d.id
+     WHERE vpl.location_id = ? AND vpl.data_source = 'isapi_camera'
+       AND vpl.trigger_time >= ? AND vpl.trigger_time <= ?${searchSql}`,
     params,
   );
   const total = Number(countRows?.[0]?.c ?? 0);
 
   const rows = await db.query(
-    `SELECT * FROM vehicle_passageway_logs
-     WHERE location_id = ? AND data_source = 'isapi_camera'
-       AND trigger_time >= ? AND trigger_time <= ?${searchSql}
-     ORDER BY trigger_time DESC
+    `SELECT vpl.*, d.name AS device_name
+     FROM vehicle_passageway_logs vpl
+     LEFT JOIN devices d ON vpl.device_id = d.id
+     WHERE vpl.location_id = ? AND vpl.data_source = 'isapi_camera'
+       AND vpl.trigger_time >= ? AND vpl.trigger_time <= ?${searchSql}
+     ORDER BY vpl.trigger_time DESC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
