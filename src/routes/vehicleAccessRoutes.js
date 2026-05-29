@@ -5,9 +5,12 @@ const express = require("express");
 const router = express.Router();
 const vehicleAccessService = require("../services/vehicleAccess/vehicleAccessService");
 const isapiVehicleSubscribeService = require("../services/vehicleAccess/isapiVehicleSubscribeService");
+const isapiVehicleDeviceService = require("../services/vehicleAccess/isapiVehicleDeviceService");
+const personLicensePlateService = require("../services/personnel/personLicensePlateService");
 const {
   authenticate,
   requirePermission,
+  requireAdminOrOperator,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
@@ -113,6 +116,157 @@ router.get(
   noCache,
   asyncHandler(async (req, res) => {
     res.sendSuccess(isapiVehicleSubscribeService.getSubscribeStatus());
+  }),
+);
+
+/**
+ * ISAPI 設備端車牌名單查詢
+ * POST /api/vehicle-access/devices/:deviceId/license-plates/search
+ */
+router.post(
+  "/devices/:deviceId/license-plates/search",
+  noCache,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId, 10);
+    const siteId =
+      req.query.siteId != null ? parseInt(req.query.siteId, 10) : undefined;
+    const channelId =
+      req.query.channelId != null
+        ? parseInt(req.query.channelId, 10)
+        : req.body?.channelId;
+    const result = await isapiVehicleDeviceService.searchLicensePlates(
+      deviceId,
+      {
+        siteId,
+        channelId,
+        searchResultPosition:
+          req.body?.searchResultPosition ?? req.query.searchResultPosition,
+        maxResults: req.body?.maxResults ?? req.query.maxResults,
+      },
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+/**
+ * ISAPI 設備端車牌新增／修改
+ * PUT /api/vehicle-access/devices/:deviceId/license-plates
+ */
+router.put(
+  "/devices/:deviceId/license-plates",
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId, 10);
+    const siteId =
+      req.query.siteId != null ? parseInt(req.query.siteId, 10) : undefined;
+    const result = await isapiVehicleDeviceService.upsertLicensePlates(
+      deviceId,
+      {
+        siteId,
+        channelId: req.body?.channelId ?? req.query.channelId,
+        plates: req.body?.plates,
+      },
+    );
+
+    const bindings = [];
+    for (const plate of req.body?.plates || []) {
+      const bindPersonId =
+        plate?.bindPersonId ?? plate?.bind_person_id ?? null;
+      if (bindPersonId == null) continue;
+      const bound = await personLicensePlateService.upsertPlateForPerson(
+        bindPersonId,
+        {
+          plateNumber: plate.licensePlate || plate.id,
+          listType: plate.listType,
+          effectiveBegin: plate.createTime,
+          effectiveEnd: plate.effectiveTime,
+        },
+        { markSynced: true },
+      );
+      bindings.push(bound);
+    }
+
+    res.sendSuccess({ ...result, bindings });
+  }),
+);
+
+/**
+ * ISAPI 設備端車牌刪除
+ * DELETE /api/vehicle-access/devices/:deviceId/license-plates
+ */
+router.delete(
+  "/devices/:deviceId/license-plates",
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId, 10);
+    const siteId =
+      req.query.siteId != null ? parseInt(req.query.siteId, 10) : undefined;
+    const result = await isapiVehicleDeviceService.deleteLicensePlates(
+      deviceId,
+      {
+        siteId,
+        channelId: req.body?.channelId ?? req.query.channelId,
+        licensePlates: req.body?.licensePlates,
+      },
+    );
+
+    const unbound = [];
+    for (const plate of req.body?.licensePlates || []) {
+      const removed = await personLicensePlateService.deleteByPlateNormalized(plate);
+      if (removed) unbound.push(removed);
+    }
+
+    res.sendSuccess({ ...result, unbound });
+  }),
+);
+
+/**
+ * 柵欄機狀態
+ * GET /api/vehicle-access/devices/:deviceId/barrier-gate/status
+ */
+router.get(
+  "/devices/:deviceId/barrier-gate/status",
+  noCache,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId, 10);
+    const siteId =
+      req.query.siteId != null ? parseInt(req.query.siteId, 10) : undefined;
+    const result = await isapiVehicleDeviceService.getBarrierGateStatus(
+      deviceId,
+      {
+        siteId,
+        channelId: req.query.channelId,
+      },
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+/**
+ * 柵欄機控制
+ * PUT /api/vehicle-access/devices/:deviceId/barrier-gate
+ */
+router.put(
+  "/devices/:deviceId/barrier-gate",
+  requireAdminOrOperator,
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId, 10);
+    const siteId =
+      req.query.siteId != null ? parseInt(req.query.siteId, 10) : undefined;
+    const result = await isapiVehicleDeviceService.controlBarrierGate(
+      deviceId,
+      {
+        siteId,
+        channelId: req.body?.channelId ?? req.query.channelId,
+        ctrlMode: req.body?.ctrlMode,
+      },
+    );
+    res.sendSuccess(result);
   }),
 );
 

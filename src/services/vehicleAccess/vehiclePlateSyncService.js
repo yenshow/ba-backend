@@ -1,0 +1,512 @@
+/**
+ * 人員車牌 ↔ ISAPI 設備名單同步（獨立於門禁 person_device_sync）
+ */
+const db = require("../../database/db");
+const { parseConfig } = require("./vehicleAccessValidation");
+const isapiVehicleDeviceService = require("./isapiVehicleDeviceService");
+const { normalizeListTypeToDevice } = require("./isapiVehicleTrafficXmlParser");
+const personLicensePlateService = require("../personnel/personLicensePlateService");
+
+const SYNC_STATUS = {
+  SYNCED: "synced",
+  PARTIAL: "partial",
+  PENDING: "pending",
+  FAILED: "failed",
+  SKIPPED: "skipped",
+};
+
+function formatIsapiTimeFromDate(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().replace(/\.\d{3}Z$/, "");
+}
+
+function buildIsapiTimesFromRow(row) {
+  const begin =
+    formatIsapiTimeFromDate(row.effective_begin) ||
+    formatIsapiTimeFromDate(new Date());
+  const end =
+    formatIsapiTimeFromDate(row.effective_end) ||
+    formatIsapiTimeFromDate(
+      new Date(Date.now() + 5 * 365 * 24 * 60 * 60 * 1000),
+    );
+  return { createTime: begin, effectiveTime: end };
+}
+
+/**
+ * @param {number|null|undefined} personGroupId
+ * @returns {Promise<Array<{ locationId: number, deviceIds: number[], channelId: number }>>}
+ */
+async function resolveIsapiTargetsForPersonGroup(personGroupId) {
+  const gid = Number(personGroupId);
+  if (!Number.isFinite(gid)) return [];
+
+  const rows = await db.query(
+    `
+      SELECT l.id AS location_id, ls.system_config
+      FROM location_systems ls
+      INNER JOIN locations l ON l.id = ls.location_id
+      WHERE ls.system_type = 'vehicle_access'
+    `,
+    [],
+  );
+
+  const targets = [];
+  for (const row of rows || []) {
+    const cfg = parseConfig(row.system_config);
+    if (cfg.dataSource !== "isapi_camera") continue;
+    if (!cfg.personGroupIds.includes(gid)) continue;
+    const deviceIds = cfg.entryCameraDeviceIds || [];
+    if (deviceIds.length === 0) continue;
+    targets.push({
+      locationId: Number(row.location_id),
+      deviceIds,
+      channelId: cfg.cameraChannelId ?? 1,
+    });
+  }
+  return targets;
+}
+
+function resolveTargetForLocation(locationId, systemConfig) {
+  const cfg = parseConfig(systemConfig);
+  if (cfg.dataSource !== "isapi_camera") return null;
+  const deviceIds = cfg.entryCameraDeviceIds || [];
+  if (deviceIds.length === 0) return null;
+  return {
+    locationId: Number(locationId),
+    deviceIds,
+    channelId: cfg.cameraChannelId ?? 1,
+  };
+}
+
+function aggregateSyncResults(results) {
+  const warnings = [];
+  const failures = [];
+  let hasSuccess = false;
+  let hasFailure = false;
+  let hasPending = false;
+
+  for (const r of results) {
+    if (r.warning) warnings.push(r.warning);
+    if (r.failure) failures.push(r.failure);
+    if (r.status === SYNC_STATUS.SYNCED) hasSuccess = true;
+    if (r.status === SYNC_STATUS.FAILED || r.status === SYNC_STATUS.PARTIAL) {
+      hasFailure = true;
+    }
+    if (r.status === SYNC_STATUS.PENDING) hasPending = true;
+  }
+
+  if (results.length === 0 || hasPending) {
+    return {
+      status: SYNC_STATUS.PENDING,
+      warnings:
+        warnings.length > 0
+          ? warnings
+          : ["尚無可同步的 ISAPI 車輛地點或入口攝影機，車牌已儲存，待地點設定後將自動同步"],
+      failures,
+    };
+  }
+  if (hasFailure && hasSuccess) {
+    return { status: SYNC_STATUS.PARTIAL, warnings, failures };
+  }
+  if (hasFailure) {
+    return { status: SYNC_STATUS.FAILED, warnings, failures };
+  }
+  return { status: SYNC_STATUS.SYNCED, warnings, failures };
+}
+
+async function pushPlateRowToTarget(plateRow, target) {
+  const { createTime, effectiveTime } = buildIsapiTimesFromRow(plateRow);
+  const listType = normalizeListTypeToDevice(plateRow.list_type || "allowList");
+  const licensePlate = plateRow.plate_number;
+  const operationType =
+    plateRow.isapi_sync_status === SYNC_STATUS.SYNCED ? "modify" : "add";
+  const failures = [];
+  let successCount = 0;
+
+  for (const deviceId of target.deviceIds) {
+    try {
+      await isapiVehicleDeviceService.upsertLicensePlates(deviceId, {
+        siteId: target.locationId,
+        channelId: target.channelId,
+        plates: [
+          {
+            id: licensePlate,
+            licensePlate,
+            listType,
+            createTime,
+            effectiveTime,
+            operationType,
+          },
+        ],
+      });
+      successCount += 1;
+    } catch (err) {
+      failures.push({
+        plateNumber: licensePlate,
+        deviceId,
+        locationId: target.locationId,
+        message: err?.message || String(err),
+      });
+    }
+  }
+
+  return { successCount, failures, totalDevices: target.deviceIds.length };
+}
+
+async function syncPlateRowById(plateId, targets) {
+  const rows = await db.query(
+    `SELECT * FROM person_license_plates WHERE id = ? LIMIT 1`,
+    [plateId],
+  );
+  const row = rows?.[0];
+  if (!row) {
+    return { status: SYNC_STATUS.SKIPPED, warning: null, failure: null };
+  }
+
+  if (!targets.length) {
+    await personLicensePlateService.updateSyncStatus(plateId, {
+      status: SYNC_STATUS.PENDING,
+      error: null,
+      syncedAt: null,
+    });
+    return { status: SYNC_STATUS.PENDING, warning: null, failure: null };
+  }
+
+  let totalOk = 0;
+  let totalDevices = 0;
+  const allFailures = [];
+
+  for (const target of targets) {
+    const res = await pushPlateRowToTarget(row, target);
+    totalOk += res.successCount;
+    totalDevices += res.totalDevices;
+    allFailures.push(...res.failures);
+  }
+
+  if (totalDevices === 0) {
+    await personLicensePlateService.updateSyncStatus(plateId, {
+      status: SYNC_STATUS.PENDING,
+      error: "缺少入口攝影機",
+      syncedAt: null,
+    });
+    return { status: SYNC_STATUS.PENDING, warning: null, failure: null };
+  }
+
+  if (allFailures.length === 0) {
+    await personLicensePlateService.updateSyncStatus(plateId, {
+      status: SYNC_STATUS.SYNCED,
+      error: null,
+      syncedAt: new Date(),
+    });
+    return { status: SYNC_STATUS.SYNCED, warning: null, failure: null };
+  }
+
+  if (totalOk > 0) {
+    await personLicensePlateService.updateSyncStatus(plateId, {
+      status: SYNC_STATUS.PARTIAL,
+      error: allFailures[0]?.message || "部分設備同步失敗",
+      syncedAt: new Date(),
+    });
+    return {
+      status: SYNC_STATUS.PARTIAL,
+      warning: null,
+      failure: allFailures[0],
+    };
+  }
+
+  await personLicensePlateService.updateSyncStatus(plateId, {
+    status: SYNC_STATUS.FAILED,
+    error: allFailures[0]?.message || "同步失敗",
+    syncedAt: null,
+  });
+  return {
+    status: SYNC_STATUS.FAILED,
+    warning: null,
+    failure: allFailures[0],
+  };
+}
+
+/**
+ * @param {number} personId
+ */
+async function syncPersonPlates(personId) {
+  const pid = Number(personId);
+  if (!Number.isFinite(pid)) {
+    return aggregateSyncResults([]);
+  }
+
+  const personRows = await db.query(
+    `SELECT person_group_id FROM persons WHERE id = ? LIMIT 1`,
+    [pid],
+  );
+  const personGroupId = personRows?.[0]?.person_group_id;
+  const targets = await resolveIsapiTargetsForPersonGroup(personGroupId);
+  const plates = await personLicensePlateService.listByPersonId(pid);
+
+  if (plates.length === 0) {
+    return { status: SYNC_STATUS.SKIPPED, warnings: [], failures: [] };
+  }
+
+  const results = [];
+  for (const plate of plates) {
+    results.push(await syncPlateRowById(plate.id, targets));
+  }
+  return aggregateSyncResults(results);
+}
+
+/**
+ * @param {number} locationId
+ */
+async function syncPlatesForLocation(locationId) {
+  const locId = Number(locationId);
+  if (!Number.isFinite(locId)) {
+    return { status: SYNC_STATUS.SKIPPED, warnings: [], failures: [] };
+  }
+
+  const rows = await db.query(
+    `
+      SELECT system_config
+      FROM location_systems
+      WHERE location_id = ? AND system_type = 'vehicle_access'
+      LIMIT 1
+    `,
+    [locId],
+  );
+  const target = resolveTargetForLocation(locId, rows?.[0]?.system_config);
+  const cfg = parseConfig(rows?.[0]?.system_config);
+  const groupIds = cfg.personGroupIds || [];
+
+  if (!target) {
+    return {
+      status: SYNC_STATUS.SKIPPED,
+      warnings: [],
+      failures: [],
+    };
+  }
+
+  if (groupIds.length === 0) {
+    return {
+      status: SYNC_STATUS.SKIPPED,
+      warnings: ["地點未設定人員群組，略過車牌同步"],
+      failures: [],
+    };
+  }
+
+  const placeholders = groupIds.map(() => "?").join(",");
+  const plateRows = await db.query(
+    `
+      SELECT plp.id
+      FROM person_license_plates plp
+      INNER JOIN persons p ON p.id = plp.person_id
+      WHERE p.person_group_id IN (${placeholders})
+      ORDER BY plp.id ASC
+    `,
+    groupIds,
+  );
+
+  const results = [];
+  for (const row of plateRows || []) {
+    results.push(await syncPlateRowById(row.id, [target]));
+  }
+  return aggregateSyncResults(results);
+}
+
+function mergeTargets(targetLists) {
+  const map = new Map();
+  for (const list of targetLists) {
+    for (const target of list || []) {
+      if (!target?.locationId) continue;
+      const key = Number(target.locationId);
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          locationId: key,
+          deviceIds: Array.from(new Set(target.deviceIds || [])),
+          channelId: target.channelId ?? 1,
+        });
+        continue;
+      }
+      existing.deviceIds = Array.from(
+        new Set([...(existing.deviceIds || []), ...(target.deviceIds || [])]),
+      );
+    }
+  }
+  return Array.from(map.values());
+}
+
+async function removePlateFromTargets(plateNumber, targets, failures = []) {
+  const licensePlate = String(plateNumber || "").trim();
+  if (!licensePlate || !targets?.length) return { removed: 0, failures };
+
+  let removed = 0;
+  for (const target of targets) {
+    for (const deviceId of target.deviceIds || []) {
+      try {
+        await isapiVehicleDeviceService.deleteLicensePlates(deviceId, {
+          siteId: target.locationId,
+          channelId: target.channelId,
+          licensePlates: [licensePlate],
+        });
+        removed += 1;
+      } catch (err) {
+        failures.push({
+          plateNumber: licensePlate,
+          deviceId,
+          locationId: target.locationId,
+          message: err?.message || String(err),
+        });
+      }
+    }
+  }
+  return { removed, failures };
+}
+
+/**
+ * 人員改群組或刪除車牌時，從舊設備移除名單
+ */
+async function reconcileAfterPersonChange(personId, context = {}) {
+  const groupChanged = Boolean(context.groupChanged);
+  const removedPlates = Array.isArray(context.removedPlates)
+    ? context.removedPlates
+    : [];
+  if (!groupChanged && removedPlates.length === 0) {
+    return { failures: [] };
+  }
+
+  const previousGroupId =
+    context.previousGroupId != null ? Number(context.previousGroupId) : null;
+  const nextGroupId =
+    context.nextGroupId != null ? Number(context.nextGroupId) : null;
+
+  const oldTargets = await resolveIsapiTargetsForPersonGroup(previousGroupId);
+  const failures = [];
+
+  if (groupChanged) {
+    const currentPlates =
+      await personLicensePlateService.listByPersonId(personId);
+    for (const plate of currentPlates) {
+      await removePlateFromTargets(plate.plate_number, oldTargets, failures);
+    }
+  }
+
+  if (removedPlates.length > 0) {
+    const cleanupTargets = groupChanged
+      ? mergeTargets([
+          oldTargets,
+          await resolveIsapiTargetsForPersonGroup(nextGroupId),
+        ])
+      : oldTargets;
+    for (const plate of removedPlates) {
+      const plateNumber = plate?.plate_number || plate?.plateNumber;
+      await removePlateFromTargets(plateNumber, cleanupTargets, failures);
+    }
+  }
+
+  return { failures };
+}
+
+/**
+ * 人員刪除前：從群組對應設備移除所有車牌
+ */
+async function purgePersonPlatesFromDevices(personId, personGroupId) {
+  const plates = await personLicensePlateService.listByPersonId(personId);
+  const targets = await resolveIsapiTargetsForPersonGroup(personGroupId);
+  const failures = [];
+  for (const plate of plates) {
+    await removePlateFromTargets(plate.plate_number, targets, failures);
+  }
+  return { failures };
+}
+
+function diffRemovedPlates(before, after) {
+  const afterNorm = new Set((after || []).map((p) => p.plate_normalized));
+  return (before || []).filter((p) => !afterNorm.has(p.plate_normalized));
+}
+
+/**
+ * 地點 personGroupIds 縮減時，從該地點入口攝影機移除對應群組車牌
+ */
+async function reconcileLocationPersonGroupChange(
+  locationId,
+  previousGroupIds,
+  nextGroupIds,
+) {
+  const prev = Array.isArray(previousGroupIds) ? previousGroupIds : [];
+  const next = new Set(
+    (Array.isArray(nextGroupIds) ? nextGroupIds : []).map(Number),
+  );
+  const removedGroups = prev.filter((gid) => !next.has(Number(gid)));
+  if (removedGroups.length === 0) {
+    return { failures: [] };
+  }
+
+  const rows = await db.query(
+    `
+      SELECT system_config
+      FROM location_systems
+      WHERE location_id = ? AND system_type = 'vehicle_access'
+      LIMIT 1
+    `,
+    [locationId],
+  );
+  const target = resolveTargetForLocation(locationId, rows?.[0]?.system_config);
+  if (!target) return { failures: [] };
+
+  const placeholders = removedGroups.map(() => "?").join(",");
+  const plateRows = await db.query(
+    `
+      SELECT plp.plate_number
+      FROM person_license_plates plp
+      INNER JOIN persons p ON p.id = plp.person_id
+      WHERE p.person_group_id IN (${placeholders})
+    `,
+    removedGroups,
+  );
+
+  const failures = [];
+  for (const row of plateRows || []) {
+    await removePlateFromTargets(row.plate_number, [target], failures);
+  }
+  return { failures };
+}
+
+/**
+ * 人員車牌變更後 reconcile + sync（可僅改群組、或僅改車牌、或兩者）
+ */
+async function reconcilePersonGroupAndPlates(
+  personId,
+  { previousGroupId, nextGroupId, groupChanged, platesInput, oldPlates },
+) {
+  const pid = Number(personId);
+  let removedPlates = [];
+
+  if (platesInput !== undefined) {
+    await personLicensePlateService.replacePlatesForPerson(pid, platesInput);
+    const newPlates = await personLicensePlateService.listByPersonId(pid);
+    removedPlates = diffRemovedPlates(oldPlates, newPlates);
+  }
+
+  if (platesInput !== undefined || groupChanged) {
+    await reconcileAfterPersonChange(pid, {
+      previousGroupId,
+      nextGroupId,
+      groupChanged: Boolean(groupChanged),
+      removedPlates,
+    });
+    return syncPersonPlates(pid);
+  }
+  return null;
+}
+
+module.exports = {
+  SYNC_STATUS,
+  resolveIsapiTargetsForPersonGroup,
+  syncPersonPlates,
+  syncPlatesForLocation,
+  reconcileAfterPersonChange,
+  purgePersonPlatesFromDevices,
+  reconcileLocationPersonGroupChange,
+  reconcilePersonGroupAndPlates,
+};

@@ -1248,6 +1248,66 @@ async function initSchema() {
     schemaLogger.info("person_license_plates 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'list_type'
+        ) THEN
+          ALTER TABLE person_license_plates
+            ADD COLUMN list_type VARCHAR(16) NOT NULL DEFAULT 'allowList';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'effective_begin'
+        ) THEN
+          ALTER TABLE person_license_plates ADD COLUMN effective_begin TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'effective_end'
+        ) THEN
+          ALTER TABLE person_license_plates ADD COLUMN effective_end TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'isapi_sync_status'
+        ) THEN
+          ALTER TABLE person_license_plates
+            ADD COLUMN isapi_sync_status VARCHAR(16) NOT NULL DEFAULT 'pending';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'isapi_sync_error'
+        ) THEN
+          ALTER TABLE person_license_plates ADD COLUMN isapi_sync_error TEXT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'person_license_plates'
+            AND column_name = 'isapi_synced_at'
+        ) THEN
+          ALTER TABLE person_license_plates ADD COLUMN isapi_synced_at TIMESTAMPTZ;
+        END IF;
+      END $BODY$;
+    `);
+    await targetPool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_person_license_plates_normalized
+      ON person_license_plates (plate_normalized);
+    `);
+
+    await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_location_access (
         id SERIAL PRIMARY KEY,
         person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,

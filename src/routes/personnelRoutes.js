@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
 const personnelService = require("../services/personnel/personnelService");
+const personLicensePlateService = require("../services/personnel/personLicensePlateService");
 const personSyncJobService = require("../services/personnel/personSyncJobService");
 const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadService");
 const personImportService = require("../services/personnel/personImportService");
@@ -280,6 +281,25 @@ router.post(
   }),
 );
 
+/**
+ * 依車牌查詢人員主檔綁定（車牌管理 UI 顯示用）
+ * GET /api/personnel/license-plates/bindings?plates=ABC1234,XYZ
+ */
+router.get(
+  "/license-plates/bindings",
+  authenticate,
+  requirePermission("system.personnel"),
+  asyncHandler(async (req, res) => {
+    const raw = req.query?.plates ?? req.query?.plate ?? "";
+    const plates = String(raw)
+      .split(/[,;，、\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const items = await personLicensePlateService.findBindingsByPlates(plates);
+    res.sendSuccess({ items });
+  }),
+);
+
 router.put(
   "/persons/:id",
   authenticate,
@@ -303,11 +323,12 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const personId = parseInt(req.params.id, 10);
-    const personLicensePlateService = require("../services/personnel/personLicensePlateService");
     const plates = req.body?.licensePlates ?? req.body?.plates ?? [];
-    await personLicensePlateService.replacePlatesForPerson(personId, plates);
-    const person = await personnelService.getPersonById(personId);
-    res.sendSuccess({ licensePlates: person.license_plates || [] });
+    const result = await personnelService.replacePersonLicensePlates(
+      personId,
+      plates,
+    );
+    res.sendSuccess(result);
   }),
 );
 

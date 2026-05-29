@@ -20,6 +20,7 @@ const {
 const locationLogger = logger.createLogger("locationSystemOps");
 const {
   validateVehicleAccessConfig,
+  parseConfig,
 } = require("../vehicleAccess/vehicleAccessValidation");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const {
@@ -412,6 +413,13 @@ async function createSystem(query, locationId, system) {
 
   if (systemType === "vehicle_access") {
     require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+    const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
+    vehiclePlateSyncService.syncPlatesForLocation(locationId).catch((err) => {
+      locationLogger.warn("vehicle plate sync after createSystem failed", {
+        locationId,
+        error: err?.message || String(err),
+      });
+    });
   }
 
   return result[0].id;
@@ -506,6 +514,34 @@ async function updateSystem(query, systemId, system) {
 
   if (targetSystemType === "vehicle_access") {
     require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+    if (vaLocationId != null) {
+      const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
+      const prevVaCfg =
+        currentSystemType === "vehicle_access"
+          ? parseConfig(currentSystemConfig)
+          : null;
+      const nextVaCfg = parseConfig(systemConfig);
+      if (prevVaCfg?.dataSource === "isapi_camera") {
+        vehiclePlateSyncService
+          .reconcileLocationPersonGroupChange(
+            vaLocationId,
+            prevVaCfg.personGroupIds,
+            nextVaCfg.personGroupIds,
+          )
+          .catch((err) => {
+            locationLogger.warn("vehicle plate reconcile after updateSystem failed", {
+              locationId: vaLocationId,
+              error: err?.message || String(err),
+            });
+          });
+      }
+      vehiclePlateSyncService.syncPlatesForLocation(vaLocationId).catch((err) => {
+        locationLogger.warn("vehicle plate sync after updateSystem failed", {
+          locationId: vaLocationId,
+          error: err?.message || String(err),
+        });
+      });
+    }
   }
 }
 

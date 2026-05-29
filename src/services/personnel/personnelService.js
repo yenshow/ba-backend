@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs").promises;
 const db = require("../../database/db");
 const personLicensePlateService = require("./personLicensePlateService");
+const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
@@ -274,7 +275,13 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
             'id', plp.id,
             'person_id', plp.person_id,
             'plate_number', plp.plate_number,
-            'plate_normalized', plp.plate_normalized
+            'plate_normalized', plp.plate_normalized,
+            'list_type', plp.list_type,
+            'effective_begin', plp.effective_begin,
+            'effective_end', plp.effective_end,
+            'isapi_sync_status', plp.isapi_sync_status,
+            'isapi_sync_error', plp.isapi_sync_error,
+            'isapi_synced_at', plp.isapi_synced_at
           )
           ORDER BY plp.id ASC
         ) AS license_plates
@@ -714,11 +721,16 @@ async function createPerson(data, createdBy = null) {
   );
   const created = rows[0];
   if (Object.prototype.hasOwnProperty.call(data || {}, "licensePlates")) {
-    await personLicensePlateService.replacePlatesForPerson(
-      created.id,
-      data.licensePlates,
-    );
-    return getPersonById(created.id);
+    const vehicle_plate_sync =
+      await vehiclePlateSyncService.reconcilePersonGroupAndPlates(created.id, {
+        previousGroupId: null,
+        nextGroupId: personGroupId,
+        groupChanged: false,
+        platesInput: data.licensePlates,
+        oldPlates: [],
+      });
+    const person = await getPersonById(created.id);
+    return { ...person, vehicle_plate_sync };
   }
   return { ...created, license_plates: [] };
 }
@@ -726,18 +738,30 @@ async function createPerson(data, createdBy = null) {
 async function updatePerson(id, data) {
   const existingPerson = await getPersonById(id);
 
+  const prevGroupId =
+    existingPerson.person_group_id != null
+      ? Number(existingPerson.person_group_id)
+      : null;
+  let nextGroupId = prevGroupId;
+  let groupChanged = false;
+  if (Object.prototype.hasOwnProperty.call(data || {}, "personGroupId")) {
+    nextGroupId = await resolvePersonGroupIdForPerson(data.personGroupId);
+    groupChanged = prevGroupId !== nextGroupId;
+  }
+
+  const hasLicensePlatesUpdate = Object.prototype.hasOwnProperty.call(
+    data || {},
+    "licensePlates",
+  );
+  const oldPlates = hasLicensePlatesUpdate
+    ? await personLicensePlateService.listByPersonId(id)
+    : [];
+
   const updates = [];
   const params = [];
-  if (Object.prototype.hasOwnProperty.call(data || {}, "personGroupId")) {
-    const nextGroupId = await resolvePersonGroupIdForPerson(data.personGroupId);
-    const prevGroupId =
-      existingPerson.person_group_id != null
-        ? Number(existingPerson.person_group_id)
-        : null;
-    if (prevGroupId !== nextGroupId) {
-      updates.push("person_group_id = ?");
-      params.push(nextGroupId);
-    }
+  if (groupChanged) {
+    updates.push("person_group_id = ?");
+    params.push(nextGroupId);
   }
   if (data.employeeNo !== undefined) {
     const v = String(data.employeeNo).trim();
@@ -800,20 +824,31 @@ async function updatePerson(id, data) {
     updates.push("user_id = ?");
     params.push(data.userId ?? null);
   }
-  if (Object.prototype.hasOwnProperty.call(data || {}, "licensePlates")) {
-    await personLicensePlateService.replacePlatesForPerson(
-      id,
-      data.licensePlates,
+  let vehiclePlateSync = null;
+
+  if (updates.length > 0) {
+    params.push(id);
+    await db.query(
+      `UPDATE persons SET ${updates.join(", ")} WHERE id = ?`,
+      params,
     );
   }
 
-  if (updates.length === 0) return getPersonById(id);
-  params.push(id);
-  await db.query(
-    `UPDATE persons SET ${updates.join(", ")} WHERE id = ?`,
-    params,
-  );
-  return getPersonById(id);
+  if (hasLicensePlatesUpdate || groupChanged) {
+    vehiclePlateSync =
+      await vehiclePlateSyncService.reconcilePersonGroupAndPlates(id, {
+        previousGroupId: prevGroupId,
+        nextGroupId,
+        groupChanged,
+        platesInput: hasLicensePlatesUpdate ? data.licensePlates : undefined,
+        oldPlates,
+      });
+  }
+
+  const person = await getPersonById(id);
+  return vehiclePlateSync
+    ? { ...person, vehicle_plate_sync: vehiclePlateSync }
+    : person;
 }
 
 // ========== 門禁資料（僅存平台，設備同步統一處理） ==========
@@ -945,8 +980,31 @@ async function setPersonAccessControlConfig(personId, params = {}) {
   return getPersonById(personId);
 }
 
+async function replacePersonLicensePlates(personId, platesInput) {
+  const person = await getPersonById(personId);
+  const groupId =
+    person.person_group_id != null ? Number(person.person_group_id) : null;
+  const vehicle_plate_sync =
+    await vehiclePlateSyncService.reconcilePersonGroupAndPlates(personId, {
+      previousGroupId: groupId,
+      nextGroupId: groupId,
+      groupChanged: false,
+      platesInput,
+      oldPlates: person.license_plates || [],
+    });
+  const updated = await getPersonById(personId);
+  return {
+    licensePlates: updated.license_plates || [],
+    vehicle_plate_sync,
+  };
+}
+
 async function deletePerson(id) {
-  await getPersonById(id);
+  const person = await getPersonById(id);
+  await vehiclePlateSyncService.purgePersonPlatesFromDevices(
+    id,
+    person.person_group_id,
+  );
   await db.query("DELETE FROM person_location_access WHERE person_id = ?", [
     id,
   ]);
@@ -1005,6 +1063,7 @@ module.exports = {
   getPersonByEmployeeNo,
   createPerson,
   updatePerson,
+  replacePersonLicensePlates,
   deletePerson,
   getPersonIdsByLocationId,
   getLocationMemberIds,
