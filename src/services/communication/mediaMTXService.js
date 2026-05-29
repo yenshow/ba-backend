@@ -11,14 +11,13 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
 const API_BASE = (config.mediaMTX?.apiBaseUrl ?? "http://127.0.0.1:9997").replace(/\/$/, "");
 const TIMEOUT_MS = config.mediaMTX?.timeoutMs ?? 10000;
 
-/** @returns {{ webrtcUrl: string, webrtcPort?: number }} */
+/** @returns {{ webrtcUrl: string, webrtcPort: number }} */
 function buildWebrtcPlayback(pathName) {
   const whepPath = `/${pathName}/whep`;
-  const fixedBase = config.mediaMTX?.webrtcBaseUrl?.replace(/\/$/, "");
-  if (fixedBase) {
-    return { webrtcUrl: `${fixedBase}${whepPath}` };
-  }
-  return { webrtcUrl: whepPath, webrtcPort: config.mediaMTX?.webrtcPort ?? 8889 };
+  return {
+    webrtcUrl: whepPath,
+    webrtcPort: config.mediaMTX?.webrtcPort ?? 8889,
+  };
 }
 
 const api = axios.create({

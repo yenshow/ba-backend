@@ -166,26 +166,12 @@ const mediaMtxPort = (portKey, legacyUrlKey, fallback) => {
   return fallback;
 };
 
-/** 選填：非 loopback 的 MEDIAMTX_WEBRTC_BASE_URL → 固定 WHEP 主機（進階） */
-const mediaMtxWebRtcFixedBase = () => {
-  const raw = getEnv("MEDIAMTX_WEBRTC_BASE_URL", "").trim();
-  if (!raw || raw.toLowerCase() === "auto") return null;
-  try {
-    const host = new URL(raw).hostname;
-    if (host === "127.0.0.1" || host === "localhost") return null;
-  } catch {
-    return raw.replace(/\/$/, "");
-  }
-  return raw.replace(/\/$/, "");
-};
-
 /**
- * MediaMTX（後端 Control API 固定本機；瀏覽器 WHEP 埠由前端帶入目前 hostname）
+ * MediaMTX（後端 Control API 固定本機；瀏覽器 WHEP 埠由前端依目前 hostname 組裝）
  */
 const mediaMTX = {
   apiPort: mediaMtxPort("MEDIAMTX_API_PORT", "MEDIAMTX_API_BASE_URL", 9997),
-  webrtcPort: mediaMtxPort("MEDIAMTX_WEBRTC_PORT", "MEDIAMTX_WEBRTC_BASE_URL", 8889),
-  webrtcBaseUrl: mediaMtxWebRtcFixedBase(),
+  webrtcPort: mediaMtxPort("MEDIAMTX_WEBRTC_PORT", "", 8889),
   timeoutMs: 10000,
 };
 mediaMTX.apiBaseUrl = `http://127.0.0.1:${mediaMTX.apiPort}`;

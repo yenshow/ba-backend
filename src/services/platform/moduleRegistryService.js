@@ -133,6 +133,7 @@ const MODULES = [
     routePrefix: "/infrastructure/elevator",
     featureKey: null,
     permissionCode: null,
+    enabled: false, // 前端尚無對應頁面，避免導向不存在的路由
   },
   {
     id: 13,
@@ -175,6 +176,7 @@ const MODULES = [
     routePrefix: "/security/access-control",
     featureKey: null,
     permissionCode: null,
+    enabled: false, // 前端尚無對應頁面，避免導向不存在的路由
   },
   {
     id: 17,
