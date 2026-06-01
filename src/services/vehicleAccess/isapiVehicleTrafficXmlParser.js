@@ -68,34 +68,8 @@ function parseLicensePlateSearchResult(rawXml) {
   };
 }
 
-const BARRIER_STATUS_LABELS = {
-  0: "無訊號",
-  1: "關閉",
-  2: "開啟",
-};
-
-/**
- * @param {string} rawXml
- * @returns {{ status: number, label: string }}
- */
-function parseBarrierGateStatus(rawXml) {
-  const raw = String(rawXml || "")
-    .replace(/^\uFEFF/, "")
-    .trim();
-  const statusStr =
-    extractTag(raw, "barrierGateStatus") || extractTag(raw, "BarrierGateStatus");
-  const status = Number(statusStr);
-  const n = Number.isFinite(status) ? status : 0;
-  return {
-    status: n,
-    label: BARRIER_STATUS_LABELS[n] || `未知(${n})`,
-  };
-}
-
 module.exports = {
   parseLicensePlateSearchResult,
-  parseBarrierGateStatus,
   normalizeListTypeToApi,
   normalizeListTypeToDevice,
-  BARRIER_STATUS_LABELS,
 };

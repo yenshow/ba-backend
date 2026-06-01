@@ -1,5 +1,5 @@
 /**
- * 車牌攝影機 ISAPI 代理：設備端名單 CRUD、柵欄機狀態／控制
+ * 車牌攝影機 ISAPI 代理：設備端名單 CRUD、柵欄機控制
  */
 const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("../accessControl/isapiClient");
@@ -10,7 +10,6 @@ const { parseConfig } = require("./vehicleAccessValidation");
 const { ensureIntArray } = require("../location/locationShared");
 const {
   parseLicensePlateSearchResult,
-  parseBarrierGateStatus,
   normalizeListTypeToApi,
   normalizeListTypeToDevice,
 } = require("./isapiVehicleTrafficXmlParser");
@@ -227,21 +226,6 @@ async function deleteLicensePlates(deviceId, options = {}) {
   return { success: true, channelId, count: normalized.length };
 }
 
-async function getBarrierGateStatus(deviceId, options = {}) {
-  await assertDeviceBelongsToSite(deviceId, options.siteId);
-  const { client } = await getCameraDeviceAndClient(deviceId);
-  const channelId = resolveChannelId(options.channelId);
-  const path = buildParkingPath(channelId, "/barrierGate/barrierGateStatus");
-  const res = await client.request({
-    method: "GET",
-    path,
-    responseType: "text",
-  });
-  const body = responseBodyToString(res.data);
-  const parsed = parseBarrierGateStatus(body);
-  return { channelId, ...parsed };
-}
-
 async function controlBarrierGate(deviceId, options = {}) {
   await assertDeviceBelongsToSite(deviceId, options.siteId);
   const ctrlMode = String(options.ctrlMode || "")
@@ -270,7 +254,6 @@ module.exports = {
   searchLicensePlates,
   upsertLicensePlates,
   deleteLicensePlates,
-  getBarrierGateStatus,
   controlBarrierGate,
   normalizeListTypeToApi,
 };

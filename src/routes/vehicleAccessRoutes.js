@@ -272,29 +272,6 @@ router.delete(
 );
 
 /**
- * 柵欄機狀態
- * GET /api/vehicle-access/devices/:deviceId/barrier-gate/status
- */
-router.get(
-  "/devices/:deviceId/barrier-gate/status",
-  noCache,
-  validateIntegers("deviceId"),
-  asyncHandler(async (req, res) => {
-    const deviceId = parseInt(req.params.deviceId, 10);
-    const siteId =
-      req.query.siteId != null ? parseInt(req.query.siteId, 10) : undefined;
-    const result = await isapiVehicleDeviceService.getBarrierGateStatus(
-      deviceId,
-      {
-        siteId,
-        channelId: req.query.channelId,
-      },
-    );
-    res.sendSuccess(result);
-  }),
-);
-
-/**
  * 柵欄機控制
  * PUT /api/vehicle-access/devices/:deviceId/barrier-gate
  */
