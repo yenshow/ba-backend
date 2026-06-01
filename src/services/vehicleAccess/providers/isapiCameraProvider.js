@@ -63,7 +63,13 @@ async function getSiteStats(siteId, _config, options = {}) {
 }
 
 async function getSiteLogs(siteId, _config, options = {}) {
-  const { start, end } = resolveStatsTimeRange(options);
+  const useSinceOnly = Boolean(options.useSinceOnly && options.since);
+  const { start, end } = useSinceOnly
+    ? { start: new Date(options.since), end: new Date() }
+    : resolveStatsTimeRange(options);
+  const timeCompareSql = useSinceOnly
+    ? "vpl.trigger_time > ?"
+    : "vpl.trigger_time >= ? AND vpl.trigger_time <= ?";
   const limit = Math.min(
     Math.max(Number(options.limit) || 50, 1),
     ENTRY_EXIT_MAX_RECORDS,
@@ -72,7 +78,9 @@ async function getSiteLogs(siteId, _config, options = {}) {
   const search = options.search ? String(options.search).trim() : "";
 
   let searchSql = "";
-  const params = [siteId, start.toISOString(), end.toISOString()];
+  const params = useSinceOnly
+    ? [siteId, start.toISOString()]
+    : [siteId, start.toISOString(), end.toISOString()];
   if (search) {
     searchSql = ` AND (
       vpl.license_plate ILIKE ? OR vpl.owner_name ILIKE ? OR vpl.lane_name ILIKE ? OR d.name ILIKE ?
@@ -85,7 +93,7 @@ async function getSiteLogs(siteId, _config, options = {}) {
     `SELECT COUNT(*)::int AS c FROM vehicle_passageway_logs vpl
      LEFT JOIN devices d ON vpl.device_id = d.id
      WHERE vpl.location_id = ? AND vpl.data_source = 'isapi_camera'
-       AND vpl.trigger_time >= ? AND vpl.trigger_time <= ?${searchSql}`,
+       AND ${timeCompareSql}${searchSql}`,
     params,
   );
   const total = Number(countRows?.[0]?.c ?? 0);
@@ -95,7 +103,7 @@ async function getSiteLogs(siteId, _config, options = {}) {
      FROM vehicle_passageway_logs vpl
      LEFT JOIN devices d ON vpl.device_id = d.id
      WHERE vpl.location_id = ? AND vpl.data_source = 'isapi_camera'
-       AND vpl.trigger_time >= ? AND vpl.trigger_time <= ?${searchSql}
+       AND ${timeCompareSql}${searchSql}
      ORDER BY vpl.trigger_time DESC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset],

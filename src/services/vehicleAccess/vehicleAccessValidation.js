@@ -6,6 +6,11 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const { ensureIntArray } = require("../location/locationShared");
+const {
+  normalizeOperationMode,
+  parseVehicleAccessConfigFields,
+  applyVehicleAccessEpochOnSave,
+} = require("./vehicleAccessConfig");
 
 function parseConfig(config) {
   const c =
@@ -18,8 +23,13 @@ function parseConfig(config) {
           }
         })()
       : config || {};
+  const modeFields = parseVehicleAccessConfigFields(c);
   return {
     dataSource: c.data_source === "isapi_camera" ? "isapi_camera" : "yscp",
+    operationMode: modeFields.operationMode,
+    statsEpochStartedAt: modeFields.statsEpochStartedAt,
+    statsResetAt: modeFields.statsResetAt,
+    parkingCapacity: modeFields.parkingCapacity,
     entryLaneId: c.entry_lane_id ?? null,
     exitLaneId: c.exit_lane_id ?? null,
     entryCameraDeviceIds: ensureIntArray(c.entry_camera_device_ids),
@@ -43,11 +53,31 @@ async function validateVehicleAccessConfig(
   excludeLocationId = null,
 ) {
   const cfg = parseConfig(systemConfig);
-  // YSCP（含功能關閉時略過寫入）：群組來自外部資料表，不在此驗證
+
+  if (cfg.operationMode === "parking" && cfg.dataSource !== "isapi_camera") {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "停車場模式僅允許 ISAPI 車牌攝影機資料來源",
+    );
+  }
+
+  if (cfg.operationMode === "parking" && cfg.parkingCapacity == null) {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "停車場模式請填寫在場車輛上限（正整數）",
+    );
+  }
+
   if (
     yscpVehicleFeature.shouldSkipYscp(cfg.dataSource) ||
     cfg.dataSource === "yscp"
   ) {
+    if (cfg.operationMode === "parking") {
+      throwApiError(
+        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        "YSCP 車道地點不可設為停車場模式",
+      );
+    }
     return cfg;
   }
 
@@ -77,7 +107,6 @@ async function validateVehicleAccessConfig(
   }
 
   const allDevices = [...entrySet, ...exitSet];
-  // 目前規則：允許攝影機跨地點／跨系統重複使用（不在後端擋）。
 
   const typeRows = await db.query(
     `SELECT id, type_code FROM devices WHERE id = ANY(?::int[])`,
@@ -98,4 +127,6 @@ async function validateVehicleAccessConfig(
 module.exports = {
   parseConfig,
   validateVehicleAccessConfig,
+  applyVehicleAccessEpochOnSave,
+  normalizeOperationMode,
 };

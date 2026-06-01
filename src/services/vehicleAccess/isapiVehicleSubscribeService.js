@@ -9,6 +9,7 @@ const { parseAnprEventXml } = require("./isapiVehicleXmlParser");
 const {
   persistAnprEvent,
   attachLicensePlatePicture,
+  runFanOutPictureBackfillOnce,
   ensureUploadsDir,
 } = require("./isapiVehiclePersistence");
 const { ensureIntArray } = require("../location/locationShared");
@@ -152,7 +153,7 @@ async function consumeEventStreamIncremental(
       enqueuePart(async () => {
         if (!pendingPicture.attachFirstImage || pendingPicture.logIds.length === 0) return;
         pendingPicture.attachFirstImage = false;
-        await attachLicensePlatePicture(pendingPicture.logIds[0], body);
+        await attachLicensePlatePicture(pendingPicture.logIds, body);
       });
     }
   };
@@ -259,6 +260,16 @@ async function start() {
   if (started) return;
   ensureUploadsDir();
   started = true;
+  try {
+    const count = await runFanOutPictureBackfillOnce();
+    if (count > 0) {
+      logger.info("[ISAPI Vehicle] 已回填 fan-out 缺圖列", { count });
+    }
+  } catch (error) {
+    logger.warn("[ISAPI Vehicle] fan-out 缺圖回填失敗", {
+      message: error?.message || String(error),
+    });
+  }
   await refresh();
 }
 

@@ -392,11 +392,18 @@ function formatSystem(system) {
       const {
         normalizeLogDisplayColumns,
       } = require("../vehicleAccess/logDisplayColumns");
+      const {
+        normalizeOperationMode,
+      } = require("../vehicleAccess/vehicleAccessConfig");
       return {
         ...baseSystem,
         config: {
           dataSource:
             config.data_source === "isapi_camera" ? "isapi_camera" : "yscp",
+          operationMode: normalizeOperationMode(config.operation_mode),
+          statsEpochStartedAt: config.stats_epoch_started_at ?? undefined,
+          statsResetAt: config.stats_reset_at ?? undefined,
+          parkingCapacity: config.parking_capacity ?? undefined,
           entryLaneId: config.entry_lane_id ?? undefined,
           exitLaneId: config.exit_lane_id ?? undefined,
           entryCameraDeviceIds: Array.isArray(config.entry_camera_device_ids)

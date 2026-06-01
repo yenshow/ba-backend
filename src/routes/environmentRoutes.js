@@ -4,7 +4,7 @@ const environmentService = require("../services/environment/environmentService")
 const {
   authenticate,
   requirePermission,
-  requireAdminOrOperator,
+  requireAdmin,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -40,7 +40,7 @@ router.get(
 // 建立區域
 router.post(
   "/zones",
-  requireAdminOrOperator,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const result = await environmentService.createZone(req.body, req.user.id);
     res.sendSuccess(result, 201);
@@ -50,7 +50,7 @@ router.post(
 // 更新區域
 router.put(
   "/zones/:id",
-  requireAdminOrOperator,
+  requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -66,7 +66,7 @@ router.put(
 // 刪除區域
 router.delete(
   "/zones/:id",
-  requireAdminOrOperator,
+  requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

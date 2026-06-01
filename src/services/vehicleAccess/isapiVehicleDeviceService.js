@@ -106,6 +106,7 @@ function buildSearchXml(searchResultPosition, maxResults) {
   const max = Math.min(500, Math.max(1, Number(maxResults) || 100));
   return `<?xml version="1.0" encoding="UTF-8"?>
 <LPListAuditSearchDescription version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
+    <searchID>2371AE29-A821-4F7D-827D-E84B6A029EFB</searchID>
     <searchResultPosition>${pos}</searchResultPosition>
     <maxResults>${max}</maxResults>
 </LPListAuditSearchDescription>`;
@@ -127,10 +128,7 @@ async function searchLicensePlates(deviceId, options = {}) {
   const { client } = await getCameraDeviceAndClient(deviceId);
   const channelId = resolveChannelId(options.channelId);
   const path = buildTrafficPath(channelId, "/searchLPListAudit");
-  const xml = buildSearchXml(
-    options.searchResultPosition,
-    options.maxResults,
-  );
+  const xml = buildSearchXml(options.searchResultPosition, options.maxResults);
   const res = await client.request({
     method: "POST",
     path,
@@ -171,10 +169,7 @@ async function upsertLicensePlates(deviceId, options = {}) {
     }
     const operationType = String(p.operationType || "add").toLowerCase();
     if (!VALID_OPERATION_TYPES.has(operationType)) {
-      throwApiError(
-        C.BAD_REQUEST,
-        "operationType 須為 add 或 modify",
-      );
+      throwApiError(C.BAD_REQUEST, "operationType 須為 add 或 modify");
     }
     const listType = normalizeListTypeToDevice(p.listType || "allowList");
     const id = String(p.id || licensePlate).trim();
@@ -249,12 +244,11 @@ async function getBarrierGateStatus(deviceId, options = {}) {
 
 async function controlBarrierGate(deviceId, options = {}) {
   await assertDeviceBelongsToSite(deviceId, options.siteId);
-  const ctrlMode = String(options.ctrlMode || "").trim().toLowerCase();
+  const ctrlMode = String(options.ctrlMode || "")
+    .trim()
+    .toLowerCase();
   if (!VALID_CTRL_MODES.has(ctrlMode)) {
-    throwApiError(
-      C.BAD_REQUEST,
-      "ctrlMode 須為 open、close、lock 或 unlock",
-    );
+    throwApiError(C.BAD_REQUEST, "ctrlMode 須為 open、close、lock 或 unlock");
   }
 
   const { client } = await getCameraDeviceAndClient(deviceId);

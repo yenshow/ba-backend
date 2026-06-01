@@ -6,6 +6,5 @@ module.exports = createSnapshotSystemRouter({
   locationType: "hvac",
   alertSource: "hvac",
   statusService: hvacStatusService,
-  requireAdminOrOperatorOnZoneMutations: true,
   statusSyncAlerts: "opt-out",
 });

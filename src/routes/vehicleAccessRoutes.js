@@ -77,14 +77,61 @@ router.get(
 );
 
 router.get(
+  "/sites/:id/session-stats",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const result = await vehicleAccessService.getSiteSessionStats(siteId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.get(
+  "/sites/:id/presence",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const result = await vehicleAccessService.getSitePresence(siteId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.get(
+  "/sites/:id/presence/plates",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const result = await vehicleAccessService.getSitePresencePlates(siteId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/sites/:id/reset",
+  requireAdminOrOperator,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const userId = req.user?.id != null ? Number(req.user.id) : null;
+    const result = await vehicleAccessService.resetSiteStats(siteId, userId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.get(
   "/sites/:id/logs/latest",
   noCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
+    const { since } = req.query;
     const result = await vehicleAccessService.getSiteLogs(siteId, {
       limit: 5,
       offset: 0,
+      since,
     });
     res.sendSuccess(result);
   }),
@@ -98,13 +145,14 @@ router.get(
     const siteId = parseInt(req.params.id, 10);
     const limit = req.query.limit != null ? parseInt(req.query.limit, 10) : 50;
     const offset = req.query.offset != null ? parseInt(req.query.offset, 10) : 0;
-    const { startTime, endTime, timeRange, search } = req.query;
+    const { startTime, endTime, timeRange, search, since } = req.query;
     const result = await vehicleAccessService.getSiteLogs(siteId, {
       limit,
       offset,
       startTime,
       endTime,
       timeRange,
+      since,
       search,
     });
     res.sendSuccess(result);

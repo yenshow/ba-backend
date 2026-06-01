@@ -9,6 +9,7 @@ const express = require("express");
 const locationService = require("../services/location/locationService");
 const {
   authenticate,
+  requireAdmin,
   requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
@@ -28,7 +29,7 @@ const {
  * @param {string} config.locationType 例如 lighting、air_circulation
  * @param {string} config.alertSource 傳入 systemAlert.* 的來源鍵
  * @param {{ getStatusSnapshot: Function, getZoneStatusSnapshot: Function }} config.statusService
- * @param {boolean} [config.requireAdminOrOperatorOnZoneMutations=false]
+ * @param {boolean} [config.requireAdminOnZoneMutations=true] 區域／地點 CRUD 僅 admin
  * @param {'off'|'opt-in'|'opt-out'} [config.statusSyncAlerts='opt-in'] off=照明；opt-in=排水；opt-out=HVAC
  * @param {number} [config.createZoneHttpStatus] POST /zones 成功狀態碼（預設 200）
  * @param {boolean} [config.manualErrorRequiresMessage=false] 煙霧警報：POST errors 需 body.message
@@ -39,7 +40,7 @@ function createSnapshotSystemRouter(config) {
     locationType,
     alertSource,
     statusService,
-    requireAdminOrOperatorOnZoneMutations = false,
+    requireAdminOnZoneMutations = true,
     statusSyncAlerts = "opt-in",
     createZoneHttpStatus,
     manualErrorRequiresMessage = false,
@@ -48,9 +49,7 @@ function createSnapshotSystemRouter(config) {
   const router = express.Router();
   router.use(authenticate, requirePermission(permissionCode));
 
-  const zoneMutationGuard = requireAdminOrOperatorOnZoneMutations
-    ? [requireAdminOrOperator]
-    : [];
+  const zoneMutationGuard = requireAdminOnZoneMutations ? [requireAdmin] : [];
 
   router.get(
     "/zones",

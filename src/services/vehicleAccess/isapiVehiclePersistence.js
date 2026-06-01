@@ -7,6 +7,12 @@ const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
 const { lookupPersonByPlate } = require("./vehiclePlateEnrichment");
+const { parseConfig } = require("./vehicleAccessValidation");
+const {
+  getEffectiveSince,
+  isEventAfterEffectiveSince,
+} = require("./vehicleAccessConfig");
+const vehiclePresenceService = require("./vehiclePresenceService");
 
 const UPLOADS_VEHICLE_DIR = path.join(
   process.cwd(),
@@ -34,6 +40,49 @@ function listTypeToAllowResult(listType) {
   return null;
 }
 
+/** @type {Map<number, { operationMode: string, effectiveSince: string|null }>} */
+const locationParkingCache = new Map();
+const LOCATION_CFG_CACHE_MS = 30_000;
+
+async function getLocationIngestPolicy(locationId) {
+  const cached = locationParkingCache.get(locationId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.policy;
+  }
+  const locRows = await db.query(
+    `SELECT l.created_at, ls.system_config
+     FROM locations l
+     JOIN location_systems ls ON ls.location_id = l.id AND ls.system_type = 'vehicle_access'
+     WHERE l.id = ?`,
+    [locationId],
+  );
+  if (!locRows?.length) {
+    return { skipIngest: false, updatePresence: false };
+  }
+  const cfg = parseConfig(locRows[0].system_config);
+  const createdAt = locRows[0].created_at
+    ? new Date(locRows[0].created_at).toISOString()
+    : null;
+  const effectiveSince = getEffectiveSince(cfg, createdAt);
+  const policy = {
+    operationMode: cfg.operationMode,
+    effectiveSince,
+    /** 停車場：略過 effectiveSince 之前的歷史事件 */
+    filterEventsBeforeSince:
+      cfg.operationMode === "parking" && effectiveSince != null,
+    updatePresence: cfg.operationMode === "parking",
+  };
+  locationParkingCache.set(locationId, {
+    policy,
+    expiresAt: Date.now() + LOCATION_CFG_CACHE_MS,
+  });
+  return policy;
+}
+
+function invalidateLocationIngestCache(locationId) {
+  if (locationId != null) locationParkingCache.delete(Number(locationId));
+}
+
 /**
  * @param {object} options
  * @returns {Promise<{ inserted: boolean, ids: number[] }>}
@@ -58,6 +107,14 @@ async function persistAnprEvent(options) {
 
   const ids = [];
   for (const target of locationTargets) {
+    const policy = await getLocationIngestPolicy(target.locationId);
+    if (
+      policy.filterEventsBeforeSince &&
+      !isEventAfterEffectiveSince(parsed.dateTime, policy.effectiveSince)
+    ) {
+      continue;
+    }
+
     const rows = await db.query(
       `INSERT INTO vehicle_passageway_logs (
         external_id, trigger_time, lane_id, lane_name, license_plate, owner_name,
@@ -85,7 +142,22 @@ async function persistAnprEvent(options) {
       ],
     );
     const id = rows?.[0]?.id;
-    if (id != null) ids.push(id);
+    if (id != null) {
+      ids.push(id);
+      if (
+        policy.updatePresence &&
+        plate &&
+        allowResult === 1 &&
+        target.laneType != null
+      ) {
+        await vehiclePresenceService.upsertPresenceFromPassage(
+          target.locationId,
+          plate,
+          { allow_result: allowResult, lane_type: target.laneType },
+          parsed.dateTime,
+        );
+      }
+    }
   }
 
   if (ids.length > 0) {
@@ -99,18 +171,28 @@ async function persistAnprEvent(options) {
   return { inserted: ids.length > 0, ids };
 }
 
-async function attachLicensePlatePicture(logId, pictureBuffer) {
-  if (
-    logId == null ||
-    !Buffer.isBuffer(pictureBuffer) ||
-    pictureBuffer.length === 0
-  ) {
+function normalizeLogIds(logIds) {
+  const raw = Array.isArray(logIds) ? logIds : logIds != null ? [logIds] : [];
+  return [
+    ...new Set(
+      raw
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+}
+
+/** fan-out 至多地點：附圖寫一次，所有 log 共用 picture_path */
+async function attachLicensePlatePicture(logIds, pictureBuffer) {
+  const ids = normalizeLogIds(logIds);
+  if (ids.length === 0 || !Buffer.isBuffer(pictureBuffer) || pictureBuffer.length === 0) {
     return;
   }
   ensureUploadsDir();
+  const primaryId = ids[0];
   const rows = await db.query(
     `SELECT device_id, trigger_time FROM vehicle_passageway_logs WHERE id = ?`,
-    [logId],
+    [primaryId],
   );
   const row = rows?.[0];
   if (!row) return;
@@ -126,23 +208,50 @@ async function attachLicensePlatePicture(logId, pictureBuffer) {
     .replace(/\+.*$/, "")
     .replace(/Z$/, "")
     .slice(0, 19);
-  const basename = `${host}_${rawTime}_${logId}.jpg`;
+  const basename = `${host}_${rawTime}_${primaryId}.jpg`;
   const filePath = path.join(UPLOADS_VEHICLE_DIR, basename);
   fs.writeFileSync(filePath, pictureBuffer);
   const picturePath = `/uploads/vehicle-events/${basename}`;
+  const placeholders = ids.map(() => "?").join(", ");
   await db.query(
-    `UPDATE vehicle_passageway_logs SET picture_path = ?, file_count = 1 WHERE id = ?`,
-    [picturePath, logId],
+    `UPDATE vehicle_passageway_logs SET picture_path = ?, file_count = 1 WHERE id IN (${placeholders})`,
+    [picturePath, ...ids],
   );
   websocketService.emitVehicleAccessIsapiEvent({
-    logId,
+    logIds: ids,
     eventTime: row.trigger_time,
   });
+}
+
+let fanOutPictureBackfillDone = false;
+
+/** 啟動時一次：fan-out 缺圖列自同事件 sibling 複製 picture_path */
+async function runFanOutPictureBackfillOnce() {
+  if (fanOutPictureBackfillDone) return 0;
+  fanOutPictureBackfillDone = true;
+  const rows = await db.query(
+    `UPDATE vehicle_passageway_logs AS target
+     SET picture_path = src.picture_path,
+         file_count = GREATEST(COALESCE(target.file_count, 0), 1)
+     FROM vehicle_passageway_logs AS src
+     WHERE target.picture_path IS NULL
+       AND src.picture_path IS NOT NULL
+       AND target.data_source = 'isapi_camera'
+       AND src.data_source = 'isapi_camera'
+       AND target.device_id = src.device_id
+       AND target.trigger_time = src.trigger_time
+       AND target.license_plate IS NOT DISTINCT FROM src.license_plate
+       AND target.id <> src.id
+     RETURNING target.id`,
+  );
+  return Array.isArray(rows) ? rows.length : 0;
 }
 
 module.exports = {
   persistAnprEvent,
   attachLicensePlatePicture,
+  runFanOutPictureBackfillOnce,
+  invalidateLocationIngestCache,
   UPLOADS_VEHICLE_DIR,
   ensureUploadsDir,
 };

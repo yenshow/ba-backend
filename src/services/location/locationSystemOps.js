@@ -21,6 +21,7 @@ const locationLogger = logger.createLogger("locationSystemOps");
 const {
   validateVehicleAccessConfig,
   parseConfig,
+  applyVehicleAccessEpochOnSave,
 } = require("../vehicleAccess/vehicleAccessValidation");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const {
@@ -253,9 +254,20 @@ function buildSystemConfig(systemType, config) {
             .map((id) => Number(id))
             .filter((n) => Number.isFinite(n) && n > 0)
         : [];
+      const {
+        normalizeOperationMode,
+      } = require("../vehicleAccess/vehicleAccessConfig");
       return {
         data_source:
           config.dataSource === "isapi_camera" ? "isapi_camera" : "yscp",
+        operation_mode: normalizeOperationMode(config.operationMode),
+        stats_epoch_started_at: config.statsEpochStartedAt ?? undefined,
+        stats_reset_at: config.statsResetAt ?? undefined,
+        parking_capacity:
+          config.parkingCapacity != null &&
+          Number.isFinite(Number(config.parkingCapacity))
+            ? Math.trunc(Number(config.parkingCapacity))
+            : undefined,
         entry_lane_id: config.entryLaneId ?? null,
         exit_lane_id: config.exitLaneId ?? null,
         entry_camera_device_ids: entryCam,
@@ -377,7 +389,7 @@ async function createSystem(query, locationId, system) {
 
   assertValidSystemType(systemType);
 
-  const systemConfig = buildSystemConfig(systemType, config);
+  let systemConfig = buildSystemConfig(systemType, config);
 
   if (
     systemType === "vehicle_access" &&
@@ -390,6 +402,7 @@ async function createSystem(query, locationId, system) {
   }
 
   if (systemType === "vehicle_access") {
+    systemConfig = applyVehicleAccessEpochOnSave(systemConfig, null);
     await validateVehicleAccessConfig(systemConfig, locationId);
   }
   await validatePeopleCountingIsapiIfNeeded(systemConfig, locationId);
@@ -472,7 +485,7 @@ async function updateSystem(query, systemId, system) {
     effectiveConfig = shallowMergePeopleCountingConfig(baseline, config);
   }
 
-  const systemConfig = buildSystemConfig(targetSystemType, effectiveConfig);
+  let systemConfig = buildSystemConfig(targetSystemType, effectiveConfig);
 
   const locRows = await query(
     "SELECT location_id FROM location_systems WHERE id = $1",
@@ -489,6 +502,10 @@ async function updateSystem(query, systemId, system) {
   }
 
   if (targetSystemType === "vehicle_access") {
+    systemConfig = applyVehicleAccessEpochOnSave(
+      systemConfig,
+      currentSystemType === "vehicle_access" ? currentSystemConfig : null,
+    );
     await validateVehicleAccessConfig(systemConfig, vaLocationId);
   }
   await validatePeopleCountingIsapiIfNeeded(systemConfig, vaLocationId);

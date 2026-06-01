@@ -3,14 +3,23 @@
  */
 /** 延遲載入，避免 locationSystemOps ↔ vehicleAccessService 循環依賴 */
 const getLocationService = () => require("../location/locationService");
+const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const { parseConfig } = require("./vehicleAccessValidation");
+const {
+  getEffectiveSince,
+  parseVehicleAccessConfigFields,
+} = require("./vehicleAccessConfig");
 const yscpProvider = require("./providers/yscpProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
 const isapiVehicleSubscribeService = require("./isapiVehicleSubscribeService");
+const vehiclePresenceService = require("./vehiclePresenceService");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
+const { computeTransitionStats } = require("../entryExit/stats");
+const { normalizePlate } = require("../../utils/vehiclePlateUtils");
+const { normalizeVehicleDirection } = require("./normalizeVehicleDirection");
 const logger = require("../../utils/logger");
 
 const PROVIDERS = {
@@ -35,8 +44,13 @@ function getVehicleAccessConfig(location) {
     (s) => s.systemType === "vehicle_access",
   );
   const cfg = sys?.config || {};
+  const modeFields = parseVehicleAccessConfigFields(cfg);
   return {
     dataSource: cfg.dataSource === "isapi_camera" ? "isapi_camera" : "yscp",
+    operationMode: modeFields.operationMode,
+    statsEpochStartedAt: modeFields.statsEpochStartedAt,
+    statsResetAt: modeFields.statsResetAt,
+    parkingCapacity: modeFields.parkingCapacity,
     entryLaneId: cfg.entryLaneId ?? null,
     exitLaneId: cfg.exitLaneId ?? null,
     entryCameraDeviceIds: ensureArray(cfg.entryCameraDeviceIds),
@@ -54,7 +68,25 @@ async function getSiteConfig(siteId) {
   if (!hasVa) {
     throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點未設定車輛進出系統");
   }
-  return { location, ...getVehicleAccessConfig(location) };
+  const vaCfg = getVehicleAccessConfig(location);
+  const createdAt =
+    location.createdAt != null
+      ? location.createdAt
+      : location.created_at != null
+        ? new Date(location.created_at).toISOString()
+        : null;
+  return { location, createdAt, ...vaCfg };
+}
+
+function resolveLogTimeOptions(cfg, createdAt, options = {}) {
+  if (options.since) {
+    return { since: String(options.since), useSinceOnly: true };
+  }
+  if (cfg.operationMode === "parking" && !options.startTime && !options.timeRange) {
+    const since = getEffectiveSince(cfg, createdAt);
+    if (since) return { since, useSinceOnly: true };
+  }
+  return { ...options, useSinceOnly: false };
 }
 
 async function getSites() {
@@ -68,16 +100,35 @@ async function getSites() {
       if (yscpVehicleFeature.shouldSkipYscp(cfg.dataSource)) continue;
       const siteId = Number(loc.id);
       if (!Number.isFinite(siteId)) continue;
-      const provider = getProvider(cfg.dataSource);
-      const stats = await provider.getSiteStats(siteId, cfg, {});
+
+      let entryCount = 0;
+      let exitCount = 0;
+      let currentCount = 0;
+      if (cfg.operationMode === "parking" && cfg.dataSource === "isapi_camera") {
+        const session = await getSiteSessionStats(siteId);
+        entryCount = session.entryCount;
+        exitCount = session.exitCount;
+        const presence = await getSitePresence(siteId);
+        currentCount = presence.currentCount;
+      } else {
+        const provider = getProvider(cfg.dataSource);
+        const stats = await provider.getSiteStats(siteId, cfg, {
+          timeRange: "today",
+        });
+        entryCount = stats.entryCount;
+        exitCount = stats.exitCount;
+        currentCount = stats.currentCount;
+      }
+
       sites.push({
         id: siteId,
         name: loc.name,
         zoneName: zone.name,
         dataSource: cfg.dataSource,
-        entryCount: stats.entryCount,
-        exitCount: stats.exitCount,
-        currentCount: stats.currentCount,
+        operationMode: cfg.operationMode,
+        entryCount,
+        exitCount,
+        currentCount,
       });
     }
   }
@@ -90,10 +141,113 @@ async function getSiteStats(siteId, options = {}) {
   return provider.getSiteStats(siteId, cfg, options);
 }
 
+async function getSiteSessionStats(siteId) {
+  const { dataSource, operationMode, createdAt, ...cfg } =
+    await getSiteConfig(siteId);
+  if (operationMode !== "parking") {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "僅停車場模式可使用 session 統計",
+    );
+  }
+  if (dataSource !== "isapi_camera") {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "停車場 session 統計僅支援 ISAPI",
+    );
+  }
+  const since = getEffectiveSince(cfg, createdAt);
+  if (!since) {
+    return { entryCount: 0, exitCount: 0, since: null };
+  }
+  const rows = await db.query(
+    `SELECT license_plate, allow_result, lane_type, trigger_time
+     FROM vehicle_passageway_logs
+     WHERE location_id = ? AND data_source = 'isapi_camera'
+       AND trigger_time > ?
+       AND allow_result = 1 AND lane_type IN (1, 2)
+     ORDER BY trigger_time ASC`,
+    [siteId, since],
+  );
+  const stats = computeTransitionStats(rows || [], {
+    getKey: (r) => normalizePlate(r.license_plate),
+    getDirection: normalizeVehicleDirection,
+    getTime: (r) => r.trigger_time,
+    sortByTime: false,
+  });
+  return {
+    entryCount: stats.entryCount,
+    exitCount: stats.exitCount,
+    since,
+  };
+}
+
+async function getSitePresence(siteId) {
+  const { operationMode, parkingCapacity } = await getSiteConfig(siteId);
+  const currentCount = await vehiclePresenceService.getPresenceCount(siteId);
+  return {
+    currentCount,
+    capacity: operationMode === "parking" ? parkingCapacity : null,
+  };
+}
+
+async function getSitePresencePlates(siteId) {
+  await getSiteConfig(siteId);
+  const plates = await vehiclePresenceService.getPresentPlates(siteId);
+  return { plates };
+}
+
+async function resetSiteStats(siteId, userId = null) {
+  const { operationMode } = await getSiteConfig(siteId);
+  if (operationMode !== "parking") {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "僅停車場模式可重製統計",
+    );
+  }
+
+  const resetAt = new Date().toISOString();
+  const rows = await db.query(
+    `SELECT id, system_config FROM location_systems
+     WHERE location_id = ? AND system_type = 'vehicle_access'`,
+    [siteId],
+  );
+  if (!rows?.length) {
+    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點未設定車輛進出系統");
+  }
+
+  const rawCfg =
+    typeof rows[0].system_config === "string"
+      ? JSON.parse(rows[0].system_config)
+      : rows[0].system_config || {};
+  rawCfg.stats_reset_at = resetAt;
+  await db.query(
+    `UPDATE location_systems
+     SET system_config = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [JSON.stringify(rawCfg), rows[0].id],
+  );
+
+  await vehiclePresenceService.resetPresence(siteId);
+  const { invalidateLocationIngestCache } = require("./isapiVehiclePersistence");
+  invalidateLocationIngestCache(siteId);
+
+  if (userId != null) {
+    await db.query(
+      `INSERT INTO vehicle_access_reset_log (location_id, reset_at, user_id)
+       VALUES (?, ?, ?)`,
+      [siteId, resetAt, userId],
+    );
+  }
+
+  return { statsResetAt: resetAt };
+}
+
 async function getSiteLogs(siteId, options = {}) {
-  const { dataSource, ...cfg } = await getSiteConfig(siteId);
+  const { dataSource, createdAt, ...cfg } = await getSiteConfig(siteId);
   const provider = getProvider(dataSource);
-  const { logs, total } = await provider.getSiteLogs(siteId, cfg, options);
+  const timeOpts = resolveLogTimeOptions(cfg, createdAt, options);
+  const { logs, total } = await provider.getSiteLogs(siteId, cfg, timeOpts);
   return { logs, total, dataSource };
 }
 
@@ -191,6 +345,10 @@ async function refreshSubscribeAfterLocationChange() {
 module.exports = {
   getSites,
   getSiteStats,
+  getSiteSessionStats,
+  getSitePresence,
+  getSitePresencePlates,
+  resetSiteStats,
   getSiteLogs,
   getAllSiteLogs,
   getSiteConfig,

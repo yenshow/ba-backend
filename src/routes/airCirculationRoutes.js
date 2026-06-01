@@ -6,6 +6,5 @@ module.exports = createSnapshotSystemRouter({
   locationType: "air_circulation",
   alertSource: "air_circulation",
   statusService: airCirculationStatusService,
-  requireAdminOrOperatorOnZoneMutations: true,
   statusSyncAlerts: "opt-out",
 });
