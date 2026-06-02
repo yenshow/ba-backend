@@ -13,6 +13,7 @@ const {
   normalizeListTypeToApi,
   normalizeListTypeToDevice,
 } = require("./isapiVehicleTrafficXmlParser");
+const { executeBarrierGateControl } = require("./vehicleBarrierGateControl");
 
 const VALID_CTRL_MODES = new Set(["open", "close", "lock", "unlock"]);
 const VALID_OPERATION_TYPES = new Set(["add", "modify"]);
@@ -29,11 +30,6 @@ function resolveChannelId(channelId) {
 function buildTrafficPath(channelId, suffix) {
   const ch = resolveChannelId(channelId);
   return `/ISAPI/Traffic/channels/${ch}${suffix}`;
-}
-
-function buildParkingPath(channelId, suffix) {
-  const ch = resolveChannelId(channelId);
-  return `/ISAPI/Parking/channels/${ch}${suffix}`;
 }
 
 function responseBodyToString(data) {
@@ -109,13 +105,6 @@ function buildSearchXml(searchResultPosition, maxResults) {
     <searchResultPosition>${pos}</searchResultPosition>
     <maxResults>${max}</maxResults>
 </LPListAuditSearchDescription>`;
-}
-
-function buildBarrierControlXml(ctrlMode) {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<BarrierGate xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
-  <ctrlMode>${ctrlMode}</ctrlMode>
-</BarrierGate>`;
 }
 
 /**
@@ -220,7 +209,7 @@ async function deleteLicensePlates(deviceId, options = {}) {
   await client.request({
     method: "PUT",
     path,
-    data: { licensePlate: normalized },
+    data: { id: normalized },
   });
 
   return { success: true, channelId, count: normalized.length };
@@ -235,15 +224,14 @@ async function controlBarrierGate(deviceId, options = {}) {
     throwApiError(C.BAD_REQUEST, "ctrlMode 須為 open、close、lock 或 unlock");
   }
 
-  const { client } = await getCameraDeviceAndClient(deviceId);
+  const { device, client } = await getCameraDeviceAndClient(deviceId);
   const channelId = resolveChannelId(options.channelId);
-  const path = buildParkingPath(channelId, "/barrierGate");
-  await client.request({
-    method: "PUT",
-    path,
-    data: buildBarrierControlXml(ctrlMode),
-    headers: { "Content-Type": "application/xml" },
-    responseType: "text",
+  const modelName = device.model_name || device.model?.name;
+  await executeBarrierGateControl({
+    client,
+    modelName,
+    channelId,
+    ctrlMode,
   });
 
   return { success: true, channelId, ctrlMode };
