@@ -15,23 +15,13 @@ const SYNC_STATUS = {
   SKIPPED: "skipped",
 };
 
-function formatIsapiTimeFromDate(value) {
-  if (!value) return null;
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString().replace(/\.\d{3}Z$/, "");
-}
-
 function buildIsapiTimesFromRow(row) {
-  const begin =
-    formatIsapiTimeFromDate(row.effective_begin) ||
-    formatIsapiTimeFromDate(new Date());
-  const end =
-    formatIsapiTimeFromDate(row.effective_end) ||
-    formatIsapiTimeFromDate(
-      new Date(Date.now() + 5 * 365 * 24 * 60 * 60 * 1000),
-    );
-  return { createTime: begin, effectiveTime: end };
+  // 時間格式統一由 isapiVehicleDeviceService.formatIsapiTime 處理
+  return {
+    createTime: row.effective_begin || new Date(),
+    effectiveTime:
+      row.effective_end || new Date(Date.now() + 5 * 365 * 24 * 60 * 60 * 1000),
+  };
 }
 
 /**
@@ -57,7 +47,9 @@ async function resolveIsapiTargetsForPersonGroup(personGroupId) {
     const cfg = parseConfig(row.system_config);
     if (cfg.dataSource !== "isapi_camera") continue;
     if (!cfg.personGroupIds.includes(gid)) continue;
-    const deviceIds = cfg.entryCameraDeviceIds || [];
+    const deviceIds = Array.from(
+      new Set([...(cfg.entryCameraDeviceIds || []), ...(cfg.exitCameraDeviceIds || [])]),
+    );
     if (deviceIds.length === 0) continue;
     targets.push({
       locationId: Number(row.location_id),
@@ -71,7 +63,9 @@ async function resolveIsapiTargetsForPersonGroup(personGroupId) {
 function resolveTargetForLocation(locationId, systemConfig) {
   const cfg = parseConfig(systemConfig);
   if (cfg.dataSource !== "isapi_camera") return null;
-  const deviceIds = cfg.entryCameraDeviceIds || [];
+  const deviceIds = Array.from(
+    new Set([...(cfg.entryCameraDeviceIds || []), ...(cfg.exitCameraDeviceIds || [])]),
+  );
   if (deviceIds.length === 0) return null;
   return {
     locationId: Number(locationId),
@@ -103,7 +97,7 @@ function aggregateSyncResults(results) {
       warnings:
         warnings.length > 0
           ? warnings
-          : ["尚無可同步的 ISAPI 車輛地點或入口攝影機，車牌已儲存，待地點設定後將自動同步"],
+          : ["尚無可同步的 ISAPI 車輛地點或入口/出口攝影機，車牌已儲存，待地點設定後將自動同步"],
       failures,
     };
   }
@@ -132,7 +126,6 @@ async function pushPlateRowToTarget(plateRow, target) {
         channelId: target.channelId,
         plates: [
           {
-            id: licensePlate,
             licensePlate,
             listType,
             createTime,
@@ -188,7 +181,7 @@ async function syncPlateRowById(plateId, targets) {
   if (totalDevices === 0) {
     await personLicensePlateService.updateSyncStatus(plateId, {
       status: SYNC_STATUS.PENDING,
-      error: "缺少入口攝影機",
+      error: "缺少入口/出口攝影機",
       syncedAt: null,
     });
     return { status: SYNC_STATUS.PENDING, warning: null, failure: null };

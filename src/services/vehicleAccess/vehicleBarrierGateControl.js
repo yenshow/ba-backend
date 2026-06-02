@@ -94,8 +94,8 @@ async function controlYsTcg405E(client, channelId, ctrlMode) {
 
 function resolveBarrierStrategy(modelName) {
   const normalized = normalizeModelName(modelName);
-  if (normalized === MODEL_46_G0) return "ys46g0";
-  if (normalized === MODEL_TCG405_E) return "ystcg405e";
+  if (normalized.includes(MODEL_46_G0)) return "ys46g0";
+  if (normalized.includes(MODEL_TCG405_E)) return "ystcg405e";
   return "ystcg405e";
 }
 

@@ -257,6 +257,7 @@ router.delete(
       {
         siteId,
         channelId: req.body?.channelId ?? req.query.channelId,
+        ids: req.body?.ids,
         licensePlates: req.body?.licensePlates,
       },
     );
