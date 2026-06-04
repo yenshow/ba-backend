@@ -5,7 +5,6 @@ const permissionService = require("../services/platform/permissionService");
 const {
   authenticate,
   requireAdmin,
-  requireAdminOrOperator,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -42,7 +41,7 @@ router.get(
 router.get(
   "/",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const { role, status, limit, offset, orderBy, order } = req.query;
     const result = await userService.getUsers({
@@ -61,7 +60,7 @@ router.get(
 router.post(
   "/",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   validateRequired("username", "password"),
   asyncHandler(async (req, res) => {
     const result = await userService.createManagedUser(req.user, req.body);
@@ -69,22 +68,22 @@ router.post(
   }),
 );
 
-// 管理員或操作員：權限定義清單（建立／編輯用戶時勾選模組）
+// 管理員：權限定義清單（建立／編輯用戶勾選）
 router.get(
   "/permission-definitions",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   asyncHandler(async (req, res) => {
-    const definitions = await permissionService.getDefinitions({ tree: false });
+    const definitions = await permissionService.getDefinitions();
     res.sendSuccess({ definitions });
   }),
 );
 
-// 管理員或操作員：取得用戶已儲存之頁面進入權限（overridesByPermId）
+// 管理員：取得用戶權限 overrides
 router.get(
   "/:id/permissions",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
@@ -97,12 +96,13 @@ router.get(
 router.put(
   "/:id/permissions",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
     const overrides = Array.isArray(req.body.overrides) ? req.body.overrides : [];
-    await permissionService.setUserPermissionOverrides(userId, overrides);
+    const sanitized = await permissionService.sanitizeOverrides(overrides);
+    await permissionService.setUserPermissionOverrides(userId, sanitized);
     res.sendSuccess({ message: "權限已更新" });
   }),
 );
@@ -111,7 +111,7 @@ router.put(
 router.get(
   "/:id",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const user = await userService.getUserById(parseInt(req.params.id, 10));
@@ -154,7 +154,7 @@ router.put(
 router.delete(
   "/:id",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);

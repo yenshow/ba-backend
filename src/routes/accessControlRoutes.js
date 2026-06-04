@@ -7,7 +7,7 @@ const multer = require("multer");
 const accessControlService = require("../services/accessControl/accessControlService");
 const {
   authenticate,
-  requireAdminOrOperator,
+  requirePermission,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -15,6 +15,7 @@ const C = require("../utils/apiErrorCodes");
 const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
 
 const router = express.Router();
+router.use(authenticate, requirePermission("system.personnel"));
 
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
@@ -39,7 +40,6 @@ const uploadMemory = multer({
  */
 router.post(
   "/devices/:deviceId/user-info",
-  authenticate,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -58,8 +58,7 @@ router.post(
  */
 router.put(
   "/devices/:deviceId/user-info",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -79,8 +78,7 @@ router.put(
  */
 router.delete(
   "/devices/:deviceId/user-info",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -97,8 +95,7 @@ router.delete(
  */
 router.put(
   "/devices/:deviceId/user-info/:employeeNo/face",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   uploadMemory.single("img"),
   asyncHandler(async (req, res) => {
@@ -128,8 +125,7 @@ router.put(
  */
 router.post(
   "/devices/:deviceId/capture-face",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -147,8 +143,6 @@ router.post(
  */
 router.get(
   "/devices/:deviceId/capture-card",
-  authenticate,
-  requireAdminOrOperator,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -164,8 +158,7 @@ router.get(
  */
 router.put(
   "/devices/:deviceId/card-info",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -182,8 +175,7 @@ router.put(
  */
 router.post(
   "/devices/:deviceId/capture-fingerprint",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -199,8 +191,7 @@ router.post(
  */
 router.post(
   "/devices/:deviceId/fingerprint",
-  authenticate,
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);

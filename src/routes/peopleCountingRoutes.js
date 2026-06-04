@@ -8,7 +8,6 @@ const peopleCountingService = require("../services/peopleCounting/peopleCounting
 const {
   authenticate,
   requirePermission,
-  requireAdmin,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -56,7 +55,7 @@ router.get(
 // 建立地點
 router.post(
   "/locations",
-  requireAdmin,
+  requirePermission("system.people_counting.location.create"),
   asyncHandler(async (req, res) => {
     const result = await peopleCountingService.createPeopleCountingLocation(
       req.body,
@@ -69,7 +68,7 @@ router.post(
 // 更新地點
 router.put(
   "/locations/:id",
-  requireAdmin,
+  requirePermission("system.people_counting.location.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -85,7 +84,7 @@ router.put(
 // 刪除地點
 router.delete(
   "/locations/:id",
-  requireAdmin,
+  requirePermission("system.people_counting.location.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -104,6 +103,7 @@ router.delete(
  */
 router.get(
   "/logs",
+  requirePermission("system.people_counting.report.full"),
   noCache,
   validateNumbers("siteId", "limit", "offset"),
   asyncHandler(async (req, res) => {

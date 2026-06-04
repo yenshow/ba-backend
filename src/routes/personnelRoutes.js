@@ -19,7 +19,6 @@ const {
 } = require("../services/personnel/personnelFileHelpers");
 const {
   authenticate,
-  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
@@ -29,6 +28,7 @@ const C = require("../utils/apiErrorCodes");
 const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
 
 const router = express.Router();
+router.use(authenticate, requirePermission("system.personnel"));
 const isapiEventLogger = logger.createLogger("ISAPI Event");
 
 const uploadsBase = path.join(process.cwd(), "uploads");
@@ -72,8 +72,6 @@ const importUpload = multer({
 
 router.get(
   "/groups",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const list = await personnelService.getPersonGroups(req.query || {});
     res.sendSuccess(list);
@@ -82,8 +80,6 @@ router.get(
 
 router.get(
   "/groups/:id",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const item = await personnelService.getPersonGroupById(
@@ -95,9 +91,7 @@ router.get(
 
 router.post(
   "/groups",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.group.create"),
   asyncHandler(async (req, res) => {
     const createdBy = req.user?.id ?? null;
     const item = await personnelService.createPersonGroup(
@@ -110,9 +104,7 @@ router.post(
 
 router.put(
   "/groups/:id",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.group.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const item = await personnelService.updatePersonGroup(
@@ -125,9 +117,7 @@ router.put(
 
 router.delete(
   "/groups/:id",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.group.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     await personnelService.deletePersonGroup(parseInt(req.params.id, 10));
@@ -139,8 +129,6 @@ router.delete(
 
 router.get(
   "/groups/:id/members",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -167,8 +155,6 @@ router.get(
 
 router.get(
   "/groups/:id/member-ids",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -184,9 +170,7 @@ router.get(
  */
 router.put(
   "/groups/:id/members",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.group.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -203,8 +187,6 @@ router.put(
 
 router.get(
   "/persons",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const filters = {};
     if (req.query.personGroupId != null)
@@ -241,8 +223,6 @@ router.get(
 
 router.get(
   "/persons/by-employee-no/:employeeNo",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const person = await personnelService.getPersonByEmployeeNo(
       req.params.employeeNo,
@@ -258,8 +238,6 @@ router.get(
 
 router.get(
   "/persons/:id",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const item = await personnelService.getPersonById(
@@ -271,9 +249,7 @@ router.get(
 
 router.post(
   "/persons",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.person.create"),
   asyncHandler(async (req, res) => {
     const createdBy = req.user?.id ?? null;
     const item = await personnelService.createPerson(req.body || {}, createdBy);
@@ -287,8 +263,6 @@ router.post(
  */
 router.get(
   "/license-plates/bindings",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const raw = req.query?.plates ?? req.query?.plate ?? "";
     const plates = String(raw)
@@ -302,9 +276,7 @@ router.get(
 
 router.put(
   "/persons/:id",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.person.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const item = await personnelService.updatePerson(
@@ -317,9 +289,7 @@ router.put(
 
 router.put(
   "/persons/:id/license-plates",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.person.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const personId = parseInt(req.params.id, 10);
@@ -343,9 +313,7 @@ router.put(
  */
 router.put(
   "/persons/:personId/access-control-config",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("personId"),
   asyncHandler(async (req, res) => {
     const personId = parseInt(req.params.personId, 10);
@@ -359,9 +327,7 @@ router.put(
 
 router.delete(
   "/persons/:id",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.person.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     await personnelService.deletePerson(parseInt(req.params.id, 10));
@@ -375,9 +341,7 @@ router.delete(
 
 router.post(
   "/persons/:personId/upload-face",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.person.update"),
   validateIntegers("personId"),
   personnelUpload.single("file"),
   asyncHandler(async (req, res) => {
@@ -403,8 +367,6 @@ router.post(
 
 router.get(
   "/syncable-locations",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const list = await personSyncJobService.getSyncableLocations();
     res.sendSuccess(list);
@@ -417,8 +379,6 @@ router.get(
  */
 router.get(
   "/locations/:locationId/sync-candidates",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const rows = await personSyncJobService.getSyncCandidatesForLocation(
@@ -432,8 +392,6 @@ router.get(
 
 router.get(
   "/locations/:locationId/members",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
@@ -464,8 +422,6 @@ router.get(
 
 router.get(
   "/locations/:locationId/member-ids",
-  authenticate,
-  requirePermission("system.personnel"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
@@ -481,9 +437,7 @@ router.get(
  */
 router.put(
   "/locations/:locationId/members",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.sync.edit"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
@@ -500,9 +454,7 @@ router.put(
 
 router.post(
   "/sync-location/:locationId",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.device_sync"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const { warnings } = await personSyncJobService.syncLocation(
@@ -518,9 +470,7 @@ router.post(
 
 router.post(
   "/sync-location/:locationId/job",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.device_sync"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const { jobId } = personSyncJobService.startSyncLocationJob(
@@ -532,8 +482,6 @@ router.post(
 
 router.get(
   "/sync-location/jobs/:jobId",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const includeIssues = String(req.query.includeIssues || "").trim() === "1";
     const includeTail = String(req.query.includeTail || "").trim() === "1";
@@ -570,8 +518,6 @@ router.get(
  */
 router.get(
   "/sync-location/jobs/:jobId/items",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const typeRaw = String(req.query.type || "").trim();
     const type = typeRaw === "tail" ? "tail" : "issues";
@@ -599,9 +545,7 @@ router.get(
 
 router.post(
   "/sync-all-locations",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.device_sync"),
   asyncHandler(async (req, res) => {
     const job = personSyncJobService.startSyncAllLocationsJob();
     res.sendSuccess({ jobId: job.jobId }, 202);
@@ -610,8 +554,6 @@ router.post(
 
 router.get(
   "/sync-all-locations/jobs/:jobId",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (req, res) => {
     const job = await personSyncJobService.getSyncAllLocationsJob(req.params.jobId);
     if (!job) {
@@ -628,8 +570,6 @@ router.get(
 // 下載批次匯入範例 Excel（template）
 router.get(
   "/import-template",
-  authenticate,
-  requirePermission("system.personnel"),
   asyncHandler(async (_req, res) => {
     const filename = "personnel_import_template.xlsx";
     const buffer = personImportService.getImportTemplateXlsxBuffer();
@@ -645,9 +585,7 @@ router.get(
 
 router.post(
   "/import",
-  authenticate,
-  requirePermission("system.personnel"),
-  requireAdminOrOperator,
+  requirePermission("system.personnel.person.create"),
   importUpload.fields([
     { name: "excel", maxCount: 1 },
     { name: "imagesZip", maxCount: 1 },
@@ -682,7 +620,6 @@ router.post(
 const isapiSubscribeService = require("../services/accessControl/isapiSubscribeService");
 router.get(
   "/isapi-subscribe-status",
-  authenticate,
   asyncHandler(async (_req, res) => {
     const status = isapiSubscribeService.getSubscribeStatus();
     res.sendSuccess({

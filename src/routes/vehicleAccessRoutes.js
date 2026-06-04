@@ -10,7 +10,6 @@ const personLicensePlateService = require("../services/personnel/personLicensePl
 const {
   authenticate,
   requirePermission,
-  requireAdminOrOperator,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
@@ -42,6 +41,7 @@ router.get(
  */
 router.get(
   "/logs",
+  requirePermission("system.vehicle_access.report.full"),
   noCache,
   validateNumbers("siteId", "limit", "offset"),
   asyncHandler(async (req, res) => {
@@ -111,7 +111,7 @@ router.get(
 
 router.post(
   "/sites/:id/reset",
-  requireAdminOrOperator,
+  requirePermission("system.vehicle_access.statistics.reset"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -173,6 +173,7 @@ router.get(
  */
 router.post(
   "/devices/:deviceId/license-plates/search",
+  requirePermission("system.vehicle_access.plate.manage"),
   noCache,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
@@ -203,7 +204,7 @@ router.post(
  */
 router.put(
   "/devices/:deviceId/license-plates",
-  requireAdminOrOperator,
+  requirePermission("system.vehicle_access.plate.update"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);
@@ -246,7 +247,7 @@ router.put(
  */
 router.delete(
   "/devices/:deviceId/license-plates",
-  requireAdminOrOperator,
+  requirePermission("system.vehicle_access.plate.delete"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);
@@ -278,7 +279,7 @@ router.delete(
  */
 router.put(
   "/devices/:deviceId/barrier-gate",
-  requireAdminOrOperator,
+  requirePermission("system.vehicle_access.barrier.control"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);

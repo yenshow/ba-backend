@@ -54,7 +54,7 @@ const MODULES = [
   // ========== construction-monitoring ==========
   {
     id: 5,
-    name: "環境品質系統",
+    name: "環境品質",
     icon: "environment",
     description: "環境品質監測與管理",
     category: "construction-monitoring",

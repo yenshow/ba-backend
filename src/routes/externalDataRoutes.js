@@ -3,7 +3,10 @@ const router = express.Router();
 const handlerFactory = require("../services/externalData/handlerFactory");
 const systemMapping = require("../services/externalData/systemMapping");
 const vehicleGroupAggregateService = require("../services/externalData/vehicleGroupAggregateService");
-const { authenticate, requirePermission } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requirePermission,
+} = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const {

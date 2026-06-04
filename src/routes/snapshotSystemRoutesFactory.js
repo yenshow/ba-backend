@@ -10,7 +10,6 @@ const locationService = require("../services/location/locationService");
 const {
   authenticate,
   requireAdmin,
-  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
@@ -151,7 +150,7 @@ function createSnapshotSystemRouter(config) {
   router.post(
     "/systems/:systemId/errors",
     validateIntegers("systemId"),
-    requireAdminOrOperator,
+    requireAdmin,
     asyncHandler(async (req, res) => {
       const { systemId } = req.params;
       if (manualErrorRequiresMessage) {
@@ -181,7 +180,7 @@ function createSnapshotSystemRouter(config) {
   router.post(
     "/systems/:systemId/alarms",
     validateIntegers("systemId"),
-    requireAdminOrOperator,
+    requireAdmin,
     asyncHandler(async (req, res) => {
       const { systemId } = req.params;
       const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();
@@ -213,7 +212,7 @@ function createSnapshotSystemRouter(config) {
   router.delete(
     "/systems/:systemId/errors",
     validateIntegers("systemId"),
-    requireAdminOrOperator,
+    requireAdmin,
     asyncHandler(async (req, res) => {
       const { systemId } = req.params;
       const clearOrigin = manualErrorRequiresMessage
@@ -229,7 +228,7 @@ function createSnapshotSystemRouter(config) {
   router.delete(
     "/systems/:systemId/alarms",
     validateIntegers("systemId"),
-    requireAdminOrOperator,
+    requireAdmin,
     asyncHandler(async (req, res) => {
       const { systemId } = req.params;
       const mode = String(req.body?.mode ?? "manual").trim().toLowerCase();

@@ -3,6 +3,7 @@ const config = require("../config");
 const logger = require("../utils/logger");
 
 const schemaLogger = logger.createLogger("initSchema");
+const syncPermissionCatalog = require("./syncPermissionCatalog");
 
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
@@ -64,7 +65,7 @@ async function initSchema() {
     });
 
     const enums = [
-      ["user_role", ["admin", "operator", "viewer"]],
+      ["user_role", ["admin", "user"]],
       ["user_status", ["active", "inactive"]],
       ["register_type", ["coil", "discrete", "holding", "input"]],
       ["alert_type", ["offline", "error", "threshold"]],
@@ -108,7 +109,7 @@ async function initSchema() {
 				id SERIAL PRIMARY KEY,
 				username VARCHAR(50) NOT NULL UNIQUE,
 				password_hash VARCHAR(255) NOT NULL,
-				role user_role NOT NULL DEFAULT 'viewer',
+				role user_role NOT NULL DEFAULT 'user',
 				status user_status NOT NULL DEFAULT 'active',
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -180,161 +181,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 清理：移除已淘汰且未實作的權限碼（避免舊環境殘留造成 UI/規格漂移）
-    // - permission_definitions.id 會被 user_permission_overrides 參照，FK 設定為 ON DELETE CASCADE
-    const deprecatedPermissionCodes = [
-      // 已淘汰且未實作的權限碼（避免舊環境殘留造成 UI/規格漂移）
-      "system.user_management",
-      "system.license_management",
-      "system.access_control",
-
-      "resource_monitoring.realtime_preview",
-      "resource_monitoring.playback",
-      "resource_monitoring.export",
-      "resource_monitoring.ptz_control",
-      "configuration.devices",
-      "configuration.access_control",
-      "operation.monitoring",
-      "operation.parking",
-      "operation.alarm_center",
-      "operation.location_management",
-    ];
-    await targetPool.query(
-      `DELETE FROM permission_definitions WHERE code = ANY($1::text[])`,
-      [deprecatedPermissionCodes],
-    );
-
-    // 種子：權限定義（僅保留「系統/模組」維度，對齊前端導覽列分類與 module registry）
-    const permissionSeeds = [
-      {
-        code: "system.equipment_management",
-        category: "system",
-        parent_id: null,
-        name: "設備管理",
-        sort_order: 1,
-      },
-      {
-        code: "system.personnel",
-        category: "system",
-        parent_id: null,
-        name: "人員管理",
-        sort_order: 5,
-      },
-      {
-        code: "system.alert_log",
-        category: "system",
-        parent_id: null,
-        name: "警示紀錄",
-        sort_order: 2,
-      },
-      {
-        code: "system.people_counting",
-        category: "system",
-        parent_id: null,
-        name: "人流統計",
-        sort_order: 10,
-      },
-      {
-        code: "system.video_surveillance",
-        category: "system",
-        parent_id: null,
-        name: "影像監控",
-        sort_order: 20,
-      },
-      {
-        code: "system.environment",
-        category: "system",
-        parent_id: null,
-        name: "環境品質",
-        sort_order: 30,
-      },
-      {
-        code: "system.vehicle_access",
-        category: "system",
-        parent_id: null,
-        name: "車輛進出",
-        sort_order: 40,
-      },
-      {
-        code: "system.lighting",
-        category: "system",
-        parent_id: null,
-        name: "照明系統",
-        sort_order: 50,
-      },
-      {
-        code: "system.hvac",
-        category: "system",
-        parent_id: null,
-        name: "空調系統",
-        sort_order: 60,
-      },
-      {
-        code: "system.air_circulation",
-        category: "system",
-        parent_id: null,
-        name: "空氣循環系統",
-        sort_order: 65,
-      },
-      {
-        code: "system.drainage",
-        category: "system",
-        parent_id: null,
-        name: "衛生排水系統",
-        sort_order: 70,
-      },
-      {
-        code: "system.power",
-        category: "system",
-        parent_id: null,
-        name: "電力系統",
-        sort_order: 80,
-      },
-      {
-        code: "system.fire",
-        category: "system",
-        parent_id: null,
-        name: "消防系統",
-        sort_order: 90,
-      },
-      {
-        code: "system.emergency_rescue",
-        category: "system",
-        parent_id: null,
-        name: "緊急求救系統",
-        sort_order: 100,
-      },
-      {
-        code: "system.smoke_alarm",
-        category: "system",
-        parent_id: null,
-        name: "煙霧警報系統",
-        sort_order: 105,
-      },
-      {
-        code: "system.multimedia",
-        category: "system",
-        parent_id: null,
-        name: "多媒體資訊",
-        sort_order: 110,
-      },
-      {
-        code: "system.area_point_map",
-        category: "system",
-        parent_id: null,
-        name: "全區點位圖（含地點/區域管理）",
-        sort_order: 6,
-      },
-    ];
-    for (const p of permissionSeeds) {
-      await targetPool.query(
-        `INSERT INTO permission_definitions (code, category, parent_id, name, sort_order)
-         SELECT $1, $2, $3, $4, $5
-         ON CONFLICT (code) DO NOTHING`,
-        [p.code, p.category, p.parent_id, p.name, p.sort_order],
-      );
-    }
-    schemaLogger.info("權限定義種子已插入", { module: "initSchema" });
+    await syncPermissionCatalog(targetPool);
 
     // 建立 device_models 表（通用設備型號表）
     await targetPool.query(`

@@ -35,9 +35,9 @@ function verifyToken(token) {
 }
 
 function validateRole(role) {
-  const validRoles = ["admin", "operator", "viewer"];
+  const validRoles = ["admin", "user"];
   if (!validRoles.includes(role)) {
-    throwApiError(C.USER_ROLE_INVALID, "角色必須為 admin, operator 或 viewer");
+    throwApiError(C.USER_ROLE_INVALID, "角色必須為 admin 或 user");
   }
 }
 
@@ -170,7 +170,7 @@ async function getUserById(userId) {
 }
 
 async function createManagedUser(creator, body) {
-  const { username, password, role = "viewer", overrides = [] } = body;
+  const { username, password, role = "user", overrides = [] } = body;
 
   if (!username || !password) {
     throwApiError(C.USER_CREDENTIALS_REQUIRED, "username、password 為必填欄位");
@@ -180,11 +180,8 @@ async function createManagedUser(creator, body) {
   }
   validateRole(role);
 
-  if (creator.role === "operator" && role === "admin") {
-    throwApiError(
-      C.USER_FORBIDDEN_ROLE_STATUS,
-      "操作員無法建立管理員帳號",
-    );
+  if (creator.role !== "admin") {
+    throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有管理員可以建立用戶");
   }
 
   const existingUser = await db.query("SELECT id FROM users WHERE username = ?", [
@@ -202,9 +199,10 @@ async function createManagedUser(creator, body) {
     );
     const id = result[0].id;
     if (role !== "admin" && Array.isArray(overrides)) {
+      const sanitized = await permissionService.sanitizeOverrides(overrides);
       await permissionService.replaceUserPermissionOverrides(
         id,
-        overrides,
+        sanitized,
         clientQuery,
       );
     }
@@ -225,26 +223,8 @@ async function updateUser(userId, updateData, currentUser) {
   }
   const previousRole = existingRows[0].role;
 
-  const canManageOthers =
-    currentUser.role === "admin" || currentUser.role === "operator";
-  if ((role !== undefined || status !== undefined) && !canManageOthers) {
-    throwApiError(
-      C.USER_FORBIDDEN_ROLE_STATUS,
-      "只有管理員或操作員可以修改角色和狀態",
-    );
-  }
-  if (!canManageOthers && currentUser.id !== userId) {
-    throwApiError(C.USER_FORBIDDEN_UPDATE_OTHERS, "只能修改自己的資料");
-  }
-
-  if (role !== undefined) {
-    validateRole(role);
-    if (currentUser.role === "operator" && role === "admin") {
-      throwApiError(
-        C.USER_FORBIDDEN_ROLE_STATUS,
-        "操作員無法將用戶設為管理員",
-      );
-    }
+  if (currentUser.role !== "admin") {
+    throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有管理員可以修改用戶資料");
   }
 
   const updates = [];
@@ -300,20 +280,10 @@ function assertPasswordChangeAllowed(currentUser, targetUser) {
   }
 
   if (currentUser.role === "admin") {
-    if (targetUser.role !== "operator" && targetUser.role !== "viewer") {
+    if (targetUser.role === "admin") {
       throwApiError(
         C.USER_FORBIDDEN_PASSWORD_TARGET,
-        "無法重設此用戶密碼（僅能重設操作員或檢視者）",
-      );
-    }
-    return { requireOldPassword: false };
-  }
-
-  if (currentUser.role === "operator") {
-    if (targetUser.role !== "viewer") {
-      throwApiError(
-        C.USER_FORBIDDEN_PASSWORD_TARGET,
-        "操作員僅能重設檢視者密碼",
+        "無法重設其他管理員密碼",
       );
     }
     return { requireOldPassword: false };
@@ -364,10 +334,8 @@ async function updatePassword(userId, oldPassword, newPassword, currentUser) {
 }
 
 async function deleteUser(userId, currentUser) {
-  const canManageOthers =
-    currentUser.role === "admin" || currentUser.role === "operator";
-  if (!canManageOthers) {
-    throwApiError(C.USER_FORBIDDEN_DELETE, "只有管理員或操作員可以刪除用戶");
+  if (currentUser.role !== "admin") {
+    throwApiError(C.USER_FORBIDDEN_DELETE, "只有管理員可以刪除用戶");
   }
 
   if (currentUser.id === userId) {
@@ -379,13 +347,6 @@ async function deleteUser(userId, currentUser) {
   ]);
   if (existing.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
-  }
-
-  if (existing[0].role === "admin" && currentUser.role !== "admin") {
-    throwApiError(
-      C.USER_FORBIDDEN_DELETE_ADMIN,
-      "只有管理員可以刪除管理員帳號",
-    );
   }
 
   await db.query("DELETE FROM users WHERE id = ?", [userId]);

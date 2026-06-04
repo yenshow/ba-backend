@@ -7,7 +7,6 @@ const deviceStreamService = require("../services/devices/deviceStreamService");
 const deviceConnectivityService = require("../services/devices/deviceConnectivityService");
 const {
   authenticate,
-  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
@@ -62,11 +61,10 @@ router.get(
   }),
 );
 
-// 建立設備型號（管理員或操作員）
+// 建立設備型號
 router.post(
   "/models",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
+  requirePermission("system.equipment_management.device.create"),
   asyncHandler(async (req, res) => {
     const result = await deviceModelService.createDeviceModel(
       req.body,
@@ -76,11 +74,10 @@ router.post(
   }),
 );
 
-// 更新設備型號（管理員或操作員）
+// 更新設備型號
 router.put(
   "/models/:id",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
+  requirePermission("system.equipment_management.device.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -93,11 +90,10 @@ router.put(
   }),
 );
 
-// 刪除設備型號（管理員或操作員）
+// 刪除設備型號
 router.delete(
   "/models/:id",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
+  requirePermission("system.equipment_management.device.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -177,7 +173,7 @@ router.post(
   "/:id/stream/start",
   noCache,
   requireFeature("surveillance"),
-  requirePermission("system.video_surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id);
@@ -190,7 +186,7 @@ router.post(
   "/:id/stream/stop",
   noCache,
   requireFeature("surveillance"),
-  requirePermission("system.video_surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id);
@@ -224,22 +220,20 @@ router.get(
   }),
 );
 
-// 創建設備（管理員或操作員）
+// 創建設備
 router.post(
   "/",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
+  requirePermission("system.equipment_management.device.create"),
   asyncHandler(async (req, res) => {
     const result = await deviceService.createDevice(req.body, req.user.id);
     res.sendSuccess(result, 201);
   }),
 );
 
-// 更新設備（管理員或操作員）
+// 更新設備
 router.put(
   "/:id",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
+  requirePermission("system.equipment_management.device.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -252,11 +246,10 @@ router.put(
   }),
 );
 
-// 刪除設備（管理員或操作員）
+// 刪除設備
 router.delete(
   "/:id",
-  requireAdminOrOperator,
-  requirePermission("system.equipment_management"),
+  requirePermission("system.equipment_management.device.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

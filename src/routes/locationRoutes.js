@@ -4,7 +4,8 @@ const locationService = require("../services/location/locationService");
 const {
   authenticate,
   requirePermission,
-  requireAdmin,
+  requireLocationMutation,
+  requireLocationTypeModuleAccess,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -15,9 +16,15 @@ router.use(authenticate);
 
 // ========== 區域管理路由 ==========
 
-// 取得區域列表
+// 取得區域列表（無 locationType＝全區點位圖彙整，需模組權限）
 router.get(
   "/zones",
+  (req, res, next) => {
+    if (req.query.locationType) {
+      return requireLocationTypeModuleAccess()(req, res, next);
+    }
+    return requirePermission("system.area_point_map")(req, res, next);
+  },
   noCache,
   asyncHandler(async (req, res) => {
     const { locationType } = req.query;
@@ -46,8 +53,7 @@ router.get(
 // 建立區域
 router.post(
   "/zones",
-  requirePermission("system.area_point_map"),
-  requireAdmin,
+  requireLocationMutation("create"),
   asyncHandler(async (req, res) => {
     const result = await locationService.createZone(req.body, req.user.id);
     res.sendSuccess(result, 201);
@@ -57,8 +63,7 @@ router.post(
 // 更新區域
 router.put(
   "/zones/:id",
-  requirePermission("system.area_point_map"),
-  requireAdmin,
+  requireLocationMutation("update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -74,8 +79,7 @@ router.put(
 // 刪除區域
 router.delete(
   "/zones/:id",
-  requirePermission("system.area_point_map"),
-  requireAdmin,
+  requireLocationMutation("delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -112,8 +116,7 @@ router.get(
 // 建立地點
 router.post(
   "/",
-  requirePermission("system.area_point_map"),
-  requireAdmin,
+  requireLocationMutation("create"),
   asyncHandler(async (req, res) => {
     const result = await locationService.createLocation(req.body, req.user.id);
     res.sendSuccess(result, 201);
@@ -123,8 +126,7 @@ router.post(
 // 更新地點
 router.put(
   "/:id",
-  requirePermission("system.area_point_map"),
-  requireAdmin,
+  requireLocationMutation("update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -140,8 +142,7 @@ router.put(
 // 刪除地點
 router.delete(
   "/:id",
-  requirePermission("system.area_point_map"),
-  requireAdmin,
+  requireLocationMutation("delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

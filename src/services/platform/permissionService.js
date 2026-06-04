@@ -1,14 +1,19 @@
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const {
+  getPermissionCodesForDeployment,
+} = require("../../config/permissionCatalog");
+
+const catalogCodesForDeployment = () => getPermissionCodesForDeployment();
+
+const catalogCodeSet = () => new Set(catalogCodesForDeployment());
 
 /**
- * 有效權限：admin 全部 permission_definitions；其餘僅 user_permission_overrides（granted=true）
+ * 有效權限：admin 為 catalog 全開；user 僅 overrides（granted=true）
  */
 async function getEffectivePermissionsForUser(userId, role = null) {
-	const allDefs = await db.query("SELECT id, code FROM permission_definitions");
-	const allCodes = allDefs.map((d) => d.code);
-	const codeById = new Map(allDefs.map((d) => [d.id, d.code]));
+	const codes = catalogCodesForDeployment();
 
 	let userRole = role;
 	if (userRole == null) {
@@ -18,8 +23,15 @@ async function getEffectivePermissionsForUser(userId, role = null) {
 	}
 
 	if (userRole === "admin") {
-		return { codes: allCodes, granted: new Set(allCodes) };
+		return { codes, granted: new Set(codes) };
 	}
+
+	const allowed = catalogCodeSet(); // 僅本部署 profile 內的碼
+	const defs = await db.query(
+		"SELECT id, code FROM permission_definitions WHERE code = ANY(?::text[])",
+		[codes],
+	);
+	const codeById = new Map(defs.map((d) => [d.id, d.code]));
 
 	const overrides = await db.query(
 		"SELECT permission_id, granted FROM user_permission_overrides WHERE user_id = ? AND granted = TRUE",
@@ -28,19 +40,22 @@ async function getEffectivePermissionsForUser(userId, role = null) {
 	const granted = new Set();
 	for (const o of overrides) {
 		const code = codeById.get(o.permission_id);
-		if (code) granted.add(code);
+		if (code && allowed.has(code)) granted.add(code);
 	}
-	return { codes: Array.from(granted), granted };
+	const grantedCodes = Array.from(granted);
+	return { codes: grantedCodes, granted: new Set(grantedCodes) };
 }
+
+const hasPermissionCode = (codes, requiredCode) =>
+	Array.isArray(codes) && codes.includes(requiredCode);
 
 async function replaceUserPermissionOverrides(userId, overrides, clientQuery) {
 	await clientQuery("DELETE FROM user_permission_overrides WHERE user_id = ?", [userId]);
 	for (const o of overrides) {
-		if (o.permission_id == null) continue;
-		const granted = o.granted === true || o.granted === 1 || o.granted === "true";
+		if (o.permission_id == null || o.granted !== true) continue;
 		await clientQuery(
-			"INSERT INTO user_permission_overrides (user_id, permission_id, granted) VALUES (?, ?, ?)",
-			[userId, Number(o.permission_id), granted],
+			"INSERT INTO user_permission_overrides (user_id, permission_id, granted) VALUES (?, ?, TRUE)",
+			[userId, Number(o.permission_id)],
 		);
 	}
 }
@@ -70,31 +85,54 @@ async function getUserPermissionOverrides(userId) {
 	};
 }
 
-async function getDefinitions(options = {}) {
-	const rows = await db.query(
-		"SELECT id, code, category, parent_id, name, sort_order FROM permission_definitions ORDER BY category, sort_order, id",
+async function getDefinitions() {
+	return db.query(
+		`SELECT id, code, category, parent_id, name, sort_order
+		 FROM permission_definitions
+		 WHERE code = ANY(?::text[])
+		 ORDER BY category, sort_order, id`,
+		[catalogCodesForDeployment()],
 	);
-	if (!options.tree) {
-		return rows;
-	}
-	const byId = new Map(rows.map((r) => [r.id, { ...r, children: [] }]));
-	const roots = [];
-	for (const r of rows) {
-		const node = byId.get(r.id);
-		if (r.parent_id == null) {
-			roots.push(node);
-		} else {
-			const parent = byId.get(r.parent_id);
-			if (parent) parent.children.push(node);
-			else roots.push(node);
-		}
-	}
-	return roots;
 }
 
 async function clearUserPermissionOverrides(userId, clientQuery = null) {
 	const run = clientQuery || db.query.bind(db);
 	await run("DELETE FROM user_permission_overrides WHERE user_id = ?", [userId]);
+}
+
+/** 僅保留 catalog 內且父層已 grant 的項目 */
+async function sanitizeOverrides(overrides) {
+	if (!Array.isArray(overrides) || overrides.length === 0) return [];
+
+	const defs = await db.query(
+		"SELECT id, parent_id FROM permission_definitions WHERE code = ANY(?::text[])",
+		[catalogCodesForDeployment()],
+	);
+	const byId = new Map(defs.map((d) => [d.id, d]));
+	const grantedParentIds = new Set();
+	const childRows = [];
+
+	for (const o of overrides) {
+		if (o.granted !== true) continue;
+		const def = byId.get(Number(o.permission_id));
+		if (!def) continue;
+		if (def.parent_id == null) {
+			grantedParentIds.add(def.id);
+		} else {
+			childRows.push(def);
+		}
+	}
+
+	const result = [...grantedParentIds].map((permission_id) => ({
+		permission_id,
+		granted: true,
+	}));
+	for (const def of childRows) {
+		if (grantedParentIds.has(def.parent_id)) {
+			result.push({ permission_id: def.id, granted: true });
+		}
+	}
+	return result;
 }
 
 module.exports = {
@@ -104,4 +142,6 @@ module.exports = {
 	replaceUserPermissionOverrides,
 	getUserPermissionOverrides,
 	clearUserPermissionOverrides,
+	hasPermissionCode,
+	sanitizeOverrides,
 };

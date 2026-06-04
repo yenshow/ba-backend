@@ -1,5 +1,5 @@
 const express = require("express");
-const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
+const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
@@ -73,7 +73,7 @@ const FORM_SCHEMA = {
 router.get(
   "/",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     await runtimeConfigService.init();
     res.sendSuccess({
@@ -90,7 +90,7 @@ router.get(
 router.put(
   "/",
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   validateRequired("values"),
   asyncHandler(async (req, res) => {
     const { values } = req.body;

@@ -3,7 +3,15 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const settingsService = require("../services/platform/settingsService");
-const { authenticate, requireAdminOrOperator } = require("../middleware/authMiddleware");
+const {
+	authenticate,
+	requireAdmin,
+	requirePermission,
+} = require("../middleware/authMiddleware");
+const {
+	HOME_SETTINGS_PERMISSION,
+	isHomeAppearanceSettingKey,
+} = require("../utils/homeSettingKeys");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const logger = require("../utils/logger");
@@ -12,6 +20,18 @@ const C = require("../utils/apiErrorCodes");
 const routeLogger = logger.createLogger("settingsRoutes");
 
 const router = express.Router();
+
+/** 首頁外觀 key → system.home；其餘仍僅 admin */
+const requireSettingWrite = (req, res, next) => {
+	if (req.user?.role === "admin") {
+		return next();
+	}
+	const key = req.params?.key ?? req.body?.key;
+	if (key != null && isHomeAppearanceSettingKey(String(key))) {
+		return requirePermission(HOME_SETTINGS_PERMISSION)(req, res, next);
+	}
+	return requireAdmin(req, res, next);
+};
 
 // 確保上傳目錄存在
 const uploadsDir = path.join(process.cwd(), "uploads", "settings");
@@ -117,7 +137,7 @@ router.post("/batch", authenticate, asyncHandler(async (req, res) => {
  * Body: { value: "...", description?: "..." }
  * 需要管理員權限
  */
-router.put("/:key", authenticate, requireAdminOrOperator, validateRequired("value"), asyncHandler(async (req, res) => {
+router.put("/:key", authenticate, requireSettingWrite, validateRequired("value"), asyncHandler(async (req, res) => {
 	const { key } = req.params;
 	const { value, description } = req.body;
 	
@@ -131,7 +151,7 @@ router.put("/:key", authenticate, requireAdminOrOperator, validateRequired("valu
  * FormData: { key: "setting_key", file: <File> }
  * 需要管理員權限
  */
-router.post("/upload", authenticate, requireAdminOrOperator, upload.single("file"), asyncHandler(async (req, res) => {
+router.post("/upload", authenticate, requireSettingWrite, upload.single("file"), asyncHandler(async (req, res) => {
 	if (!req.file) {
 		return res.sendFailure(
 			{
@@ -197,7 +217,7 @@ router.post("/upload", authenticate, requireAdminOrOperator, upload.single("file
  * DELETE /api/settings/:key
  * 需要管理員權限
  */
-router.delete("/:key", authenticate, requireAdminOrOperator, asyncHandler(async (req, res) => {
+router.delete("/:key", authenticate, requireSettingWrite, asyncHandler(async (req, res) => {
 	const { key } = req.params;
 	
 	// 先取得設定值，如果是檔案 URL，則刪除檔案

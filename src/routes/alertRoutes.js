@@ -10,7 +10,6 @@ const db = require("../database/db");
 const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
 const {
   authenticate,
-  requireAdminOrOperator,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
@@ -498,7 +497,7 @@ router.get(
 // 批次取得多個規則的整合設定（DO / 攝影機 / Email）
 router.post(
   "/rules/integrations/batch",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.update"),
   noCache,
   asyncHandler(async (req, res) => {
     const raw = req.body || {};
@@ -551,7 +550,7 @@ router.post(
 // 建立警報規則（需要 admin/operator 權限）
 router.post(
   "/rules",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.create"),
   asyncHandler(async (req, res) => {
     const validationError = validateRulePayload(req.body, {
       allowPartial: false,
@@ -568,7 +567,7 @@ router.post(
 // 取得單一規則的整合設定（連動 DO / 攝影機 / Email）
 router.get(
   "/rules/:id/integrations",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log"),
   noCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
@@ -585,7 +584,7 @@ router.get(
 // 更新單一規則的整合設定（以 rule_id 為主鍵 upsert）
 router.put(
   "/rules/:id/integrations",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const ruleId = Number(req.params.id);
@@ -648,7 +647,7 @@ router.put(
 // SMTP 測試寄信（admin/operator；不寫入 DB；可用 body.emailSubscription 覆寫設定）
 router.post(
   "/rules/:id/email/test",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const ruleId = Number(req.params.id);
@@ -739,7 +738,7 @@ router.post(
 // 更新警報規則（需要 admin/operator 權限）
 router.put(
   "/rules/:id",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -761,7 +760,7 @@ router.put(
 // 刪除警報規則（需要 admin/operator 權限）
 router.delete(
   "/rules/:id",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -788,7 +787,7 @@ router.get(
 // 標記警示為未解決（需要 admin/operator 權限）
 router.put(
   "/:id/unresolve",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -804,7 +803,7 @@ router.put(
 // 忽視警示（需要 admin/operator 權限，支持多系統來源）
 router.post(
   "/:deviceId/:alertType/ignore",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.ignore"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const { deviceId, alertType } = req.params;
@@ -828,7 +827,7 @@ router.post(
 // 取消忽視警示（需要 admin/operator 權限，支持多系統來源）
 router.post(
   "/:deviceId/:alertType/unignore",
-  requireAdminOrOperator,
+  requirePermission("system.alert_log.alert.ignore"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const { deviceId, alertType } = req.params;

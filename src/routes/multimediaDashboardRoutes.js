@@ -5,7 +5,7 @@ const fs = require("fs");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   authenticate,
-  requireAdminOrOperator,
+  requireAdmin,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const multimediaDashboardService = require("../services/multimedia/multimediaDashboardService");
@@ -28,7 +28,7 @@ router.get(
 
 router.put(
   "/dashboard/settings",
-  requireAdminOrOperator,
+  requireAdmin,
   asyncHandler(async (req, res) => {
     const nextSettings =
       await multimediaDashboardService.updateDashboardSettings(req.body || {});
@@ -96,7 +96,7 @@ const upload = multer({
 
 router.post(
   "/dashboard/upload",
-  requireAdminOrOperator,
+  requireAdmin,
   upload.single("file"),
   asyncHandler(async (req, res) => {
     if (!req.file) {
