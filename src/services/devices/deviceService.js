@@ -6,7 +6,6 @@ const {
   validateLoggingConfig,
 } = require("../../utils/deviceHelpers");
 const websocketService = require("../websocket/websocketService");
-const alertService = require("../alerts/alertService");
 const licenseService = require("../license/licenseService");
 const licenseQuotaService = require("../license/licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
@@ -33,7 +32,6 @@ async function getDevices(filters = {}) {
   try {
     const {
       type_code,
-      status,
       group,
       limit = 20,
       offset = 0,
@@ -57,18 +55,13 @@ async function getDevices(filters = {}) {
       params.push(type_code);
     }
 
-    if (status) {
-      query += " AND d.status = ?";
-      params.push(status);
-    }
-
     if (group != null && group !== "") {
       query += " AND d.config->>'group' = ?";
       params.push(group);
     }
 
     // 排序
-    const validOrderBy = ["created_at", "updated_at", "name", "status"];
+    const validOrderBy = ["created_at", "updated_at", "name"];
     const orderByField = validOrderBy.includes(orderBy)
       ? orderBy
       : "created_at";
@@ -92,11 +85,6 @@ async function getDevices(filters = {}) {
     if (type_code) {
       countQuery += " AND d.type_code = ?";
       countParams.push(type_code);
-    }
-
-    if (status) {
-      countQuery += " AND d.status = ?";
-      countParams.push(status);
     }
 
     if (group != null && group !== "") {
@@ -184,7 +172,7 @@ async function getDeviceById(id) {
 // 創建設備
 async function createDevice(deviceData, userId) {
   try {
-    const { name, type_code, model_id, description, status, config } = deviceData;
+    const { name, type_code, model_id, description, config } = deviceData;
 
     // 驗證必填欄位
     if (!name || name.trim().length === 0) {
@@ -462,13 +450,12 @@ async function createDevice(deviceData, userId) {
 
     // 建立設備
     const result = await db.query(
-      "INSERT INTO devices (name, type_code, model_id, description, status, config, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+      "INSERT INTO devices (name, type_code, model_id, description, config, created_by) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
       [
         name.trim(),
         typeCode,
         model_id,
         description || null,
-        status || "inactive",
         stringifyConfig(config),
         userId || null,
       ],
@@ -514,7 +501,7 @@ async function createDevice(deviceData, userId) {
 // 更新設備
 async function updateDevice(id, deviceData, userId) {
   try {
-    const { name, model_id, description, status, config, type_code } = deviceData;
+    const { name, model_id, description, config, type_code } = deviceData;
 
     // 檢查設備是否存在
     const existing = await db.query("SELECT * FROM devices WHERE id = ?", [id]);
@@ -580,17 +567,6 @@ async function updateDevice(id, deviceData, userId) {
     if (description !== undefined) {
       updates.push("description = ?");
       params.push(description || null);
-    }
-
-    if (status !== undefined) {
-      if (!["active", "inactive", "error"].includes(status)) {
-        throwApiError(
-          C.DEVICE_STATUS_INVALID,
-          "狀態必須為 active, inactive 或 error",
-        );
-      }
-      updates.push("status = ?");
-      params.push(status);
     }
 
     if (config !== undefined) {
@@ -861,9 +837,6 @@ async function updateDevice(id, deviceData, userId) {
 
     params.push(id);
 
-    // 記錄舊狀態（用於狀態變更事件）
-    const oldStatus = existingDevice.status;
-
     await db.query(
       `UPDATE devices SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       params,
@@ -891,68 +864,12 @@ async function updateDevice(id, deviceData, userId) {
 
     // 構建變更的欄位列表
     const changes = {};
-    const fields = { name, type_code, model_id, description, status, config };
+    const fields = { name, type_code, model_id, description, config };
     Object.keys(fields).forEach((key) => {
       if (fields[key] !== undefined) {
         changes[key] = true;
       }
     });
-
-    // 檢測狀態變更並推送特定事件
-    const newStatus = status !== undefined ? status : oldStatus;
-    if (status !== undefined && oldStatus !== newStatus) {
-      // 「停用=全停」：設備被停用時，解決所有既有 active 警示（含 device 與各系統綁定的 location_systems）
-      if (newStatus === "inactive") {
-        try {
-          await alertService.updateAllAlertTypesStatus(
-            alertService.ALERT_SOURCES.DEVICE,
-            id,
-            alertService.ALERT_STATUS.RESOLVED,
-            null,
-          );
-
-          const linked = await db.query(
-            `SELECT id, system_type
-             FROM location_systems
-             WHERE system_config->'device_ids' IS NOT NULL
-               AND system_config->'device_ids' @> ?::jsonb`,
-            [JSON.stringify([id])],
-          );
-
-          const sourceMap = {
-            environment: alertService.ALERT_SOURCES.ENVIRONMENT,
-            lighting: alertService.ALERT_SOURCES.LIGHTING,
-            drainage: alertService.ALERT_SOURCES.DRAINAGE,
-            power: alertService.ALERT_SOURCES.POWER,
-            fire: alertService.ALERT_SOURCES.FIRE,
-            emergency_rescue: alertService.ALERT_SOURCES.EMERGENCY_RESCUE,
-          };
-
-          for (const row of linked || []) {
-            const src = sourceMap[row.system_type];
-            if (!src) continue;
-            await alertService.updateAllAlertTypesStatus(
-              src,
-              Number(row.id),
-              alertService.ALERT_STATUS.RESOLVED,
-              null,
-            );
-          }
-        } catch (e) {
-          deviceLogger.warn("停用設備時解決警示失敗", {
-            error: e?.message || String(e),
-            module: "deviceService",
-          });
-        }
-      }
-
-      websocketService.emitDeviceStatusChanged({
-        deviceId: id,
-        oldStatus,
-        newStatus,
-        userId,
-      });
-    }
 
     // 推送設備更新事件（包含所有變更）
     websocketService.emitDeviceUpdated({

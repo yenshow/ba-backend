@@ -468,30 +468,6 @@ function emitDeviceDeleted(data) {
 }
 
 /**
- * 推送設備狀態變更事件
- * @param {Object} data - 事件資料
- * @param {number} data.deviceId - 設備 ID
- * @param {string} data.oldStatus - 舊狀態
- * @param {string} data.newStatus - 新狀態
- * @param {number} data.userId - 變更用戶 ID（可選）
- */
-function emitDeviceStatusChanged(data) {
-  safeEmit(
-    "device:status:changed",
-    {
-      deviceId: data.deviceId,
-      oldStatus: data.oldStatus,
-      newStatus: data.newStatus,
-      userId: data.userId,
-      timestamp: new Date().toISOString(),
-    },
-    {
-      logMessage: `設備 ID: ${data.deviceId}, ${data.oldStatus} -> ${data.newStatus}`,
-    },
-  );
-}
-
-/**
  * 推送環境感測器讀數事件（方案 B 統一契約）
  * @param {Object} data
  * @param {number} data.locationId - 位置 ID
@@ -600,7 +576,6 @@ module.exports = {
   emitDeviceCreated,
   emitDeviceUpdated,
   emitDeviceDeleted,
-  emitDeviceStatusChanged,
   emitEnvironmentReading,
   emitIsapiAccessEvent,
   emitIsapiPeopleCountingEvent,

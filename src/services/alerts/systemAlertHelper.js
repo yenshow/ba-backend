@@ -354,8 +354,7 @@ async function getDeviceIdFromConfig(deviceConfig) {
     const result = await db.query(
       `SELECT d.id
       FROM devices d
-      WHERE d.status = 'active'
-        AND (
+      WHERE (
           (d.config::jsonb->>'protocol' = 'modbus'
             AND (d.config::jsonb->>'host')::text = ?
             AND (d.config::jsonb->>'port')::text = ?)
@@ -426,7 +425,7 @@ const getSmokeAlarmInfo = (systemId) =>
 async function getDeviceInfo(deviceId) {
   try {
     const result = await db.query(
-      `SELECT d.id, d.name, d.status, d.type_code as device_type_code
+      `SELECT d.id, d.name, d.type_code as device_type_code
       FROM devices d
       WHERE d.id = ?`,
       [deviceId],
@@ -690,15 +689,10 @@ async function recordErrorDetailed(system, sourceId, errorMessage, options = {})
 
     const isConnErr = isDeviceConnectionError(errorMessage);
 
-    // 「停用=全停」：如果能映射到設備且設備非 active，直接跳過（不創建警示、不推送狀態）
-    // - 避免停用設備仍持續產生 alerts/WS，造成前端仍收到「設備訊息」
     const mappedDeviceId = await config.getDeviceId(sourceId);
     let mappedDeviceInfo = null;
     if (mappedDeviceId) {
       mappedDeviceInfo = await getDeviceInfo(mappedDeviceId);
-      if (mappedDeviceInfo?.status && mappedDeviceInfo.status !== "active") {
-        return false;
-      }
     }
 
     if (isConnErr && mappedDeviceId && mappedDeviceInfo) {

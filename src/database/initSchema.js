@@ -66,7 +66,6 @@ async function initSchema() {
     const enums = [
       ["user_role", ["admin", "operator", "viewer"]],
       ["user_status", ["active", "inactive"]],
-      ["device_status", ["active", "inactive", "error"]],
       ["register_type", ["coil", "discrete", "holding", "input"]],
       ["alert_type", ["offline", "error", "threshold"]],
       ["alert_severity", ["warning", "error", "critical"]],
@@ -504,7 +503,6 @@ async function initSchema() {
 				type_code VARCHAR(20) NOT NULL,
 				location VARCHAR(255),
 				description TEXT,
-				status device_status NOT NULL DEFAULT 'inactive',
 				config JSONB,
 				created_by INTEGER,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -518,11 +516,26 @@ async function initSchema() {
     await createUpdatedAtTrigger(targetPool, "devices");
 
     await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
 			CREATE INDEX IF NOT EXISTS idx_devices_type_code ON devices(type_code);
 			CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
 			CREATE INDEX IF NOT EXISTS idx_devices_config ON devices USING GIN (config);
 		`);
+
+    // 既有 DB：移除 devices.status（啟用/停用已不再使用）
+    await targetPool.query(`
+      DO $BODY$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'devices'
+            AND column_name = 'status'
+        ) THEN
+          DROP INDEX IF EXISTS idx_devices_status;
+          ALTER TABLE devices DROP COLUMN status;
+        END IF;
+      END $BODY$;
+    `);
 
     schemaLogger.info("devices 表已建立", { module: "initSchema" });
 

@@ -293,7 +293,6 @@ async function getMultimediaEnvReadingsSnapshot() {
     `SELECT id, config as device_config
      FROM devices
      WHERE id = ANY($1::int[])
-       AND status = 'active'
        AND type_code = 'sensor'
        AND config->>'protocol' = 'modbus'`,
     [deviceIds],

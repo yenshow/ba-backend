@@ -205,17 +205,8 @@ async function checkSingleDeviceConnectivity(deviceRow) {
   const typeCode = String(deviceRow?.type_code || "")
     .trim()
     .toLowerCase();
-  const status = String(deviceRow?.status || "")
-    .trim()
-    .toLowerCase();
-
   if (!Number.isFinite(deviceId)) {
     return { deviceId: null, ok: false, error: "deviceId 無效" };
-  }
-
-  // 停用設備：不檢查，狀態維持 unknown（也避免刷離線）
-  if (status !== "active") {
-    return { deviceId, ok: true, skipped: true, nextStatus: "offline" };
   }
 
   const cfg =
@@ -312,10 +303,9 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
     params.push(typeCode);
   }
 
-  // 僅針對 active/inactive/error 都載入：active 才檢查，inactive 保留 unknown
   const rows = await db.query(
     `
-      SELECT d.id, d.type_code, d.status, d.config
+      SELECT d.id, d.type_code, d.config
       FROM devices d
       ${where}
       ORDER BY d.id ASC
@@ -401,7 +391,7 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
 
   const rows = await db.query(
     `
-      SELECT d.id, d.type_code, d.status, d.config
+      SELECT d.id, d.type_code, d.config
       FROM devices d
       WHERE d.id = ANY($1::int[])
       ORDER BY d.id ASC
