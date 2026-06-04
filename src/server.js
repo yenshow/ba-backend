@@ -25,14 +25,7 @@ const C = require("./utils/apiErrorCodes");
 const modbusRoutes = require("./routes/modbusRoutes");
 const userRoutes = require("./routes/userRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
-const lightingRoutes = require("./routes/lightingRoutes");
-const drainageRoutes = require("./routes/drainageRoutes");
-const powerRoutes = require("./routes/powerRoutes");
-const fireRoutes = require("./routes/fireRoutes");
-const hvacRoutes = require("./routes/hvacRoutes");
-const airCirculationRoutes = require("./routes/airCirculationRoutes");
-const emergencyRescueRoutes = require("./routes/emergencyRescueRoutes");
-const smokeAlarmRoutes = require("./routes/smokeAlarmRoutes");
+const { mountSnapshotSystemRoutes } = require("./routes/snapshotSystems");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
@@ -134,32 +127,13 @@ app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 // 若前端僅反代 /api（未反代 /uploads），仍可透過 /api/uploads 取用同一批靜態檔案
 app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-// 註冊路由（授權僅控：人流、照明、排水、消防、環境、影像監控、車輛進出；其餘由角色 admin/operator 管理）
+// 註冊路由：業務模組寫入以 requirePermission + requireFeature；平台管理以 requireAdmin
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/license", licenseRoutes);
 app.use("/api/modules", moduleRegistryRoutes);
 app.use("/api/devices", deviceRoutes);
-app.use("/api/lighting", requireFeature("lighting"), lightingRoutes);
-app.use("/api/drainage", requireFeature("drainage"), drainageRoutes);
-app.use("/api/hvac", requireFeature("hvac"), hvacRoutes);
-app.use(
-  "/api/air-circulation",
-  requireFeature("air_circulation"),
-  airCirculationRoutes,
-);
-app.use("/api/power", requireFeature("power"), powerRoutes);
-app.use("/api/fire", requireFeature("fire"), fireRoutes);
-app.use(
-  "/api/emergency-rescue",
-  requireFeature("emergency_rescue"),
-  emergencyRescueRoutes,
-);
-app.use(
-  "/api/smoke-alarm",
-  requireFeature("smoke_alarm"),
-  smokeAlarmRoutes,
-);
+mountSnapshotSystemRoutes(app, requireFeature);
 app.use("/api/environment", requireFeature("environment"), environmentRoutes);
 app.use("/api/locations", locationRoutes); // 統一地點管理 API
 app.use(

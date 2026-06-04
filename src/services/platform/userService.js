@@ -261,6 +261,7 @@ async function updateUser(userId, updateData, currentUser) {
 
   if (role !== undefined && role !== previousRole) {
     await permissionService.clearUserPermissionOverrides(userId);
+    permissionService.invalidateUserPermissionCache(userId);
   }
 
   return await getUserById(userId);

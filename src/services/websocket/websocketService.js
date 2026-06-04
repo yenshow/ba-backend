@@ -138,6 +138,7 @@ function initializeWebSocket(httpServer) {
         socket.data.userId = decoded.id;
         socket.data.role = decoded.role;
         socket.data.permissions = codes;
+        socket.join(`user:${decoded.id}`);
 
         for (const code of codes) {
           if (!code) continue;
@@ -537,6 +538,16 @@ function emitVehicleAccessIsapiEvent(data) {
   );
 }
 
+function emitPermissionsUpdated(userId) {
+  if (!ioInstance || userId == null) return;
+  const room = `user:${Number(userId)}`;
+  safeEmit(
+    "permissions:updated",
+    { userId: Number(userId), timestamp: new Date().toISOString() },
+    { rooms: [room], logMessage: `permissions:updated user=${userId}` },
+  );
+}
+
 function emitYscpEvent(type) {
   const eventMap = {
     vehicle_access: "yscp:event:vehicle",
@@ -581,4 +592,5 @@ module.exports = {
   emitIsapiPeopleCountingEvent,
   emitVehicleAccessIsapiEvent,
   emitYscpEvent,
+  emitPermissionsUpdated,
 };

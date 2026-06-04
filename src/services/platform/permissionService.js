@@ -9,10 +9,23 @@ const catalogCodesForDeployment = () => getPermissionCodesForDeployment();
 
 const catalogCodeSet = () => new Set(catalogCodesForDeployment());
 
+const CACHE_TTL_MS = 45_000;
+/** @type {Map<number, { codes: string[], expiresAt: number }>} */
+const effectiveCache = new Map();
+
+const invalidateUserPermissionCache = (userId) => {
+	if (userId != null) effectiveCache.delete(Number(userId));
+};
+
 /**
  * 有效權限：admin 為 catalog 全開；user 僅 overrides（granted=true）
  */
 async function getEffectivePermissionsForUser(userId, role = null) {
+	const uid = Number(userId);
+	const cached = effectiveCache.get(uid);
+	if (cached && cached.expiresAt > Date.now()) {
+		return { codes: cached.codes, granted: new Set(cached.codes) };
+	}
 	const codes = catalogCodesForDeployment();
 
 	let userRole = role;
@@ -23,6 +36,10 @@ async function getEffectivePermissionsForUser(userId, role = null) {
 	}
 
 	if (userRole === "admin") {
+		effectiveCache.set(uid, {
+			codes,
+			expiresAt: Date.now() + CACHE_TTL_MS,
+		});
 		return { codes, granted: new Set(codes) };
 	}
 
@@ -43,6 +60,10 @@ async function getEffectivePermissionsForUser(userId, role = null) {
 		if (code && allowed.has(code)) granted.add(code);
 	}
 	const grantedCodes = Array.from(granted);
+	effectiveCache.set(uid, {
+		codes: grantedCodes,
+		expiresAt: Date.now() + CACHE_TTL_MS,
+	});
 	return { codes: grantedCodes, granted: new Set(grantedCodes) };
 }
 
@@ -64,6 +85,7 @@ async function setUserPermissionOverrides(userId, overrides) {
 	await db.transaction(async (clientQuery) => {
 		await replaceUserPermissionOverrides(userId, overrides, clientQuery);
 	});
+	invalidateUserPermissionCache(userId);
 }
 
 async function getUserPermissionOverrides(userId) {
@@ -144,4 +166,5 @@ module.exports = {
 	clearUserPermissionOverrides,
 	hasPermissionCode,
 	sanitizeOverrides,
+	invalidateUserPermissionCache,
 };

@@ -547,7 +547,7 @@ router.post(
 
 // 規則訊息預覽 API 已移除（訊息模板固定 + 後綴，前端不提供預覽）
 
-// 建立警報規則（需要 admin/operator 權限）
+// 建立警報規則（system.alert_log.alert.create）
 router.post(
   "/rules",
   requirePermission("system.alert_log.alert.create"),
@@ -644,7 +644,7 @@ router.put(
   }),
 );
 
-// SMTP 測試寄信（admin/operator；不寫入 DB；可用 body.emailSubscription 覆寫設定）
+// SMTP 測試寄信（system.alert_log；不寫入 DB）
 router.post(
   "/rules/:id/email/test",
   requirePermission("system.alert_log.alert.update"),
@@ -735,7 +735,7 @@ router.post(
   }),
 );
 
-// 更新警報規則（需要 admin/operator 權限）
+// 更新警報規則（system.alert_log.alert.update）
 router.put(
   "/rules/:id",
   requirePermission("system.alert_log.alert.update"),
@@ -757,7 +757,7 @@ router.put(
   }),
 );
 
-// 刪除警報規則（需要 admin/operator 權限）
+// 刪除警報規則（system.alert_log.alert.delete）
 router.delete(
   "/rules/:id",
   requirePermission("system.alert_log.alert.delete"),
@@ -784,7 +784,7 @@ router.get(
 // 注意：警報由系統自動解決，不提供手動解決的端點
 // 系統會在檢測到問題恢復時自動將警報標記為已解決
 
-// 標記警示為未解決（需要 admin/operator 權限）
+// 標記警示為未解決（system.alert_log.alert.update）
 router.put(
   "/:id/unresolve",
   requirePermission("system.alert_log.alert.update"),
@@ -800,7 +800,7 @@ router.put(
   }),
 );
 
-// 忽視警示（需要 admin/operator 權限，支持多系統來源）
+// 忽視警示（system.alert_log.alert.ignore）
 router.post(
   "/:deviceId/:alertType/ignore",
   requirePermission("system.alert_log.alert.ignore"),
@@ -824,7 +824,7 @@ router.post(
   }),
 );
 
-// 取消忽視警示（需要 admin/operator 權限，支持多系統來源）
+// 取消忽視警示（system.alert_log.alert.ignore）
 router.post(
   "/:deviceId/:alertType/unignore",
   requirePermission("system.alert_log.alert.ignore"),

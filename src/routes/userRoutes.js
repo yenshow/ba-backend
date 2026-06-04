@@ -7,6 +7,7 @@ const {
   requireAdmin,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
+const websocketService = require("../services/websocket/websocketService");
 const {
   validateRequired,
   validateIntegers,
@@ -37,7 +38,7 @@ router.get(
   }),
 );
 
-// 管理員或操作員：取得用戶列表
+// 管理員：取得用戶列表
 router.get(
   "/",
   authenticate,
@@ -56,7 +57,7 @@ router.get(
   }),
 );
 
-// 管理員或操作員：建立用戶；非 admin 須帶 overrides[]（手動勾選之頁面進入權限）
+// 管理員：建立用戶；非 admin 須帶 overrides[]（手動勾選之頁面進入權限）
 router.post(
   "/",
   authenticate,
@@ -92,7 +93,7 @@ router.get(
   }),
 );
 
-// 管理員或操作員：寫入用戶頁面進入權限（全量 overrides，與 UI 勾選一致）
+// 管理員：寫入用戶頁面進入權限（全量 overrides，與 UI 勾選一致）
 router.put(
   "/:id/permissions",
   authenticate,
@@ -103,11 +104,12 @@ router.put(
     const overrides = Array.isArray(req.body.overrides) ? req.body.overrides : [];
     const sanitized = await permissionService.sanitizeOverrides(overrides);
     await permissionService.setUserPermissionOverrides(userId, sanitized);
+    websocketService.emitPermissionsUpdated(userId);
     res.sendSuccess({ message: "權限已更新" });
   }),
 );
 
-// 管理員或操作員：取得單一用戶
+// 管理員：取得單一用戶
 router.get(
   "/:id",
   authenticate,
@@ -119,7 +121,7 @@ router.get(
   }),
 );
 
-// 需要認證：更新用戶（用戶可更新自己；管理員或操作員可更新任何人）
+// 需要認證：更新用戶（用戶可更新自己；管理員可更新任何人）
 router.put(
   "/:id",
   authenticate,
@@ -150,7 +152,7 @@ router.put(
   }),
 );
 
-// 管理員或操作員：刪除用戶
+// 管理員：刪除用戶
 router.delete(
   "/:id",
   authenticate,

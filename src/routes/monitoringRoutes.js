@@ -2,7 +2,7 @@ const express = require("express");
 const asyncHandler = require("../utils/asyncHandler");
 const { noCache } = require("../middleware/common");
 const { authenticate } = require("../middleware/authMiddleware");
-const permissionService = require("../services/platform/permissionService");
+const { hasPermissionCode } = require("../services/platform/permissionService");
 const licenseService = require("../services/license/licenseService");
 const locationService = require("../services/location/locationService");
 
@@ -15,19 +15,10 @@ const airCirculationStatusService = require("../services/snapshotStatus/airCircu
 const smokeAlarmStatusService = require("../services/snapshotStatus/smokeAlarmStatusService");
 const emergencyRescueStatusService = require("../services/snapshotStatus/emergencyRescueStatusService");
 
-const ensurePermissionsLoaded = async (req) => {
-	if (!req.user) return [];
-	if (req.user.role === "admin") return ["*"];
-	if (Array.isArray(req.user.permissions)) return req.user.permissions;
-	const result = await permissionService.getEffectivePermissionsForUser(req.user.id, req.user.role);
-	req.user.permissions = result.codes;
-	return result.codes;
-};
-
-const hasPermission = (req, codes, requiredCode) => {
+const hasPermission = (req, requiredCode) => {
 	if (!req.user) return false;
 	if (req.user.role === "admin") return true;
-	return Array.isArray(codes) && codes.includes(requiredCode);
+	return hasPermissionCode(req.user.permissions, requiredCode);
 };
 
 module.exports = (() => {
@@ -42,7 +33,6 @@ module.exports = (() => {
 		"/overview/status",
 		noCache,
 		asyncHandler(async (req, res) => {
-			const permissions = await ensurePermissionsLoaded(req);
 			const activeFeatures = new Set(licenseService.getActiveFeatureKeys());
 			const syncAlerts = String(req.query.syncAlerts ?? "").trim().toLowerCase() === "true";
 
@@ -106,7 +96,7 @@ module.exports = (() => {
 			];
 
 			const enabled = systems.filter(
-				(s) => activeFeatures.has(s.featureKey) && hasPermission(req, permissions, s.permissionCode)
+				(s) => activeFeatures.has(s.featureKey) && hasPermission(req, s.permissionCode),
 			);
 
 			const pairs = await Promise.allSettled(

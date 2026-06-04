@@ -27,7 +27,7 @@ function sendAuthFailure(res, status, code, message) {
 	return res.sendFailure({ code, message, details: null }, status);
 }
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
 	try {
 		const authHeader = req.headers.authorization;
 		if (!authHeader) {
@@ -43,6 +43,7 @@ function authenticate(req, res, next) {
 		}
 
 		req.user = decoded;
+		await attachEffectivePermissions(req);
 		next();
 	} catch (error) {
 		return sendAuthFailure(res, 401, C.AUTH_FAILED, `認證失敗：${error.message}`);
@@ -140,4 +141,5 @@ module.exports = {
 	requirePermission,
 	requireLocationMutation,
 	requireLocationTypeModuleAccess,
+	attachEffectivePermissions,
 };

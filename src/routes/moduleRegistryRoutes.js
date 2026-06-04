@@ -1,22 +1,29 @@
+const crypto = require("crypto");
 const express = require("express");
 const router = express.Router();
 const { authenticate } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const moduleRegistryService = require("../services/platform/moduleRegistryService");
 
+const registryEtag = (registry) =>
+  `"${crypto.createHash("sha1").update(JSON.stringify(registry)).digest("hex")}"`;
+
 /**
  * GET /api/modules/registry
- * - 需認證
- * - 回傳模組 registry（SSOT）：routePrefix / featureKey / permissionCode / category
  */
 router.get(
   "/registry",
   authenticate,
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const registry = moduleRegistryService.getRegistry();
+    const etag = registryEtag(registry);
+    if (req.headers["if-none-match"] === etag) {
+      return res.status(304).end();
+    }
+    res.setHeader("ETag", etag);
+    res.setHeader("Cache-Control", "private, max-age=60");
     res.sendSuccess(registry);
   }),
 );
 
 module.exports = router;
-

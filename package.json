@@ -11,6 +11,8 @@
     "loadtest:personnel-sync-job": "node scripts/personnelSync.js",
     "db:init": "node src/database/initSchema.js",
     "db:sync-perms": "node scripts/syncPermissionCatalog.js",
+    "gen:perm": "node scripts/generate-permission-codes.mjs",
+    "audit:route-guards": "node scripts/audit-route-guards.js --md",
     "db:test": "node -e \"require('./src/database/db').testConnection().then(() => process.exit(0)).catch(() => process.exit(1))\"",
     "admin:create": "node scripts/createAdmin.js",
     "postgres:download": "node scripts/download-portable-postgres.js",
