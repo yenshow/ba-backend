@@ -2,8 +2,14 @@
  * 權限目錄 SSOT（與 moduleRegistry.permissionCode 對齊）
  * - 父層 system.{module}：模組進入（路由 / 模組 GET）
  * - 子層 system.{module}.{action}：細項操作
- * - Central 基礎設施／安防快照子系統（照明、排水等）：僅父層；區域 CRUD 另由後端 requireAdmin 保護
+ * - Central 基礎設施／安防快照子系統（照明、排水等）：父層 + location.create/update/delete
  */
+
+const LOCATION_MUTATION_CHILDREN = [
+  { code: "location.create", name: "地點新增", sort_order: 1 },
+  { code: "location.update", name: "地點編輯", sort_order: 2 },
+  { code: "location.delete", name: "地點刪除", sort_order: 3 },
+];
 
 const SHARED_MODULES = [
   {
@@ -54,11 +60,8 @@ const SHARED_MODULES = [
     name: "人流統計",
     sort_order: 10,
     children: [
-      { code: "location.create", name: "地點新增", sort_order: 1 },
-      { code: "location.update", name: "地點編輯", sort_order: 2 },
-      { code: "location.delete", name: "地點刪除", sort_order: 3 },
+      ...LOCATION_MUTATION_CHILDREN,
       { code: "report.full", name: "完整報表", sort_order: 4 },
-      { code: "report.export", name: "報表匯出", sort_order: 5 },
     ],
   },
   {
@@ -66,11 +69,8 @@ const SHARED_MODULES = [
     name: "環境品質",
     sort_order: 11,
     children: [
-      { code: "location.create", name: "地點新增", sort_order: 1 },
-      { code: "location.update", name: "地點編輯", sort_order: 2 },
-      { code: "location.delete", name: "地點刪除", sort_order: 3 },
+      ...LOCATION_MUTATION_CHILDREN,
       { code: "report.full", name: "完整報表", sort_order: 4 },
-      { code: "report.export", name: "報表匯出", sort_order: 5 },
     ],
   },
   {
@@ -78,17 +78,14 @@ const SHARED_MODULES = [
     name: "車輛進出",
     sort_order: 12,
     children: [
-      { code: "location.create", name: "地點新增", sort_order: 1 },
-      { code: "location.update", name: "地點編輯", sort_order: 2 },
-      { code: "location.delete", name: "地點刪除", sort_order: 3 },
+      ...LOCATION_MUTATION_CHILDREN,
       { code: "plate.manage", name: "車牌管理", sort_order: 4 },
       { code: "plate.create", name: "車牌新增", sort_order: 5 },
       { code: "plate.update", name: "車牌編輯", sort_order: 6 },
       { code: "plate.delete", name: "車牌刪除", sort_order: 7 },
       { code: "report.full", name: "完整報表", sort_order: 8 },
-      { code: "report.export", name: "報表匯出", sort_order: 9 },
-      { code: "statistics.reset", name: "重製統計", sort_order: 10 },
-      { code: "barrier.control", name: "道閘控制", sort_order: 11 },
+      { code: "statistics.reset", name: "重製統計", sort_order: 9 },
+      { code: "barrier.control", name: "道閘控制", sort_order: 10 },
     ],
   },
   {
@@ -108,69 +105,96 @@ const CENTRAL_MODULES = [
     name: "全區點位圖",
     sort_order: 4,
     children: [
-      { code: "zone.create", name: "區域新增", sort_order: 1 },
-      { code: "zone.update", name: "區域編輯", sort_order: 2 },
-      { code: "zone.delete", name: "區域刪除", sort_order: 3 },
-      { code: "location.delete", name: "地點刪除", sort_order: 4 },
+      { code: "zone.delete", name: "區域刪除", sort_order: 1 },
+      { code: "location.delete", name: "地點刪除", sort_order: 2 },
     ],
   },
   {
     code: "system.lighting",
     name: "照明系統",
     sort_order: 20,
-    children: [],
+    children: [
+      ...LOCATION_MUTATION_CHILDREN,
+      { code: "device.control", name: "開關控制", sort_order: 4 },
+    ],
   },
   {
     code: "system.hvac",
     name: "空調系統",
     sort_order: 21,
-    children: [],
+    children: [
+      ...LOCATION_MUTATION_CHILDREN,
+      { code: "device.control", name: "開關控制", sort_order: 4 },
+    ],
   },
   {
     code: "system.power",
     name: "電力系統",
     sort_order: 22,
-    children: [],
+    children: LOCATION_MUTATION_CHILDREN,
   },
   {
     code: "system.drainage",
     name: "衛生排水系統",
     sort_order: 23,
-    children: [],
+    children: LOCATION_MUTATION_CHILDREN,
   },
   {
     code: "system.air_circulation",
     name: "空氣循環系統",
     sort_order: 24,
-    children: [],
+    children: LOCATION_MUTATION_CHILDREN,
   },
   {
     code: "system.fire",
     name: "消防系統",
     sort_order: 25,
-    children: [],
+    children: LOCATION_MUTATION_CHILDREN,
   },
   {
     code: "system.emergency_rescue",
     name: "緊急求救系統",
     sort_order: 26,
-    children: [],
+    children: LOCATION_MUTATION_CHILDREN,
   },
   {
     code: "system.smoke_alarm",
     name: "煙霧警報系統",
     sort_order: 27,
-    children: [],
+    children: LOCATION_MUTATION_CHILDREN,
   },
   {
     code: "system.multimedia",
     name: "多媒體資訊",
     sort_order: 28,
-    children: [],
+    children: [
+      { code: "settings.update", name: "設定編輯", sort_order: 1 },
+    ],
   },
 ];
 
 const MODULES = [...SHARED_MODULES, ...CENTRAL_MODULES];
+
+/** locationType（DB／API）→ 父層模組權限碼；地點變更檢查 ${code}.location.* */
+/** Modbus 寫入時 controlScope 查詢參數對應的權限碼 */
+const MODBUS_CONTROL_SCOPE_PERMISSION = {
+  lighting: "system.lighting.device.control",
+  hvac: "system.hvac.device.control",
+};
+
+const LOCATION_TYPE_MODULE = {
+  people_counting: "system.people_counting",
+  environment: "system.environment",
+  vehicle_access: "system.vehicle_access",
+  lighting: "system.lighting",
+  hvac: "system.hvac",
+  power: "system.power",
+  drainage: "system.drainage",
+  air_circulation: "system.air_circulation",
+  fire: "system.fire",
+  emergency_rescue: "system.emergency_rescue",
+  smoke_alarm: "system.smoke_alarm",
+};
 
 const normalizeProfile = (profile) =>
   profile === "construction" ? "construction" : "central";
@@ -241,6 +265,9 @@ module.exports = {
   MODULES,
   SHARED_MODULES,
   CENTRAL_MODULES,
+  LOCATION_TYPE_MODULE,
+  LOCATION_MUTATION_CHILDREN,
+  MODBUS_CONTROL_SCOPE_PERMISSION,
   normalizeProfile,
   getCatalogModulesForProfile,
   getPermissionSeedRows,

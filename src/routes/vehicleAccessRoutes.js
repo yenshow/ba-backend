@@ -10,6 +10,7 @@ const personLicensePlateService = require("../services/personnel/personLicensePl
 const {
   authenticate,
   requirePermission,
+  requirePlateUpsert,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
@@ -204,7 +205,7 @@ router.post(
  */
 router.put(
   "/devices/:deviceId/license-plates",
-  requirePermission("system.vehicle_access.plate.update"),
+  requirePlateUpsert(),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);

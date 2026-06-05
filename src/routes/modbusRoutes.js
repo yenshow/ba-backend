@@ -2,7 +2,13 @@ const express = require("express");
 const modbusClient = require("../services/devices/modbusClient");
 const modbusBatchService = require("../services/devices/modbusBatchService");
 const systemAlert = require("../services/alerts/systemAlertHelper");
-const { authenticate } = require("../middleware/authMiddleware");
+const {
+  authenticate,
+  requirePermission,
+} = require("../middleware/authMiddleware");
+const {
+  MODBUS_CONTROL_SCOPE_PERMISSION,
+} = require("../config/permissionCatalog");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
@@ -147,10 +153,27 @@ router.post(
   }),
 );
 
-// PUT /coils - 寫入單個或多個 DO
+const requireModbusControlScope = (req, res, next) => {
+  const scope = String(req.query.controlScope || "").trim();
+  const permissionCode = MODBUS_CONTROL_SCOPE_PERMISSION[scope];
+  if (!permissionCode) {
+    return res.sendFailure(
+      {
+        code: C.PERMISSION_DENIED,
+        message: "缺少或無效的 controlScope，無法寫入 Modbus",
+        details: null,
+      },
+      403,
+    );
+  }
+  return requirePermission(permissionCode)(req, res, next);
+};
+
+// PUT /coils - 寫入單個或多個 DO（需 controlScope 對應開關控制權限）
 router.put(
   "/coils",
   noCache,
+  requireModbusControlScope,
   validateRequired("address"),
   asyncHandler(async (req, res) => {
     const { address, value, values } = req.body;

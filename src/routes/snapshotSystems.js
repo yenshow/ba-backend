@@ -116,7 +116,18 @@ const mountSnapshotSystemRoutes = (app, requireFeature) => {
   }
 };
 
+/** monitoring overview 聚合用；與 SNAPSHOT_SYSTEMS 共用定義，避免重複 permissionCode / locationType */
+const getMonitoringOverviewSystems = () =>
+  SNAPSHOT_SYSTEMS.map(({ featureKey, config }) => ({
+    key: featureKey,
+    featureKey,
+    permissionCode: config.permissionCode,
+    locationType: config.locationType,
+    statusService: config.statusService,
+  }));
+
 module.exports = {
   mountSnapshotSystemRoutes,
   SNAPSHOT_SYSTEMS,
+  getMonitoringOverviewSystems,
 };

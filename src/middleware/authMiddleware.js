@@ -2,6 +2,7 @@ const userService = require("../services/platform/userService");
 const permissionService = require("../services/platform/permissionService");
 const {
   getPermissionCodesForDeployment,
+  LOCATION_TYPE_MODULE,
 } = require("../config/permissionCatalog");
 const C = require("../utils/apiErrorCodes");
 
@@ -86,12 +87,6 @@ function requirePermission(requiredCode) {
 	};
 }
 
-const LOCATION_TYPE_MODULE = {
-	vehicle_access: "system.vehicle_access",
-	environment: "system.environment",
-	people_counting: "system.people_counting",
-};
-
 const AREA_POINT_MAP_MODULE = "system.area_point_map";
 
 /** 區域路由（/zones…）與地點路由（/:id）在無 locationType 時改檢查全區點位圖細項 */
@@ -135,11 +130,39 @@ function requireLocationTypeModuleAccess() {
 	};
 }
 
+/** 車牌 upsert：query mutation=create|update 對應 plate.create / plate.update */
+function requirePlateUpsert() {
+	return async (req, res, next) => {
+		const mutation = String(req.query.mutation || "").trim().toLowerCase();
+		if (mutation === "create") {
+			return requirePermission("system.vehicle_access.plate.create")(
+				req,
+				res,
+				next,
+			);
+		}
+		if (mutation === "update") {
+			return requirePermission("system.vehicle_access.plate.update")(
+				req,
+				res,
+				next,
+			);
+		}
+		return sendAuthFailure(
+			res,
+			400,
+			C.VALIDATION_INVALID_ENUM,
+			"需提供 mutation=create 或 mutation=update",
+		);
+	};
+}
+
 module.exports = {
 	authenticate,
 	requireAdmin,
 	requirePermission,
 	requireLocationMutation,
 	requireLocationTypeModuleAccess,
+	requirePlateUpsert,
 	attachEffectivePermissions,
 };

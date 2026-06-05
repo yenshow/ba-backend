@@ -119,30 +119,41 @@ async function pushPlateRowToTarget(plateRow, target) {
   const failures = [];
   let successCount = 0;
 
-  for (const deviceId of target.deviceIds) {
-    try {
-      await isapiVehicleDeviceService.upsertLicensePlates(deviceId, {
-        siteId: target.locationId,
-        channelId: target.channelId,
-        plates: [
-          {
-            licensePlate,
-            listType,
-            createTime,
-            effectiveTime,
-            operationType,
+  const deviceResults = await Promise.all(
+    target.deviceIds.map(async (deviceId) => {
+      try {
+        await isapiVehicleDeviceService.upsertLicensePlates(deviceId, {
+          siteId: target.locationId,
+          channelId: target.channelId,
+          plates: [
+            {
+              licensePlate,
+              listType,
+              createTime,
+              effectiveTime,
+              operationType,
+            },
+          ],
+        });
+        return { ok: true, deviceId };
+      } catch (err) {
+        return {
+          ok: false,
+          deviceId,
+          failure: {
+            plateNumber: licensePlate,
+            deviceId,
+            locationId: target.locationId,
+            message: err?.message || String(err),
           },
-        ],
-      });
-      successCount += 1;
-    } catch (err) {
-      failures.push({
-        plateNumber: licensePlate,
-        deviceId,
-        locationId: target.locationId,
-        message: err?.message || String(err),
-      });
-    }
+        };
+      }
+    }),
+  );
+
+  for (const r of deviceResults) {
+    if (r.ok) successCount += 1;
+    else if (r.failure) failures.push(r.failure);
   }
 
   return { successCount, failures, totalDevices: target.deviceIds.length };
@@ -171,8 +182,10 @@ async function syncPlateRowById(plateId, targets) {
   let totalDevices = 0;
   const allFailures = [];
 
-  for (const target of targets) {
-    const res = await pushPlateRowToTarget(row, target);
+  const targetResults = await Promise.all(
+    targets.map((target) => pushPlateRowToTarget(row, target)),
+  );
+  for (const res of targetResults) {
     totalOk += res.successCount;
     totalDevices += res.totalDevices;
     allFailures.push(...res.failures);
@@ -242,10 +255,9 @@ async function syncPersonPlates(personId) {
     return { status: SYNC_STATUS.SKIPPED, warnings: [], failures: [] };
   }
 
-  const results = [];
-  for (const plate of plates) {
-    results.push(await syncPlateRowById(plate.id, targets));
-  }
+  const results = await Promise.all(
+    plates.map((plate) => syncPlateRowById(plate.id, targets)),
+  );
   return aggregateSyncResults(results);
 }
 
