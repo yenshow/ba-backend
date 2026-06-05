@@ -102,6 +102,50 @@ const requireLocationTypeModuleAccess = () => async (req, res, next) => {
   return requirePermission(moduleCode)(req, res, next);
 };
 
+/** 警示 CSV 匯出等大量查詢（列表分頁／輪詢遠低於此門檻） */
+const ALERT_EXPORT_BULK_LIMIT_THRESHOLD = 500;
+
+const requireAlertExportIfBulk = () => async (req, res, next) => {
+  const raw = req.query.limit;
+  if (raw == null || raw === "") return next();
+  const limit = Number.parseInt(String(raw), 10);
+  if (
+    !Number.isFinite(limit) ||
+    limit < ALERT_EXPORT_BULK_LIMIT_THRESHOLD
+  ) {
+    return next();
+  }
+  return requirePermission("system.alert_log.report.export")(req, res, next);
+};
+
+/**
+ * 環境完整報表：aggregated 須 query `reportScope=full`；
+ * raw readings 帶 startTime+endTime 亦視為歷史區間查詢。
+ */
+const requireEnvironmentReportFullIfScoped = () => async (req, res, next) => {
+  const scope = String(req.query.reportScope || "").trim().toLowerCase();
+  if (scope === "full") {
+    return requirePermission("system.environment.report.full")(
+      req,
+      res,
+      next,
+    );
+  }
+  const hasRange =
+    String(req.query.startTime || "").trim() !== "" &&
+    String(req.query.endTime || "").trim() !== "";
+  const routePath = String(req.route?.path || "");
+  const isAggregatedRoute = routePath.endsWith("/aggregated");
+  if (!isAggregatedRoute && hasRange) {
+    return requirePermission("system.environment.report.full")(
+      req,
+      res,
+      next,
+    );
+  }
+  return next();
+};
+
 const requirePlateUpsert = () => async (req, res, next) => {
   const mutation = String(req.query.mutation || "").trim().toLowerCase();
   if (mutation === "create") {
@@ -134,4 +178,7 @@ module.exports = {
   requireLocationMutation,
   requireLocationTypeModuleAccess,
   requirePlateUpsert,
+  requireAlertExportIfBulk,
+  requireEnvironmentReportFullIfScoped,
+  ALERT_EXPORT_BULK_LIMIT_THRESHOLD,
 };

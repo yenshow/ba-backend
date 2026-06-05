@@ -11,6 +11,7 @@ const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
 const {
   authenticate,
   requirePermission,
+  requireAlertExportIfBulk,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -385,6 +386,7 @@ router.use(requirePermission("system.alert_log"));
 // 取得警示列表
 router.get(
   "/",
+  requireAlertExportIfBulk(),
   noCache,
   asyncHandler(async (req, res) => {
     const {

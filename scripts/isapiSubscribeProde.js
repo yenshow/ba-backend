@@ -35,6 +35,7 @@ const SUBSCRIBE_XML_ALL = `<?xml version="1.0" encoding="UTF-8"?>
 </SubscribeEvent>`;
 
 const ensureInt = (v) => {
+  if (v == null || String(v).trim() === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : null;
 };
@@ -116,7 +117,8 @@ const isKeepAliveEvent = (obj) => {
   const eventState = String(obj.eventState || "").toLowerCase();
   if (eventState === "inactive") return true;
 
-  if (!obj.eventType && (obj.ipAddress || obj.portNo || obj.macAddress)) return true;
+  if (!obj.eventType && (obj.ipAddress || obj.portNo || obj.macAddress))
+    return true;
 
   return false;
 };
@@ -225,7 +227,7 @@ const consumeMultipartStream = async ({
 };
 
 async function main() {
-  const host = process.env.ISAPI_HOST || "192.168.2.95";
+  const host = process.env.ISAPI_HOST || "192.168.6.101";
   const port = ensureInt(process.env.ISAPI_PORT) ?? 80;
   const username = process.env.ISAPI_USERNAME || "admin";
   const password = process.env.ISAPI_PASSWORD || "Aa83124007";

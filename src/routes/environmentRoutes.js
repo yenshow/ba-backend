@@ -4,6 +4,7 @@ const environmentService = require("../services/environment/environmentService")
 const {
   authenticate,
   requirePermission,
+  requireEnvironmentReportFullIfScoped,
 } = require("../middleware/authMiddleware");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -79,6 +80,7 @@ router.delete(
 // 取得彙總讀數（須在 /readings/:locationId 前註冊）
 router.get(
   "/readings/:locationId/aggregated",
+  requireEnvironmentReportFullIfScoped(),
   noCache,
   asyncHandler(async (req, res) => {
     const { locationId } = req.params;
@@ -95,6 +97,7 @@ router.get(
 // 取得歷史讀數（即時由 Monitor 推送 WebSocket）
 router.get(
   "/readings/:locationId",
+  requireEnvironmentReportFullIfScoped(),
   noCache,
   asyncHandler(async (req, res) => {
     const { locationId } = req.params;

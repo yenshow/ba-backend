@@ -1,6 +1,6 @@
 /**
  * ISAPI ANPR EventNotificationAlert XML 解析
- * 僅擷取：dateTime、eventType、ANPR.licensePlate、ANPR.listType（見 docs/00-decisions/isapi_anpr.md）
+ * 僅擷取：dateTime、eventType、ANPR.licensePlate、ANPR.listType（契約見 docs/30-contracts/external-integrations.md）
  */
 function extractTag(xml, tag) {
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
