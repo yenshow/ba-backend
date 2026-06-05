@@ -1,8 +1,7 @@
 /**
- * 權限目錄 SSOT（與 moduleRegistry.permissionCode 對齊）
+ * 權限目錄 SSOT（方案 A：catalog 完全主導 registry 與權限碼）
  * - 父層 system.{module}：模組進入（路由 / 模組 GET）
  * - 子層 system.{module}.{action}：細項操作
- * - Central 基礎設施／安防快照子系統（照明、排水等）：父層 + location.create/update/delete
  */
 
 const LOCATION_MUTATION_CHILDREN = [
@@ -98,7 +97,7 @@ const SHARED_MODULES = [
   },
 ];
 
-/** Central 專屬模組（moduleRegistry central profile） */
+/** Central 專屬模組 */
 const CENTRAL_MODULES = [
   {
     code: "system.area_point_map",
@@ -175,8 +174,6 @@ const CENTRAL_MODULES = [
 
 const MODULES = [...SHARED_MODULES, ...CENTRAL_MODULES];
 
-/** locationType（DB／API）→ 父層模組權限碼；地點變更檢查 ${code}.location.* */
-/** Modbus 寫入時 controlScope 查詢參數對應的權限碼 */
 const MODBUS_CONTROL_SCOPE_PERMISSION = {
   lighting: "system.lighting.device.control",
   hvac: "system.hvac.device.control",
@@ -199,7 +196,6 @@ const LOCATION_TYPE_MODULE = {
 const normalizeProfile = (profile) =>
   profile === "construction" ? "construction" : "central";
 
-/** 依部署樣貌回傳可設定／可生效的模組（與 moduleRegistryService profile 對齊） */
 function getCatalogModulesForProfile(profile) {
   const p = normalizeProfile(profile);
   if (p === "construction") return SHARED_MODULES;
@@ -229,16 +225,10 @@ function buildPermissionSeedRows(modules) {
   return rows;
 }
 
-/** 扁平種子列（initSchema / sync 用；含 Central，單一 DB 部署兩產品線） */
 function getPermissionSeedRows() {
   return buildPermissionSeedRows(MODULES);
 }
 
-function getPermissionSeedRowsForProfile(profile) {
-  return buildPermissionSeedRows(getCatalogModulesForProfile(profile));
-}
-
-/** 部署樣貌下合法權限碼（含父層）；未傳 profile 時等同 central 全量（僅種子／遷移） */
 function getAllPermissionCodes(profile) {
   const modules =
     profile == null ? MODULES : getCatalogModulesForProfile(profile);
@@ -247,7 +237,7 @@ function getAllPermissionCodes(profile) {
 
 function resolveDeploymentProfile() {
   try {
-    const config = require("../../config");
+    const config = require("../config");
     return config?.license?.deploymentProfile === "construction"
       ? "construction"
       : "central";
@@ -256,22 +246,25 @@ function resolveDeploymentProfile() {
   }
 }
 
-/** 目前後端實例的權限碼集合（與 LICENSE_DEPLOYMENT_PROFILE 一致） */
 function getPermissionCodesForDeployment() {
   return getAllPermissionCodes(resolveDeploymentProfile());
 }
 
+/** 首頁／儀表板外觀設定（system_settings key）與 RBAC 對齊 */
+const HOME_SETTINGS_PERMISSION = "system.home";
+
+const isHomeAppearanceSettingKey = (key) => {
+  if (key == null || typeof key !== "string") return false;
+  return key === "safety_banner_message" || key.startsWith("home_");
+};
+
 module.exports = {
-  MODULES,
-  SHARED_MODULES,
-  CENTRAL_MODULES,
   LOCATION_TYPE_MODULE,
-  LOCATION_MUTATION_CHILDREN,
   MODBUS_CONTROL_SCOPE_PERMISSION,
-  normalizeProfile,
+  HOME_SETTINGS_PERMISSION,
+  isHomeAppearanceSettingKey,
   getCatalogModulesForProfile,
   getPermissionSeedRows,
-  getPermissionSeedRowsForProfile,
   getAllPermissionCodes,
   resolveDeploymentProfile,
   getPermissionCodesForDeployment,

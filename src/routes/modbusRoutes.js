@@ -8,7 +8,7 @@ const {
 } = require("../middleware/authMiddleware");
 const {
   MODBUS_CONTROL_SCOPE_PERMISSION,
-} = require("../config/permissionCatalog");
+} = require("../access/catalog");
 const { noCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {

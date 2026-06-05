@@ -3,7 +3,7 @@ const config = require("../config");
 const logger = require("../utils/logger");
 
 const schemaLogger = logger.createLogger("initSchema");
-const syncPermissionCatalog = require("./syncPermissionCatalog");
+const syncDefinitions = require("../access/syncDefinitions");
 
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
@@ -181,7 +181,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    await syncPermissionCatalog(targetPool);
+    await syncDefinitions(targetPool);
 
     // 建立 device_models 表（通用設備型號表）
     await targetPool.query(`

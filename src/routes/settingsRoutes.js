@@ -11,7 +11,7 @@ const {
 const {
 	HOME_SETTINGS_PERMISSION,
 	isHomeAppearanceSettingKey,
-} = require("../utils/homeSettingKeys");
+} = require("../access/catalog");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const logger = require("../utils/logger");

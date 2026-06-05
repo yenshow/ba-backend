@@ -51,7 +51,7 @@ const { requireFeature } = require("./middleware/licenseMiddleware");
 const db = require("./database/db");
 const externalDb = require("./database/externalDb");
 const websocketService = require("./services/websocket/websocketService");
-const syncPermissionCatalog = require("./database/syncPermissionCatalog");
+const syncDefinitions = require("./access/syncDefinitions");
 
 // 背景監控服務
 const backgroundMonitor = require("./services/monitoring/backgroundMonitor");
@@ -248,7 +248,7 @@ async function startServer() {
     }
 
     if (dbConnected) {
-      await syncPermissionCatalog(db.pool).catch((err) =>
+      await syncDefinitions(db.pool).catch((err) =>
         serverLogger.warn("權限定義同步失敗", { error: err.message }),
       );
       await bootstrapRuntimeInfrastructure();

@@ -32,7 +32,7 @@
 
 | 路由模組 | 主要 service |
 |----------|----------------|
-| `userRoutes` | `platform/userService`、`platform/permissionService`（有效權限計算，無獨立 `/api/permissions` 路由） |
+| `userRoutes` | `platform/userService`、`access/permissionService`（含 `/permission-definitions`、`/:id/permissions`） |
 | `settingsRoutes` / `runtimeConfigRoutes` | `platform/settingsService`、`platform/runtimeConfigService` |
 | `licenseRoutes` | `license/*` |
 | `locationRoutes` | `location/locationService` |

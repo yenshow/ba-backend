@@ -2,7 +2,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const db = require("../../database/db");
 const config = require("../../config");
-const permissionService = require("./permissionService");
+const permissionService = require("../../access/permissionService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 

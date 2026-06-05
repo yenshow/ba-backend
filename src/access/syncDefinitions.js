@@ -1,10 +1,10 @@
 const {
   getPermissionSeedRows,
   getAllPermissionCodes,
-} = require("../config/permissionCatalog");
+} = require("./catalog");
 
-/** 將 permission_definitions 與 permissionCatalog SSOT 對齊 */
-async function syncPermissionCatalog(pool) {
+/** 將 permission_definitions 與 catalog SSOT 對齊 */
+async function syncDefinitions(pool) {
   const catalogCodes = getAllPermissionCodes();
   await pool.query(
     `DELETE FROM permission_definitions WHERE NOT (code = ANY($1::text[]))`,
@@ -38,4 +38,27 @@ async function syncPermissionCatalog(pool) {
   }
 }
 
-module.exports = syncPermissionCatalog;
+async function runCli() {
+  const db = require("../database/db");
+  try {
+    const connected = await db.testConnection();
+    if (!connected) {
+      console.error("❌ 資料庫連線失敗，無法同步權限定義");
+      process.exit(1);
+    }
+    console.log("正在同步權限定義（catalog → permission_definitions）…");
+    await syncDefinitions(db.pool);
+    console.log("✅ 權限定義同步完成");
+  } catch (error) {
+    console.error("❌ 權限定義同步失敗:", error?.message || error);
+    process.exit(1);
+  } finally {
+    await db.close();
+  }
+}
+
+if (require.main === module) {
+  runCli();
+}
+
+module.exports = syncDefinitions;

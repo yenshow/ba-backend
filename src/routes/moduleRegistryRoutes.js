@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticate } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
-const moduleRegistryService = require("../services/platform/moduleRegistryService");
+const registry = require("../access/registry");
 
 const registryEtag = (registry) =>
   `"${crypto.createHash("sha1").update(JSON.stringify(registry)).digest("hex")}"`;
@@ -15,14 +15,14 @@ router.get(
   "/registry",
   authenticate,
   asyncHandler(async (req, res) => {
-    const registry = moduleRegistryService.getRegistry();
-    const etag = registryEtag(registry);
+    const registryPayload = registry.getRegistry();
+    const etag = registryEtag(registryPayload);
     if (req.headers["if-none-match"] === etag) {
       return res.status(304).end();
     }
     res.setHeader("ETag", etag);
     res.setHeader("Cache-Control", "private, max-age=60");
-    res.sendSuccess(registry);
+    res.sendSuccess(registryPayload);
   }),
 );
 

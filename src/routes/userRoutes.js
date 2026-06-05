@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const userService = require("../services/platform/userService");
-const permissionService = require("../services/platform/permissionService");
+const permissionService = require("../access/permissionService");
 const {
   authenticate,
   requireAdmin,
@@ -13,7 +13,6 @@ const {
   validateIntegers,
 } = require("../middleware/validation");
 
-// 公開路由：登入
 router.post(
   "/login",
   validateRequired("username", "password"),
@@ -23,7 +22,6 @@ router.post(
   }),
 );
 
-// 需要認證：取得當前用戶資訊（含有效權限 permissions）
 router.get(
   "/me",
   authenticate,
@@ -38,7 +36,6 @@ router.get(
   }),
 );
 
-// 管理員：取得用戶列表
 router.get(
   "/",
   authenticate,
@@ -57,7 +54,6 @@ router.get(
   }),
 );
 
-// 管理員：建立用戶；非 admin 須帶 overrides[]（手動勾選之頁面進入權限）
 router.post(
   "/",
   authenticate,
@@ -69,7 +65,6 @@ router.post(
   }),
 );
 
-// 管理員：權限定義清單（建立／編輯用戶勾選）
 router.get(
   "/permission-definitions",
   authenticate,
@@ -80,7 +75,6 @@ router.get(
   }),
 );
 
-// 管理員：取得用戶權限 overrides
 router.get(
   "/:id/permissions",
   authenticate,
@@ -93,7 +87,6 @@ router.get(
   }),
 );
 
-// 管理員：寫入用戶頁面進入權限（全量 overrides，與 UI 勾選一致）
 router.put(
   "/:id/permissions",
   authenticate,
@@ -109,7 +102,6 @@ router.put(
   }),
 );
 
-// 管理員：取得單一用戶
 router.get(
   "/:id",
   authenticate,
@@ -121,7 +113,6 @@ router.get(
   }),
 );
 
-// 需要認證：更新用戶（用戶可更新自己；管理員可更新任何人）
 router.put(
   "/:id",
   authenticate,
@@ -133,7 +124,6 @@ router.put(
   }),
 );
 
-// 需要認證：更新密碼
 router.put(
   "/:id/password",
   authenticate,
@@ -152,7 +142,6 @@ router.put(
   }),
 );
 
-// 管理員：刪除用戶
 router.delete(
   "/:id",
   authenticate,

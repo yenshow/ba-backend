@@ -6,7 +6,7 @@
 const config = require("../../config");
 const logger = require("../../utils/logger");
 const userService = require("../platform/userService");
-const permissionService = require("../platform/permissionService");
+const permissionService = require("../../access/permissionService");
 
 let ioInstance = null;
 const wsLogger = logger.createLogger("WebSocket");
