@@ -163,7 +163,6 @@ async function syncPowerConnectivityAlert(
 }
 
 async function buildItemForPowerSystem(zone, location, system, options = {}) {
-  const { syncAlerts = true } = options || {};
   const {
     deviceId,
     modbus,
@@ -207,8 +206,6 @@ async function buildItemForPowerSystem(zone, location, system, options = {}) {
     pointKeys,
     raw,
   );
-
-  if (syncAlerts) {
     try {
       await syncPowerConnectivityAlert(
         Number(system.id),
@@ -223,7 +220,6 @@ async function buildItemForPowerSystem(zone, location, system, options = {}) {
         error: alertErr?.message || String(alertErr),
         module: "powerStatusService",
       });
-    }
   }
 
   return {
@@ -258,7 +254,6 @@ function collectPowerItemsFromZones(zones) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZones({ locationType: "power" });
   let zones = result.zones || [];
 
@@ -286,7 +281,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForPowerSystem(zone, location, system, { syncAlerts }),
+      buildItemForPowerSystem(zone, location, system),
     ),
   );
 
@@ -303,7 +298,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "power");
   const zone = result.zone;
   const triples = collectPowerItemsFromZones([zone]);
@@ -325,7 +319,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForPowerSystem(z, location, system, { syncAlerts }),
+      buildItemForPowerSystem(z, location, system),
     ),
   );
   const mergedAlerts = mergeActiveAlertsIntoSnapshotItems(

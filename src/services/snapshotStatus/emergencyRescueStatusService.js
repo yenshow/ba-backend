@@ -172,7 +172,6 @@ async function buildItemForEmergencyRescueSystem(
   system,
   options = {},
 ) {
-  const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
@@ -207,8 +206,6 @@ async function buildItemForEmergencyRescueSystem(
     pointKeys,
     raw,
   );
-
-  if (syncAlerts) {
     try {
       await syncEmergencyRescueConnectivityAlert(
         Number(system.id),
@@ -223,7 +220,6 @@ async function buildItemForEmergencyRescueSystem(
         error: alertErr?.message || String(alertErr),
         module: "emergencyRescueStatusService",
       });
-    }
   }
 
   return {
@@ -258,7 +254,6 @@ function collectEmergencyRescueItemsFromZones(zones) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZones({
     locationType: "emergency_rescue",
   });
@@ -279,7 +274,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForEmergencyRescueSystem(zone, location, system, { syncAlerts }),
+      buildItemForEmergencyRescueSystem(zone, location, system),
     ),
   );
 
@@ -289,7 +284,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "emergency_rescue");
   const zone = result.zone;
   const triples = collectEmergencyRescueItemsFromZones([zone]);
@@ -302,7 +296,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForEmergencyRescueSystem(z, location, system, { syncAlerts }),
+      buildItemForEmergencyRescueSystem(z, location, system),
     ),
   );
   return {

@@ -176,7 +176,6 @@ async function buildItemForSmokeAlarmSystem(
   system,
   options = {},
 ) {
-  const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
@@ -211,8 +210,6 @@ async function buildItemForSmokeAlarmSystem(
     pointKeys,
     raw,
   );
-
-  if (syncAlerts) {
     try {
       await syncSmokeAlarmConnectivityAlert(
         Number(system.id),
@@ -227,7 +224,6 @@ async function buildItemForSmokeAlarmSystem(
         error: alertErr?.message || String(alertErr),
         module: "smokeAlarmStatusService",
       });
-    }
   }
 
   return {
@@ -298,7 +294,6 @@ function collectSmokeAlarmItemsFromZones(zones) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZones({
     locationType: "smoke_alarm",
   });
@@ -319,7 +314,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone, location, system }) =>
-      buildSmokeAlarmItemWithTimeout(zone, location, system, { syncAlerts }),
+      buildSmokeAlarmItemWithTimeout(zone, location, system),
     ),
   );
   const items = settled.map((r, idx) => {
@@ -339,7 +334,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "smoke_alarm");
   const zone = result.zone;
   const triples = collectSmokeAlarmItemsFromZones([zone]);
@@ -352,7 +346,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone: z, location, system }) =>
-      buildSmokeAlarmItemWithTimeout(z, location, system, { syncAlerts }),
+      buildSmokeAlarmItemWithTimeout(z, location, system),
     ),
   );
   const items = settled.map((r, idx) => {

@@ -13,6 +13,7 @@ const alertRuleService = require("../alerts/alertRuleService");
 const alertService = require("../alerts/alertService");
 const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
 const environmentReadingsService = require("../environment/environmentReadingsService");
+const deviceReadingSnapshotCache = require("../environment/deviceReadingSnapshotCache");
 const {
   computeDerivedMetrics,
 } = require("../environment/environmentDerivedMetrics");
@@ -308,6 +309,11 @@ async function checkEnvironmentLocations() {
                       );
                     });
                 }
+                deviceReadingSnapshotCache.setDeviceReading(deviceId, {
+                  recordedAt: ts,
+                  data: derived,
+                  status: "online",
+                });
                 websocketService.emitEnvironmentReading({
                   locationId: location.location_id,
                   recordedAt: ts,
@@ -413,9 +419,15 @@ async function checkEnvironmentLocations() {
           ? parseInt(location.device_id, 10)
           : null;
         if (Number.isFinite(failedDeviceId)) {
+          const failedAt = new Date().toISOString();
+          deviceReadingSnapshotCache.setDeviceReading(failedDeviceId, {
+            recordedAt: failedAt,
+            data: {},
+            status: "offline",
+          });
           websocketService.emitEnvironmentReading({
             locationId: location.location_id,
-            recordedAt: new Date().toISOString(),
+            recordedAt: failedAt,
             data: {},
             devices: [{ deviceId: failedDeviceId, status: "offline" }],
           });

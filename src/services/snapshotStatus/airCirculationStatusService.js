@@ -186,7 +186,6 @@ function effectiveAirCirculationStatusPoints(cfg) {
 }
 
 async function buildItem(zone, location, system, options = {}) {
-  const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
@@ -218,8 +217,6 @@ async function buildItem(zone, location, system, options = {}) {
   const rawMerged = mergeAirCirculationSnapshotRaw(raw);
 
   const uiStatus = deriveUiStatus(rawMerged, hadDeviceConfig, pointKeys, raw);
-
-  if (syncAlerts) {
     try {
       await syncConnectivityAlert(
         Number(system.id),
@@ -234,7 +231,6 @@ async function buildItem(zone, location, system, options = {}) {
         error: alertErr?.message || String(alertErr),
         module: "airCirculationStatusService",
       });
-    }
   }
 
   return {
@@ -294,7 +290,6 @@ async function buildAirCirculationItemWithTimeout(
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = Array.isArray(query.zoneIds) ? query.zoneIds : [];
-  const syncAlerts = query.syncAlerts !== false;
 
   const result = await locationService.getZones({
     locationType: "air_circulation",
@@ -316,8 +311,7 @@ async function getStatusSnapshot(query = {}) {
   const settled = await Promise.allSettled(
     triples.map(({ zone, location, system }) =>
       buildAirCirculationItemWithTimeout(zone, location, system, {
-        syncAlerts,
-      }),
+        }),
     ),
   );
   const items = settled.map((r, idx) => {
@@ -336,7 +330,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "air_circulation");
   const zone = result.zone;
   const triples = collectItemsFromZones([zone]);
@@ -349,7 +342,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone: z, location, system }) =>
-      buildAirCirculationItemWithTimeout(z, location, system, { syncAlerts }),
+      buildAirCirculationItemWithTimeout(z, location, system),
     ),
   );
   const items = settled.map((r, idx) => {

@@ -19,7 +19,6 @@ const systemAlert = require("../services/alerts/systemAlertHelper");
 const C = require("../utils/apiErrorCodes");
 const {
   parseZoneIdsQuery,
-  resolveSyncAlertsFromQuery,
 } = require("../services/snapshotStatus/modbusSnapshotHelpers");
 
 /**
@@ -28,7 +27,6 @@ const {
  * @param {string} config.locationType 例如 lighting、air_circulation
  * @param {string} config.alertSource 傳入 systemAlert.* 的來源鍵
  * @param {{ getStatusSnapshot: Function, getZoneStatusSnapshot: Function }} config.statusService
- * @param {'off'|'opt-in'|'opt-out'} [config.statusSyncAlerts='opt-in'] off=照明；opt-in=排水；opt-out=HVAC
  * @param {number} [config.createZoneHttpStatus] POST /zones 成功狀態碼（預設 200）
  * @param {boolean} [config.manualErrorRequiresMessage=false] 煙霧警報：POST errors 需 body.message
  */
@@ -38,7 +36,6 @@ function createSnapshotSystemRouter(config) {
     locationType,
     alertSource,
     statusService,
-    statusSyncAlerts = "opt-in",
     createZoneHttpStatus,
     manualErrorRequiresMessage = false,
   } = config;
@@ -112,13 +109,8 @@ function createSnapshotSystemRouter(config) {
     noCache,
     asyncHandler(async (req, res) => {
       const zoneIds = parseZoneIdsQuery(req.query.zoneIds);
-      const syncAlerts = resolveSyncAlertsFromQuery(
-        statusSyncAlerts,
-        req.query.syncAlerts,
-      );
       const result = await statusService.getStatusSnapshot({
         zoneIds,
-        syncAlerts,
       });
       res.sendSuccess(result);
     }),
@@ -130,13 +122,9 @@ function createSnapshotSystemRouter(config) {
     validateIntegers("id"),
     asyncHandler(async (req, res) => {
       const { id } = req.params;
-      const syncAlerts = resolveSyncAlertsFromQuery(
-        statusSyncAlerts,
-        req.query.syncAlerts,
-      );
       const result = await statusService.getZoneStatusSnapshot(
         parseInt(id, 10),
-        { syncAlerts },
+        {},
       );
       res.sendSuccess(result);
     }),

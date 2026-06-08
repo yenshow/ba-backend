@@ -3,6 +3,7 @@ const db = require("../../database/db");
 const modbusBatchService = require("../devices/modbusBatchService");
 const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
 const environmentReadingsService = require("../environment/environmentReadingsService");
+const deviceReadingSnapshotCache = require("../environment/deviceReadingSnapshotCache");
 const {
   computeDerivedMetrics,
 } = require("../environment/environmentDerivedMetrics");
@@ -190,7 +191,61 @@ async function updateDashboardSettings(payload) {
     JSON.stringify(normalized),
     "多媒體資訊牆設定（v1）",
   );
+  invalidateEnvReadingsSnapshotCache();
   return normalized;
+}
+
+let envSnapshotInflight = null;
+
+const invalidateEnvReadingsSnapshotCache = () => {
+  envSnapshotInflight = null;
+};
+
+const applyDeviceReading = (reading, deviceId, mergedData, recordedAts, devices) => {
+  const id = reading.deviceId ?? deviceId;
+  if (reading.status === "offline") {
+    devices.push({
+      deviceId: id,
+      status: "offline",
+      reason: reading.reason || "設備離線",
+    });
+    return;
+  }
+  for (const [k, v] of Object.entries(reading.data || {})) {
+    if (mergedData[k] == null) mergedData[k] = v;
+  }
+  if (reading.recordedAt) recordedAts.push(reading.recordedAt);
+  devices.push({ deviceId: id, status: "online" });
+};
+
+async function getLatestDeviceReadingsFromDb(deviceIds) {
+  if (!deviceIds.length) return new Map();
+  const rows = await db.query(
+    `SELECT DISTINCT ON (device_id) device_id, data, recorded_at
+     FROM environment_readings
+     WHERE device_id = ANY($1::int[])
+       AND recorded_at >= NOW() - INTERVAL '10 minutes'
+     ORDER BY device_id, recorded_at DESC`,
+    [deviceIds],
+  );
+  const out = new Map();
+  for (const row of rows || []) {
+    const deviceId = Number(row.device_id);
+    if (!Number.isFinite(deviceId)) continue;
+    const data =
+      typeof row.data === "object" && row.data
+        ? row.data
+        : safeJsonParse(String(row.data || "")) || {};
+    out.set(deviceId, {
+      data,
+      recordedAt:
+        row.recorded_at instanceof Date
+          ? row.recorded_at.toISOString()
+          : String(row.recorded_at || ""),
+      status: "online",
+    });
+  }
+  return out;
 }
 
 const toNormalizedRegisterType = (registerType) => {
@@ -275,20 +330,81 @@ async function readDeviceValuesByRegisterType(enabledValues, deviceConfig) {
   return deviceValues;
 }
 
-async function getMultimediaEnvReadingsSnapshot() {
-  const settings = await getDashboardSettings();
-  const deviceIds = (settings.envDeviceIds || [])
-    .map((n) => Number(n))
-    .filter((n) => Number.isInteger(n) && n > 0);
-
-  if (!deviceIds.length) {
+async function readDeviceEnvSnapshotViaModbus(deviceId, deviceConfigRaw) {
+  const deviceConfig =
+    typeof deviceConfigRaw === "string"
+      ? JSON.parse(deviceConfigRaw || "{}")
+      : deviceConfigRaw || {};
+  if (!deviceConfig.host || !deviceConfig.port) {
     return {
-      timestamp: new Date().toISOString(),
+      deviceId,
+      status: "offline",
+      reason: "設備配置不完整（host/port）",
       data: {},
-      devices: [],
+      recordedAt: null,
     };
   }
 
+  const cfg = {
+    host: deviceConfig.host,
+    port: deviceConfig.port,
+    unitId: deviceConfig.unitId || 1,
+  };
+
+  try {
+    const loggingConfig = await deviceLoggingConfig.getDeviceLoggingConfig(deviceId);
+    const enabledValues = (loggingConfig?.values || []).filter(
+      (v) => v && v.enabled !== false,
+    );
+
+    let deviceValues = {};
+    if (loggingConfig?.enabled && enabledValues.length > 0) {
+      deviceValues = await readDeviceValuesByRegisterType(enabledValues, cfg);
+    } else {
+      const results = await modbusBatchService.batchRead([
+        {
+          host: cfg.host,
+          port: cfg.port,
+          unitId: cfg.unitId,
+          registerType: "holding",
+          address: 0,
+          length: 1,
+          meta: { health: true, multimedia: true },
+        },
+      ]);
+      const first = results?.[0];
+      if (!first || first.ok !== true) {
+        throwApiError(C.MULTIMEDIA_MODBUS_READ_FAILED, first?.error || "設備離線");
+      }
+    }
+
+    const recordedAt = new Date().toISOString();
+    const result = {
+      deviceId,
+      status: "online",
+      data: deviceValues,
+      recordedAt,
+    };
+    deviceReadingSnapshotCache.setDeviceReading(deviceId, result);
+    return result;
+  } catch (err) {
+    const result = {
+      deviceId,
+      status: "offline",
+      reason: err?.message || "設備離線",
+      data: {},
+      recordedAt: null,
+    };
+    deviceReadingSnapshotCache.setDeviceReading(deviceId, {
+      recordedAt: new Date().toISOString(),
+      data: {},
+      status: "offline",
+    });
+    return result;
+  }
+}
+
+async function buildMultimediaEnvReadingsSnapshot(deviceIds) {
   const rows = await db.query(
     `SELECT id, config as device_config
      FROM devices
@@ -301,9 +417,15 @@ async function getMultimediaEnvReadingsSnapshot() {
     (rows || []).map((d) => [Number(d.id), d.device_config]),
   );
 
-  const timestamp = new Date().toISOString();
+  const memoryHits = deviceReadingSnapshotCache.getDeviceReadings(deviceIds);
+  const dbHits = await getLatestDeviceReadingsFromDb(
+    deviceIds.filter((id) => !memoryHits.has(id)),
+  );
+
   const mergedData = {};
   const devices = [];
+  const recordedAts = [];
+  const modbusTargets = [];
 
   for (const deviceId of deviceIds) {
     const deviceConfigRaw = deviceConfigMap.get(deviceId);
@@ -316,78 +438,55 @@ async function getMultimediaEnvReadingsSnapshot() {
       continue;
     }
 
-    const deviceConfig =
-      typeof deviceConfigRaw === "string"
-        ? JSON.parse(deviceConfigRaw || "{}")
-        : deviceConfigRaw || {};
-    if (!deviceConfig.host || !deviceConfig.port) {
-      devices.push({
-        deviceId,
-        status: "offline",
-        reason: "設備配置不完整（host/port）",
-      });
+    const cached = memoryHits.get(deviceId) || dbHits.get(deviceId);
+    if (cached) {
+      applyDeviceReading(cached, deviceId, mergedData, recordedAts, devices);
       continue;
     }
 
-    const cfg = {
-      host: deviceConfig.host,
-      port: deviceConfig.port,
-      unitId: deviceConfig.unitId || 1,
-    };
+    modbusTargets.push({ deviceId, deviceConfigRaw });
+  }
 
-    try {
-      const loggingConfig = await deviceLoggingConfig.getDeviceLoggingConfig(
-        deviceId,
-      );
-      const enabledValues = (loggingConfig?.values || []).filter(
-        (v) => v && v.enabled !== false,
-      );
-
-      // 沒有 values 也視為 online（配置可能只用於 health check）
-      let deviceValues = {};
-      if (loggingConfig?.enabled && enabledValues.length > 0) {
-        deviceValues = await readDeviceValuesByRegisterType(enabledValues, cfg);
-      } else {
-        // 最小 health check：讀取 holding register 0（與 environmentMonitor 一致）
-        const results = await modbusBatchService.batchRead([
-          {
-            host: cfg.host,
-            port: cfg.port,
-            unitId: cfg.unitId,
-            registerType: "holding",
-            address: 0,
-            length: 1,
-            meta: { health: true, multimedia: true },
-          },
-        ]);
-        const first = results?.[0];
-        if (!first || first.ok !== true) {
-          throwApiError(C.MULTIMEDIA_MODBUS_READ_FAILED, first?.error || "設備離線");
-        }
-      }
-
-      // merge (first non-null wins)
-      for (const [k, v] of Object.entries(deviceValues || {})) {
-        if (mergedData[k] === undefined || mergedData[k] === null) {
-          mergedData[k] = v;
-        }
-      }
-
-      devices.push({ deviceId, status: "online" });
-    } catch (err) {
-      devices.push({
-        deviceId,
-        status: "offline",
-        reason: err?.message || "設備離線",
-      });
+  if (modbusTargets.length > 0) {
+    const modbusResults = await Promise.all(
+      modbusTargets.map(({ deviceId, deviceConfigRaw }) =>
+        readDeviceEnvSnapshotViaModbus(deviceId, deviceConfigRaw),
+      ),
+    );
+    for (const value of modbusResults) {
+      applyDeviceReading(value, value.deviceId, mergedData, recordedAts, devices);
     }
   }
 
-  // rounding + derived metrics
   const rounded = environmentReadingsService.roundDataToOneDecimal(mergedData);
   const derived = { ...rounded, ...computeDerivedMetrics(rounded) };
+  const timestamp =
+    recordedAts.length > 0
+      ? recordedAts.reduce((latest, cur) => (cur > latest ? cur : latest))
+      : new Date().toISOString();
 
   return { timestamp, data: derived, devices };
+}
+
+async function getMultimediaEnvReadingsSnapshot() {
+  const settings = await getDashboardSettings();
+  const deviceIds = settings.envDeviceIds || [];
+
+  if (!deviceIds.length) {
+    return {
+      timestamp: new Date().toISOString(),
+      data: {},
+      devices: [],
+    };
+  }
+
+  if (envSnapshotInflight) return envSnapshotInflight;
+
+  envSnapshotInflight = buildMultimediaEnvReadingsSnapshot(deviceIds).finally(() => {
+    envSnapshotInflight = null;
+  });
+
+  return envSnapshotInflight;
 }
 
 module.exports = {

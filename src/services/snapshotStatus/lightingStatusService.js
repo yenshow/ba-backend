@@ -46,9 +46,7 @@ async function syncLightingConnectivityAlert(
   configuredKeys,
   raw,
   readError,
-  syncAlerts,
 ) {
-  if (!syncAlerts) return;
   if (!hadDeviceConfig || !configuredKeys || configuredKeys.length === 0)
     return;
   const anyRead = configuredKeys.some(
@@ -95,7 +93,6 @@ async function fetchLightingSystems(zoneIds = []) {
 }
 
 async function buildLightingSnapshotItem(row, options = {}) {
-  const { syncAlerts = true } = options;
   const systemId = Number(row.system_id);
   const deviceId = row.device_id ? Number(row.device_id) : null;
   const baseItem = {
@@ -115,14 +112,12 @@ async function buildLightingSnapshotItem(row, options = {}) {
 
   if (!modbusConfigRaw || Object.keys(modbusConfigRaw).length === 0) {
     const readError = "配置為空";
-    if (syncAlerts) {
       await systemAlert.syncLocationSnapshotReadResult(
         "lighting",
         systemId,
         false,
         readError,
       );
-    }
     return {
       ...baseItem,
       error: readError,
@@ -133,14 +128,12 @@ async function buildLightingSnapshotItem(row, options = {}) {
   const bitSpecs = collectLightingDiDoReadSpecs(modbusConfigRaw);
   if (bitSpecs.length === 0) {
     const readError = "未配置 DI/DO 點位";
-    if (syncAlerts) {
       await systemAlert.syncLocationSnapshotReadResult(
         "lighting",
         systemId,
         false,
         readError,
       );
-    }
     const hadCfg = Boolean(
       await resolveDeviceConfig(deviceId, modbusConfigRaw, { logger: statusLogger }),
     );
@@ -157,14 +150,12 @@ async function buildLightingSnapshotItem(row, options = {}) {
   const hadDeviceConfig = Boolean(deviceConfig);
   if (!deviceConfig) {
     const readError = "配置不完整";
-    if (syncAlerts) {
       await systemAlert.syncLocationSnapshotReadResult(
         "lighting",
         systemId,
         false,
         readError,
       );
-    }
     return {
       ...baseItem,
       deviceId: deviceId ?? undefined,
@@ -206,7 +197,6 @@ async function buildLightingSnapshotItem(row, options = {}) {
       configuredKeys,
       raw,
       readError,
-      syncAlerts,
     );
   } catch (alertErr) {
     statusLogger.warn("同步警報失敗（略過）", {
@@ -227,7 +217,6 @@ async function buildLightingSnapshotItem(row, options = {}) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIds = parseZoneIds(query.zoneIds);
-  const syncAlerts = query.syncAlerts !== false;
 
   const rows = await fetchLightingSystems(zoneIds);
 
@@ -236,7 +225,7 @@ async function getStatusSnapshot(query = {}) {
   }
 
   const items = await Promise.all(
-    rows.map((row) => buildLightingSnapshotItem(row, { syncAlerts })),
+    rows.map((row) => buildLightingSnapshotItem(row)),
   );
   const systemIds = items
     .map((it) => Number(it.systemId))
@@ -254,14 +243,12 @@ async function getStatusSnapshot(query = {}) {
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
   const id = Number(zoneId);
-  const syncAlerts = query.syncAlerts !== false;
   if (!Number.isFinite(id)) {
     return { zoneId: String(zoneId), items: [] };
   }
 
   const result = await getStatusSnapshot({
     zoneIds: [id],
-    syncAlerts,
   });
   return { zoneId: String(id), items: result.items };
 }

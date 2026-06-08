@@ -108,18 +108,6 @@ function parseZoneIdsQuery(raw) {
     .filter((n) => !Number.isNaN(n));
 }
 
-/**
- * @param {'off'|'opt-in'|'opt-out'} mode
- * @param {string|undefined} rawQuery syncAlerts query value
- */
-function resolveSyncAlertsFromQuery(mode, rawQuery) {
-  if (mode === "off") return false;
-  if (mode === "opt-out") {
-    return String(rawQuery ?? "true") !== "false";
-  }
-  return String(rawQuery ?? "false") === "true";
-}
-
 module.exports = {
   DEVICE_CFG_CACHE_TTL,
   ALLOWED_REGISTER_TYPES,
@@ -130,5 +118,4 @@ module.exports = {
   normalizeRegisterType,
   deriveConnectivityUiStatus,
   parseZoneIdsQuery,
-  resolveSyncAlertsFromQuery,
 };

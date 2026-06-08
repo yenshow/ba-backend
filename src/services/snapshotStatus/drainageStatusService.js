@@ -174,7 +174,6 @@ async function buildItemForDrainageSystem(
   system,
   options = {},
 ) {
-  const { syncAlerts = true } = options || {};
   const {
     deviceId,
     modbus,
@@ -214,8 +213,6 @@ async function buildItemForDrainageSystem(
     pointKeys,
     raw,
   );
-
-  if (syncAlerts) {
     try {
       await syncDrainageConnectivityAlert(
         Number(system.id),
@@ -230,7 +227,6 @@ async function buildItemForDrainageSystem(
         error: alertErr?.message || String(alertErr),
         module: "drainageStatusService",
       });
-    }
   }
 
   return {
@@ -265,7 +261,6 @@ function collectDrainageItemsFromZones(zones) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZones({ locationType: "drainage" });
   let zones = result.zones || [];
 
@@ -293,7 +288,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForDrainageSystem(zone, location, system, { syncAlerts }),
+      buildItemForDrainageSystem(zone, location, system),
     ),
   );
 
@@ -310,7 +305,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "drainage");
   const zone = result.zone;
   const triples = collectDrainageItemsFromZones([zone]);
@@ -332,7 +326,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForDrainageSystem(z, location, system, { syncAlerts }),
+      buildItemForDrainageSystem(z, location, system),
     ),
   );
   const mergedAlerts = mergeActiveAlertsIntoSnapshotItems(

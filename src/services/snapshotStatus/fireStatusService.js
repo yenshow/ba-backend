@@ -166,7 +166,6 @@ async function syncFireConnectivityAlert(
 }
 
 async function buildItemForFireSystem(zone, location, system, options = {}) {
-  const { syncAlerts = true } = options || {};
   const {
     deviceId,
     modbus,
@@ -206,23 +205,20 @@ async function buildItemForFireSystem(zone, location, system, options = {}) {
     pointKeys,
     raw,
   );
-
-  if (syncAlerts) {
-    try {
-      await syncFireConnectivityAlert(
-        Number(system.id),
-        hadDeviceConfig,
-        pointKeys,
-        raw,
-        readError,
-      );
-    } catch (alertErr) {
-      statusLogger.warn("同步警報失敗（略過）", {
-        systemId: Number(system.id),
-        error: alertErr?.message || String(alertErr),
-        module: "fireStatusService",
-      });
-    }
+  try {
+    await syncFireConnectivityAlert(
+      Number(system.id),
+      hadDeviceConfig,
+      pointKeys,
+      raw,
+      readError,
+    );
+  } catch (alertErr) {
+    statusLogger.warn("同步警報失敗（略過）", {
+      systemId: Number(system.id),
+      error: alertErr?.message || String(alertErr),
+      module: "fireStatusService",
+    });
   }
 
   return {
@@ -257,7 +253,6 @@ function collectFireItemsFromZones(zones) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = query.zoneIds;
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZones({ locationType: "fire" });
   let zones = result.zones || [];
 
@@ -285,7 +280,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItemForFireSystem(zone, location, system, { syncAlerts }),
+      buildItemForFireSystem(zone, location, system),
     ),
   );
 
@@ -302,7 +297,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "fire");
   const zone = result.zone;
   const triples = collectFireItemsFromZones([zone]);
@@ -324,7 +318,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItemForFireSystem(z, location, system, { syncAlerts }),
+      buildItemForFireSystem(z, location, system),
     ),
   );
   const mergedAlerts = mergeActiveAlertsIntoSnapshotItems(

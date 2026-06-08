@@ -178,7 +178,6 @@ function collectItemsFromZones(zones) {
 }
 
 async function buildItem(zone, location, system, options = {}) {
-  const { syncAlerts = true } = options || {};
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
@@ -213,8 +212,6 @@ async function buildItem(zone, location, system, options = {}) {
 
   const configuredKeys = [...pointKeys, ...(modbus ? ["isOn"] : [])];
   const uiStatus = deriveUiStatus(raw, hadDeviceConfig, configuredKeys);
-
-  if (syncAlerts) {
     try {
       await syncConnectivityAlert(
         Number(system.id),
@@ -229,7 +226,6 @@ async function buildItem(zone, location, system, options = {}) {
         error: alertErr?.message || String(alertErr),
         module: "hvacStatusService",
       });
-    }
   }
 
   return {
@@ -246,7 +242,6 @@ async function buildItem(zone, location, system, options = {}) {
 
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = Array.isArray(query.zoneIds) ? query.zoneIds : [];
-  const syncAlerts = query.syncAlerts !== false;
 
   const result = await locationService.getZones({ locationType: "hvac" });
   let zones = result.zones || [];
@@ -265,7 +260,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone, location, system }) =>
-      buildItem(zone, location, system, { syncAlerts }),
+      buildItem(zone, location, system),
     ),
   );
   return {
@@ -274,7 +269,6 @@ async function getStatusSnapshot(query = {}) {
 }
 
 async function getZoneStatusSnapshot(zoneId, query = {}) {
-  const syncAlerts = query.syncAlerts !== false;
   const result = await locationService.getZoneById(zoneId, "hvac");
   const zone = result.zone;
   const triples = collectItemsFromZones([zone]);
@@ -287,7 +281,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const items = await Promise.all(
     triples.map(({ zone: z, location, system }) =>
-      buildItem(z, location, system, { syncAlerts }),
+      buildItem(z, location, system),
     ),
   );
   return {

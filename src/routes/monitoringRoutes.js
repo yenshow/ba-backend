@@ -30,7 +30,6 @@ module.exports = (() => {
 		noCache,
 		asyncHandler(async (req, res) => {
 			const activeFeatures = new Set(licenseService.getActiveFeatureKeys());
-			const syncAlerts = String(req.query.syncAlerts ?? "").trim().toLowerCase() === "true";
 
 			const systems = getMonitoringOverviewSystems();
 
@@ -43,7 +42,7 @@ module.exports = (() => {
 			const pairs = await Promise.allSettled(
 				enabled.map(async (s) => {
 					const zonesRes = await locationService.getZones({ locationType: s.locationType });
-					const statusRes = await s.statusService.getStatusSnapshot({ zoneIds: undefined, syncAlerts });
+					const statusRes = await s.statusService.getStatusSnapshot({ zoneIds: undefined });
 					return [
 						s.key,
 						{
