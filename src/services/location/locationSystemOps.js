@@ -249,11 +249,6 @@ function buildSystemConfig(systemType, config) {
             .map((id) => Number(id))
             .filter((n) => Number.isFinite(n) && n > 0)
         : [];
-      const personGroupIds = Array.isArray(config.personGroupIds)
-        ? config.personGroupIds
-            .map((id) => Number(id))
-            .filter((n) => Number.isFinite(n) && n > 0)
-        : [];
       const {
         normalizeOperationMode,
       } = require("../vehicleAccess/vehicleAccessConfig");
@@ -274,7 +269,6 @@ function buildSystemConfig(systemType, config) {
         exit_camera_device_ids: exitCam,
         camera_channel_id: ch,
         vehicle_group_ids: vehicleGroupIds,
-        person_group_ids: personGroupIds,
         log_display_columns: (() => {
           const cols = toStoredLogDisplayColumns(
             normalizeLogDisplayColumns(config.logDisplayColumns),
@@ -533,25 +527,6 @@ async function updateSystem(query, systemId, system) {
     require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
     if (vaLocationId != null) {
       const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
-      const prevVaCfg =
-        currentSystemType === "vehicle_access"
-          ? parseConfig(currentSystemConfig)
-          : null;
-      const nextVaCfg = parseConfig(systemConfig);
-      if (prevVaCfg?.dataSource === "isapi_camera") {
-        vehiclePlateSyncService
-          .reconcileLocationPersonGroupChange(
-            vaLocationId,
-            prevVaCfg.personGroupIds,
-            nextVaCfg.personGroupIds,
-          )
-          .catch((err) => {
-            locationLogger.warn("vehicle plate reconcile after updateSystem failed", {
-              locationId: vaLocationId,
-              error: err?.message || String(err),
-            });
-          });
-      }
       vehiclePlateSyncService.syncPlatesForLocation(vaLocationId).catch((err) => {
         locationLogger.warn("vehicle plate sync after updateSystem failed", {
           locationId: vaLocationId,

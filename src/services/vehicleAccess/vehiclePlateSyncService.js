@@ -25,28 +25,37 @@ function buildIsapiTimesFromRow(row) {
 }
 
 /**
- * @param {number|null|undefined} personGroupId
+ * @param {number} personId
  * @returns {Promise<Array<{ locationId: number, deviceIds: number[], channelId: number }>>}
  */
-async function resolveIsapiTargetsForPersonGroup(personGroupId) {
-  const gid = Number(personGroupId);
-  if (!Number.isFinite(gid)) return [];
+async function resolveIsapiTargetsForPersonId(personId) {
+  const pid = Number(personId);
+  if (!Number.isFinite(pid)) return [];
 
+  const accessRows = await db.query(
+    `SELECT location_id FROM person_location_access WHERE person_id = ?`,
+    [pid],
+  );
+  const locationIds = (accessRows || [])
+    .map((r) => Number(r.location_id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (locationIds.length === 0) return [];
+
+  const placeholders = locationIds.map(() => "?").join(",");
   const rows = await db.query(
     `
-      SELECT l.id AS location_id, ls.system_config
+      SELECT ls.location_id, ls.system_config
       FROM location_systems ls
-      INNER JOIN locations l ON l.id = ls.location_id
       WHERE ls.system_type = 'vehicle_access'
+        AND ls.location_id IN (${placeholders})
     `,
-    [],
+    locationIds,
   );
 
   const targets = [];
   for (const row of rows || []) {
     const cfg = parseConfig(row.system_config);
     if (cfg.dataSource !== "isapi_camera") continue;
-    if (!cfg.personGroupIds.includes(gid)) continue;
     const deviceIds = Array.from(
       new Set([...(cfg.entryCameraDeviceIds || []), ...(cfg.exitCameraDeviceIds || [])]),
     );
@@ -243,12 +252,7 @@ async function syncPersonPlates(personId) {
     return aggregateSyncResults([]);
   }
 
-  const personRows = await db.query(
-    `SELECT person_group_id FROM persons WHERE id = ? LIMIT 1`,
-    [pid],
-  );
-  const personGroupId = personRows?.[0]?.person_group_id;
-  const targets = await resolveIsapiTargetsForPersonGroup(personGroupId);
+  const targets = await resolveIsapiTargetsForPersonId(pid);
   const plates = await personLicensePlateService.listByPersonId(pid);
 
   if (plates.length === 0) {
@@ -280,8 +284,6 @@ async function syncPlatesForLocation(locationId) {
     [locId],
   );
   const target = resolveTargetForLocation(locId, rows?.[0]?.system_config);
-  const cfg = parseConfig(rows?.[0]?.system_config);
-  const groupIds = cfg.personGroupIds || [];
 
   if (!target) {
     return {
@@ -291,24 +293,16 @@ async function syncPlatesForLocation(locationId) {
     };
   }
 
-  if (groupIds.length === 0) {
-    return {
-      status: SYNC_STATUS.SKIPPED,
-      warnings: ["地點未設定人員群組，略過車牌同步"],
-      failures: [],
-    };
-  }
-
-  const placeholders = groupIds.map(() => "?").join(",");
   const plateRows = await db.query(
     `
       SELECT plp.id
       FROM person_license_plates plp
+      INNER JOIN person_location_access pla ON pla.person_id = plp.person_id
       INNER JOIN persons p ON p.id = plp.person_id
-      WHERE p.person_group_id IN (${placeholders})
+      WHERE pla.location_id = ? AND p.status = 'active'
       ORDER BY plp.id ASC
     `,
-    groupIds,
+    [locId],
   );
 
   const results = [];
@@ -372,37 +366,43 @@ async function removePlateFromTargets(plateNumber, targets, failures = []) {
  * 人員改群組或刪除車牌時，從舊設備移除名單
  */
 async function reconcileAfterPersonChange(personId, context = {}) {
-  const groupChanged = Boolean(context.groupChanged);
   const removedPlates = Array.isArray(context.removedPlates)
     ? context.removedPlates
     : [];
-  if (!groupChanged && removedPlates.length === 0) {
+  const locationAccessChanged = Boolean(context.locationAccessChanged);
+  if (!locationAccessChanged && removedPlates.length === 0) {
     return { failures: [] };
   }
 
-  const previousGroupId =
-    context.previousGroupId != null ? Number(context.previousGroupId) : null;
-  const nextGroupId =
-    context.nextGroupId != null ? Number(context.nextGroupId) : null;
-
-  const oldTargets = await resolveIsapiTargetsForPersonGroup(previousGroupId);
+  const previousLocationIds = Array.isArray(context.previousLocationIds)
+    ? context.previousLocationIds.map(Number).filter((n) => Number.isFinite(n))
+    : [];
   const failures = [];
 
-  if (groupChanged) {
+  if (locationAccessChanged && previousLocationIds.length > 0) {
     const currentPlates =
       await personLicensePlateService.listByPersonId(personId);
+    const oldTargets = [];
+    for (const locationId of previousLocationIds) {
+      const rows = await db.query(
+        `
+          SELECT system_config
+          FROM location_systems
+          WHERE location_id = ? AND system_type = 'vehicle_access'
+          LIMIT 1
+        `,
+        [locationId],
+      );
+      const target = resolveTargetForLocation(locationId, rows?.[0]?.system_config);
+      if (target) oldTargets.push(target);
+    }
     for (const plate of currentPlates) {
       await removePlateFromTargets(plate.plate_number, oldTargets, failures);
     }
   }
 
   if (removedPlates.length > 0) {
-    const cleanupTargets = groupChanged
-      ? mergeTargets([
-          oldTargets,
-          await resolveIsapiTargetsForPersonGroup(nextGroupId),
-        ])
-      : oldTargets;
+    const cleanupTargets = await resolveIsapiTargetsForPersonId(personId);
     for (const plate of removedPlates) {
       const plateNumber = plate?.plate_number || plate?.plateNumber;
       await removePlateFromTargets(plateNumber, cleanupTargets, failures);
@@ -415,9 +415,9 @@ async function reconcileAfterPersonChange(personId, context = {}) {
 /**
  * 人員刪除前：從群組對應設備移除所有車牌
  */
-async function purgePersonPlatesFromDevices(personId, personGroupId) {
+async function purgePersonPlatesFromDevices(personId) {
   const plates = await personLicensePlateService.listByPersonId(personId);
-  const targets = await resolveIsapiTargetsForPersonGroup(personGroupId);
+  const targets = await resolveIsapiTargetsForPersonId(personId);
   const failures = [];
   for (const plate of plates) {
     await removePlateFromTargets(plate.plate_number, targets, failures);
@@ -431,19 +431,14 @@ function diffRemovedPlates(before, after) {
 }
 
 /**
- * 地點 personGroupIds 縮減時，從該地點入口攝影機移除對應群組車牌
+ * 地點名單縮減時，從該地點攝影機移除被移除人員的車牌
  */
-async function reconcileLocationPersonGroupChange(
-  locationId,
-  previousGroupIds,
-  nextGroupIds,
-) {
-  const prev = Array.isArray(previousGroupIds) ? previousGroupIds : [];
-  const next = new Set(
-    (Array.isArray(nextGroupIds) ? nextGroupIds : []).map(Number),
-  );
-  const removedGroups = prev.filter((gid) => !next.has(Number(gid)));
-  if (removedGroups.length === 0) {
+async function reconcileLocationMemberChange(locationId, removedPersonIds = []) {
+  const locId = Number(locationId);
+  const removed = (Array.isArray(removedPersonIds) ? removedPersonIds : [])
+    .map((id) => Number(id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!Number.isFinite(locId) || removed.length === 0) {
     return { failures: [] };
   }
 
@@ -454,20 +449,19 @@ async function reconcileLocationPersonGroupChange(
       WHERE location_id = ? AND system_type = 'vehicle_access'
       LIMIT 1
     `,
-    [locationId],
+    [locId],
   );
-  const target = resolveTargetForLocation(locationId, rows?.[0]?.system_config);
+  const target = resolveTargetForLocation(locId, rows?.[0]?.system_config);
   if (!target) return { failures: [] };
 
-  const placeholders = removedGroups.map(() => "?").join(",");
+  const placeholders = removed.map(() => "?").join(",");
   const plateRows = await db.query(
     `
       SELECT plp.plate_number
       FROM person_license_plates plp
-      INNER JOIN persons p ON p.id = plp.person_id
-      WHERE p.person_group_id IN (${placeholders})
+      WHERE plp.person_id IN (${placeholders})
     `,
-    removedGroups,
+    removed,
   );
 
   const failures = [];
@@ -482,7 +476,7 @@ async function reconcileLocationPersonGroupChange(
  */
 async function reconcilePersonGroupAndPlates(
   personId,
-  { previousGroupId, nextGroupId, groupChanged, platesInput, oldPlates },
+  { groupChanged, platesInput, oldPlates },
 ) {
   const pid = Number(personId);
   let removedPlates = [];
@@ -494,12 +488,9 @@ async function reconcilePersonGroupAndPlates(
   }
 
   if (platesInput !== undefined || groupChanged) {
-    await reconcileAfterPersonChange(pid, {
-      previousGroupId,
-      nextGroupId,
-      groupChanged: Boolean(groupChanged),
-      removedPlates,
-    });
+    if (removedPlates.length > 0) {
+      await reconcileAfterPersonChange(pid, { removedPlates });
+    }
     return syncPersonPlates(pid);
   }
   return null;
@@ -507,11 +498,11 @@ async function reconcilePersonGroupAndPlates(
 
 module.exports = {
   SYNC_STATUS,
-  resolveIsapiTargetsForPersonGroup,
+  resolveIsapiTargetsForPersonId,
   syncPersonPlates,
   syncPlatesForLocation,
   reconcileAfterPersonChange,
   purgePersonPlatesFromDevices,
-  reconcileLocationPersonGroupChange,
+  reconcileLocationMemberChange,
   reconcilePersonGroupAndPlates,
 };

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <AssemblyName>HcNetSdkBridge</AssemblyName>
+    <RootNamespace>HcNetSdkBridge</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\common\HcNetSdkCommon.cs" Link="HcNetSdkCommon.cs" />
+    <Compile Include="..\common\SdkMarshal.cs" Link="SdkMarshal.cs" />
+    <Compile Include="..\common\SdkFloorHelper.cs" Link="SdkFloorHelper.cs" />
+    <Compile Include="..\common\SdkCardService.cs" Link="SdkCardService.cs" />
+    <Compile Include="..\common\SdkAlarmHelper.cs" Link="SdkAlarmHelper.cs" />
+    <Compile Include="..\common\AcsEventNames.cs" Link="AcsEventNames.cs" />
+    <Compile Include="..\common\SdkCardJson.cs" Link="SdkCardJson.cs" />
+  </ItemGroup>
+</Project>

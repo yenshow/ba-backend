@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs").promises;
 const db = require("../../database/db");
 const personLicensePlateService = require("./personLicensePlateService");
+const personLadderCardService = require("./personLadderCardService");
 const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
@@ -230,6 +231,63 @@ async function ensureLocationIsSyncable(locationId) {
   return id;
 }
 
+/** 地點名單管理：人流門禁或 ISAPI 車輛地點 */
+async function ensureLocationAllowsAccessMembers(locationId) {
+  const id = await ensureLocationExists(locationId);
+  const rows = await db.query(
+    `
+      SELECT ls.system_type, ls.system_config
+      FROM location_systems ls
+      WHERE ls.location_id = ?
+    `,
+    [id],
+  );
+  let allowed = false;
+  for (const row of rows || []) {
+    const cfg =
+      typeof row.system_config === "string"
+        ? (() => {
+            try {
+              return JSON.parse(row.system_config);
+            } catch {
+              return {};
+            }
+          })()
+        : row.system_config || {};
+    if (row.system_type === "people_counting") {
+      const entryIds = Array.isArray(cfg.entry_device_ids)
+        ? cfg.entry_device_ids
+        : [];
+      if (entryIds.length > 0) allowed = true;
+    }
+    if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
+      const entryCam = Array.isArray(cfg.entry_camera_device_ids)
+        ? cfg.entry_camera_device_ids
+        : [];
+      const exitCam = Array.isArray(cfg.exit_camera_device_ids)
+        ? cfg.exit_camera_device_ids
+        : [];
+      if (entryCam.length > 0 || exitCam.length > 0) allowed = true;
+    }
+  }
+  if (!allowed) {
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      "此地點不支援名單管理（需設定人流門禁入口設備或 ISAPI 車輛攝影機）",
+    );
+  }
+  return id;
+}
+
+async function triggerVehiclePlateSyncForLocation(locationId) {
+  try {
+    const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
+    await vehiclePlateSyncService.syncPlatesForLocation(locationId);
+  } catch {
+    // 非車輛地點或同步失敗不阻擋名單寫入
+  }
+}
+
 async function getPersonsByGroupId(personGroupId, options = {}) {
   const group = await ensurePersonGroupExists(personGroupId);
   const limit = clampInt(options.limit, { min: 1, max: 500, fallback: 200 });
@@ -387,7 +445,7 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
 }
 
 async function getPersonsByLocationIdPaged(locationId, options = {}) {
-  const id = await ensureLocationIsSyncable(locationId);
+  const id = await ensureLocationAllowsAccessMembers(locationId);
   const limit = clampInt(options.limit, { min: 1, max: 500, fallback: 20 });
   const offset = clampInt(options.offset, {
     min: 0,
@@ -439,7 +497,8 @@ async function getPersonsByLocationIdPaged(locationId, options = {}) {
 }
 
 async function replaceLocationMembers(locationId, memberPersonIds = []) {
-  const id = await ensureLocationIsSyncable(locationId);
+  const id = await ensureLocationAllowsAccessMembers(locationId);
+  const previousIds = await getPersonIdsByLocationId(id);
 
   const rawIds = Array.isArray(memberPersonIds)
     ? memberPersonIds
@@ -473,6 +532,18 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
       );
     }
   });
+
+  const removedPersonIds = (previousIds || []).filter((pid) => !nextIds.includes(pid));
+  if (removedPersonIds.length > 0) {
+    try {
+      const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
+      await vehiclePlateSyncService.reconcileLocationMemberChange(id, removedPersonIds);
+    } catch {
+      // 不阻擋名單寫入
+    }
+  }
+
+  void triggerVehiclePlateSyncForLocation(id);
 
   return getPersonsByLocationIdPaged(id, { limit: 20, offset: 0 });
 }
@@ -655,7 +726,8 @@ async function getPersonById(id) {
   }
   const person = rows[0];
   const licensePlates = await personLicensePlateService.listByPersonId(id);
-  return { ...person, license_plates: licensePlates };
+  const ladderCard = await personLadderCardService.getByPersonId(id);
+  return { ...person, license_plates: licensePlates, ladder_card: ladderCard };
 }
 
 async function getPersonByEmployeeNo(employeeNo) {
@@ -980,6 +1052,19 @@ async function setPersonAccessControlConfig(personId, params = {}) {
   return getPersonById(personId);
 }
 
+async function replacePersonLadderCard(personId, input) {
+  await getPersonById(personId);
+  if (input == null || input === false) {
+    await personLadderCardService.removeForPerson(personId);
+    return { ladder_card: null };
+  }
+  const ladderCard = await personLadderCardService.upsertForPerson(
+    personId,
+    input,
+  );
+  return { ladder_card: ladderCard };
+}
+
 async function replacePersonLicensePlates(personId, platesInput) {
   const person = await getPersonById(personId);
   const groupId =
@@ -1001,10 +1086,7 @@ async function replacePersonLicensePlates(personId, platesInput) {
 
 async function deletePerson(id) {
   const person = await getPersonById(id);
-  await vehiclePlateSyncService.purgePersonPlatesFromDevices(
-    id,
-    person.person_group_id,
-  );
+  await vehiclePlateSyncService.purgePersonPlatesFromDevices(id);
   await db.query("DELETE FROM person_location_access WHERE person_id = ?", [
     id,
   ]);
@@ -1021,7 +1103,7 @@ async function getPersonIdsByLocationId(locationId) {
 }
 
 async function getLocationMemberIds(locationId) {
-  const id = await ensureLocationIsSyncable(locationId);
+  const id = await ensureLocationAllowsAccessMembers(locationId);
   const ids = await getPersonIdsByLocationId(id);
   return Array.from(
     new Set(
@@ -1035,7 +1117,8 @@ async function getLocationMemberIds(locationId) {
 
 async function getPersonsWithAccessByLocationId(locationId) {
   const rows = await db.query(
-    `SELECT p.id, p.employee_no, p.full_name, p.status, p.face_url, p.config, pg.name AS group_name
+    `SELECT p.id, p.employee_no, p.full_name, p.status, p.face_url, p.config,
+            p.person_group_id, pg.name AS group_name
      FROM person_location_access pla
      INNER JOIN persons p ON pla.person_id = p.id
      LEFT JOIN person_groups pg ON p.person_group_id = pg.id
@@ -1064,6 +1147,7 @@ module.exports = {
   createPerson,
   updatePerson,
   replacePersonLicensePlates,
+  replacePersonLadderCard,
   deletePerson,
   getPersonIdsByLocationId,
   getLocationMemberIds,

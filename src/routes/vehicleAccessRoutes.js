@@ -78,6 +78,17 @@ router.get(
 );
 
 router.get(
+  "/sites/:id/organization-groups",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const result = await vehicleAccessService.getOrganizationGroups(siteId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.get(
   "/sites/:id/session-stats",
   noCache,
   validateIntegers("id"),

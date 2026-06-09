@@ -342,6 +342,27 @@ async function refreshSubscribeAfterLocationChange() {
   } catch (_e) {}
 }
 
+async function getOrganizationGroups(siteId, options = {}) {
+  const { dataSource, operationMode } = await getSiteConfig(siteId);
+  if (dataSource !== "isapi_camera") {
+    return { groups: [] };
+  }
+  const vehicleOrganizationGroupsService = require("./vehicleOrganizationGroupsService");
+  let presentPlates;
+  if (operationMode === "parking") {
+    try {
+      const presence = await getSitePresencePlates(siteId);
+      presentPlates = presence?.plates;
+    } catch {
+      presentPlates = [];
+    }
+  }
+  return vehicleOrganizationGroupsService.getOrganizationGroupsForSite(siteId, {
+    ...options,
+    presentPlates,
+  });
+}
+
 module.exports = {
   getSites,
   getSiteStats,
@@ -353,6 +374,7 @@ module.exports = {
   getAllSiteLogs,
   getSiteConfig,
   getVehicleAccessConfig,
+  getOrganizationGroups,
   refreshSubscribeAfterLocationChange,
   normalizeId,
 };

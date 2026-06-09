@@ -33,6 +33,7 @@ const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
 const accessControlRoutes = require("./routes/accessControlRoutes");
+const ladderSdkRoutes = require("./routes/ladderSdkRoutes");
 const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
@@ -66,6 +67,7 @@ const {
 const environmentAggregationService = require("./services/environment/environmentAggregationService");
 // 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
 const isapiSubscribeHub = require("./services/isapi/isapiSubscribeHub");
+const sdkArmingService = require("./services/ladderSdk/sdkArmingService");
 
 const app = express();
 
@@ -149,6 +151,7 @@ app.use(
 app.use("/api/alerts", alertRoutes);
 app.use("/api/external-data", externalDataRoutes); // 車輛相關路由在 externalDataRoutes 內依 requireFeature(vehicle_access) 控管
 app.use("/api/access-control", accessControlRoutes);
+app.use("/api/ladder-sdk", ladderSdkRoutes);
 app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅角色控制）
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
@@ -375,6 +378,12 @@ async function startServer() {
         error: err.message,
       });
     });
+
+    sdkArmingService.start().catch((err) => {
+      serverLogger.warn("梯控 SDK 佈防啟動時發生錯誤（將不影響其他功能）", {
+        error: err.message,
+      });
+    });
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
       serverLogger.error(
@@ -419,6 +428,9 @@ async function gracefulShutdown(signal) {
 
     isapiSubscribeHub.stop();
     shutdownLogger.info("ISAPI 佈防訂閱中心已停止");
+
+    sdkArmingService.stop();
+    shutdownLogger.info("梯控 SDK 佈防已停止");
 
     if (global.__envHourAggIntervalId) {
       clearInterval(global.__envHourAggIntervalId);

@@ -176,6 +176,17 @@ const mediaMTX = {
 };
 mediaMTX.apiBaseUrl = `http://127.0.0.1:${mediaMTX.apiPort}`;
 
+/**
+ * 梯控 HCNetSDK（Windows x64）
+ */
+const ladderSdk = {
+  hcnetSdkRoot: getEnv(
+    "HCNETSDK_ROOT",
+    path.resolve(process.cwd(), "sdk", "hcnet-sdk"),
+  ),
+  bridgeExePath: getEnv("LADDER_SDK_BRIDGE_EXE", ""),
+};
+
 module.exports = {
   server,
   isProduction,
@@ -185,6 +196,7 @@ module.exports = {
   features,
   license,
   mediaMTX,
+  ladderSdk,
   cors,
   // 向後兼容：保留舊的配置結構
   serverHost: server.host,

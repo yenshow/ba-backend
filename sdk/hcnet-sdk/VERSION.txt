@@ -1,0 +1,10 @@
+HCNetSDK V6.1.9.4 build 20220412 (win64)
+Source: D:\EN-HCNetSDKV6.1.9.4_build20220412_win64
+
+Bundled for ba-system runtime / development:
+  incEn/              C/C++ headers (HCNetSDK.h, etc.)
+  lib/*.dll           Core runtime DLLs
+  lib/*.lib           Import libraries (C++ link)
+  lib/HCNetSDKCom/    Component DLLs (HCAlarm.dll required for arming)
+
+Not included: ClientDemo, doc, C# demos, LocalXml.zip

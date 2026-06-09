@@ -50,6 +50,37 @@ function hashCard({ cardNo }) {
   return c ? sha256Hex(`cardNo:${c}`) : null;
 }
 
+function hashLadderCard({
+  cardNo,
+  homeFloor,
+  floors,
+  cardType,
+  floorMode,
+  cardPassword,
+  validEnabled,
+  validBegin,
+  validEnd,
+}) {
+  const c = cardNo != null ? String(cardNo).trim() : "";
+  if (!c) return null;
+  const floorList = Array.isArray(floors)
+    ? floors.map((f) => Number(f)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  return sha256Hex(
+    JSON.stringify({
+      cardNo: c,
+      homeFloor: Number(homeFloor) || 1,
+      floors: floorList,
+      cardType: Number(cardType) || 1,
+      floorMode: String(floorMode || "byte"),
+      cardPassword: cardPassword != null ? String(cardPassword) : "",
+      validEnabled: !!validEnabled,
+      validBegin: validBegin ? String(validBegin) : "",
+      validEnd: validEnd ? String(validEnd) : "",
+    }),
+  );
+}
+
 function hashFingerprint({ fingerprints }) {
   const list = Array.isArray(fingerprints) ? fingerprints : [];
   const normalized = list
@@ -197,6 +228,7 @@ module.exports = {
   hashUserInfo,
   hashFace,
   hashCard,
+  hashLadderCard,
   hashFingerprint,
   hashFingerprintTemplate,
   getStatesForDevice,

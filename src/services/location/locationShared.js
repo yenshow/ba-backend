@@ -422,11 +422,6 @@ function formatSystem(system) {
                 .map((id) => Number(id))
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
-          personGroupIds: Array.isArray(config.person_group_ids)
-            ? config.person_group_ids
-                .map((id) => Number(id))
-                .filter((n) => Number.isFinite(n) && n > 0)
-            : [],
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),

@@ -1198,6 +1198,36 @@ async function initSchema() {
       ON person_license_plates (plate_normalized);
     `);
 
+    // 人員梯控卡片（主檔；下發至 HCNetSDK 設備，同步狀態欄位比照 person_license_plates）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_ladder_cards (
+        id SERIAL PRIMARY KEY,
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        card_no VARCHAR(64) NOT NULL,
+        home_floor SMALLINT NOT NULL DEFAULT 1,
+        floors JSONB NOT NULL DEFAULT '[]',
+        card_type SMALLINT NOT NULL DEFAULT 1,
+        floor_mode VARCHAR(16) NOT NULL DEFAULT 'byte',
+        card_password VARCHAR(32),
+        valid_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        valid_begin TIMESTAMPTZ,
+        valid_end TIMESTAMPTZ,
+        sdk_sync_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        sdk_sync_error TEXT,
+        sdk_synced_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(person_id),
+        UNIQUE(card_no)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "person_ladder_cards");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_ladder_cards_card_no
+      ON person_ladder_cards(card_no);
+    `);
+    schemaLogger.info("person_ladder_cards 表已建立", { module: "initSchema" });
+
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_location_access (
         id SERIAL PRIMARY KEY,
@@ -1340,6 +1370,37 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_payload ON isapi_access_events USING GIN (payload);
     `);
     schemaLogger.info("isapi_access_events 表已建立", { module: "initSchema" });
+
+    // 梯控 SDK 佈防事件（僅寫入允許之 major/minor；供電梯模組查詢最新紀錄）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS ladder_sdk_events (
+        id BIGSERIAL PRIMARY KEY,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        device_ip VARCHAR(45) NOT NULL,
+        event_time TIMESTAMPTZ NOT NULL,
+        major INTEGER NOT NULL,
+        minor INTEGER NOT NULL,
+        event_name VARCHAR(255),
+        floor INTEGER,
+        card_no VARCHAR(64),
+        payload JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ladder_sdk_events_event_time
+      ON ladder_sdk_events(event_time DESC);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ladder_sdk_events_device_time
+      ON ladder_sdk_events(device_id, event_time DESC);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_ladder_sdk_events_card_no
+      ON ladder_sdk_events(card_no)
+      WHERE card_no IS NOT NULL AND card_no <> '';
+    `);
+    schemaLogger.info("ladder_sdk_events 表已建立", { module: "initSchema" });
 
     // 建立 environment_readings 表（環境品質系統感測器讀數，取代 device_data_logs）
     await targetPool.query(`

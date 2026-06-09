@@ -303,6 +303,31 @@ router.put(
 );
 
 /**
+ * 更新人員梯控卡片主檔（僅存平台；下發設備由同步 job 處理）
+ * PUT /api/personnel/persons/:id/ladder-card
+ * Body: { cardNo, floors, homeFloor?, cardType?, floorMode?, cardPassword?, validEnabled?, validBegin?, validEnd? }
+ * DELETE body 或 cardNo 空字串可清除
+ */
+router.put(
+  "/persons/:id/ladder-card",
+  requirePermission("system.personnel.person.update"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const personId = parseInt(req.params.id, 10);
+    const body = req.body || {};
+    const shouldClear =
+      body.clear === true ||
+      body.ladderCard === null ||
+      (body.cardNo != null && String(body.cardNo).trim() === "");
+    const result = await personnelService.replacePersonLadderCard(
+      personId,
+      shouldClear ? null : body.ladderCard ?? body,
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+/**
  * 一次更新人員門禁設定（整合卡片/指紋/密碼/validity；僅存平台）
  * PUT /api/personnel/persons/:personId/access-control-config
  * Body（節錄）:

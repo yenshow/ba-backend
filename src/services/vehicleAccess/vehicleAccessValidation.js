@@ -40,7 +40,6 @@ function parseConfig(config) {
         ? Math.trunc(Number(c.camera_channel_id))
         : 1,
     vehicleGroupIds: ensureIntArray(c.vehicle_group_ids),
-    personGroupIds: ensureIntArray(c.person_group_ids),
   };
 }
 
@@ -79,13 +78,6 @@ async function validateVehicleAccessConfig(
       );
     }
     return cfg;
-  }
-
-  if (cfg.personGroupIds.length === 0) {
-    throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
-      "ISAPI 車輛地點至少需要選擇一個人員群組",
-    );
   }
 
   if (cfg.entryCameraDeviceIds.length === 0) {

@@ -39,6 +39,32 @@ function statsFromAccessControlLogs(logs) {
   });
 }
 
+const UNGROUPED_GROUP_ID = 0;
+const UNGROUPED_GROUP_NAME = "未分組";
+
+function groupPersonsByPersonGroup(persons) {
+  const byGroupId = new Map();
+  for (const p of persons || []) {
+    const groupId =
+      p.person_group_id != null && Number.isFinite(Number(p.person_group_id))
+        ? Number(p.person_group_id)
+        : UNGROUPED_GROUP_ID;
+    const groupName =
+      groupId === UNGROUPED_GROUP_ID
+        ? UNGROUPED_GROUP_NAME
+        : p.group_name || UNGROUPED_GROUP_NAME;
+    if (!byGroupId.has(groupId)) {
+      byGroupId.set(groupId, { id: groupId, name: groupName, list: [] });
+    }
+    byGroupId.get(groupId).list.push(p);
+  }
+  return [...byGroupId.values()].sort((a, b) => {
+    if (a.id === UNGROUPED_GROUP_ID) return 1;
+    if (b.id === UNGROUPED_GROUP_ID) return -1;
+    return String(a.name).localeCompare(String(b.name), "zh-Hant");
+  });
+}
+
 /**
  * 門禁地點進出紀錄：從 isapi_access_events 查詢
  */
@@ -205,12 +231,7 @@ async function getSiteData(siteId, config) {
   try {
     const persons =
       await personnelService.getPersonsWithAccessByLocationId(siteId);
-    const byGroup = new Map();
-    for (const p of persons) {
-      const gname = p.group_name || "未分組";
-      if (!byGroup.has(gname)) byGroup.set(gname, []);
-      byGroup.get(gname).push(p);
-    }
+    const grouped = groupPersonsByPersonGroup(persons);
     const { start, end } = resolveStatsTimeRange({});
     const todayLogs =
       entryDeviceIds.length > 0 || exitDeviceIds.length > 0
@@ -227,17 +248,16 @@ async function getSiteData(siteId, config) {
     entryCount = siteStats.entryCount;
     exitCount = siteStats.exitCount;
     currentCount = siteStats.currentCount;
-    let idx = 0;
-    units = [...byGroup.entries()].map(([name, list]) => {
-      const employeeNos = new Set(list.map((p) => String(p.employee_no)));
+    units = grouped.map((group) => {
+      const employeeNos = new Set(group.list.map((p) => String(p.employee_no)));
       const unitLogs = todayLogs.filter((log) =>
         employeeNos.has(log.employeeId || ""),
       );
       return {
-        id: ++idx,
-        name,
+        id: group.id,
+        name: group.name,
         currentCount: statsFromAccessControlLogs(unitLogs).currentCount,
-        totalCount: list.length,
+        totalCount: group.list.length,
       };
     });
   } catch (err) {
@@ -265,22 +285,16 @@ async function getSiteLogs(siteId, config, options = {}) {
 }
 
 /**
- * 單位人員列表（門禁：unitId 為群組序號 1-based）
+ * 單位人員列表（門禁：unitId 為 person_group.id；0 表示未分組）
  */
 async function getUnitPersonnel(unitId, siteId, config) {
   const persons =
     await personnelService.getPersonsWithAccessByLocationId(siteId);
-  const byGroup = new Map();
-  for (const p of persons) {
-    const gname = p.group_name || "未分組";
-    if (!byGroup.has(gname)) byGroup.set(gname, []);
-    byGroup.get(gname).push(p);
-  }
-  const groupList = [...byGroup.entries()];
-  const idx = Math.max(0, Number(unitId) - 1);
-  const group = groupList[idx];
-  if (!group) return { personnel: [], entryCount: 0, exitCount: 0 };
-  const [, list] = group;
+  const grouped = groupPersonsByPersonGroup(persons);
+  const targetGroupId = Number(unitId);
+  const match = grouped.find((g) => g.id === targetGroupId);
+  if (!match) return { personnel: [], entryCount: 0, exitCount: 0 };
+  const list = match.list;
   const employeeNosInUnit = new Set(list.map((p) => String(p.employee_no)));
 
   const { start: todayStart, end: todayEnd } = resolveStatsTimeRange({});

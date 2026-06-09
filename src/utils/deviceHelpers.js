@@ -35,6 +35,23 @@ const validateDeviceConfig = (config, typeCode) => {
       if (!config.host || typeof config.host !== "string") {
         deviceConfigInvalid("controller 類型需要 host (string)");
       }
+      if (config.protocol === "hcnet_sdk") {
+        if (!config.username || typeof config.username !== "string") {
+          deviceConfigInvalid("controller (hcnet_sdk) 需要 username (string)");
+        }
+        if (!config.password || typeof config.password !== "string") {
+          deviceConfigInvalid("controller (hcnet_sdk) 需要 password (string)");
+        }
+        if (config.port !== undefined && config.port !== null) {
+          const sdkPort = Number(config.port);
+          if (Number.isNaN(sdkPort) || sdkPort < 1 || sdkPort > 65535) {
+            deviceConfigInvalid(
+              "controller (hcnet_sdk) 的 port 須為 1–65535（SDK 埠，預設 8000）",
+            );
+          }
+        }
+        break;
+      }
       if (config.port !== undefined && typeof config.port !== "number") {
         deviceConfigInvalid("controller 類型的 port 必須是數字");
       }

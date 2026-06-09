@@ -525,6 +525,19 @@ function emitIsapiPeopleCountingEvent(data) {
   );
 }
 
+/** 梯控 SDK 佈防事件寫入後推送，前端監聽 ladder-sdk:event 並重新載入最新紀錄 */
+function emitLadderSdkEvent(data) {
+  safeEmit(
+    "ladder-sdk:event",
+    {
+      ...(data || {}),
+      source: "ladder_sdk",
+      timestamp: new Date().toISOString(),
+    },
+    { logMessage: "梯控 SDK 事件已寫入" },
+  );
+}
+
 /** 車輛 ISAPI ANPR 事件寫入後推送 */
 function emitVehicleAccessIsapiEvent(data) {
   safeEmit(
@@ -590,6 +603,7 @@ module.exports = {
   emitEnvironmentReading,
   emitIsapiAccessEvent,
   emitIsapiPeopleCountingEvent,
+  emitLadderSdkEvent,
   emitVehicleAccessIsapiEvent,
   emitYscpEvent,
   emitPermissionsUpdated,
