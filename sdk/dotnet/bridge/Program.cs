@@ -1,7 +1,12 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using HcNetSdkCommon;
+
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
 var jsonOptions = new JsonSerializerOptions
 {
@@ -77,6 +82,9 @@ static BridgeResponse HandleRequest(BridgeRequest request)
         "card.update" => HandleCardWrite(session, request.Payload, SdkCardAction.Update),
         "card.delete" => HandleCardDelete(session, request.Payload),
         "control.gateway" => HandleControlGateway(session, request.Payload),
+        "door.list" => HandleDoorList(session, request.Payload),
+        "door.get" => HandleDoorGet(session, request.Payload),
+        "door.set" => HandleDoorSet(session, request.Payload),
         _ => new BridgeResponse(false, "UNKNOWN_ACTION", $"不支援的 action: {request.Action}"),
     };
 }
@@ -168,6 +176,72 @@ static BridgeResponse HandleControlGateway(SdkDeviceSession session, JsonElement
         command,
         commandName = SdkGatewayHelper.CommandName(command),
     });
+}
+
+static BridgeResponse HandleDoorList(SdkDeviceSession session, JsonElement? payload)
+{
+    var limit = ReadInt(payload, "limit", 0);
+    var maxDoor = SdkDoorService.QueryMaxDoor(session.UserId);
+    var (ok, doors, error) = SdkDoorService.ListDoors(
+        session.UserId,
+        limit > 0 ? limit : null);
+    if (!ok)
+    {
+        return new BridgeResponse(false, "DOOR_READ_FAILED", error);
+    }
+
+    return new BridgeResponse(true, null, null, new
+    {
+        maxDoor,
+        doors = doors.Select(d => new { d.DoorIndex, name = d.Name, d.OpenDuration, d.LadderControlDelayTime }),
+        total = doors.Count,
+    });
+}
+
+static BridgeResponse HandleDoorGet(SdkDeviceSession session, JsonElement? payload)
+{
+    var doorIndex = ReadInt(payload, "doorIndex", 0);
+    if (doorIndex < 1)
+    {
+        return new BridgeResponse(false, "DOOR_INDEX_REQUIRED", "請提供 doorIndex（>= 1）");
+    }
+
+    var (ok, door, error) = SdkDoorService.GetDoor(session.UserId, doorIndex);
+    if (!ok)
+    {
+        return new BridgeResponse(false, "DOOR_READ_FAILED", error);
+    }
+
+    return new BridgeResponse(true, null, null, new
+    {
+        doorIndex = door.DoorIndex,
+        name = door.Name,
+        door.OpenDuration,
+        door.LadderControlDelayTime,
+    });
+}
+
+static BridgeResponse HandleDoorSet(SdkDeviceSession session, JsonElement? payload)
+{
+    var doorIndex = ReadInt(payload, "doorIndex", 0);
+    var name = ReadString(payload, "name");
+    if (doorIndex < 1)
+    {
+        return new BridgeResponse(false, "DOOR_INDEX_REQUIRED", "請提供 doorIndex（>= 1）");
+    }
+
+    if (name == null)
+    {
+        return new BridgeResponse(false, "DOOR_NAME_REQUIRED", "請提供 name");
+    }
+
+    var (ok, error) = SdkDoorService.SetDoorName(session.UserId, doorIndex, name);
+    if (!ok)
+    {
+        return new BridgeResponse(false, "DOOR_WRITE_FAILED", error);
+    }
+
+    return new BridgeResponse(true, null, null, new { doorIndex, name });
 }
 
 static void ApplyFloorMode(JsonElement? payload)

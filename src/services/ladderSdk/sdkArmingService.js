@@ -114,25 +114,20 @@ const startDeviceLoop = async (deviceId) => {
 const getLadderDeviceIds = async () => {
   const rows = await db.query(
     `
-      SELECT id
-      FROM devices
-      WHERE type_code = 'controller'
-        AND config->>'protocol' = 'hcnet_sdk'
-      UNION
-      SELECT id
-      FROM devices
-      WHERE type_code = 'access_control'
-        AND (
-          (config->>'sdk_port') IS NOT NULL
-          OR (config->>'sdkPort') IS NOT NULL
-        )
+      SELECT DISTINCT (jsonb_array_elements_text(ls.system_config->'device_ids'))::int AS id
+      FROM location_systems ls
+      WHERE ls.system_type = 'elevator'
+        AND COALESCE(jsonb_array_length(ls.system_config->'device_ids'), 0) > 0
     `,
     [],
   );
 
-  return (rows || [])
-    .map((row) => parseInt(String(row.id), 10))
-    .filter((id) => Number.isFinite(id));
+  const ids = new Set();
+  for (const r of rows || []) {
+    const n = r.id != null ? parseInt(String(r.id), 10) : NaN;
+    if (Number.isFinite(n)) ids.add(n);
+  }
+  return Array.from(ids);
 };
 
 const start = async () => {

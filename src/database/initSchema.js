@@ -256,6 +256,45 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // 種子：控制器預設型號（可重跑、可覆蓋更新）
+    const controllerModelSeeds = [
+      {
+        name: "YS-K2210",
+        port: 8000,
+        config: { protocol: "hcnet_sdk" },
+        description: "HCNetSDK 梯控控制器",
+      },
+      {
+        name: "ZC160",
+        port: 502,
+        config: {},
+        description: "Modbus DI/DO 控制器",
+      },
+    ];
+    for (const m of controllerModelSeeds) {
+      await targetPool.query(
+        `
+          INSERT INTO device_models (name, type_code, category_code, description, port, config)
+          VALUES ($1, 'controller', $2, $3, $4, $5::jsonb)
+          ON CONFLICT (type_code, name) DO UPDATE
+          SET port = EXCLUDED.port,
+              description = EXCLUDED.description,
+              config = EXCLUDED.config,
+              updated_at = CURRENT_TIMESTAMP
+        `,
+        [
+          m.name,
+          null,
+          m.description,
+          m.port,
+          JSON.stringify(m.config || {}),
+        ],
+      );
+    }
+    schemaLogger.info("device_models：控制器預設型號種子已插入", {
+      module: "initSchema",
+    });
+
     // 種子：攝影機預設型號（含分類；可重跑、可覆蓋更新）
     // category_code（互斥單選）：
     // - people_counting：人流統計
@@ -443,7 +482,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -482,6 +521,31 @@ async function initSchema() {
     schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
       module: "initSchema",
     });
+
+    // Migration: location_systems.system_type 擴充 elevator
+    try {
+      await targetPool.query(`
+        ALTER TABLE location_systems
+        DROP CONSTRAINT IF EXISTS location_systems_system_type_check
+      `);
+      await targetPool.query(`
+        ALTER TABLE location_systems
+        ADD CONSTRAINT location_systems_system_type_check
+        CHECK (system_type IN (
+          'environment', 'lighting', 'hvac', 'air_circulation',
+          'people_counting', 'vehicle_access', 'drainage', 'power',
+          'fire', 'emergency_rescue', 'smoke_alarm', 'elevator'
+        ))
+      `);
+    } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (!/already exists|duplicate/i.test(msg)) {
+        schemaLogger.warn("location_systems elevator CHECK migration 略過", {
+          module: "initSchema",
+          error: msg,
+        });
+      }
+    }
 
     // ========== Migration: location_systems.system_config ==========
     // device_ids：僅在已是 JSON array 時做正整數去重清洗；不從舊鍵回填

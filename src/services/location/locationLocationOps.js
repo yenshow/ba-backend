@@ -20,6 +20,9 @@ const {
 } = shared;
 
 const { createLocationWithSystems, updateLocationWithSystems } = systemOps;
+const {
+  syncElevatorFloorsFromLocations,
+} = require("../ladderSdk/sdkDoorService");
 
 const locationLogger = logger.createLogger("locationLocationOps");
 
@@ -162,6 +165,8 @@ async function createLocation(locationData, userId) {
       );
     });
 
+    await syncElevatorFloorsFromLocations([locationData]);
+
     const result = await getLocationById(locationId);
     return {
       message: "地點建立成功",
@@ -208,6 +213,10 @@ async function updateLocation(id, locationData, userId) {
       );
       locationDeleted = locationCheck.length === 0;
     });
+
+    if (!locationDeleted) {
+      await syncElevatorFloorsFromLocations([locationData]);
+    }
 
     // 如果地點已被刪除（因為變成無系統），返回特殊訊息
     if (locationDeleted) {

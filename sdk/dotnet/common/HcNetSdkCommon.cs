@@ -14,8 +14,14 @@ internal static class HcNetSdkNative
     public const int MaxGroupNum128 = 128;
     public const int MaxLockCodeLen = 8;
     public const int MaxDoorCodeLen = 8;
+    public const int DoorNameLen = 32;
+    public const int StressPasswordLen = 8;
+    public const int SuperPasswordLen = 8;
+    public const int UnlockPasswordLen = 8;
 
     public const uint AcsAbility = 0x801;
+    public const uint NetDvrGetDoorCfg = 2108;
+    public const uint NetDvrSetDoorCfg = 2109;
     public const uint NetDvrGetCardCfgV50 = 2178;
     public const uint NetDvrSetCardCfgV50 = 2179;
     public const uint EnumAcsSendData = 3;
@@ -215,6 +221,48 @@ internal static class HcNetSdkNative
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct NET_DVR_DOOR_CFG
+    {
+        public uint dwSize;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = DoorNameLen)]
+        public byte[] byDoorName;
+
+        public byte byMagneticType;
+        public byte byOpenButtonType;
+        public byte byOpenDuration;
+        public byte byAccessibleOpenDuration;
+        public byte byMagneticAlarmTimeout;
+        public byte byEnableDoorLock;
+        public byte byEnableLeaderCard;
+        public byte byLeaderCardMode;
+        public uint dwLeaderCardOpenDuration;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = StressPasswordLen)]
+        public byte[] byStressPassword;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = SuperPasswordLen)]
+        public byte[] bySuperPassword;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = UnlockPasswordLen)]
+        public byte[] byUnlockPassword;
+
+        public byte byUseLocalController;
+        public byte byRes1;
+        public ushort wLocalControllerID;
+        public ushort wLocalControllerDoorNumber;
+        public ushort wLocalControllerStatus;
+        public byte byLockInputCheck;
+        public byte byLockInputType;
+        public byte byDoorTerminalMode;
+        public byte byOpenButton;
+        public byte byLadderControlDelayTime;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 43)]
+        public byte[] byRes2;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct NET_DVR_SETUPALARM_PARAM_V50
     {
         public uint dwSize;
@@ -359,6 +407,23 @@ internal static class HcNetSdkNative
         uint dwInLength,
         byte[] pOutBuf,
         uint dwOutLength);
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern bool NET_DVR_GetDVRConfig(
+        int lUserID,
+        uint dwCommand,
+        int lChannel,
+        byte[] lpOutBuffer,
+        uint dwOutBufferSize,
+        ref uint lpBytesReturned);
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern bool NET_DVR_SetDVRConfig(
+        int lUserID,
+        uint dwCommand,
+        int lChannel,
+        byte[] lpInBuffer,
+        uint dwInBufferSize);
 }
 
 internal sealed record SdkCardWriteRequest(

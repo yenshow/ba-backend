@@ -11,10 +11,14 @@
     <RootNamespace>HcNetSdkBridge</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="..\common\HcNetSdkCommon.cs" Link="HcNetSdkCommon.cs" />
     <Compile Include="..\common\SdkMarshal.cs" Link="SdkMarshal.cs" />
     <Compile Include="..\common\SdkFloorHelper.cs" Link="SdkFloorHelper.cs" />
     <Compile Include="..\common\SdkCardService.cs" Link="SdkCardService.cs" />
+    <Compile Include="..\common\SdkDoorService.cs" Link="SdkDoorService.cs" />
     <Compile Include="..\common\SdkAlarmHelper.cs" Link="SdkAlarmHelper.cs" />
     <Compile Include="..\common\AcsEventNames.cs" Link="AcsEventNames.cs" />
     <Compile Include="..\common\SdkCardJson.cs" Link="SdkCardJson.cs" />

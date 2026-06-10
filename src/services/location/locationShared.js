@@ -25,6 +25,7 @@ const VALID_LOCATION_SYSTEM_TYPES = [
   "fire",
   "emergency_rescue",
   "smoke_alarm",
+  "elevator",
 ];
 
 function assertValidSystemType(systemType) {
@@ -384,6 +385,35 @@ function formatSystem(system) {
           preferRegion: config.prefer_region ?? undefined,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
           logDisplayColumns: normalizeLogDisplayColumns(config.log_display_columns),
+        },
+      };
+    }
+
+    case "elevator": {
+      const {
+        normalizeLogDisplayColumns,
+      } = require("../elevator/logDisplayColumns");
+      const {
+        normalizeElevatorFloorConfig,
+      } = require("../elevator/elevatorFloorConfig");
+      const floors = normalizeElevatorFloorConfig(config);
+      return {
+        ...baseSystem,
+        config: {
+          deviceIds: Array.isArray(config.device_ids)
+            ? config.device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          logDisplayColumns: normalizeLogDisplayColumns(
+            config.log_display_columns,
+          ),
+          ...(floors.floorCount != null
+            ? {
+                floorCount: floors.floorCount,
+                floorNames: floors.floorNames,
+              }
+            : {}),
         },
       };
     }

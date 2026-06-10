@@ -24,6 +24,7 @@ const MODULE_PERM_KEYS = {
   "system.vehicle_access": "vehicleAccess",
   "system.video_surveillance": "videoSurveillance",
   "system.area_point_map": "areaPointMap",
+  "system.elevator": "elevator",
   "system.lighting": "lighting",
   "system.hvac": "hvac",
   "system.power": "power",
@@ -63,14 +64,28 @@ const defaultChildProp = (childCode) => {
 
 const buildPermObject = (profile) => {
   const modules = getCatalogModulesForProfile(profile);
+  const childrenByRbacModule = new Map();
+
+  for (const mod of modules) {
+    for (const child of mod.children) {
+      const rbacModule = child.rbac_module ?? mod.code;
+      const list = childrenByRbacModule.get(rbacModule) ?? [];
+      list.push({
+        child,
+        fullCode: `${rbacModule}.${child.code}`,
+      });
+      childrenByRbacModule.set(rbacModule, list);
+    }
+  }
+
   const lines = [];
 
   for (const mod of modules) {
     const permKey = MODULE_PERM_KEYS[mod.code];
     if (!permKey) continue;
 
-    const childLines = mod.children.map((child) => {
-      const fullCode = `${mod.code}.${child.code}`;
+    const childEntries = childrenByRbacModule.get(mod.code) ?? [];
+    const childLines = childEntries.map(({ child, fullCode }) => {
       const prop = defaultChildProp(child.code);
       return `\t\t${prop}: "${fullCode}",`;
     });

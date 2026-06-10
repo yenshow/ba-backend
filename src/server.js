@@ -29,6 +29,7 @@ const { mountSnapshotSystemRoutes } = require("./routes/snapshotSystems");
 const environmentRoutes = require("./routes/environmentRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
+const elevatorRoutes = require("./routes/elevatorRoutes");
 const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
@@ -143,6 +144,11 @@ app.use(
   requireFeature("people_counting"),
   peopleCountingRoutes,
 ); // 人流統計
+app.use(
+  "/api/elevator",
+  requireFeature("elevator"),
+  elevatorRoutes,
+); // 電梯系統
 app.use(
   "/api/vehicle-access",
   requireFeature("vehicle_access"),

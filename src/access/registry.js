@@ -13,17 +13,6 @@ const {
 /** 無 catalog 權限碼的預留模組（僅 UI／導覽） */
 const EXTRA_MODULES = [
   {
-    id: 12,
-    name: "電梯系統",
-    icon: "elevator",
-    description: "電梯系統監控與管理",
-    category: "infrastructure",
-    routePrefix: "/infrastructure/elevator",
-    featureKey: null,
-    permissionCode: null,
-    enabled: false,
-  },
-  {
     id: 16,
     name: "門禁保全系統",
     icon: "security",

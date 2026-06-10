@@ -26,6 +26,17 @@ const {
 } = shared;
 
 const { createLocationWithSystems, updateLocationWithSystems } = systemOps;
+const {
+  syncElevatorFloorsFromLocations,
+} = require("../ladderSdk/sdkDoorService");
+
+const syncElevatorFloorsIfPresent = async (locations) => {
+  if (locations === undefined) return;
+  const validLocations = getValidLocations(locations);
+  if (validLocations.length > 0) {
+    await syncElevatorFloorsFromLocations(validLocations);
+  }
+};
 
 const locationLogger = logger.createLogger("locationZoneOps");
 
@@ -274,6 +285,7 @@ async function createZone(zoneData, userId) {
           );
         }
       });
+      await syncElevatorFloorsIfPresent(locations);
     }
 
     // 取得建立後的完整區域資料
@@ -361,6 +373,8 @@ async function updateZone(id, zoneData, userId) {
         // 如果當前區域沒有地點了，刪除它
         await deleteEmptyZoneIfNeeded(query, id);
       });
+
+      await syncElevatorFloorsIfPresent(locations);
 
       // 返回目標區域的資料
       const targetZoneResult = await getZoneById(targetZoneId);
@@ -479,6 +493,8 @@ async function updateZone(id, zoneData, userId) {
         await deleteLocationsWithoutSystems(query, id);
       }
     });
+
+    await syncElevatorFloorsIfPresent(locations);
 
     const zoneResult = await getZoneById(id);
     return {

@@ -6,6 +6,11 @@ const net = require("net");
 const { URL } = require("url");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
+const {
+  parseConfig,
+  isHcnetSdkController,
+  resolveHcnetSdkPort,
+} = require("../../utils/deviceHelpers");
 
 /**
  * In-memory connectivity snapshot.
@@ -145,6 +150,54 @@ async function rtspOptionsProbe(rtspUrl) {
   });
 }
 
+async function tcpPortHealthCheck(host, port) {
+  const normalizedHost = String(host || "").trim();
+  const normalizedPort = Number(port);
+  if (!normalizedHost || !Number.isFinite(normalizedPort)) {
+    throw createApiError(
+      C.DEVICE_CONNECTIVITY_TCP_CONFIG_INCOMPLETE,
+      "TCP 配置不完整（host/port）",
+    );
+  }
+
+  return await new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (err, ok) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch (_) {}
+      if (err) reject(err);
+      else resolve(ok);
+    };
+
+    const timer = setTimeout(() => {
+      done(
+        createApiError(C.DEVICE_CONNECTIVITY_TCP_TIMEOUT, "TCP 連線超時"),
+        false,
+      );
+    }, CONNECTIVITY_TIMEOUT_MS);
+
+    socket.once("error", (e) => {
+      clearTimeout(timer);
+      done(
+        createApiError(
+          C.DEVICE_CONNECTIVITY_TCP_FAILED,
+          e?.message || "TCP 連線失敗",
+        ),
+        false,
+      );
+    });
+
+    socket.connect(normalizedPort, normalizedHost, () => {
+      clearTimeout(timer);
+      done(null, true);
+    });
+  });
+}
+
 async function modbusHealthCheck(deviceConfig) {
   const host = String(deviceConfig?.host || "").trim();
   const port = Number(deviceConfig?.port);
@@ -209,16 +262,9 @@ async function checkSingleDeviceConnectivity(deviceRow) {
     return { deviceId: null, ok: false, error: "deviceId 無效" };
   }
 
-  const cfg =
-    typeof deviceRow?.config === "string"
-      ? (() => {
-          try {
-            return JSON.parse(deviceRow.config || "{}");
-          } catch (_) {
-            return {};
-          }
-        })()
-      : deviceRow?.config || {};
+  const cfg = parseConfig(deviceRow?.config) || {};
+  const modelCfg = parseConfig(deviceRow?.model_config) || {};
+  const modelPort = deviceRow?.model_port;
 
   if (typeCode === "camera") {
     const rtspUrl = String(cfg?.rtsp_url || "").trim();
@@ -233,6 +279,11 @@ async function checkSingleDeviceConnectivity(deviceRow) {
   }
 
   if (typeCode === "controller") {
+    if (isHcnetSdkController(cfg, modelCfg)) {
+      const host = String(cfg?.host || "").trim();
+      await tcpPortHealthCheck(host, resolveHcnetSdkPort(cfg, modelPort));
+      return { deviceId, ok: true, nextStatus: "online" };
+    }
     await modbusHealthCheck(cfg);
     return { deviceId, ok: true, nextStatus: "online" };
   }
@@ -305,8 +356,9 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
 
   const rows = await db.query(
     `
-      SELECT d.id, d.type_code, d.config
+      SELECT d.id, d.type_code, d.config, dm.config AS model_config, dm.port AS model_port
       FROM devices d
+      LEFT JOIN device_models dm ON dm.id = d.model_id
       ${where}
       ORDER BY d.id ASC
     `,
@@ -391,8 +443,9 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
 
   const rows = await db.query(
     `
-      SELECT d.id, d.type_code, d.config
+      SELECT d.id, d.type_code, d.config, dm.config AS model_config, dm.port AS model_port
       FROM devices d
+      LEFT JOIN device_models dm ON dm.id = d.model_id
       WHERE d.id = ANY($1::int[])
       ORDER BY d.id ASC
     `,

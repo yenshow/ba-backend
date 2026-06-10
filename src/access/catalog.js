@@ -47,8 +47,6 @@ const SHARED_MODULES = [
       { code: "person.create", name: "人員新增", sort_order: 4 },
       { code: "person.update", name: "人員編輯", sort_order: 5 },
       { code: "person.delete", name: "人員刪除", sort_order: 6 },
-      { code: "device_sync", name: "設備同步", sort_order: 7 },
-      { code: "sync.edit", name: "同步編輯", sort_order: 8 },
     ],
     ui: {
       id: 2,
@@ -86,6 +84,18 @@ const SHARED_MODULES = [
     children: [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "report.full", name: "完整報表", sort_order: 4 },
+      {
+        code: "device_sync",
+        name: "設備同步",
+        sort_order: 5,
+        rbac_module: "system.personnel",
+      },
+      {
+        code: "sync.edit",
+        name: "同步編輯",
+        sort_order: 6,
+        rbac_module: "system.personnel",
+      },
     ],
     ui: {
       id: 6,
@@ -169,6 +179,25 @@ const CENTRAL_MODULES = [
       category: "core",
       routePrefix: "/core/area-point-map",
       featureKey: null,
+    },
+  },
+  {
+    code: "system.elevator",
+    name: "電梯系統",
+    sort_order: 19,
+    children: [
+      ...LOCATION_MUTATION_CHILDREN,
+      { code: "report.full", name: "完整報表", sort_order: 4 },
+      { code: "device.control", name: "呼梯控制", sort_order: 5 },
+      { code: "card.manage", name: "卡片管理", sort_order: 6 },
+    ],
+    ui: {
+      id: 12,
+      icon: "elevator",
+      description: "電梯系統監控與管理",
+      category: "infrastructure",
+      routePrefix: "/infrastructure/elevator",
+      featureKey: "elevator",
     },
   },
   {
@@ -324,6 +353,7 @@ const LOCATION_TYPE_MODULE = {
   fire: "system.fire",
   emergency_rescue: "system.emergency_rescue",
   smoke_alarm: "system.smoke_alarm",
+  elevator: "system.elevator",
 };
 
 const normalizeProfile = (profile) =>
@@ -346,8 +376,9 @@ function buildPermissionSeedRows(modules) {
       sort_order: mod.sort_order,
     });
     for (const child of mod.children) {
+      const rbacModule = child.rbac_module ?? mod.code;
       rows.push({
-        code: `${mod.code}.${child.code}`,
+        code: `${rbacModule}.${child.code}`,
         category: "system",
         parent_code: mod.code,
         name: child.name,

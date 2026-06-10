@@ -1,24 +1,41 @@
 /**
  * 梯控 SDK 本機測試腳本（透過 ba-backend/sdk bridge）
  *
- * 環境變數：
- *   SDK_DEVICE_HOST, SDK_DEVICE_PORT, SDK_DEVICE_USER, SDK_DEVICE_PASS
- *   SDK_CARD_NO, SDK_CARD_FLOORS, SDK_GATEWAY_INDEX, SDK_CONTROL_COMMAND
+ * 使用方式：npm run test:sdk-ladder-door-list
+ * 參數直接改下方 CONFIG，無需設定環境變數。
  */
 const { invokeBridge } = require("../src/services/ladderSdk/sdkBridgeClient");
 
-const action = process.argv[2] || "card.list";
-
-const device = {
-  host: process.env.SDK_DEVICE_HOST || "192.168.6.100",
-  port: Number(process.env.SDK_DEVICE_PORT) || 8000,
-  username: process.env.SDK_DEVICE_USER || "admin",
-  password: process.env.SDK_DEVICE_PASS || "",
+// ===== 本機測試設定（直接改這裡）=====
+const CONFIG = {
+  device: {
+    host: "192.168.6.100",
+    port: 8000,
+    username: "admin",
+    password: "Aa83124007", // 必填
+  },
+  cardNo: "1234567890",
+  cardFloors: [1, 2, 3],
+  cardHomeFloor: 3,
+  cardName: "",
+  cardEmployeeNo: 0,
+  cardType: 1,
+  cardFloorMode: "byte", // "byte" | "bitmap"
+  gatewayIndex: 1,
+  controlCommand: 1, // 0 關、1 開、2 常開、3 常閉、4 恢復、5 訪客呼梯、6 住戶呼梯
+  doorLimit: 10, // door.list 筆數上限，0 = 依設備能力全部
+  doorIndex: 1,
+  doorName: "Floor 01",
 };
+
+const action = process.argv[2] || "card.list";
+const device = CONFIG.device;
 
 const run = async () => {
   if (!device.password) {
-    console.error("請設定 SDK_DEVICE_PASS");
+    console.error(
+      "請在 scripts/testLadderSdk.js 的 CONFIG.device.password 填入密碼",
+    );
     process.exit(1);
   }
 
@@ -31,7 +48,7 @@ const run = async () => {
       request = {
         action: "card.get",
         device,
-        payload: { cardNo: process.env.SDK_CARD_NO || "1234567890" },
+        payload: { cardNo: CONFIG.cardNo },
       };
       break;
     case "card.create":
@@ -40,16 +57,13 @@ const run = async () => {
         action,
         device,
         payload: {
-          cardNo: process.env.SDK_CARD_NO || "1234567890",
-          floors: (process.env.SDK_CARD_FLOORS || "1,2,3")
-            .split(",")
-            .map((v) => Number(v.trim()))
-            .filter((v) => v > 0),
-          homeFloor: Number(process.env.SDK_CARD_HOME_FLOOR) || 3,
-          name: process.env.SDK_CARD_NAME || "",
-          employeeNo: Number(process.env.SDK_CARD_EMPLOYEE_NO) || 0,
-          cardType: Number(process.env.SDK_CARD_TYPE) || 1,
-          floorMode: process.env.SDK_CARD_FLOOR_MODE || "byte",
+          cardNo: CONFIG.cardNo,
+          floors: CONFIG.cardFloors,
+          homeFloor: CONFIG.cardHomeFloor,
+          name: CONFIG.cardName,
+          employeeNo: CONFIG.cardEmployeeNo,
+          cardType: CONFIG.cardType,
+          floorMode: CONFIG.cardFloorMode,
         },
       };
       break;
@@ -57,7 +71,7 @@ const run = async () => {
       request = {
         action: "card.delete",
         device,
-        payload: { cardNo: process.env.SDK_CARD_NO || "1234567890" },
+        payload: { cardNo: CONFIG.cardNo },
       };
       break;
     case "control":
@@ -65,8 +79,34 @@ const run = async () => {
         action: "control.gateway",
         device,
         payload: {
-          gatewayIndex: Number(process.env.SDK_GATEWAY_INDEX) || 1,
-          command: Number(process.env.SDK_CONTROL_COMMAND) || 1,
+          gatewayIndex: CONFIG.gatewayIndex,
+          command: CONFIG.controlCommand,
+        },
+      };
+      break;
+    case "door.list":
+      request = {
+        action: "door.list",
+        device,
+        payload: {
+          limit: CONFIG.doorLimit,
+        },
+      };
+      break;
+    case "door.get":
+      request = {
+        action: "door.get",
+        device,
+        payload: { doorIndex: CONFIG.doorIndex },
+      };
+      break;
+    case "door.set":
+      request = {
+        action: "door.set",
+        device,
+        payload: {
+          doorIndex: CONFIG.doorIndex,
+          name: CONFIG.doorName,
         },
       };
       break;

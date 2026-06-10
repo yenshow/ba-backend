@@ -5,6 +5,7 @@
 const deviceService = require("../devices/deviceService");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
+const { resolveHcnetSdkPort } = require("../../utils/deviceHelpers");
 
 const resolveSdkCredentials = (device) => {
   const cfg = device.config || {};
@@ -19,7 +20,7 @@ const resolveSdkCredentials = (device) => {
 
     return {
       host: cfg.host,
-      port: Number(cfg.port) > 0 ? Number(cfg.port) : 8000,
+      port: resolveHcnetSdkPort(cfg, null),
       username: cfg.username,
       password: cfg.password,
     };

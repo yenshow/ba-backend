@@ -20,6 +20,7 @@ const SETTINGS_KEYS = {
  */
 const FEATURE_KEYS_CENTRAL = [
   "people_counting",
+  "elevator",
   "lighting",
   "hvac",
   "air_circulation",

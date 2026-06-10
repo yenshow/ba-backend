@@ -244,9 +244,31 @@ const validateLoggingConfig = (config) => {
   return { valid: true };
 };
 
+const isHcnetSdkController = (deviceConfig, modelConfig) =>
+  String(deviceConfig?.protocol || modelConfig?.protocol || "")
+    .trim()
+    .toLowerCase() === "hcnet_sdk";
+
+const ensureControllerHcnetProtocol = (config, modelConfig) => {
+  if (isHcnetSdkController(config, modelConfig)) {
+    config.protocol = "hcnet_sdk";
+  }
+};
+
+const resolveHcnetSdkPort = (deviceConfig, modelPort, fallbackPort = 8000) => {
+  const devicePort = Number(deviceConfig?.port);
+  if (Number.isFinite(devicePort) && devicePort > 0) return devicePort;
+  const inheritedPort = Number(modelPort);
+  if (Number.isFinite(inheritedPort) && inheritedPort > 0) return inheritedPort;
+  return fallbackPort;
+};
+
 module.exports = {
   parseConfig,
   stringifyConfig,
   validateDeviceConfig,
   validateLoggingConfig,
+  isHcnetSdkController,
+  ensureControllerHcnetProtocol,
+  resolveHcnetSdkPort,
 };

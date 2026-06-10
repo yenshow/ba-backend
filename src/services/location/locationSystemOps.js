@@ -224,6 +224,31 @@ function buildSystemConfig(systemType, config) {
       };
     }
 
+    case "elevator": {
+      const {
+        normalizeLogDisplayColumns,
+        toStoredLogDisplayColumns,
+      } = require("../elevator/logDisplayColumns");
+      const {
+        validateElevatorFloorConfig,
+      } = require("../elevator/elevatorFloorConfig");
+      const validated = validateElevatorFloorConfig(config);
+      const result = {
+        device_ids: validated.deviceIds,
+        log_display_columns: (() => {
+          const cols = toStoredLogDisplayColumns(
+            normalizeLogDisplayColumns(config.logDisplayColumns),
+          );
+          return cols.length > 0 ? cols : undefined;
+        })(),
+      };
+      if (validated.floorCount != null) {
+        result.floor_count = validated.floorCount;
+        result.floor_names = validated.floorNames;
+      }
+      return result;
+    }
+
     case "vehicle_access": {
       const {
         normalizeLogDisplayColumns,
@@ -618,6 +643,17 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           if (accessControlGroups !== undefined)
             systemConfig.accessControlGroups = accessControlGroups;
           break;
+        case "elevator": {
+          assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
+          const fc = location.floorCount ?? location.floor_count;
+          const fn = location.floorNames ?? location.floor_names;
+          if (fc !== undefined) systemConfig.floorCount = fc;
+          if (fn !== undefined) systemConfig.floorNames = fn;
+          if (location.logDisplayColumns !== undefined) {
+            systemConfig.logDisplayColumns = location.logDisplayColumns;
+          }
+          break;
+        }
         case "vehicle_access":
           if (entryLaneId !== undefined) systemConfig.entryLaneId = entryLaneId;
           if (exitLaneId !== undefined) systemConfig.exitLaneId = exitLaneId;
