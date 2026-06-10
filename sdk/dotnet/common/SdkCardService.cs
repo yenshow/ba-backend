@@ -102,7 +102,7 @@ internal static class SdkCardService
             return (false, cards, $"StartRemoteConfig 失敗, error={HcNetSdkNative.NET_DVR_GetLastError()}");
         }
 
-        if (querySingle && !SendCardNo(remoteHandle, cardNo))
+        if (querySingle && !SendCardSendData(remoteHandle, cardNo))
         {
             HcNetSdkNative.NET_DVR_StopRemoteConfig(remoteHandle);
             return (false, cards, $"SendRemoteConfig 失敗, error={HcNetSdkNative.NET_DVR_GetLastError()}");
@@ -118,7 +118,10 @@ internal static class SdkCardService
         return (string.IsNullOrEmpty(callbackError), cards, callbackError);
     }
 
-    public static (bool Ok, string Error) WriteCard(int userId, SdkCardWriteRequest request)
+    public static (bool Ok, string Error) WriteCard(
+        int userId,
+        SdkCardWriteRequest request,
+        SdkCardAction action = SdkCardAction.Create)
     {
         var callbackError = string.Empty;
         var doneEvent = new ManualResetEventSlim(false);
@@ -135,7 +138,7 @@ internal static class SdkCardService
             switch (status)
             {
                 case HcNetSdkNative.NetSdkCallbackStatusProcessing:
-                    Console.WriteLine($"處理中: {ReadStatusCardNo(lpBuffer, 4)}");
+                    Console.Error.WriteLine($"處理中: {ReadStatusCardNo(lpBuffer, 4)}");
                     break;
                 case HcNetSdkNative.NetSdkCallbackStatusFailed:
                     callbackError = dwBufLen >= 8
@@ -168,7 +171,13 @@ internal static class SdkCardService
             return (false, $"StartRemoteConfig 失敗, error={HcNetSdkNative.NET_DVR_GetLastError()}");
         }
 
-        var cardCfg = SdkCardHelper.BuildCardConfig(request);
+        var cardCfg = ResolveCardConfig(userId, request, action);
+        if (!SendCardSendData(remoteHandle, request.CardNo, request.EmployeeNo))
+        {
+            HcNetSdkNative.NET_DVR_StopRemoteConfig(remoteHandle);
+            return (false, $"SendRemoteConfig（卡號）失敗, error={HcNetSdkNative.NET_DVR_GetLastError()}");
+        }
+
         if (!HcNetSdkNative.NET_DVR_SendRemoteConfig(
                 remoteHandle,
                 HcNetSdkNative.EnumAcsSendData,
@@ -176,7 +185,7 @@ internal static class SdkCardService
                 (uint)Marshal.SizeOf<HcNetSdkNative.NET_DVR_CARD_CFG_V50>()))
         {
             HcNetSdkNative.NET_DVR_StopRemoteConfig(remoteHandle);
-            return (false, $"SendRemoteConfig 失敗, error={HcNetSdkNative.NET_DVR_GetLastError()}");
+            return (false, $"SendRemoteConfig（卡片）失敗, error={HcNetSdkNative.NET_DVR_GetLastError()}");
         }
 
         if (!doneEvent.Wait(TimeSpan.FromSeconds(30)))
@@ -194,12 +203,32 @@ internal static class SdkCardService
         return (true, string.Empty);
     }
 
-    private static bool SendCardNo(int remoteHandle, string cardNo)
+    private static HcNetSdkNative.NET_DVR_CARD_CFG_V50 ResolveCardConfig(
+        int userId,
+        SdkCardWriteRequest request,
+        SdkCardAction action)
+    {
+        if (request.Delete || action == SdkCardAction.Create)
+        {
+            return SdkCardHelper.BuildCardConfig(request);
+        }
+
+        var (got, cards, _) = GetCards(userId, SdkCardAction.Get, request.CardNo);
+        if (got && cards.Count > 0)
+        {
+            return SdkCardHelper.MergeCardConfig(cards[0], request);
+        }
+
+        return SdkCardHelper.BuildCardConfig(request);
+    }
+
+    private static bool SendCardSendData(int remoteHandle, string cardNo, uint cardUserId = 0)
     {
         var sendData = new HcNetSdkNative.NET_DVR_CARD_CFG_SEND_DATA
         {
             dwSize = (uint)Marshal.SizeOf<HcNetSdkNative.NET_DVR_CARD_CFG_SEND_DATA>(),
             byCardNo = new byte[HcNetSdkNative.AcsCardNoLen],
+            dwCardUserId = cardUserId,
             byRes = new byte[12],
         };
         SdkCardHelper.SetCardNo(sendData.byCardNo, cardNo);

@@ -52,7 +52,7 @@ sdk/
 
 **單次請求**：Node → stdin JSON → bridge 登入設備 → stdout JSON。
 
-**佈防**：`sdkArmingService` spawn `HcNetSdkBridge.exe --arming`，讀取 stdout NDJSON，過濾後寫入 `ladder_sdk_events`，推送 WebSocket `ladder-sdk:event`。
+**佈防**：`sdkArmingService` spawn `HcNetSdkBridge.exe --arming`，讀取 stdout NDJSON；`sdkEventPersistence` 白名單過濾後寫入 `ladder_sdk_events`，推送 WebSocket `ladder-sdk:event`。
 
 ---
 
@@ -113,7 +113,7 @@ sdk/
 | `cardNo`                                   | ✓               | 卡號                      |
 | `floors`                                   | create/update ✓ | 授權樓層，如 `[1,2,3]`    |
 | `homeFloor`                                |                 | 歸屬樓層，預設 1          |
-| `name` / `employeeNo` / `password`         |                 | 持卡人資訊                |
+| `name` / `employeeNo` / `password`         |                 | 持卡人資訊；部分梯控機不寫入 `byName`，API 會以人員主檔補齊 |
 | `cardType`                                 |                 | 1=普通卡（預設）          |
 | `validEnabled` / `validBegin` / `validEnd` |                 | 有效期                    |
 | `floorMode`                                |                 | `byte`（預設）或 `bitmap` |
@@ -141,7 +141,7 @@ stdout 逐行 NDJSON，由 `sdkArmingService` 注入 `SDK_DEVICE_*` 環境變數
 | type      | 說明                   |
 | --------- | ---------------------- |
 | `ready`   | 佈防成功               |
-| `event`   | ACS 事件（已過白名單） |
+| `event`   | ACS 事件（全部 major/minor） |
 | `error`   | 連線或佈防失敗         |
 | `stopped` | 程序結束               |
 
@@ -149,7 +149,7 @@ stdout 逐行 NDJSON，由 `sdkArmingService` 注入 `SDK_DEVICE_*` 環境變數
 
 ## 佈防事件白名單
 
-Bridge 與 `sdkEventPersistence` 僅處理：
+Bridge 佈防輸出**全部** ACS 事件；後端 `sdkEventPersistence` 寫入 DB／WebSocket 前套用白名單：
 
 | Major | Minor | 說明           |
 | ----- | ----- | -------------- |
@@ -189,7 +189,7 @@ npm run test:sdk-ladder-door-set      # CONFIG.doorIndex、CONFIG.doorName
 # 呼梯
 npm run test:sdk-ladder-control
 
-# 佈防（Ctrl+C 結束）
+# 佈防（Ctrl+C 結束；輸出全部 ACS 事件；會先結束既有 HcNetSdkBridge 程序）
 npm run test:sdk-ladder-events
 ```
 
@@ -305,7 +305,7 @@ npm run test:sdk-ladder-events
 | API  | `PUT /api/personnel/persons/:id/ladder-card`                              |
 | 權限 | `system.personnel.person.update`                                          |
 | Body | `{ cardNo, floors, homeFloor?, ... }`；`clear: true` 或空 `cardNo` 可清除 |
-| 同步 | `elevatorCardSyncJobService` 排程下發至設備                               |
+| 同步 | `elevatorFloorSyncJobService` 排程下發至設備                              |
 
 ---
 

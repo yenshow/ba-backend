@@ -81,6 +81,43 @@ const mapBridgeError = (response) => {
   });
 };
 
+const parseBridgeStdout = (stdout) => {
+  const trimmed = String(stdout || "").trim();
+  if (!trimmed) return null;
+
+  const tryParse = (text) => {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && "ok" in parsed) {
+        return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  let parsed = tryParse(trimmed);
+  if (parsed) return parsed;
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    parsed = tryParse(lines[i]);
+    if (parsed) return parsed;
+  }
+
+  const jsonStart = trimmed.lastIndexOf("{");
+  if (jsonStart >= 0) {
+    parsed = tryParse(trimmed.slice(jsonStart));
+    if (parsed) return parsed;
+  }
+
+  return null;
+};
+
 const invokeBridge = (request, options = {}) =>
   new Promise((resolve, reject) => {
     let exePath;
@@ -151,16 +188,19 @@ const invokeBridge = (request, options = {}) =>
         return;
       }
 
-      let parsed;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch (error) {
+      const parsed = parseBridgeStdout(trimmed);
+      if (!parsed) {
+        const stderrHint = stderr.trim() ? `：${stderr.trim().slice(0, 200)}` : "";
         finish(
           reject,
-          createApiError(C.LADDER_SDK_BRIDGE_FAILED, "Bridge 回應非 JSON", {
-            stdout: trimmed.slice(0, 500),
-            stderr,
-          }),
+          createApiError(
+            C.LADDER_SDK_BRIDGE_FAILED,
+            `Bridge 回應非 JSON${stderrHint}`,
+            {
+              stdout: trimmed.slice(0, 500),
+              stderr,
+            },
+          ),
         );
         return;
       }

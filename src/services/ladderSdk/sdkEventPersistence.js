@@ -1,11 +1,11 @@
 /**
- * 梯控 SDK 佈防事件寫入（比照 isapiEventPersistence / vehicle ANPR）
+ * 梯控 SDK 佈防事件寫入（Bridge 輸出全部 ACS 事件，寫庫前套用白名單）
  */
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 
 /** major=0x3: 0x400–0x403；major=0x5: 0x01、0x5f、0x60 */
-const ALLOWED_EVENTS = new Set([
+const ALLOWED_EVENT_KEYS = new Set([
   "3:1024",
   "3:1025",
   "3:1026",
@@ -15,8 +15,8 @@ const ALLOWED_EVENTS = new Set([
   "5:96",
 ]);
 
-const isProcessableEvent = (major, minor) =>
-  ALLOWED_EVENTS.has(`${Number(major)}:${Number(minor)}`);
+const isAllowedEvent = (major, minor) =>
+  ALLOWED_EVENT_KEYS.has(`${Number(major)}:${Number(minor)}`);
 
 /**
  * @param {object} options
@@ -35,7 +35,7 @@ const persistLadderSdkEvent = async (options) => {
     payload = {},
   } = options || {};
 
-  if (!deviceId || !isProcessableEvent(major, minor)) {
+  if (!deviceId || !isAllowedEvent(major, minor)) {
     return { inserted: false };
   }
 
@@ -80,7 +80,5 @@ const persistLadderSdkEvent = async (options) => {
 };
 
 module.exports = {
-  ALLOWED_EVENTS,
-  isProcessableEvent,
   persistLadderSdkEvent,
 };

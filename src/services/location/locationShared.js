@@ -405,6 +405,11 @@ function formatSystem(system) {
                 .map((id) => Number(id))
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
+          accessDeviceIds: Array.isArray(config.access_device_ids)
+            ? config.access_device_ids
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),

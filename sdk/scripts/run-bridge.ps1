@@ -18,6 +18,14 @@ function Resolve-SdkLibDir {
   return $null
 }
 
+function Stop-HcNetSdkBridge {
+  $procs = Get-Process -Name "HcNetSdkBridge" -ErrorAction SilentlyContinue
+  if (-not $procs) { return }
+  Write-Host "Stopping $($procs.Count) HcNetSdkBridge process(es)..."
+  $procs | Stop-Process -Force
+  Start-Sleep -Milliseconds 500
+}
+
 function Copy-SdkRuntime {
   param([string]$LibDir, [string]$TargetDir)
   New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
@@ -64,6 +72,8 @@ function Test-NeedsBuild {
   }
   return $false
 }
+
+Stop-HcNetSdkBridge
 
 if (Test-NeedsBuild -ExePath $dotnetExe) {
   Write-Host "Building HcNetSdkBridge..."

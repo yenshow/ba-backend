@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -18,7 +19,6 @@ internal static class HcNetSdkNative
     public const int StressPasswordLen = 8;
     public const int SuperPasswordLen = 8;
     public const int UnlockPasswordLen = 8;
-
     public const uint AcsAbility = 0x801;
     public const uint NetDvrGetDoorCfg = 2108;
     public const uint NetDvrSetDoorCfg = 2109;
@@ -38,6 +38,7 @@ internal static class HcNetSdkNative
     public const uint CardParamCardType = 0x00000004;
     public const uint CardParamDoorRight = 0x00000008;
     public const uint CardParamPassword = 0x00000080;
+    public const uint CardParamRightPlan = 0x00000100;
     public const uint CardParamEmployeeNo = 0x00000400;
     public const uint CardParamName = 0x00000800;
     public const uint CardParamFloorNumber = 0x00020000;
@@ -561,63 +562,109 @@ internal static class SdkCardHelper
         };
     }
 
-    public static HcNetSdkNative.NET_DVR_CARD_CFG_V50 BuildCardConfig(SdkCardWriteRequest request)
+    public static HcNetSdkNative.NET_DVR_CARD_CFG_V50 BuildCardConfig(SdkCardWriteRequest request) =>
+        MergeCardConfig(CreateEmptyCard(), request);
+
+    public static HcNetSdkNative.NET_DVR_CARD_CFG_V50 MergeCardConfig(
+        HcNetSdkNative.NET_DVR_CARD_CFG_V50 existing,
+        SdkCardWriteRequest request)
     {
         var useBitmap = string.Equals(
             Environment.GetEnvironmentVariable("SDK_CARD_FLOOR_MODE"),
             "bitmap",
             StringComparison.OrdinalIgnoreCase);
 
+        var card = CloneCard(existing);
         var modify =
             HcNetSdkNative.CardParamCardValid |
             HcNetSdkNative.CardParamCardType |
             HcNetSdkNative.CardParamDoorRight |
-            HcNetSdkNative.CardParamFloorNumber;
+            HcNetSdkNative.CardParamFloorNumber |
+            HcNetSdkNative.CardParamRightPlan;
+
+        card.byCardValid = request.Delete ? (byte)0 : (byte)1;
+        card.byCardType = request.CardType;
+        card.wFloorNumber = request.HomeFloor;
+        SetCardNo(card.byCardNo, request.CardNo);
+        SetFloorRights(card.byDoorRight, request.Floors, useBitmap);
+        AssignFloorRightPlans(card.wCardRightPlan, request.Floors);
 
         if (!string.IsNullOrWhiteSpace(request.Name))
         {
             modify |= HcNetSdkNative.CardParamName;
+            SetName(card.byName, request.Name);
         }
 
         if (request.EmployeeNo > 0)
         {
             modify |= HcNetSdkNative.CardParamEmployeeNo;
+            card.dwEmployeeNo = request.EmployeeNo;
+            card.dwCardUserId = request.EmployeeNo;
         }
 
         if (!string.IsNullOrWhiteSpace(request.Password))
         {
             modify |= HcNetSdkNative.CardParamPassword;
+            SetPassword(card.byCardPassword, request.Password);
         }
 
         if (request.ValidEnabled)
         {
             modify |= HcNetSdkNative.CardParamValid;
+            card.struValid = CreateValidPeriod(request.ValidBegin, request.ValidEnd);
+        }
+        else if (card.struValid.byEnable == 0)
+        {
+            card.struValid = CreateAlwaysValidPeriod();
         }
 
-        var card = CreateEmptyCard();
         card.dwModifyParamType = modify;
-        card.byCardValid = request.Delete ? (byte)0 : (byte)1;
-        card.byCardType = request.CardType;
-        card.wFloorNumber = request.HomeFloor;
-        card.dwEmployeeNo = request.EmployeeNo;
-        card.struValid = request.ValidEnabled
-            ? CreateValidPeriod(request.ValidBegin, request.ValidEnd)
-            : CreateAlwaysValidPeriod();
-
-        SetCardNo(card.byCardNo, request.CardNo);
-        SetFloorRights(card.byDoorRight, request.Floors, useBitmap);
-
-        if (!string.IsNullOrWhiteSpace(request.Name))
-        {
-            SetName(card.byName, request.Name);
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Password))
-        {
-            SetPassword(card.byCardPassword, request.Password);
-        }
-
+        card.dwSize = (uint)Marshal.SizeOf<HcNetSdkNative.NET_DVR_CARD_CFG_V50>();
         return card;
+    }
+
+    public static HcNetSdkNative.NET_DVR_CARD_CFG_V50 CloneCard(
+        HcNetSdkNative.NET_DVR_CARD_CFG_V50 source)
+    {
+        var card = source;
+        card.byCardNo = (byte[])source.byCardNo.Clone();
+        card.byDoorRight = (byte[])source.byDoorRight.Clone();
+        card.byBelongGroup = (byte[])source.byBelongGroup.Clone();
+        card.byCardPassword = (byte[])source.byCardPassword.Clone();
+        card.wCardRightPlan = (byte[])source.wCardRightPlan.Clone();
+        card.byName = (byte[])source.byName.Clone();
+        card.byRes2 = (byte[])source.byRes2.Clone();
+        card.byLockCode = (byte[])source.byLockCode.Clone();
+        card.byRoomCode = (byte[])source.byRoomCode.Clone();
+        card.byRes3 = (byte[])source.byRes3.Clone();
+        card.bySIMNum = (byte[])source.bySIMNum.Clone();
+        return card;
+    }
+
+    public static void AssignFloorRightPlans(byte[] wCardRightPlan, IEnumerable<int> floors)
+    {
+        if (wCardRightPlan == null || wCardRightPlan.Length == 0)
+        {
+            return;
+        }
+
+        foreach (var floor in floors)
+        {
+            if (floor < 1 || floor > HcNetSdkNative.MaxDoorNum256)
+            {
+                continue;
+            }
+
+            var offset = (floor - 1) * HcNetSdkNative.MaxCardRightPlanNum * 2;
+            if (offset + 1 >= wCardRightPlan.Length)
+            {
+                continue;
+            }
+
+            var plan = BitConverter.GetBytes((ushort)1);
+            wCardRightPlan[offset] = plan[0];
+            wCardRightPlan[offset + 1] = plan[1];
+        }
     }
 
     public static HcNetSdkNative.NET_DVR_CARD_CFG_V50 CreateEmptyCard() =>
@@ -704,6 +751,31 @@ internal static class SdkCardHelper
 
     public static string ReadName(byte[] source)
     {
+        if (source == null || source.All(static b => b == 0))
+        {
+            return "(未設定)";
+        }
+
+        var utf16Length = 0;
+        for (var i = 0; i + 1 < source.Length; i += 2)
+        {
+            if (source[i] == 0 && source[i + 1] == 0)
+            {
+                break;
+            }
+
+            utf16Length = i + 2;
+        }
+
+        if (utf16Length > 0)
+        {
+            var utf16 = Encoding.Unicode.GetString(source, 0, utf16Length).Trim('\0', ' ');
+            if (!string.IsNullOrWhiteSpace(utf16))
+            {
+                return utf16;
+            }
+        }
+
         var end = Array.IndexOf(source, (byte)0);
         if (end < 0)
         {
@@ -728,16 +800,13 @@ internal static class SdkCardHelper
     public static void SetName(byte[] target, string name)
     {
         Array.Clear(target);
-        try
+        if (string.IsNullOrWhiteSpace(name))
         {
-            var bytes = Encoding.GetEncoding(936).GetBytes(name);
-            Array.Copy(bytes, target, Math.Min(bytes.Length, target.Length));
+            return;
         }
-        catch
-        {
-            var bytes = Encoding.UTF8.GetBytes(name);
-            Array.Copy(bytes, target, Math.Min(bytes.Length, target.Length));
-        }
+
+        var bytes = Encoding.Unicode.GetBytes(name);
+        Array.Copy(bytes, target, Math.Min(bytes.Length, target.Length));
     }
 
     public static void SetPassword(byte[] target, string password)
@@ -897,7 +966,7 @@ internal static class SdkEnv
         string defaultHost = "192.168.6.100",
         int defaultPort = 8000,
         string defaultUser = "admin",
-        string defaultPass = "")
+        string defaultPass = "Aa83124007")
     {
         var host = Environment.GetEnvironmentVariable("SDK_DEVICE_HOST") ?? defaultHost;
         var port = int.TryParse(Environment.GetEnvironmentVariable("SDK_DEVICE_PORT"), out var parsedPort)

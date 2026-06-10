@@ -1309,6 +1309,29 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS person_elevator_floor_access (
+        id SERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        floor_index SMALLINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(location_id, person_id, floor_index),
+        CHECK (floor_index >= 1)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_elevator_floor_access_location_id
+      ON person_elevator_floor_access(location_id);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_person_elevator_floor_access_location_floor
+      ON person_elevator_floor_access(location_id, floor_index);
+    `);
+    schemaLogger.info("person_elevator_floor_access 表已建立", {
+      module: "initSchema",
+    });
+
     // 人員 × 門禁設備：同步狀態（用於差異同步與 UI 顯示已同步/失敗）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_device_sync_states (

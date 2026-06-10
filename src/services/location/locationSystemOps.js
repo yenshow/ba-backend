@@ -233,8 +233,14 @@ function buildSystemConfig(systemType, config) {
         validateElevatorFloorConfig,
       } = require("../elevator/elevatorFloorConfig");
       const validated = validateElevatorFloorConfig(config);
+      const accessDeviceIds = Array.isArray(config.accessDeviceIds)
+        ? config.accessDeviceIds
+            .map((id) => Number(id))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        : [];
       const result = {
         device_ids: validated.deviceIds,
+        access_device_ids: accessDeviceIds,
         log_display_columns: (() => {
           const cols = toStoredLogDisplayColumns(
             normalizeLogDisplayColumns(config.logDisplayColumns),
@@ -645,6 +651,15 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           break;
         case "elevator": {
           assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
+          const acIds =
+            location.accessDeviceIds ?? location.access_device_ids;
+          if (acIds !== undefined) {
+            systemConfig.accessDeviceIds = Array.isArray(acIds)
+              ? acIds
+                  .map((id) => Number(id))
+                  .filter((n) => Number.isFinite(n) && n > 0)
+              : [];
+          }
           const fc = location.floorCount ?? location.floor_count;
           const fn = location.floorNames ?? location.floor_names;
           if (fc !== undefined) systemConfig.floorCount = fc;

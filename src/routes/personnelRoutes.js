@@ -305,7 +305,7 @@ router.put(
 /**
  * 更新人員梯控卡片主檔（僅存平台；下發設備由同步 job 處理）
  * PUT /api/personnel/persons/:id/ladder-card
- * Body: { cardNo, floors, homeFloor?, cardType?, floorMode?, cardPassword?, validEnabled?, validBegin?, validEnd? }
+ * Body: { floors: { byLocation: { "<locationId>": number[] } } }；卡號／密碼／有效期取自人員主檔 access_control
  * DELETE body 或 cardNo 空字串可清除
  */
 router.put(

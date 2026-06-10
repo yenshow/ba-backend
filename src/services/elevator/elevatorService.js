@@ -68,9 +68,15 @@ function getElevatorConfig(location) {
         .map((id) => Number(id))
         .filter((n) => Number.isFinite(n) && n > 0)
     : [];
+  const accessDeviceIds = Array.isArray(config.accessDeviceIds)
+    ? config.accessDeviceIds
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    : [];
   const floors = normalizeElevatorFloorConfig(config);
   return {
     deviceIds,
+    accessDeviceIds,
     logDisplayColumns: normalizeLogDisplayColumns(config.logDisplayColumns),
     floorCount: floors.floorCount ?? undefined,
     floorNames: floors.floorNames,
@@ -218,6 +224,7 @@ async function createElevatorLocation(locationData, userId) {
         name,
         zoneId,
         deviceIds = [],
+        accessDeviceIds = [],
         logDisplayColumns,
         floorCount,
         floorNames,
@@ -231,6 +238,7 @@ async function createElevatorLocation(locationData, userId) {
           locationType: "elevator",
           config: {
             deviceIds,
+            accessDeviceIds,
             logDisplayColumns,
             floorCount,
             floorNames,
@@ -254,8 +262,14 @@ async function createElevatorLocation(locationData, userId) {
 async function updateElevatorLocation(id, locationData, userId) {
   return handleServiceError(
     async () => {
-      const { name, deviceIds, logDisplayColumns, floorCount, floorNames } =
-        locationData;
+      const {
+        name,
+        deviceIds,
+        accessDeviceIds,
+        logDisplayColumns,
+        floorCount,
+        floorNames,
+      } = locationData;
       await getElevatorLocationById(id);
       validateLocationData(locationData, true);
 
@@ -264,6 +278,9 @@ async function updateElevatorLocation(id, locationData, userId) {
 
       const configUpdates = {};
       if (deviceIds !== undefined) configUpdates.deviceIds = deviceIds;
+      if (accessDeviceIds !== undefined) {
+        configUpdates.accessDeviceIds = accessDeviceIds;
+      }
       if (logDisplayColumns !== undefined) {
         configUpdates.logDisplayColumns = logDisplayColumns;
       }

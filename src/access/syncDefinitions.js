@@ -3,13 +3,23 @@ const {
   getAllPermissionCodes,
 } = require("./catalog");
 
+/** 將舊權限碼的 user overrides 遷移至新碼（須在刪除舊碼前執行） */
+async function migratePermissionOverrides(pool, oldCode, newCode) {
+  await pool.query(
+    `INSERT INTO user_permission_overrides (user_id, permission_id, granted)
+     SELECT uo.user_id, new_p.id, uo.granted
+     FROM user_permission_overrides uo
+     INNER JOIN permission_definitions old_p
+       ON old_p.id = uo.permission_id AND old_p.code = $1
+     INNER JOIN permission_definitions new_p ON new_p.code = $2
+     ON CONFLICT (user_id, permission_id) DO UPDATE SET granted = EXCLUDED.granted`,
+    [oldCode, newCode],
+  );
+}
+
 /** 將 permission_definitions 與 catalog SSOT 對齊 */
 async function syncDefinitions(pool) {
   const catalogCodes = getAllPermissionCodes();
-  await pool.query(
-    `DELETE FROM permission_definitions WHERE NOT (code = ANY($1::text[]))`,
-    [catalogCodes],
-  );
   for (const row of getPermissionSeedRows()) {
     if (!row.parent_code) {
       await pool.query(
@@ -36,6 +46,17 @@ async function syncDefinitions(pool) {
       [row.code, row.category, row.name, row.sort_order, row.parent_code],
     );
   }
+
+  await migratePermissionOverrides(
+    pool,
+    "system.elevator.card.manage",
+    "system.elevator.floor.manage",
+  );
+
+  await pool.query(
+    `DELETE FROM permission_definitions WHERE NOT (code = ANY($1::text[]))`,
+    [catalogCodes],
+  );
 }
 
 async function runCli() {

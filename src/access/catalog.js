@@ -189,7 +189,7 @@ const CENTRAL_MODULES = [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "report.full", name: "完整報表", sort_order: 4 },
       { code: "device.control", name: "呼梯控制", sort_order: 5 },
-      { code: "card.manage", name: "卡片管理", sort_order: 6 },
+      { code: "floor.manage", name: "樓層管理", sort_order: 6 },
     ],
     ui: {
       id: 12,

@@ -142,7 +142,7 @@ static BridgeResponse HandleCardWrite(
     }
 
     ApplyFloorMode(payload);
-    var (ok, error) = SdkCardService.WriteCard(session.UserId, writeRequest);
+    var (ok, error) = SdkCardService.WriteCard(session.UserId, writeRequest, action);
     if (!ok)
     {
         return new BridgeResponse(false, "CARD_WRITE_FAILED", error);
@@ -361,11 +361,6 @@ static async Task<int> RunArmingDaemonAsync(JsonSerializerOptions jsonOptions)
             return;
         }
 
-        if (!AcsEventNames.IsAllowed(evt.Major, evt.Minor))
-        {
-            return;
-        }
-
         var payload = new
         {
             type = "event",
@@ -470,7 +465,7 @@ static int[] ReadIntArray(JsonElement root, string name, bool _ = false)
 static async Task WriteResponseAsync(JsonSerializerOptions jsonOptions, BridgeResponse response)
 {
     var json = JsonSerializer.Serialize(response, jsonOptions);
-    await Console.Out.WriteAsync(json);
+    await Console.Out.WriteLineAsync(json);
 }
 
 static async Task WriteLineJsonAsync(JsonSerializerOptions jsonOptions, object payload)

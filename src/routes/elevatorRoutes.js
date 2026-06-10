@@ -5,7 +5,8 @@ const express = require("express");
 const router = express.Router();
 const elevatorService = require("../services/elevator/elevatorService");
 const { MAX_LOG_RECORDS } = elevatorService;
-const elevatorCardSyncJobService = require("../services/elevator/elevatorCardSyncJobService");
+const elevatorFloorAccessService = require("../services/elevator/elevatorFloorAccessService");
+const elevatorFloorSyncJobService = require("../services/elevator/elevatorFloorSyncJobService");
 const {
   authenticate,
   requirePermission,
@@ -165,12 +166,49 @@ router.get(
   }),
 );
 
+router.get(
+  "/locations/:id/floor-access",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const result = await elevatorFloorAccessService.getFloorAccess(
+      parseInt(req.params.id, 10),
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+router.put(
+  "/locations/:id/floor-access",
+  requirePermission("system.elevator.floor.manage"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const result = await elevatorFloorAccessService.replaceFloorAccess(
+      parseInt(req.params.id, 10),
+      req.body?.assignments,
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+router.get(
+  "/locations/:id/sync-candidates",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const result = await elevatorFloorSyncJobService.getSyncCandidatesForLocation(
+      parseInt(req.params.id, 10),
+    );
+    res.sendSuccess(result);
+  }),
+);
+
 router.post(
   "/sync-location/:locationId/job",
-  requirePermission("system.elevator.card.manage"),
+  requirePermission("system.elevator.floor.manage"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
-    const result = await elevatorCardSyncJobService.startLocationSyncJob(
+    const result = await elevatorFloorSyncJobService.startLocationSyncJob(
       parseInt(req.params.locationId, 10),
       req.user?.id,
     );
@@ -180,11 +218,9 @@ router.post(
 
 router.get(
   "/sync-location/jobs/:jobId",
-  requirePermission("system.elevator.card.manage"),
+  requirePermission("system.elevator.floor.manage"),
   asyncHandler(async (req, res) => {
-    const result = await elevatorCardSyncJobService.getJob(
-      req.params.jobId,
-    );
+    const result = await elevatorFloorSyncJobService.getJob(req.params.jobId);
     res.sendSuccess(result);
   }),
 );

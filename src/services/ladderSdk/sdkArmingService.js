@@ -1,6 +1,5 @@
 /**
- * 梯控 SDK 佈防常駐服務
- * 過濾事件後推送 WebSocket：ladder_sdk:event
+ * 梯控 SDK 佈防常駐服務（事件白名單由 sdkEventPersistence 套用）
  */
 const db = require("../../database/db");
 const logger = require("../../utils/logger").createLogger("Ladder SDK Arming");

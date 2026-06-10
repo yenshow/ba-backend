@@ -903,33 +903,33 @@ async function syncPersonToDevice(
 }
 
 /**
- * 對單一地點執行同步：目標名單為來源，設備與之對齊（新增/更新姓名與人臉、刪除多餘）
- * @returns {{ warnings: Array<{ type: string, employeeNo?: string, deviceId?: number, message: string }> }}
+ * 將目標人員名單同步至多台門禁設備（新增／更新／刪除多餘）
  */
-async function syncLocation(locationId, reporter = null) {
-  const warnings = [];
-  const devs = await getPeopleCountingDevicesForLocation(locationId);
-  if (!devs) {
-    throwApiError(C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED, "該地點未設定人流門禁入口設備");
-  }
-
-  const persons =
-    await personnelService.getPersonsWithAccessByLocationId(locationId);
-  const targetEmployeeNos = new Set(persons.map((p) => String(p.employee_no)));
-  const targetList = persons.map((p) => ({
-    employeeNo: String(p.employee_no),
-    name: p.full_name || p.employee_no,
-    face_url: p.face_url || null,
-    config: p.config || null,
-  }));
-
-  const deviceIds = [
-    ...new Set([...(devs.entryDeviceIds || []), ...(devs.exitDeviceIds || [])]),
+async function syncAccessDevicesWithPersons(
+  deviceIds,
+  targetList,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const locationId =
+    options.locationId != null ? Number(options.locationId) : null;
+  const targetEmployeeNos = new Set(
+    (targetList || []).map((p) => String(p.employeeNo)),
+  );
+  const normalizedDeviceIds = [
+    ...new Set(
+      (deviceIds || [])
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
   ];
-  const deviceNameById = await getDeviceNameByIds(deviceIds);
+  if (!normalizedDeviceIds.length) return;
+
+  const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
   reporter?.setTotals?.({
-    targetPersonsTotal: targetList.length,
-    deviceTotal: deviceIds.length,
+    targetPersonsTotal: (targetList || []).length,
+    deviceTotal: normalizedDeviceIds.length,
   });
 
   // 讀設備全量 employeeNo 清單成本高：同一個 job 內加 TTL cache，避免重試/二次流程又打一次
@@ -955,7 +955,7 @@ async function syncLocation(locationId, reporter = null) {
   // total ops：每台設備的 add + sync + delete（delete 以 employeeNo 筆數計）
   let estimatedTotalOps = 0;
   const deviceTargets = new Map();
-  for (const deviceId of deviceIds) {
+  for (const deviceId of normalizedDeviceIds) {
     try {
       const currentEmployeeNos = new Set(
         await fetchAllEmployeeNosFromDeviceCached(deviceId),
@@ -988,12 +988,12 @@ async function syncLocation(locationId, reporter = null) {
   }
   reporter?.setTotals?.({ totalOps: estimatedTotalOps });
 
-  for (let i = 0; i < deviceIds.length; i++) {
-    const deviceId = deviceIds[i];
+  for (let i = 0; i < normalizedDeviceIds.length; i++) {
+    const deviceId = normalizedDeviceIds[i];
     reporter?.markDevice?.({
       deviceId,
       deviceIndex: i + 1,
-      deviceTotal: deviceIds.length,
+      deviceTotal: normalizedDeviceIds.length,
     });
 
     // 同步狀態（用於差異同步）：一次性抓取該設備下此地點所有目標人員的狀態
@@ -1019,7 +1019,7 @@ async function syncLocation(locationId, reporter = null) {
       });
       warnings.push({
         type: "sync",
-        locationId: Number(locationId),
+        ...(locationId != null ? { locationId } : {}),
         deviceId,
         deviceName: deviceNameById.get(Number(deviceId)) || null,
         message: `讀取設備人員清單失敗：${message}`,
@@ -1251,8 +1251,57 @@ async function syncLocation(locationId, reporter = null) {
       reporter.__stateByEmployeeNo = null;
     }
   }
+}
+
+/**
+ * 對單一地點執行同步：目標名單為來源，設備與之對齊（新增/更新姓名與人臉、刪除多餘）
+ * @returns {{ warnings: Array<{ type: string, employeeNo?: string, deviceId?: number, message: string }> }}
+ */
+async function syncLocation(locationId, reporter = null) {
+  const warnings = [];
+  const devs = await getPeopleCountingDevicesForLocation(locationId);
+  if (!devs) {
+    throwApiError(C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED, "該地點未設定人流門禁入口設備");
+  }
+
+  const persons =
+    await personnelService.getPersonsWithAccessByLocationId(locationId);
+  const targetList = persons.map((p) => ({
+    employeeNo: String(p.employee_no),
+    name: p.full_name || p.employee_no,
+    face_url: p.face_url || null,
+    config: p.config || null,
+  }));
+
+  const deviceIds = [
+    ...new Set([...(devs.entryDeviceIds || []), ...(devs.exitDeviceIds || [])]),
+  ];
+  await syncAccessDevicesWithPersons(deviceIds, targetList, warnings, reporter, {
+    locationId,
+  });
 
   logger.info("同步完成", { locationId, warningsCount: warnings.length });
+  return { warnings };
+}
+
+async function syncPersonsToAccessDevices({
+  deviceIds,
+  persons,
+  warnings = [],
+  reporter = null,
+}) {
+  const targetList = (persons || []).map((p) => ({
+    employeeNo: String(p.employee_no),
+    name: p.full_name || p.employee_no,
+    face_url: p.face_url || null,
+    config: p.config || null,
+  }));
+  await syncAccessDevicesWithPersons(
+    deviceIds,
+    targetList,
+    warnings,
+    reporter,
+  );
   return { warnings };
 }
 
@@ -1434,23 +1483,19 @@ async function syncAllLocations() {
   return { synced: results.length, results };
 }
 
-async function getSyncCandidatesForLocation(locationId) {
-  const rows =
-    await personnelService.getPersonsWithAccessByLocationId(locationId);
-  const list = Array.isArray(rows) ? rows : [];
-  const devs = await getPeopleCountingDevicesForLocation(locationId);
-  const deviceIds = devs
-    ? [
-        ...new Set([
-          ...(devs.entryDeviceIds || []),
-          ...(devs.exitDeviceIds || []),
-        ]),
-      ]
-    : [];
+async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
+  const list = Array.isArray(persons) ? persons : [];
+  const ids = [
+    ...new Set(
+      (deviceIds || [])
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
 
   const employeeNos = list.map((p) => String(p.employee_no));
   const stateMaps = [];
-  for (const did of deviceIds) {
+  for (const did of ids) {
     stateMaps.push({
       deviceId: did,
       map: await personDeviceSyncStateService.getStatesForDevice(
@@ -1682,6 +1727,22 @@ async function getSyncCandidatesForLocation(locationId) {
   });
 }
 
+async function getSyncCandidatesForLocation(locationId) {
+  const rows =
+    await personnelService.getPersonsWithAccessByLocationId(locationId);
+  const list = Array.isArray(rows) ? rows : [];
+  const devs = await getPeopleCountingDevicesForLocation(locationId);
+  const deviceIds = devs
+    ? [
+        ...new Set([
+          ...(devs.entryDeviceIds || []),
+          ...(devs.exitDeviceIds || []),
+        ]),
+      ]
+    : [];
+  return buildAccessSyncFieldsForPersons(list, deviceIds);
+}
+
 function startSyncAllLocationsJob() {
   const jobId = randomJobId();
 
@@ -1803,7 +1864,9 @@ module.exports = {
   getPeopleCountingDevicesForLocation,
   getSyncableLocations,
   getSyncCandidatesForLocation,
+  buildAccessSyncFieldsForPersons,
   syncLocation,
+  syncPersonsToAccessDevices,
   syncAllLocations,
   startSyncLocationJob,
   getSyncLocationJobView,

@@ -13,9 +13,6 @@ internal static class AcsEventNames
         [(0x5, 0x60)] = "呼梯繼電器閉合",
     };
 
-    public static bool IsAllowed(uint major, uint minor) =>
-        Names.ContainsKey((major, minor));
-
     public static string Format(uint major, uint minor)
     {
         if (Names.TryGetValue((major, minor), out var name))

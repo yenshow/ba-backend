@@ -60,20 +60,4 @@ internal static class SdkAlarmHelper
         evt = new AcsAlarmEvent(major, minor, doorNo, cardNo);
         return true;
     }
-
-    public static string FormatEventLine(AcsAlarmEvent evt)
-    {
-        var line = AcsEventNames.Format(evt.Major, evt.Minor);
-        if (evt.DoorNo > 0)
-        {
-            line += $" | 樓層={evt.DoorNo}";
-        }
-
-        if (!string.IsNullOrEmpty(evt.CardNo) && evt.CardNo != "0")
-        {
-            line += $" | 卡號={evt.CardNo}";
-        }
-
-        return line;
-    }
 }

@@ -680,7 +680,10 @@ async function getPersonsPaged(filters = {}, options = {}) {
         p.*,
         pg.name AS group_name,
         COALESCE(al.access_locations, '[]'::json) AS access_locations,
-        COALESCE(lp.license_plate_count, 0)::int AS license_plate_count
+        COALESCE(lp.license_plate_count, 0)::int AS license_plate_count,
+        EXISTS (
+          SELECT 1 FROM person_ladder_cards plc WHERE plc.person_id = p.id
+        ) AS has_ladder_card
       FROM persons p
       LEFT JOIN person_groups pg ON p.person_group_id = pg.id
       LEFT JOIN LATERAL (

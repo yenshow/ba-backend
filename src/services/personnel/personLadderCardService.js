@@ -1,9 +1,12 @@
 /**
- * 人員梯控卡片（person_ladder_cards）— 比照 person_license_plates
+ * 人員梯控卡片（person_ladder_cards）— 卡號／密碼／有效期取自人員主檔 access_control
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const {
+  buildIsapiValidPayloadFromPlatformValidity,
+} = require("../accessControl/accessControlValidityUtils");
 
 const VALID_SYNC_STATUSES = new Set([
   "pending",
@@ -22,7 +25,7 @@ const mapRow = (row) => {
       floors = [];
     }
   }
-  if (!Array.isArray(floors)) floors = [];
+  if (floors == null) floors = [];
 
   return {
     id: row.id,
@@ -44,17 +47,88 @@ const mapRow = (row) => {
   };
 };
 
-const parseTimestamp = (value) => {
-  if (value == null || value === "") return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-};
-
 const parseFloors = (raw) => {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((v) => Number(v))
     .filter((n) => Number.isFinite(n) && n > 0);
+};
+
+const parsePersonConfig = (raw) => {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" ? raw : {};
+};
+
+const getAccessControlFromPerson = (personRow) => {
+  const config = parsePersonConfig(personRow?.config);
+  return (config && config.access_control) || {};
+};
+
+const normalizeFloorsStorage = (raw) => {
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.byLocation) {
+    const byLocation = {};
+    for (const [key, value] of Object.entries(raw.byLocation)) {
+      const floors = parseFloors(value);
+      if (floors.length) byLocation[String(key)] = floors;
+    }
+    return { byLocation };
+  }
+  const legacy = parseFloors(raw);
+  if (legacy.length) {
+    return { byLocation: {}, _legacy: legacy };
+  }
+  return { byLocation: {} };
+};
+
+const parseFloorsForLocation = (raw, locationId) => {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    if (Array.isArray(raw._legacy) && raw._legacy.length) {
+      return parseFloors(raw._legacy);
+    }
+    const map = raw.byLocation || {};
+    const key = String(locationId);
+    return parseFloors(map[key] ?? map[Number(locationId)]);
+  }
+  return parseFloors(raw);
+};
+
+const hasAnyFloors = (storage) => {
+  if (Array.isArray(storage)) return storage.length > 0;
+  if (storage && typeof storage === "object") {
+    if (Array.isArray(storage._legacy) && storage._legacy.length) return true;
+    const map = storage.byLocation || {};
+    return Object.values(map).some((v) => parseFloors(v).length > 0);
+  }
+  return false;
+};
+
+const resolveSyncFields = (personRow, floors) => {
+  const ac = getAccessControlFromPerson(personRow);
+  const cardNo = ac.cardNo != null ? String(ac.cardNo).trim() : "";
+  const valid = buildIsapiValidPayloadFromPlatformValidity(ac?.validity);
+  const password =
+    ac?.password != null && String(ac.password).trim() !== ""
+      ? String(ac.password).trim()
+      : null;
+  const floorList = parseFloors(floors);
+  return {
+    cardNo,
+    homeFloor: floorList[0] ?? 1,
+    floors: floorList,
+    cardType: 1,
+    floorMode: "byte",
+    cardPassword: password,
+    validEnabled: Boolean(valid.enable),
+    validBegin: valid.beginTime || null,
+    validEnd: valid.endTime || null,
+  };
 };
 
 const assertCardNotOwnedByOther = async (cardNo, personId) => {
@@ -82,30 +156,39 @@ const getByPersonId = async (personId) => {
 };
 
 const upsertForPerson = async (personId, input = {}) => {
-  const cardNo = String(input.cardNo ?? input.card_no ?? "").trim();
+  const personRows = await db.query(`SELECT config FROM persons WHERE id = ?`, [
+    Number(personId),
+  ]);
+  const personRow = personRows?.[0] || null;
+  const ac = getAccessControlFromPerson(personRow);
+  const cardNo = String(ac.cardNo ?? input.cardNo ?? input.card_no ?? "").trim();
   if (!cardNo) {
-    throwApiError(C.VALIDATION_CUSTOM, "請提供 cardNo");
+    throwApiError(C.VALIDATION_CUSTOM, "請於卡片設定填寫卡號");
   }
 
-  const floors = parseFloors(input.floors);
-  if (floors.length === 0) {
-    throwApiError(C.VALIDATION_CUSTOM, "請提供 floors 授權樓層");
+  const floorsStorage = normalizeFloorsStorage(input.floors);
+  if (!hasAnyFloors(floorsStorage)) {
+    throwApiError(C.VALIDATION_CUSTOM, "請選擇授權樓層");
   }
 
   await assertCardNotOwnedByOther(cardNo, personId);
 
-  const homeFloor = Number(input.homeFloor ?? input.home_floor ?? 1);
-  const cardType = Number(input.cardType ?? input.card_type ?? 1);
-  const floorMode = String(input.floorMode ?? input.floor_mode ?? "byte");
-  const cardPassword =
-    input.cardPassword ?? input.card_password ?? null;
-  const validEnabled = Boolean(
-    input.validEnabled ?? input.valid_enabled ?? false,
-  );
-  const validBegin = parseTimestamp(
-    input.validBegin ?? input.valid_begin,
-  );
-  const validEnd = parseTimestamp(input.validEnd ?? input.valid_end);
+  const firstFloors = (() => {
+    if (Array.isArray(floorsStorage._legacy) && floorsStorage._legacy.length) {
+      return floorsStorage._legacy;
+    }
+    const all = Object.values(floorsStorage.byLocation || {}).flatMap((v) =>
+      parseFloors(v),
+    );
+    return [...new Set(all)].sort((a, b) => a - b);
+  })();
+  const homeFloor = firstFloors[0] ?? 1;
+  const cardType = 1;
+  const floorMode = "byte";
+  const storedFloors =
+    floorsStorage.byLocation && Object.keys(floorsStorage.byLocation).length
+      ? { byLocation: floorsStorage.byLocation }
+      : { _legacy: firstFloors };
 
   const syncRaw = input.sdkSyncStatus ?? input.sdk_sync_status;
   const sdkSyncStatus =
@@ -113,69 +196,54 @@ const upsertForPerson = async (personId, input = {}) => {
       ? String(syncRaw)
       : "pending";
 
-  const existing = await getByPersonId(personId);
-  if (existing) {
-    const rows = await db.query(
-      `UPDATE person_ladder_cards
-       SET card_no = ?,
-           home_floor = ?,
-           floors = ?,
-           card_type = ?,
-           floor_mode = ?,
-           card_password = ?,
-           valid_enabled = ?,
-           valid_begin = ?,
-           valid_end = ?,
-           sdk_sync_status = ?,
-           sdk_sync_error = NULL,
-           sdk_synced_at = NULL,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE person_id = ?
-       RETURNING *`,
-      [
-        cardNo,
-        homeFloor,
-        JSON.stringify(floors),
-        cardType,
-        floorMode,
-        cardPassword,
-        validEnabled,
-        validBegin,
-        validEnd,
-        sdkSyncStatus,
-        Number(personId),
-      ],
-    );
-    return mapRow(rows?.[0]);
-  }
+  const floorsJson = JSON.stringify(storedFloors);
+  const pid = Number(personId);
+  const rowParams = [cardNo, homeFloor, floorsJson, cardType, floorMode, sdkSyncStatus];
 
-  const rows = await db.query(
-    `INSERT INTO person_ladder_cards (
-       person_id, card_no, home_floor, floors, card_type, floor_mode,
-       card_password, valid_enabled, valid_begin, valid_end, sdk_sync_status
-     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     RETURNING *`,
-    [
-      Number(personId),
-      cardNo,
-      homeFloor,
-      JSON.stringify(floors),
-      cardType,
-      floorMode,
-      cardPassword,
-      validEnabled,
-      validBegin,
-      validEnd,
-      sdkSyncStatus,
-    ],
-  );
-  return mapRow(rows?.[0]);
+  const existing = await getByPersonId(personId);
+  const rows = existing
+    ? await db.query(
+        `UPDATE person_ladder_cards
+         SET card_no = ?,
+             home_floor = ?,
+             floors = ?,
+             card_type = ?,
+             floor_mode = ?,
+             card_password = NULL,
+             valid_enabled = FALSE,
+             valid_begin = NULL,
+             valid_end = NULL,
+             sdk_sync_status = ?,
+             sdk_sync_error = NULL,
+             sdk_synced_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE person_id = ?
+         RETURNING *`,
+        [...rowParams, pid],
+      )
+    : await db.query(
+        `INSERT INTO person_ladder_cards (
+           person_id, card_no, home_floor, floors, card_type, floor_mode,
+           card_password, valid_enabled, valid_begin, valid_end, sdk_sync_status
+         )
+         VALUES (?, ?, ?, ?, ?, ?, NULL, FALSE, NULL, NULL, ?)
+         RETURNING *`,
+        [pid, ...rowParams],
+      );
+
+  const mapped = mapRow(rows?.[0]);
+  const {
+    syncPersonFloorAccessFromLadderFloors,
+  } = require("../elevator/elevatorFloorAccessService");
+  await syncPersonFloorAccessFromLadderFloors(personId, storedFloors);
+  return mapped;
 };
 
 const removeForPerson = async (personId) => {
-  await db.query(`DELETE FROM person_ladder_cards WHERE person_id = ?`, [
-    Number(personId),
+  const pid = Number(personId);
+  await db.query(`DELETE FROM person_ladder_cards WHERE person_id = ?`, [pid]);
+  await db.query(`DELETE FROM person_elevator_floor_access WHERE person_id = ?`, [
+    pid,
   ]);
   return { success: true };
 };
@@ -197,4 +265,6 @@ module.exports = {
   removeForPerson,
   getPersonIdByCardNo,
   mapRow,
+  parseFloorsForLocation,
+  resolveSyncFields,
 };

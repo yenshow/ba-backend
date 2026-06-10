@@ -5,6 +5,7 @@
  * 參數直接改下方 CONFIG，無需設定環境變數。
  */
 const { invokeBridge } = require("../src/services/ladderSdk/sdkBridgeClient");
+const { enrichLadderCardName } = require("../src/services/ladderSdk/sdkCardService");
 
 // ===== 本機測試設定（直接改這裡）=====
 const CONFIG = {
@@ -115,7 +116,15 @@ const run = async () => {
       process.exit(1);
   }
 
-  const result = await invokeBridge(request);
+  let result = await invokeBridge(request);
+  if (action === "card.list" && Array.isArray(result?.cards)) {
+    result = {
+      ...result,
+      cards: await Promise.all(result.cards.map((card) => enrichLadderCardName(card))),
+    };
+  } else if (action === "card.get" && result) {
+    result = await enrichLadderCardName(result);
+  }
   console.log(JSON.stringify(result, null, 2));
 };
 

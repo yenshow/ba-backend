@@ -1,0 +1,460 @@
+/**
+ * 電梯梯控設備同步 job（地點樓層授權 + 人員梯控卡 → 設備）
+ */
+const db = require("../../database/db");
+const logger = require("../../utils/logger").createLogger("ElevatorFloorSync");
+const C = require("../../utils/apiErrorCodes");
+const { throwApiError } = require("../../utils/apiErrorMeta");
+const personLadderCardService = require("../personnel/personLadderCardService");
+const personDeviceSyncStateService = require("../personnel/personDeviceSyncStateService");
+const sdkCardService = require("../ladderSdk/sdkCardService");
+const elevatorService = require("./elevatorService");
+const elevatorFloorAccessService = require("./elevatorFloorAccessService");
+const personSyncJobService = require("../personnel/personSyncJobService");
+
+const SYNC_DELAY_MS = 300;
+const jobs = new Map();
+
+const randomJobId = () =>
+  `elevator_sync_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const toMessage = (err) => err?.message ?? String(err);
+
+const updateLadderCardSyncStatus = async (personId, status, error = null) => {
+  await db.query(
+    `UPDATE person_ladder_cards
+     SET sdk_sync_status = ?,
+         sdk_sync_error = ?,
+         sdk_synced_at = CASE WHEN ? = 'synced' THEN CURRENT_TIMESTAMP ELSE sdk_synced_at END,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE person_id = ?`,
+    [status, error, status, Number(personId)],
+  );
+};
+
+const buildLadderIdentity = (person) => ({
+  name: String(person.full_name || person.employee_no || "").trim(),
+  employeeNo: Number(person.id) > 0 ? Number(person.id) : 0,
+});
+
+const buildCardPayload = (person, floors) => {
+  const { cardPassword, ...fields } = personLadderCardService.resolveSyncFields(
+    person,
+    floors,
+  );
+  const identity = buildLadderIdentity(person);
+  return {
+    ...fields,
+    name: identity.name,
+    employeeNo: identity.employeeNo > 0 ? identity.employeeNo : undefined,
+    password: cardPassword || undefined,
+  };
+};
+
+const buildLadderDesiredHash = (person, floors, resolved) => {
+  const identity = buildLadderIdentity(person);
+  return personDeviceSyncStateService.hashLadderCard({
+    cardNo: resolved.cardNo,
+    homeFloor: resolved.homeFloor,
+    floors,
+    cardType: resolved.cardType,
+    floorMode: resolved.floorMode,
+    cardPassword: resolved.cardPassword,
+    validEnabled: resolved.validEnabled,
+    validBegin: resolved.validBegin,
+    validEnd: resolved.validEnd,
+    name: identity.name,
+    employeeNo: identity.employeeNo,
+  });
+};
+
+async function syncLocationToDevice(locationId, deviceId, job = null) {
+  const persons =
+    await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
+  const targetCardNos = new Set();
+  const warnings = [];
+
+  let deviceCards = [];
+  try {
+    const listResult = await sdkCardService.listCards(deviceId);
+    deviceCards = Array.isArray(listResult?.cards)
+      ? listResult.cards
+      : Array.isArray(listResult)
+        ? listResult
+        : [];
+  } catch (err) {
+    throwApiError(
+      C.ELEVATOR_OPERATION_FAILED,
+      `讀取設備卡片失敗: ${toMessage(err)}`,
+    );
+  }
+
+  const deviceCardNos = new Set(
+    deviceCards
+      .map((c) => (c?.cardNo != null ? String(c.cardNo).trim() : ""))
+      .filter(Boolean),
+  );
+
+  if (job) {
+    job.progress = {
+      ...job.progress,
+      targetPersonsTotal: persons.length,
+      deviceId,
+      totalOps: (job.progress?.totalOps || 0) + persons.length,
+    };
+  }
+
+  for (const person of persons) {
+    const ladderCard = await personLadderCardService.getByPersonId(person.id);
+    const syncFields = personLadderCardService.resolveSyncFields(person, []);
+    const cardNo = String(syncFields.cardNo || "").trim();
+    if (!cardNo) {
+      warnings.push({
+        type: "skip_no_card",
+        employeeNo: person.employee_no,
+        message: "人員未設定卡號（請於人員主檔卡片設定填寫）",
+      });
+      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      continue;
+    }
+    if (!ladderCard) {
+      warnings.push({
+        type: "skip_no_ladder_floors",
+        employeeNo: person.employee_no,
+        message: "人員未設定梯控授權樓層",
+      });
+      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      continue;
+    }
+
+    const floors = await elevatorFloorAccessService.aggregateFloorsForPerson(
+      locationId,
+      person.id,
+    );
+    if (!floors.length) {
+      warnings.push({
+        type: "skip_no_floors",
+        employeeNo: person.employee_no,
+        message: "人員未授權任何樓層",
+      });
+      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      continue;
+    }
+
+    targetCardNos.add(cardNo);
+    const payload = buildCardPayload(person, floors);
+    const resolved = personLadderCardService.resolveSyncFields(person, floors);
+    const desiredHash = buildLadderDesiredHash(person, floors, resolved);
+
+    const stateMap = await personDeviceSyncStateService.getStatesForDevice(
+      deviceId,
+      [person.employee_no],
+    );
+    const stateRow = stateMap.get(String(person.employee_no));
+    const lastHash = stateRow?.card_hash ? String(stateRow.card_hash) : null;
+
+    try {
+      if (deviceCardNos.has(cardNo)) {
+        if (lastHash && lastHash === desiredHash) {
+          await personDeviceSyncStateService.upsertStepState({
+            deviceId,
+            employeeNo: person.employee_no,
+            step: "card",
+            status: "synced",
+            hash: desiredHash,
+          });
+          await updateLadderCardSyncStatus(person.id, "synced");
+          if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+          await sleep(SYNC_DELAY_MS);
+          continue;
+        }
+        await sdkCardService.updateCard(deviceId, cardNo, payload);
+      } else {
+        await sdkCardService.createCard(deviceId, payload);
+        deviceCardNos.add(cardNo);
+      }
+
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employee_no,
+        step: "card",
+        status: "synced",
+        hash: desiredHash,
+      });
+      await updateLadderCardSyncStatus(person.id, "synced");
+    } catch (err) {
+      const message = toMessage(err);
+      logger.warn("梯控卡片同步失敗", {
+        locationId,
+        deviceId,
+        employeeNo: person.employee_no,
+        error: message,
+      });
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employee_no,
+        step: "card",
+        status: "failed",
+        hash: desiredHash,
+        lastErrorMessage: message,
+      });
+      await updateLadderCardSyncStatus(person.id, "failed", message);
+      warnings.push({
+        type: "sync_failed",
+        employeeNo: person.employee_no,
+        deviceId,
+        message,
+      });
+    }
+
+    if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+    await sleep(SYNC_DELAY_MS);
+  }
+
+  for (const cardNo of deviceCardNos) {
+    if (targetCardNos.has(cardNo)) continue;
+    try {
+      await sdkCardService.deleteCard(deviceId, cardNo);
+    } catch (err) {
+      if (err?.code === C.LADDER_SDK_CARD_NOT_FOUND) continue;
+      warnings.push({
+        type: "delete_failed",
+        cardNo,
+        deviceId,
+        message: toMessage(err),
+      });
+    }
+    await sleep(SYNC_DELAY_MS);
+  }
+
+  return { warnings, deviceId };
+}
+
+async function syncLocationCards(locationId, job = null) {
+  const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const { deviceIds, accessDeviceIds } = elevatorService.getElevatorConfig(location);
+  if (!deviceIds.length && !accessDeviceIds.length) {
+    throwApiError(
+      C.ELEVATOR_VALIDATION_FAILED,
+      "該地點未設定梯控或門禁設備",
+    );
+  }
+
+  const hasAccess = await elevatorFloorAccessService.getPersonIdsWithFloorAccess(
+    locationId,
+  );
+  if (!hasAccess.length) {
+    throwApiError(
+      C.ELEVATOR_VALIDATION_FAILED,
+      "此地點尚未設定樓層授權，請先完成樓層管理步驟 1",
+    );
+  }
+
+  if (job) {
+    job.progress = {
+      ...job.progress,
+      doneOps: 0,
+      totalOps: 0,
+    };
+  }
+
+  const allWarnings = [];
+  const syncedDeviceIds = [];
+  const syncedAccessDeviceIds = [];
+
+  if (deviceIds.length) {
+    for (const deviceId of deviceIds) {
+      const { warnings, deviceId: syncedId } = await syncLocationToDevice(
+        locationId,
+        deviceId,
+        job,
+      );
+      allWarnings.push(...warnings);
+      syncedDeviceIds.push(syncedId);
+    }
+  }
+
+  if (accessDeviceIds.length) {
+    const persons =
+      await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
+    const { warnings: accessWarnings } =
+      await personSyncJobService.syncPersonsToAccessDevices({
+        deviceIds: accessDeviceIds,
+        persons,
+        warnings: [],
+      });
+    allWarnings.push(...accessWarnings);
+    syncedAccessDeviceIds.push(...accessDeviceIds);
+  }
+
+  return {
+    warnings: allWarnings,
+    deviceId: syncedDeviceIds[0] ?? syncedAccessDeviceIds[0] ?? null,
+    deviceIds: syncedDeviceIds,
+    accessDeviceIds: syncedAccessDeviceIds,
+  };
+}
+
+async function runJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return;
+  job.status = "running";
+  job.startedAt = Date.now();
+  try {
+    const result = await syncLocationCards(job.locationId, job);
+    job.status = "completed";
+    job.finishedAt = Date.now();
+    job.result = result;
+  } catch (err) {
+    job.status = "completed";
+    job.finishedAt = Date.now();
+    job.error = toMessage(err);
+    job.result = { warnings: [] };
+  }
+}
+
+async function startLocationSyncJob(locationId, _userId) {
+  const jobId = randomJobId();
+  const job = {
+    jobId,
+    jobType: "elevator_sync_location",
+    locationId: Number(locationId),
+    status: "queued",
+    createdAt: Date.now(),
+    startedAt: null,
+    finishedAt: null,
+    progress: {},
+    result: null,
+    error: null,
+  };
+  jobs.set(jobId, job);
+  setImmediate(() => {
+    void runJob(jobId);
+  });
+  return { jobId };
+}
+
+function getJob(jobId) {
+  const job = jobs.get(String(jobId || "").trim());
+  if (!job) {
+    throwApiError(C.ELEVATOR_SYNC_JOB_NOT_FOUND, "同步工作不存在");
+  }
+  return { job };
+}
+
+function mapCardSyncStatus(raw) {
+  const s = String(raw || "").trim();
+  if (s === "synced" || s === "success") return "success";
+  if (s === "failed") return "failed";
+  if (s === "unchanged") return "unchanged";
+  if (s === "no_data") return "no_data";
+  return s || "no_data";
+}
+
+async function getSyncCandidatesForLocation(locationId) {
+  const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const { deviceIds, accessDeviceIds } = elevatorService.getElevatorConfig(location);
+  const persons =
+    await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
+  const employeeNos = persons.map((p) => String(p.employee_no));
+
+  const stateMaps = [];
+  for (const deviceId of deviceIds) {
+    stateMaps.push({
+      deviceId,
+      map: await personDeviceSyncStateService.getStatesForDevice(
+        deviceId,
+        employeeNos,
+      ),
+    });
+  }
+
+  const accessFieldsByEmployeeNo = new Map();
+  if (accessDeviceIds.length) {
+    const accessRows = await personSyncJobService.buildAccessSyncFieldsForPersons(
+      persons,
+      accessDeviceIds,
+    );
+    persons.forEach((person, idx) => {
+      const row = accessRows[idx];
+      if (row) {
+        accessFieldsByEmployeeNo.set(String(person.employee_no), row);
+      }
+    });
+  }
+
+  const results = [];
+  for (const person of persons) {
+    const ladderCard = await personLadderCardService.getByPersonId(person.id);
+    const floors = await elevatorFloorAccessService.aggregateFloorsForPerson(
+      locationId,
+      person.id,
+    );
+    const resolved = personLadderCardService.resolveSyncFields(person, floors);
+    const cardNo = resolved.cardNo ? String(resolved.cardNo).trim() : "";
+    const desiredHash = cardNo
+      ? buildLadderDesiredHash(person, floors, resolved)
+      : null;
+
+    let cardStatus = "no_data";
+    let cardSyncedAt = null;
+    let needsSync = false;
+
+    if (!cardNo) {
+      needsSync = true;
+    } else if (!deviceIds.length) {
+      needsSync = true;
+    } else {
+      let allSynced = true;
+      for (const { map } of stateMaps) {
+        const row = map.get(String(person.employee_no));
+        if (!row) {
+          allSynced = false;
+          continue;
+        }
+        const ok =
+          String(row.card_status || "") === "synced" &&
+          String(row.card_hash || "") === String(desiredHash || "");
+        if (!ok) allSynced = false;
+        if (row.card_synced_at) {
+          cardSyncedAt = row.card_synced_at;
+        }
+        cardStatus = mapCardSyncStatus(row.card_status);
+      }
+      needsSync = !allSynced;
+    }
+
+    const accessRow = accessFieldsByEmployeeNo.get(String(person.employee_no));
+    const needsAccessSync = Boolean(accessRow?.needs_sync);
+    results.push({
+      employee_no: person.employee_no,
+      full_name: person.full_name,
+      has_ladder_card: Boolean(cardNo && ladderCard),
+      authorized_floors: floors,
+      needs_sync: needsSync || needsAccessSync,
+      needs_ladder_sync: needsSync,
+      needs_access_sync: needsAccessSync,
+      last_sync: {
+        card: {
+          status: cardStatus,
+          at: cardSyncedAt,
+        },
+        ...(accessRow?.last_sync ? { access: accessRow.last_sync } : {}),
+      },
+    });
+  }
+
+  return {
+    persons: results,
+    hasAccessDevices: accessDeviceIds.length > 0,
+  };
+}
+
+module.exports = {
+  startLocationSyncJob,
+  getJob,
+  syncLocationCards,
+  getSyncCandidatesForLocation,
+};

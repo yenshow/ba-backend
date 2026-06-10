@@ -60,12 +60,15 @@ function hashLadderCard({
   validEnabled,
   validBegin,
   validEnd,
+  name,
+  employeeNo,
 }) {
   const c = cardNo != null ? String(cardNo).trim() : "";
   if (!c) return null;
   const floorList = Array.isArray(floors)
     ? floors.map((f) => Number(f)).filter((n) => Number.isFinite(n) && n > 0)
     : [];
+  const employeeId = Number(employeeNo);
   return sha256Hex(
     JSON.stringify({
       cardNo: c,
@@ -77,6 +80,8 @@ function hashLadderCard({
       validEnabled: !!validEnabled,
       validBegin: validBegin ? String(validBegin) : "",
       validEnd: validEnd ? String(validEnd) : "",
+      name: name != null ? String(name).trim() : "",
+      employeeNo: Number.isFinite(employeeId) && employeeId > 0 ? employeeId : 0,
     }),
   );
 }
