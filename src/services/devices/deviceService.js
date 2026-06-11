@@ -14,7 +14,7 @@ const licenseQuotaService = require("../license/licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError, throwApiError } = require("../../utils/apiErrorMeta");
+const { createApiError, throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
 const {
   rethrowIfApiError,
   failDeviceList,
@@ -243,7 +243,7 @@ async function getDevices(filters = {}) {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    failDeviceList("取得設備列表失敗: " + error.message, error.message);
+    failDeviceList("取得設備列表失敗", causeDetails(error));
   }
 }
 
@@ -294,7 +294,7 @@ async function getDeviceById(id) {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    failDeviceGet("取得設備失敗: " + error.message, error.message);
+    failDeviceGet("取得設備失敗", causeDetails(error));
   }
 }
 
@@ -561,7 +561,7 @@ async function createDevice(deviceData, userId) {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    failDeviceCreate("創建設備失敗: " + error.message, error.message);
+    failDeviceCreate("創建設備失敗", causeDetails(error));
   }
 }
 
@@ -855,7 +855,7 @@ async function updateDevice(id, deviceData, userId) {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    failDeviceUpdate("更新設備失敗: " + error.message, error.message);
+    failDeviceUpdate("更新設備失敗", causeDetails(error));
   }
 }
 
@@ -906,7 +906,7 @@ async function deleteDevice(id, userId = null) {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    failDeviceDelete("刪除設備失敗: " + error.message, error.message);
+    failDeviceDelete("刪除設備失敗", causeDetails(error));
   }
 }
 
@@ -929,9 +929,9 @@ async function getCameraGroups() {
       error: error?.message || String(error),
       module: "deviceService",
     });
-    throwApiError(C.DEVICE_CAMERA_GROUPS_FAILED, "取得攝影機群組失敗: " + error.message, {
+    throwApiError(C.DEVICE_CAMERA_GROUPS_FAILED, "取得攝影機群組失敗", {
       statusCode: 500,
-      details: error.message,
+      details: causeDetails(error),
     });
   }
 }

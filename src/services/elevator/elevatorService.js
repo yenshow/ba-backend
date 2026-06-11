@@ -10,6 +10,7 @@ const C = require("../../utils/apiErrorCodes");
 const {
   throwApiError,
   rethrowIfApiError,
+  causeDetails,
 } = require("../../utils/apiErrorMeta");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const {
@@ -17,6 +18,8 @@ const {
   normalizeElevatorFloorConfig,
 } = require("./elevatorFloorConfig");
 const { resolveTimeOptions } = require("../entryExit/resolveTimeOptions");
+const { formatAcsEventDisplayName } = require("../ladderSdk/acsEventLabels");
+const { aggregateElevatorLogs } = require("./elevatorLogAggregation");
 const db = require("../../database/db");
 
 const MAX_LOG_RECORDS = 500;
@@ -37,11 +40,10 @@ async function handleServiceError(fn, errorMessage, context = {}) {
       ...context,
       module: "elevatorService",
     });
-    throwApiError(
-      C.ELEVATOR_OPERATION_FAILED,
-      errorMessage + ": " + error.message,
-      { statusCode: 500, details: error.message },
-    );
+    throwApiError(C.ELEVATOR_OPERATION_FAILED, errorMessage, {
+      statusCode: 500,
+      details: causeDetails(error),
+    });
   }
 }
 
@@ -92,11 +94,12 @@ function mapEventToLog(row) {
   return {
     id: row.id,
     deviceId: row.deviceId,
+    major: row.major,
+    minor: row.minor,
     floor: row.floor ?? null,
     deviceName: row.deviceName || null,
     personName: row.personName || null,
-    cardNo: row.cardNo || null,
-    event: row.eventName || null,
+    event: formatAcsEventDisplayName(row.eventName, row.major, row.minor),
     time: row.eventTime,
     employeeNo: row.employeeNo || null,
     personId: row.personId || null,
@@ -107,12 +110,11 @@ function filterLogsBySearch(logs, search) {
   const q = search != null ? String(search).trim().toLowerCase() : "";
   if (!q) return logs;
   return logs.filter((log) => {
-    const card = log.cardNo != null ? String(log.cardNo).toLowerCase() : "";
     const name =
       log.personName != null ? String(log.personName).toLowerCase() : "";
     const emp =
       log.employeeNo != null ? String(log.employeeNo).toLowerCase() : "";
-    return card.includes(q) || name.includes(q) || emp.includes(q);
+    return name.includes(q) || emp.includes(q);
   });
 }
 
@@ -389,6 +391,7 @@ async function getSiteLogs(locationId, options = {}) {
 
       let logs = (result.items || []).map(mapEventToLog);
       logs = filterLogsBySearch(logs, search);
+      logs = aggregateElevatorLogs(logs);
 
       return {
         logs,

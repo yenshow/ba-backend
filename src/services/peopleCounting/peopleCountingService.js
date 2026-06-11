@@ -12,6 +12,7 @@ const C = require("../../utils/apiErrorCodes");
 const {
   throwApiError,
   rethrowIfApiError,
+  causeDetails,
 } = require("../../utils/apiErrorMeta");
 const yscpProvider = require("./providers/yscpProvider");
 const accessControlProvider = require("./providers/accessControlProvider");
@@ -57,8 +58,8 @@ async function handleServiceError(fn, errorMessage, context = {}) {
     });
     throwApiError(
       C.PEOPLE_COUNTING_OPERATION_FAILED,
-      errorMessage + ": " + error.message,
-      { statusCode: 500, details: error.message },
+      errorMessage,
+      { statusCode: 500, details: causeDetails(error) },
     );
   }
 }

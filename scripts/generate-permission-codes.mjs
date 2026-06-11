@@ -104,9 +104,13 @@ const buildPermObject = (profile) => {
   return lines.join("\n");
 };
 
-const buildLocationDeleteMap = () => {
+const buildLocationDeleteMap = (profile) => {
+  const moduleCodes = new Set(
+    getCatalogModulesForProfile(profile).map((mod) => mod.code),
+  );
   const entries = Object.entries(LOCATION_TYPE_MODULE)
     .map(([locationType, moduleCode]) => {
+      if (!moduleCodes.has(moduleCode)) return null;
       const permKey = MODULE_PERM_KEYS[moduleCode];
       if (!permKey) return null;
       return `\t${locationType}: PERM.${permKey}.locationDelete,`;
@@ -117,15 +121,15 @@ const buildLocationDeleteMap = () => {
 
 const renderFile = (profile) => {
   const permBody = buildPermObject(profile);
-  const locationMap =
-    profile === "central"
-      ? `
+  const locationDeleteBody = buildLocationDeleteMap(profile);
+  const locationMap = locationDeleteBody
+    ? `
 
 /** locationType（DB／API）→ 地點刪除權限碼；全區點位圖依系統刪除地點時使用 */
 export const LOCATION_DELETE_BY_SYSTEM_TYPE: Record<string, string> = {
-${buildLocationDeleteMap()}
+${locationDeleteBody}
 }`
-      : "";
+    : "";
 
   return `// AUTO-GENERATED — do not edit; run: npm run gen:perm (ba-backend)
 /** Profile: ${profile} — aligned with access/catalog.js */

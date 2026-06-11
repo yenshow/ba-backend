@@ -124,9 +124,9 @@ sdk/
 | ----------- | ------------------- | ------------------------------------------------------------------- |
 | `door.list` | `limit?`            | 列出樓層名稱；`limit` 限制筆數，省略則依 ACS 能力集上限（可能 128） |
 | `door.get`  | `doorIndex`         | 讀取單層（≥1）                                                      |
-| `door.set`  | `doorIndex`, `name` | 修改名稱；內部先 Get 再 Set，避免覆蓋其他門參數                     |
+| `door.set`  | `doorIndex`, `name`, `openDuration?` | 修改名稱與／或繼電器動作時間；內部先 Get 再 Set，避免覆蓋其他門參數 |
 
-底層：`NET_DVR_GetDVRConfig` / `SetDVRConfig`，command `2108` / `2109`，欄位 `byDoorName[32]`。
+底層：`NET_DVR_GetDVRConfig` / `SetDVRConfig`，command `2108` / `2109`，欄位 `byDoorName[32]`、`byOpenDuration`（1–255 秒）。
 
 **呼梯**
 
@@ -160,6 +160,8 @@ Bridge 佈防輸出**全部** ACS 事件；後端 `sdkEventPersistence` 寫入 D
 | 0x5   | 0x01  | 合法卡通行     |
 | 0x5   | 0x5f  | 呼梯繼電器斷開 |
 | 0x5   | 0x60  | 呼梯繼電器閉合 |
+| 0x5   | 0x63  | 關門           |
+| 0x5   | 0x64  | 開門           |
 
 ---
 

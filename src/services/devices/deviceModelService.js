@@ -2,7 +2,7 @@ const db = require("../../database/db");
 const { parseConfig, stringifyConfig } = require("../../utils/deviceHelpers");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
 const {
   rethrowIfApiError,
   failDeviceModelList,
@@ -62,7 +62,7 @@ async function getAllDeviceModels(filters = {}) {
       error: error?.message || String(error),
       module: "deviceModelService",
     });
-    failDeviceModelList("取得設備型號失敗: " + error.message, error.message);
+    failDeviceModelList("取得設備型號失敗", causeDetails(error));
   }
 }
 
@@ -94,7 +94,7 @@ async function getDeviceModelById(id) {
       error: error?.message || String(error),
       module: "deviceModelService",
     });
-    failDeviceModelGet("取得設備型號失敗: " + error.message, error.message);
+    failDeviceModelGet("取得設備型號失敗", causeDetails(error));
   }
 }
 
@@ -254,7 +254,7 @@ async function createDeviceModel(data, userId) {
       error: error?.message || String(error),
       module: "deviceModelService",
     });
-    failDeviceModelCreate("建立設備型號失敗: " + error.message, error.message);
+    failDeviceModelCreate("建立設備型號失敗", causeDetails(error));
   }
 }
 
@@ -416,7 +416,7 @@ async function updateDeviceModel(id, data, userId) {
       error: error?.message || String(error),
       module: "deviceModelService",
     });
-    failDeviceModelUpdate("更新設備型號失敗: " + error.message, error.message);
+    failDeviceModelUpdate("更新設備型號失敗", causeDetails(error));
   }
 }
 
@@ -450,7 +450,7 @@ async function deleteDeviceModel(id) {
       error: error?.message || String(error),
       module: "deviceModelService",
     });
-    failDeviceModelDelete("刪除設備型號失敗: " + error.message, error.message);
+    failDeviceModelDelete("刪除設備型號失敗", causeDetails(error));
   }
 }
 

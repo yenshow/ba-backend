@@ -1,7 +1,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
 const { rethrowIfApiError } = require("../../utils/apiErrorMeta");
 const {
   failLocationGet,
@@ -49,7 +49,7 @@ async function getLocationById(id) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationGet("取得地點失敗: " + error.message, error.message);
+    failLocationGet("取得地點失敗", causeDetails(error));
   }
 }
 
@@ -184,7 +184,7 @@ async function createLocation(locationData, userId) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationCreate("建立地點失敗: " + error.message, error.message);
+    failLocationCreate("建立地點失敗", causeDetails(error));
   }
 }
 
@@ -244,7 +244,7 @@ async function updateLocation(id, locationData, userId) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationUpdate("更新地點失敗: " + error.message, error.message);
+    failLocationUpdate("更新地點失敗", causeDetails(error));
   }
 }
 
@@ -273,7 +273,7 @@ async function deleteLocation(id) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationDelete("刪除地點失敗: " + error.message, error.message);
+    failLocationDelete("刪除地點失敗", causeDetails(error));
   }
 }
 

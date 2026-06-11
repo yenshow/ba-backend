@@ -1,7 +1,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { rethrowIfApiError, throwApiError } = require("../../utils/apiErrorMeta");
+const { rethrowIfApiError, throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
 const {
   failLocationZoneList,
   failLocationZoneGet,
@@ -136,7 +136,7 @@ async function getZones(filters = {}) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationZoneList("取得區域列表失敗: " + error.message, error.message);
+    failLocationZoneList("取得區域列表失敗", causeDetails(error));
   }
 }
 
@@ -164,7 +164,7 @@ async function getZoneById(id, systemTypeOrLocationType = null) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationZoneGet("取得區域失敗: " + error.message, error.message);
+    failLocationZoneGet("取得區域失敗", causeDetails(error));
   }
 }
 
@@ -307,7 +307,7 @@ async function createZone(zoneData, userId) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationZoneCreate("建立區域失敗: " + error.message, error.message);
+    failLocationZoneCreate("建立區域失敗", causeDetails(error));
   }
 }
 
@@ -515,7 +515,7 @@ async function updateZone(id, zoneData, userId) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationZoneUpdate("更新區域失敗: " + error.message, error.message);
+    failLocationZoneUpdate("更新區域失敗", causeDetails(error));
   }
 }
 
@@ -549,7 +549,7 @@ async function deleteZone(id) {
       error: error?.message || String(error),
       module: "locationService",
     });
-    failLocationZoneDelete("刪除區域失敗: " + error.message, error.message);
+    failLocationZoneDelete("刪除區域失敗", causeDetails(error));
   }
 }
 

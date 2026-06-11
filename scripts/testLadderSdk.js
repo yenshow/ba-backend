@@ -27,6 +27,7 @@ const CONFIG = {
   doorLimit: 10, // door.list 筆數上限，0 = 依設備能力全部
   doorIndex: 1,
   doorName: "Floor 01",
+  doorOpenDuration: 5,
 };
 
 const action = process.argv[2] || "card.list";
@@ -108,6 +109,7 @@ const run = async () => {
         payload: {
           doorIndex: CONFIG.doorIndex,
           name: CONFIG.doorName,
+          openDuration: CONFIG.doorOpenDuration,
         },
       };
       break;

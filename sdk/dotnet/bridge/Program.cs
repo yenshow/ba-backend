@@ -225,23 +225,29 @@ static BridgeResponse HandleDoorSet(SdkDeviceSession session, JsonElement? paylo
 {
     var doorIndex = ReadInt(payload, "doorIndex", 0);
     var name = ReadString(payload, "name");
+    var (openDuration, openDurationError) = ReadOpenDuration(payload);
     if (doorIndex < 1)
     {
         return new BridgeResponse(false, "DOOR_INDEX_REQUIRED", "請提供 doorIndex（>= 1）");
     }
 
-    if (name == null)
+    if (openDurationError != null)
     {
-        return new BridgeResponse(false, "DOOR_NAME_REQUIRED", "請提供 name");
+        return new BridgeResponse(false, "DOOR_OPEN_DURATION_INVALID", openDurationError);
     }
 
-    var (ok, error) = SdkDoorService.SetDoorName(session.UserId, doorIndex, name);
+    if (name == null && openDuration == null)
+    {
+        return new BridgeResponse(false, "DOOR_PARAM_REQUIRED", "請提供 name 或 openDuration");
+    }
+
+    var (ok, error) = SdkDoorService.SetDoor(session.UserId, doorIndex, name, openDuration);
     if (!ok)
     {
         return new BridgeResponse(false, "DOOR_WRITE_FAILED", error);
     }
 
-    return new BridgeResponse(true, null, null, new { doorIndex, name });
+    return new BridgeResponse(true, null, null, new { doorIndex, name, openDuration });
 }
 
 static void ApplyFloorMode(JsonElement? payload)
@@ -416,6 +422,29 @@ static int ReadInt(JsonElement? payload, string name, int fallback = 0)
         JsonValueKind.String => int.TryParse(value.GetString(), out var parsed) ? parsed : fallback,
         _ => fallback,
     };
+}
+
+static (byte? Value, string? Error) ReadOpenDuration(JsonElement? payload)
+{
+    var root = GetPayloadRoot(payload);
+    if (root == null || !root.Value.TryGetProperty("openDuration", out var value))
+    {
+        return (null, null);
+    }
+
+    var duration = value.ValueKind switch
+    {
+        JsonValueKind.Number => value.TryGetInt32(out var n) ? n : -1,
+        JsonValueKind.String => int.TryParse(value.GetString(), out var parsed) ? parsed : -1,
+        _ => -1,
+    };
+
+    if (duration is < 1 or > 255)
+    {
+        return (null, "openDuration 須為 1-255（秒）");
+    }
+
+    return ((byte)duration, null);
 }
 
 static uint ReadUInt(JsonElement? payload, string name, uint fallback = 0)

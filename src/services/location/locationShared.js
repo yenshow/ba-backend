@@ -417,6 +417,7 @@ function formatSystem(system) {
             ? {
                 floorCount: floors.floorCount,
                 floorNames: floors.floorNames,
+                floorOpenDurations: floors.floorOpenDurations,
               }
             : {}),
         },

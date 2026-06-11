@@ -4,20 +4,18 @@
  */
 
 const ELEVATOR_LOG_COLUMN_KEYS = [
-  "floor",
   "device_name",
   "name",
-  "card_no",
   "event",
+  "floor",
   "time",
 ];
 
 const ELEVATOR_LOG_COLUMN_LABELS = {
-  floor: "樓層",
   device_name: "設備名稱",
   name: "姓名",
-  card_no: "卡號",
   event: "事件",
+  floor: "樓層",
   time: "時間",
 };
 
@@ -38,7 +36,7 @@ function normalizeLogDisplayColumns(raw) {
   const out = [];
   for (const key of raw) {
     const k = String(key).trim();
-    if (!allowed.has(k) || seen.has(k)) continue;
+    if (k === "card_no" || !allowed.has(k) || seen.has(k)) continue;
     seen.add(k);
     out.push(k);
   }

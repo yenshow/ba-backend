@@ -251,6 +251,7 @@ function buildSystemConfig(systemType, config) {
       if (validated.floorCount != null) {
         result.floor_count = validated.floorCount;
         result.floor_names = validated.floorNames;
+        result.floor_open_durations = validated.floorOpenDurations;
       }
       return result;
     }
@@ -662,8 +663,11 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           }
           const fc = location.floorCount ?? location.floor_count;
           const fn = location.floorNames ?? location.floor_names;
+          const fod =
+            location.floorOpenDurations ?? location.floor_open_durations;
           if (fc !== undefined) systemConfig.floorCount = fc;
           if (fn !== undefined) systemConfig.floorNames = fn;
+          if (fod !== undefined) systemConfig.floorOpenDurations = fod;
           if (location.logDisplayColumns !== undefined) {
             systemConfig.logDisplayColumns = location.logDisplayColumns;
           }

@@ -11,6 +11,8 @@ const sdkCardService = require("../ladderSdk/sdkCardService");
 const elevatorService = require("./elevatorService");
 const elevatorFloorAccessService = require("./elevatorFloorAccessService");
 const personSyncJobService = require("../personnel/personSyncJobService");
+const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
+const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 
 const SYNC_DELAY_MS = 300;
 const jobs = new Map();
@@ -70,11 +72,17 @@ const buildLadderDesiredHash = (person, floors, resolved) => {
   });
 };
 
-async function syncLocationToDevice(locationId, deviceId, job = null) {
+async function syncLocationToDevice(
+  locationId,
+  deviceId,
+  job = null,
+  deviceNameById = null,
+) {
   const persons =
     await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
   const targetCardNos = new Set();
   const warnings = [];
+  const deviceName = deviceNameById?.get(Number(deviceId)) ?? null;
 
   let deviceCards = [];
   try {
@@ -111,18 +119,16 @@ async function syncLocationToDevice(locationId, deviceId, job = null) {
     const syncFields = personLadderCardService.resolveSyncFields(person, []);
     const cardNo = String(syncFields.cardNo || "").trim();
     if (!cardNo) {
-      warnings.push({
+      pushPersonSyncWarning(warnings, person, {
         type: "skip_no_card",
-        employeeNo: person.employee_no,
         message: "人員未設定卡號（請於人員主檔卡片設定填寫）",
       });
       if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
       continue;
     }
     if (!ladderCard) {
-      warnings.push({
+      pushPersonSyncWarning(warnings, person, {
         type: "skip_no_ladder_floors",
-        employeeNo: person.employee_no,
         message: "人員未設定梯控授權樓層",
       });
       if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
@@ -134,9 +140,8 @@ async function syncLocationToDevice(locationId, deviceId, job = null) {
       person.id,
     );
     if (!floors.length) {
-      warnings.push({
+      pushPersonSyncWarning(warnings, person, {
         type: "skip_no_floors",
-        employeeNo: person.employee_no,
         message: "人員未授權任何樓層",
       });
       if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
@@ -201,10 +206,10 @@ async function syncLocationToDevice(locationId, deviceId, job = null) {
         lastErrorMessage: message,
       });
       await updateLadderCardSyncStatus(person.id, "failed", message);
-      warnings.push({
+      pushPersonSyncWarning(warnings, person, {
         type: "sync_failed",
-        employeeNo: person.employee_no,
         deviceId,
+        deviceName,
         message,
       });
     }
@@ -223,6 +228,7 @@ async function syncLocationToDevice(locationId, deviceId, job = null) {
         type: "delete_failed",
         cardNo,
         deviceId,
+        deviceName,
         message: toMessage(err),
       });
     }
@@ -263,6 +269,10 @@ async function syncLocationCards(locationId, job = null) {
   const allWarnings = [];
   const syncedDeviceIds = [];
   const syncedAccessDeviceIds = [];
+  const deviceNameById = await getDeviceNameByIds([
+    ...deviceIds,
+    ...accessDeviceIds,
+  ]);
 
   if (deviceIds.length) {
     for (const deviceId of deviceIds) {
@@ -270,6 +280,7 @@ async function syncLocationCards(locationId, job = null) {
         locationId,
         deviceId,
         job,
+        deviceNameById,
       );
       allWarnings.push(...warnings);
       syncedDeviceIds.push(syncedId);

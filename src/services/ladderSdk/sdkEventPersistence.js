@@ -3,8 +3,9 @@
  */
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
+const { resolveEventCardNo } = require("./ladderSdkCardCorrelation");
 
-/** major=0x3: 0x400–0x403；major=0x5: 0x01、0x5f、0x60 */
+/** major=0x3: 0x400–0x403；major=0x5: 0x01、0x5f、0x60、0x63、0x64 */
 const ALLOWED_EVENT_KEYS = new Set([
   "3:1024",
   "3:1025",
@@ -13,6 +14,8 @@ const ALLOWED_EVENT_KEYS = new Set([
   "5:1",
   "5:95",
   "5:96",
+  "5:99",
+  "5:100",
 ]);
 
 const isAllowedEvent = (major, minor) =>
@@ -39,6 +42,15 @@ const persistLadderSdkEvent = async (options) => {
     return { inserted: false };
   }
 
+  const resolvedEventTime = eventTime || new Date().toISOString();
+  const resolvedCardNo = await resolveEventCardNo({
+    deviceId,
+    eventTime: resolvedEventTime,
+    major,
+    minor,
+    cardNo,
+  });
+
   const rows = await db.query(
     `INSERT INTO ladder_sdk_events (
        device_id, device_ip, event_time, major, minor,
@@ -49,12 +61,12 @@ const persistLadderSdkEvent = async (options) => {
     [
       Number(deviceId),
       String(deviceIp || ""),
-      eventTime || new Date().toISOString(),
+      resolvedEventTime,
       Number(major),
       Number(minor),
       eventName || null,
       floor != null ? Number(floor) : null,
-      cardNo ? String(cardNo) : null,
+      resolvedCardNo,
       JSON.stringify(payload || {}),
     ],
   );
@@ -68,12 +80,12 @@ const persistLadderSdkEvent = async (options) => {
     id,
     deviceId: Number(deviceId),
     deviceIp: String(deviceIp || ""),
-    eventTime: eventTime || new Date().toISOString(),
+    eventTime: resolvedEventTime,
     major: Number(major),
     minor: Number(minor),
     eventName: eventName || "",
     floor: floor != null ? Number(floor) : null,
-    cardNo: cardNo ? String(cardNo) : null,
+    cardNo: resolvedCardNo,
   });
 
   return { inserted: true, id };

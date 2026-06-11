@@ -15,6 +15,8 @@ const personDeviceSyncStateService = require("./personDeviceSyncStateService");
 const personSyncJobStore = require("./personSyncJobStore");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
+const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 
 const SYNC_DELAY_MS = 300;
 
@@ -30,24 +32,6 @@ function normalizeIsapiErrorMessage(raw) {
     return "設備驗證失敗（401 Unauthorized），請確認帳密/權限";
   }
   return msg;
-}
-
-async function getDeviceNameByIds(deviceIds) {
-  const ids = [...new Set((deviceIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))];
-  if (ids.length === 0) return new Map();
-  const rows = await db.query(
-    "SELECT id, name FROM devices WHERE id = ANY(?::int[])",
-    [ids.map((x) => Math.trunc(x))],
-  );
-  const map = new Map();
-  for (const r of rows || []) {
-    const id = Number(r?.id);
-    const name = r?.name != null ? String(r.name).trim() : "";
-    if (!Number.isFinite(id)) continue;
-    if (!name) continue;
-    map.set(id, name);
-  }
-  return map;
 }
 
 // ========== sync 背景工作（DB 持久化） ==========
@@ -504,9 +488,8 @@ async function syncPersonToDevice(
       employeeNo: person.employeeNo,
       face_url: faceUrlRaw.substring(0, 80),
     });
-    warnings.push({
+    pushPersonSyncWarning(warnings, person, {
       type: "face",
-      employeeNo: person.employeeNo,
       deviceId,
       message,
     });
@@ -608,9 +591,8 @@ async function syncPersonToDevice(
           employeeNo: person.employeeNo,
           error: message,
         });
-        warnings.push({
+        pushPersonSyncWarning(warnings, person, {
           type: "face",
-          employeeNo: person.employeeNo,
           deviceId,
           deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
           message,
@@ -698,9 +680,8 @@ async function syncPersonToDevice(
           employeeNo: person.employeeNo,
           error: message,
         });
-        warnings.push({
+        pushPersonSyncWarning(warnings, person, {
           type: "card",
-          employeeNo: person.employeeNo,
           deviceId,
           deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
           message: `卡片設定失敗：${message}`,
@@ -862,9 +843,8 @@ async function syncPersonToDevice(
         fingerPrintID,
         error: message,
       });
-      warnings.push({
+      pushPersonSyncWarning(warnings, person, {
         type: "fingerprint",
-        employeeNo: person.employeeNo,
         deviceId,
         deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
         message: `指紋設定失敗：${message}`,
@@ -1071,9 +1051,8 @@ async function syncAccessDevicesWithPersons(
           employeeNo: p.employeeNo,
           error: message,
         });
-        warnings.push({
+        pushPersonSyncWarning(warnings, p, {
           type: "add",
-          employeeNo: p.employeeNo,
           deviceId,
           deviceName: deviceNameById.get(Number(deviceId)) || null,
           message: `新增失敗：${message}`,
@@ -1116,9 +1095,8 @@ async function syncAccessDevicesWithPersons(
           employeeNo: p.employeeNo,
           error: message,
         });
-        warnings.push({
+        pushPersonSyncWarning(warnings, p, {
           type: "update",
-          employeeNo: p.employeeNo,
           deviceId,
           deviceName: deviceNameById.get(Number(deviceId)) || null,
           message: `更新失敗：${message}`,

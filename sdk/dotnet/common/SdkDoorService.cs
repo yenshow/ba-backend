@@ -53,15 +53,36 @@ internal static class SdkDoorService
         return (true, ToDoorInfo(doorIndex, cfg), string.Empty);
     }
 
-    public static (bool Ok, string Error) SetDoorName(int userId, int doorIndex, string name)
+    public static (bool Ok, string Error) SetDoorName(int userId, int doorIndex, string name) =>
+        SetDoor(userId, doorIndex, name, null);
+
+    public static (bool Ok, string Error) SetDoor(
+        int userId,
+        int doorIndex,
+        string? name,
+        byte? openDuration)
     {
+        if (name == null && openDuration == null)
+        {
+            return (false, "請提供 name 或 openDuration");
+        }
+
         var (ok, cfg, error) = GetDoorConfig(userId, doorIndex);
         if (!ok)
         {
             return (false, error);
         }
 
-        SetDoorNameBytes(cfg.byDoorName, name);
+        if (name != null)
+        {
+            SetDoorNameBytes(cfg.byDoorName, name);
+        }
+
+        if (openDuration.HasValue)
+        {
+            cfg.byOpenDuration = openDuration.Value;
+        }
+
         return SetDoorConfig(userId, doorIndex, cfg);
     }
 

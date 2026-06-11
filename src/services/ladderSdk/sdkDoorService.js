@@ -9,22 +9,28 @@ const {
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
 
-const syncFloorNames = async (deviceId, floorNames) => {
+const syncFloorNames = async (deviceId, floors) => {
   const failures = [];
 
-  for (let i = 0; i < floorNames.length; i += 1) {
+  for (let i = 0; i < floors.length; i += 1) {
     const doorIndex = i + 1;
+    const floor = floors[i];
     try {
       const { credentials } = await getLadderDevice(deviceId);
       await invokeBridge({
         action: "door.set",
         device: toBridgeDevice(credentials),
-        payload: { doorIndex, name: floorNames[i] },
+        payload: {
+          doorIndex,
+          name: floor.name,
+          openDuration: floor.openDuration,
+        },
       });
     } catch (error) {
       failures.push({
         doorIndex,
-        name: floorNames[i],
+        name: floor.name,
+        openDuration: floor.openDuration ?? null,
         message: error?.message || String(error),
       });
     }
@@ -33,7 +39,7 @@ const syncFloorNames = async (deviceId, floorNames) => {
   if (failures.length > 0) {
     throw createApiError(
       C.ELEVATOR_FLOOR_SYNC_FAILED,
-      `樓層名稱下發失敗（${failures.length}/${floorNames.length} 層）`,
+      `樓層參數下發失敗（${failures.length}/${floors.length} 層）`,
       { details: { failures } },
     );
   }
@@ -42,7 +48,7 @@ const syncFloorNames = async (deviceId, floorNames) => {
 const syncElevatorFloorsFromLocations = async (locations) => {
   const tasks = collectElevatorFloorSyncTasks(locations);
   for (const task of tasks) {
-    await syncFloorNames(task.deviceId, task.floorNames);
+    await syncFloorNames(task.deviceId, task.floors);
   }
 };
 

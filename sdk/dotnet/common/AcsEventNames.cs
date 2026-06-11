@@ -11,16 +11,18 @@ internal static class AcsEventNames
         [(0x5, 0x01)] = "合法卡通行",
         [(0x5, 0x5f)] = "呼梯繼電器斷開",
         [(0x5, 0x60)] = "呼梯繼電器閉合",
+        [(0x5, 0x63)] = "關門",
+        [(0x5, 0x64)] = "開門",
     };
 
     public static string Format(uint major, uint minor)
     {
         if (Names.TryGetValue((major, minor), out var name))
         {
-            return $"{MajorName(major)} / {name} (0x{major:x}/0x{minor:x})";
+            return $"{MajorName(major)} / {name}";
         }
 
-        return $"{MajorName(major)} / Minor=0x{minor:x} (0x{major:x}/0x{minor:x})";
+        return $"{MajorName(major)} / 未知事件";
     }
 
     private static string MajorName(uint major) => major switch

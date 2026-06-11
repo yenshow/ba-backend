@@ -4,7 +4,7 @@ const environmentAggregationService = require("./environmentAggregationService")
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
-const { rethrowIfApiError } = require("../../utils/apiErrorMeta");
+const { rethrowIfApiError, causeDetails } = require("../../utils/apiErrorMeta");
 
 const envServiceLogger = logger.createLogger("environmentService");
 
@@ -34,9 +34,9 @@ async function getZones() {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throwApiError(C.LOCATION_ZONE_LIST_FAILED, "取得區域列表失敗: " + error.message, {
+    throwApiError(C.LOCATION_ZONE_LIST_FAILED, "取得區域列表失敗", {
       statusCode: 500,
-      details: error.message,
+      details: causeDetails(error),
     });
   }
 }
@@ -52,9 +52,9 @@ async function getZoneById(id) {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throwApiError(C.LOCATION_ZONE_GET_FAILED, "取得區域失敗: " + error.message, {
+    throwApiError(C.LOCATION_ZONE_GET_FAILED, "取得區域失敗", {
       statusCode: 500,
-      details: error.message,
+      details: causeDetails(error),
     });
   }
 }
@@ -85,9 +85,9 @@ async function createZone(zoneData, userId) {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throwApiError(C.LOCATION_ZONE_CREATE_FAILED, "建立區域失敗: " + error.message, {
+    throwApiError(C.LOCATION_ZONE_CREATE_FAILED, "建立區域失敗", {
       statusCode: 500,
-      details: error.message,
+      details: causeDetails(error),
     });
   }
 }
@@ -122,9 +122,9 @@ async function updateZone(id, zoneData, userId) {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throwApiError(C.LOCATION_ZONE_UPDATE_FAILED, "更新區域失敗: " + error.message, {
+    throwApiError(C.LOCATION_ZONE_UPDATE_FAILED, "更新區域失敗", {
       statusCode: 500,
-      details: error.message,
+      details: causeDetails(error),
     });
   }
 }
@@ -139,9 +139,9 @@ async function deleteZone(id) {
       error: error?.message || String(error),
       module: "environmentService",
     });
-    throwApiError(C.LOCATION_ZONE_DELETE_FAILED, "刪除區域失敗: " + error.message, {
+    throwApiError(C.LOCATION_ZONE_DELETE_FAILED, "刪除區域失敗", {
       statusCode: 500,
-      details: error.message,
+      details: causeDetails(error),
     });
   }
 }
@@ -198,8 +198,8 @@ async function getReadings(locationId, options = {}) {
     });
     throwApiError(
       C.ENVIRONMENT_READINGS_LIST_FAILED,
-      "取得讀數失敗: " + error.message,
-      { statusCode: 500, details: error.message },
+      "取得讀數失敗",
+      { statusCode: 500, details: causeDetails(error) },
     );
   }
 }
@@ -269,8 +269,8 @@ async function getReadingsAggregated(locationId, options = {}) {
     });
     throwApiError(
       C.ENVIRONMENT_READINGS_AGGREGATED_FAILED,
-      "取得彙總讀數失敗: " + error.message,
-      { statusCode: 500, details: error.message },
+      "取得彙總讀數失敗",
+      { statusCode: 500, details: causeDetails(error) },
     );
   }
 }

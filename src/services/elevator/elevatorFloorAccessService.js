@@ -8,6 +8,10 @@ const elevatorService = require("./elevatorService");
 const { normalizeElevatorFloorConfig } = require("./elevatorFloorConfig");
 
 const personLadderCardService = require("../personnel/personLadderCardService");
+const {
+  formatPersonLabel,
+  formatMissingPersonIdLabels,
+} = require("../../utils/personDisplayUtils");
 
 const parseFloorsJson = (raw) => {
   if (Array.isArray(raw)) {
@@ -183,15 +187,27 @@ async function replaceFloorAccess(locationId, assignments = []) {
   if (pairs.length > 0) {
     const personIds = Array.from(new Set(pairs.map((p) => p.personId)));
     const rows = await db.query(
-      `SELECT id FROM persons WHERE id IN (${personIds.map(() => "?").join(",")}) AND status = 'active'`,
+      `SELECT id, employee_no, full_name, config FROM persons WHERE id IN (${personIds.map(() => "?").join(",")}) AND status = 'active'`,
       personIds,
     );
     const existing = new Set((rows || []).map((r) => Number(r.id)));
     const missing = personIds.filter((id) => !existing.has(id));
     if (missing.length > 0) {
+      const labels = await formatMissingPersonIdLabels(missing);
       throwApiError(
         C.ELEVATOR_VALIDATION_FAILED,
-        `人員不存在或已停用：${missing.join(", ")}`,
+        `人員不存在或已停用：${labels.join("、")}`,
+      );
+    }
+
+    const missingCardPersons = (rows || []).filter(
+      (row) =>
+        !String(personLadderCardService.resolveSyncFields(row, []).cardNo || "").trim(),
+    );
+    if (missingCardPersons.length > 0) {
+      throwApiError(
+        C.ELEVATOR_VALIDATION_FAILED,
+        `以下人員未設定卡號，無法加入樓層授權：${missingCardPersons.map(formatPersonLabel).join("、")}（請於人員主檔卡片設定填寫）`,
       );
     }
   }

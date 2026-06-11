@@ -125,7 +125,7 @@ async function executeBatchImport({
       continue;
     }
     if (!fullName) {
-      errors.push({ row: i + 2, employeeNo, message: "姓名為必填" });
+      errors.push({ row: i + 2, employeeNo, fullName: null, message: "姓名為必填" });
       continue;
     }
 
@@ -252,6 +252,7 @@ async function executeBatchImport({
       errors.push({
         row: i + 2,
         employeeNo,
+        fullName,
         message: err.message || String(err),
       });
     }

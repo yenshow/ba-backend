@@ -13,30 +13,24 @@ const RE_CONNECT_DELAY_MS = 10_000;
 /** @type {Map<number, { child: import('child_process').ChildProcess, startedAt: number, status: string }>} */
 const deviceProcesses = new Map();
 
-const enrichEvent = (deviceId, device, message) => ({
-  deviceId,
-  deviceName: device?.name || "",
-  major: message.major,
-  minor: message.minor,
-  eventName: message.eventName,
-  floor: message.floor ?? null,
-  cardNo: message.cardNo ?? null,
-  timestamp: message.timestamp || new Date().toISOString(),
-});
-
 const handleEvent = async (deviceId, device, message) => {
-  const enriched = enrichEvent(deviceId, device, message);
+  const eventTime = message.timestamp || new Date().toISOString();
   try {
     await persistLadderSdkEvent({
       deviceId,
       deviceIp: device?.config?.host || "",
-      eventTime: enriched.timestamp,
-      major: enriched.major,
-      minor: enriched.minor,
-      eventName: enriched.eventName,
-      floor: enriched.floor,
-      cardNo: enriched.cardNo,
-      payload: enriched,
+      eventTime,
+      major: message.major,
+      minor: message.minor,
+      eventName: message.eventName,
+      floor: message.floor ?? null,
+      cardNo: message.cardNo ?? null,
+      payload: {
+        ...message,
+        deviceId,
+        deviceName: device?.name || "",
+        timestamp: eventTime,
+      },
     });
   } catch (error) {
     logger.warn("梯控事件寫入失敗", {

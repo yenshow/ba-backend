@@ -11,6 +11,7 @@ const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const { formatMissingPersonIdLabels } = require("../../utils/personDisplayUtils");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -409,7 +410,11 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
     const existing = new Set((rows || []).map((r) => r.id));
     const missing = nextIds.filter((pid) => !existing.has(pid));
     if (missing.length > 0) {
-      throwApiError(C.PERSONNEL_VALIDATION_FAILED,`人員不存在：${missing.join(", ")}`);
+      const labels = await formatMissingPersonIdLabels(missing);
+      throwApiError(
+        C.PERSONNEL_VALIDATION_FAILED,
+        `人員不存在：${labels.join("、")}`,
+      );
     }
   }
 
@@ -515,7 +520,11 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
     const existing = new Set((rows || []).map((r) => r.id));
     const missing = nextIds.filter((pid) => !existing.has(pid));
     if (missing.length > 0) {
-      throwApiError(C.PERSONNEL_VALIDATION_FAILED,`人員不存在：${missing.join(", ")}`);
+      const labels = await formatMissingPersonIdLabels(missing);
+      throwApiError(
+        C.PERSONNEL_VALIDATION_FAILED,
+        `人員不存在：${labels.join("、")}`,
+      );
     }
   }
 

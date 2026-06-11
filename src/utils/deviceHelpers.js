@@ -1,5 +1,6 @@
 // 設備相關共用工具函數
 
+const db = require("../database/db");
 const { deviceConfigInvalid } = require("./deviceErrors");
 
 /**
@@ -263,6 +264,30 @@ const resolveHcnetSdkPort = (deviceConfig, modelPort, fallbackPort = 8000) => {
   return fallbackPort;
 };
 
+/** 批次查詢設備顯示名稱（id → name） */
+const getDeviceNameByIds = async (deviceIds) => {
+  const ids = [
+    ...new Set(
+      (deviceIds || [])
+        .map((x) => Number(x))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+  if (ids.length === 0) return new Map();
+  const rows = await db.query(
+    "SELECT id, name FROM devices WHERE id = ANY(?::int[])",
+    [ids.map((x) => Math.trunc(x))],
+  );
+  const map = new Map();
+  for (const r of rows || []) {
+    const id = Number(r?.id);
+    const name = r?.name != null ? String(r.name).trim() : "";
+    if (!Number.isFinite(id) || !name) continue;
+    map.set(id, name);
+  }
+  return map;
+};
+
 module.exports = {
   parseConfig,
   stringifyConfig,
@@ -271,4 +296,5 @@ module.exports = {
   isHcnetSdkController,
   ensureControllerHcnetProtocol,
   resolveHcnetSdkPort,
+  getDeviceNameByIds,
 };

@@ -100,6 +100,7 @@ const STATUS_BY_CODE = {
   [C.DEVICE_MODEL_UNIT_ID_INVALID]: 400,
   [C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID]: 400,
   [C.DEVICE_MODEL_REGISTER_TYPE_INVALID]: 400,
+  [C.DEVICE_MODEL_CATEGORY_CODE_INVALID]: 400,
   [C.DEVICE_MODEL_TYPE_CHANGE_FORBIDDEN]: 409,
   [C.DEVICE_MODEL_IN_USE]: 409,
   [C.DEVICE_MODEL_UPDATE_NO_FIELDS]: 400,
@@ -117,6 +118,9 @@ const STATUS_BY_CODE = {
   [C.DEVICE_CONNECTIVITY_RTSP_RESPONSE_INVALID]: 503,
   [C.DEVICE_CONNECTIVITY_MODBUS_CONFIG_INCOMPLETE]: 400,
   [C.DEVICE_CONNECTIVITY_MODBUS_FAILED]: 503,
+  [C.DEVICE_CONNECTIVITY_TCP_CONFIG_INCOMPLETE]: 400,
+  [C.DEVICE_CONNECTIVITY_TCP_TIMEOUT]: 503,
+  [C.DEVICE_CONNECTIVITY_TCP_FAILED]: 503,
   [C.DEVICE_CONNECTIVITY_ISAPI_CONFIG_INCOMPLETE]: 400,
   [C.DEVICE_CONNECTIVITY_ISAPI_TIMEOUT]: 503,
   [C.DEVICE_CONNECTIVITY_CAMERA_RTSP_MISSING]: 400,
@@ -160,6 +164,17 @@ const STATUS_BY_CODE = {
   [C.LADDER_SDK_CARD_READ_FAILED]: 502,
   [C.LADDER_SDK_CARD_WRITE_FAILED]: 502,
   [C.LADDER_SDK_CONTROL_FAILED]: 502,
+
+  [C.VEHICLE_ACCESS_NOT_CAMERA]: 400,
+  [C.VEHICLE_ACCESS_CONFIG_INCOMPLETE]: 400,
+  [C.VEHICLE_ACCESS_ISAPI_INVALID_RESPONSE]: 502,
+  [C.VEHICLE_ACCESS_DEVICE_NOT_IN_SITE]: 400,
+  [C.PLATE_ALREADY_ASSIGNED]: 409,
+
+  [C.ELEVATOR_VALIDATION_FAILED]: 400,
+  [C.ELEVATOR_OPERATION_FAILED]: 500,
+  [C.ELEVATOR_FLOOR_SYNC_FAILED]: 500,
+  [C.ELEVATOR_SYNC_JOB_NOT_FOUND]: 404,
 
   [C.LOCATION_ZONE_NOT_FOUND]: 404,
   [C.LOCATION_ZONE_NAME_REQUIRED]: 400,
@@ -332,10 +347,22 @@ function rethrowIfApiError(error) {
   }
 }
 
+/** 服務層 catch：技術原因放 details.cause，message 保持簡短摘要 */
+function causeDetails(error) {
+  if (error == null) return null;
+  if (typeof error === "string") return { cause: error };
+  if (error instanceof Error && error.message) return { cause: error.message };
+  if (typeof error === "object" && error.message) {
+    return { cause: String(error.message) };
+  }
+  return { cause: String(error) };
+}
+
 module.exports = {
   httpStatusForCode,
   codeForHttpStatus,
   createApiError,
   throwApiError,
   rethrowIfApiError,
+  causeDetails,
 };
