@@ -184,8 +184,10 @@ async function executeBatchImport({
                   ? { longTerm: true }
                   : undefined,
             password,
-            cardNo,
           };
+          if (cardNo) {
+            payload.cards = [{ cardNo, source: "manual" }];
+          }
           await personnelService.setPersonAccessControlConfig(person.id, payload);
         }
       }

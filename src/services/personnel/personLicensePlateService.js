@@ -134,6 +134,8 @@ async function updateSyncStatus(plateId, { status, error, syncedAt }) {
   );
 }
 
+const MAX_LICENSE_PLATES_PER_PERSON = 5;
+
 async function replacePlatesForPerson(personId, platesInput) {
   const pid = Number(personId);
   if (!Number.isFinite(pid)) {
@@ -150,6 +152,13 @@ async function replacePlatesForPerson(personId, platesInput) {
     await assertPlateNotOwnedByOther(plateNormalized, pid);
     seen.add(plateNormalized);
     normalized.push({ ...parsed, plateNormalized });
+  }
+
+  if (normalized.length > MAX_LICENSE_PLATES_PER_PERSON) {
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      `車牌最多 ${MAX_LICENSE_PLATES_PER_PERSON} 筆`,
+    );
   }
 
   await db.query(`DELETE FROM person_license_plates WHERE person_id = ?`, [

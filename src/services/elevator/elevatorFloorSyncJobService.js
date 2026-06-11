@@ -41,14 +41,16 @@ const buildLadderIdentity = (person) => ({
   employeeNo: Number(person.id) > 0 ? Number(person.id) : 0,
 });
 
-const buildCardPayload = (person, floors) => {
+const buildCardPayload = (person, floors, cardNo) => {
   const { cardPassword, ...fields } = personLadderCardService.resolveSyncFields(
     person,
     floors,
+    cardNo,
   );
   const identity = buildLadderIdentity(person);
   return {
     ...fields,
+    cardNo: cardNo || fields.cardNo,
     name: identity.name,
     employeeNo: identity.employeeNo > 0 ? identity.employeeNo : undefined,
     password: cardPassword || undefined,
@@ -57,8 +59,12 @@ const buildCardPayload = (person, floors) => {
 
 const buildLadderDesiredHash = (person, floors, resolved) => {
   const identity = buildLadderIdentity(person);
+  const cardKey =
+    Array.isArray(resolved.cardNos) && resolved.cardNos.length
+      ? resolved.cardNos.join("|")
+      : resolved.cardNo;
   return personDeviceSyncStateService.hashLadderCard({
-    cardNo: resolved.cardNo,
+    cardNo: cardKey,
     homeFloor: resolved.homeFloor,
     floors,
     cardType: resolved.cardType,
@@ -117,8 +123,10 @@ async function syncLocationToDevice(
   for (const person of persons) {
     const ladderCard = await personLadderCardService.getByPersonId(person.id);
     const syncFields = personLadderCardService.resolveSyncFields(person, []);
-    const cardNo = String(syncFields.cardNo || "").trim();
-    if (!cardNo) {
+    const cardNos = Array.isArray(syncFields.cardNos)
+      ? syncFields.cardNos.map((c) => String(c).trim()).filter(Boolean)
+      : [];
+    if (!cardNos.length) {
       pushPersonSyncWarning(warnings, person, {
         type: "skip_no_card",
         message: "人員未設定卡號（請於人員主檔卡片設定填寫）",
@@ -148,8 +156,6 @@ async function syncLocationToDevice(
       continue;
     }
 
-    targetCardNos.add(cardNo);
-    const payload = buildCardPayload(person, floors);
     const resolved = personLadderCardService.resolveSyncFields(person, floors);
     const desiredHash = buildLadderDesiredHash(person, floors, resolved);
 
@@ -160,27 +166,40 @@ async function syncLocationToDevice(
     const stateRow = stateMap.get(String(person.employee_no));
     const lastHash = stateRow?.card_hash ? String(stateRow.card_hash) : null;
 
-    try {
-      if (deviceCardNos.has(cardNo)) {
-        if (lastHash && lastHash === desiredHash) {
-          await personDeviceSyncStateService.upsertStepState({
-            deviceId,
-            employeeNo: person.employee_no,
-            step: "card",
-            status: "synced",
-            hash: desiredHash,
-          });
-          await updateLadderCardSyncStatus(person.id, "synced");
-          if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
-          await sleep(SYNC_DELAY_MS);
-          continue;
+    let personSyncFailed = false;
+    let personSyncMessage = null;
+
+    for (const cardNo of cardNos) {
+      targetCardNos.add(cardNo);
+      const payload = buildCardPayload(person, floors, cardNo);
+
+      try {
+        if (deviceCardNos.has(cardNo)) {
+          if (lastHash && lastHash === desiredHash) {
+            continue;
+          }
+          await sdkCardService.updateCard(deviceId, cardNo, payload);
+        } else {
+          await sdkCardService.createCard(deviceId, payload);
+          deviceCardNos.add(cardNo);
         }
-        await sdkCardService.updateCard(deviceId, cardNo, payload);
-      } else {
-        await sdkCardService.createCard(deviceId, payload);
-        deviceCardNos.add(cardNo);
+      } catch (err) {
+        personSyncFailed = true;
+        personSyncMessage = toMessage(err);
+        logger.warn("梯控卡片同步失敗", {
+          locationId,
+          deviceId,
+          employeeNo: person.employee_no,
+          cardNo,
+          error: personSyncMessage,
+        });
       }
 
+      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      await sleep(SYNC_DELAY_MS);
+    }
+
+    if (lastHash && lastHash === desiredHash && !personSyncFailed) {
       await personDeviceSyncStateService.upsertStepState({
         deviceId,
         employeeNo: person.employee_no,
@@ -189,33 +208,35 @@ async function syncLocationToDevice(
         hash: desiredHash,
       });
       await updateLadderCardSyncStatus(person.id, "synced");
-    } catch (err) {
-      const message = toMessage(err);
-      logger.warn("梯控卡片同步失敗", {
-        locationId,
-        deviceId,
-        employeeNo: person.employee_no,
-        error: message,
-      });
+      continue;
+    }
+
+    if (personSyncFailed) {
       await personDeviceSyncStateService.upsertStepState({
         deviceId,
         employeeNo: person.employee_no,
         step: "card",
         status: "failed",
         hash: desiredHash,
-        lastErrorMessage: message,
+        lastErrorMessage: personSyncMessage,
       });
-      await updateLadderCardSyncStatus(person.id, "failed", message);
+      await updateLadderCardSyncStatus(person.id, "failed", personSyncMessage);
       pushPersonSyncWarning(warnings, person, {
         type: "sync_failed",
         deviceId,
         deviceName,
-        message,
+        message: personSyncMessage,
       });
+    } else {
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employee_no,
+        step: "card",
+        status: "synced",
+        hash: desiredHash,
+      });
+      await updateLadderCardSyncStatus(person.id, "synced");
     }
-
-    if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
-    await sleep(SYNC_DELAY_MS);
   }
 
   for (const cardNo of deviceCardNos) {
@@ -404,8 +425,10 @@ async function getSyncCandidatesForLocation(locationId) {
       person.id,
     );
     const resolved = personLadderCardService.resolveSyncFields(person, floors);
-    const cardNo = resolved.cardNo ? String(resolved.cardNo).trim() : "";
-    const desiredHash = cardNo
+    const cardNos = Array.isArray(resolved.cardNos)
+      ? resolved.cardNos.map((c) => String(c).trim()).filter(Boolean)
+      : [];
+    const desiredHash = cardNos.length
       ? buildLadderDesiredHash(person, floors, resolved)
       : null;
 
@@ -413,7 +436,7 @@ async function getSyncCandidatesForLocation(locationId) {
     let cardSyncedAt = null;
     let needsSync = false;
 
-    if (!cardNo) {
+    if (!cardNos.length) {
       needsSync = true;
     } else if (!deviceIds.length) {
       needsSync = true;
@@ -442,7 +465,7 @@ async function getSyncCandidatesForLocation(locationId) {
     results.push({
       employee_no: person.employee_no,
       full_name: person.full_name,
-      has_ladder_card: Boolean(cardNo && ladderCard),
+      has_ladder_card: Boolean(cardNos.length && ladderCard),
       authorized_floors: floors,
       needs_sync: needsSync || needsAccessSync,
       needs_ladder_sync: needsSync,

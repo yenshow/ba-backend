@@ -17,6 +17,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
+const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 
 const SYNC_DELAY_MS = 300;
 
@@ -619,92 +620,168 @@ async function syncPersonToDevice(
     }
   }
 
-  // 卡片同步：employeeNo -> cardNo
-  const cardNo = ac?.cardNo != null ? String(ac.cardNo).trim() : "";
-  if (cardNo) {
-    const cardHash = personDeviceSyncStateService.hashCard({ cardNo });
-    const lastHash = stateRow?.card_hash ? String(stateRow.card_hash) : null;
-    const lastStatus = stateRow?.card_status
-      ? String(stateRow.card_status)
-      : null;
-    if (
-      lastStatus === "success" &&
-      lastHash &&
-      cardHash &&
-      lastHash === cardHash
-    ) {
-      reporter?.skipOp?.({
-        employeeNo: person.employeeNo,
+  // 卡片同步：employeeNo -> cardNos（最多 5 張）
+  const cardNos = resolveCardNos(ac);
+  const cardsHash = personDeviceSyncStateService.hashCards({ cardNos });
+  const lastHash = stateRow?.card_hash ? String(stateRow.card_hash) : null;
+  const lastStatus = stateRow?.card_status ? String(stateRow.card_status) : null;
+
+  if (!cardNos.length) {
+    try {
+      const deviceCards = await accessControlService.searchCardInfoByEmployee(
         deviceId,
-        action: "sync",
-        stage: "card",
-        message: "未變更",
-      });
-    } else {
-      const startedAt = reporter?.startOp
-        ? reporter.startOp({
-            employeeNo: person.employeeNo,
+        person.employeeNo,
+      );
+      for (const staleCardNo of deviceCards) {
+        try {
+          await accessControlService.deleteCardInfo(deviceId, staleCardNo);
+          await delay(SYNC_DELAY_MS);
+        } catch (deleteErr) {
+          logger.warn("ISAPI 清除卡片失敗", {
             deviceId,
-            action: "sync",
-            stage: "card",
-          })
-        : null;
-      try {
+            employeeNo: person.employeeNo,
+            cardNo: staleCardNo,
+            error: toMessage(deleteErr),
+          });
+        }
+      }
+      if (deviceCards.length) {
+        await personDeviceSyncStateService.upsertStepState({
+          deviceId,
+          employeeNo: person.employeeNo,
+          step: "card",
+          status: "success",
+          hash: null,
+          syncedAt: new Date(),
+          lastErrorMessage: null,
+        });
+      }
+    } catch (searchErr) {
+      logger.warn("ISAPI 查詢卡片失敗", {
+        deviceId,
+        employeeNo: person.employeeNo,
+        error: toMessage(searchErr),
+      });
+    }
+  } else if (
+    lastStatus === "success" &&
+    lastHash &&
+    cardsHash &&
+    lastHash === cardsHash
+  ) {
+    reporter?.skipOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "card",
+      message: "未變更",
+    });
+  } else {
+    const startedAt = reporter?.startOp
+      ? reporter.startOp({
+          employeeNo: person.employeeNo,
+          deviceId,
+          action: "sync",
+          stage: "card",
+        })
+      : null;
+    let cardSyncOk = true;
+    let cardSyncMessage = null;
+    try {
+      for (const cardNo of cardNos) {
         await accessControlService.setCardInfo(deviceId, {
           employeeNo: person.employeeNo,
           cardNo,
           cardType: "normalCard",
         });
         await delay(SYNC_DELAY_MS);
-        await personDeviceSyncStateService.upsertStepState({
+      }
+      try {
+        const deviceCards = await accessControlService.searchCardInfoByEmployee(
+          deviceId,
+          person.employeeNo,
+        );
+        const desiredSet = new Set(cardNos);
+        for (const staleCardNo of deviceCards) {
+          if (desiredSet.has(staleCardNo)) continue;
+          try {
+            await accessControlService.deleteCardInfo(deviceId, staleCardNo);
+            await delay(SYNC_DELAY_MS);
+          } catch (deleteErr) {
+            cardSyncOk = false;
+            cardSyncMessage = toMessage(deleteErr);
+            logger.warn("ISAPI 刪除多餘卡片失敗", {
+              deviceId,
+              employeeNo: person.employeeNo,
+              cardNo: staleCardNo,
+              error: cardSyncMessage,
+            });
+          }
+        }
+      } catch (searchErr) {
+        logger.warn("ISAPI 查詢卡片失敗（略過刪除多餘卡）", {
           deviceId,
           employeeNo: person.employeeNo,
-          step: "card",
-          status: "success",
-          hash: cardHash,
-          syncedAt: new Date(),
-          lastErrorMessage: null,
+          error: toMessage(searchErr),
         });
-        reporter?.finishOp?.({
-          employeeNo: person.employeeNo,
-          deviceId,
-          action: "sync",
-          stage: "card",
-          startedAt,
-          ok: true,
-        });
-      } catch (cardErr) {
-        const message = normalizeIsapiErrorMessage(toMessage(cardErr));
-        logger.warn("ISAPI 綁定卡片失敗", {
-          deviceId,
-          employeeNo: person.employeeNo,
-          error: message,
-        });
+      }
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employeeNo,
+        step: "card",
+        status: cardSyncOk ? "success" : "failed",
+        hash: cardsHash,
+        syncedAt: new Date(),
+        lastErrorMessage: cardSyncOk ? null : cardSyncMessage,
+      });
+      reporter?.finishOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "card",
+        startedAt,
+        ok: cardSyncOk,
+        message: cardSyncMessage,
+      });
+      if (!cardSyncOk) {
         pushPersonSyncWarning(warnings, person, {
           type: "card",
           deviceId,
           deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
-          message: `卡片設定失敗：${message}`,
-        });
-        await personDeviceSyncStateService.upsertStepState({
-          deviceId,
-          employeeNo: person.employeeNo,
-          step: "card",
-          status: "failed",
-          hash: cardHash,
-          syncedAt: new Date(),
-          lastErrorMessage: message,
-        });
-        reporter?.finishOp?.({
-          employeeNo: person.employeeNo,
-          deviceId,
-          action: "sync",
-          stage: "card",
-          startedAt,
-          ok: false,
-          message,
+          message: `卡片設定失敗：${cardSyncMessage}`,
         });
       }
+    } catch (cardErr) {
+      const message = normalizeIsapiErrorMessage(toMessage(cardErr));
+      logger.warn("ISAPI 綁定卡片失敗", {
+        deviceId,
+        employeeNo: person.employeeNo,
+        error: message,
+      });
+      pushPersonSyncWarning(warnings, person, {
+        type: "card",
+        deviceId,
+        deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
+        message: `卡片設定失敗：${message}`,
+      });
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employeeNo,
+        step: "card",
+        status: "failed",
+        hash: cardsHash,
+        syncedAt: new Date(),
+        lastErrorMessage: message,
+      });
+      reporter?.finishOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "card",
+        startedAt,
+        ok: false,
+        message,
+      });
     }
   }
 
@@ -1595,9 +1672,9 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       person?.face_url != null ? String(person.face_url).trim() : "";
     const desiredFaceHash = faceUrl ? await computeDesiredFaceHash(faceUrl) : null;
 
-    const cardNo = ac?.cardNo != null ? String(ac.cardNo).trim() : "";
-    const desiredCardHash = cardNo
-      ? personDeviceSyncStateService.hashCard({ cardNo })
+    const cardNos = resolveCardNos(ac);
+    const desiredCardHash = cardNos.length
+      ? personDeviceSyncStateService.hashCards({ cardNos })
       : null;
 
     const fps = Array.isArray(ac?.fingerprints) ? ac.fingerprints : [];
@@ -1612,7 +1689,7 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       if (!row) {
         steps.add("user_info");
         if (faceUrl) steps.add("face");
-        if (cardNo) steps.add("card");
+        if (cardNos.length) steps.add("card");
         if (desiredFpHash) steps.add("fingerprint");
         continue;
       }
@@ -1629,7 +1706,7 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
         if (!faceOk) steps.add("face");
       }
 
-      if (cardNo) {
+      if (cardNos.length) {
         const cardOk =
           String(row.card_status || "") === "success" &&
           String(row.card_hash || "") === String(desiredCardHash || "");
@@ -1673,7 +1750,7 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       ac?.password != null && String(ac.password).trim() !== ""
         ? String(ac.password).trim()
         : "";
-    const cardNo = ac?.cardNo != null ? String(ac.cardNo).trim() : "";
+    const cardNos = resolveCardNos(ac);
     const fps = Array.isArray(ac?.fingerprints) ? ac.fingerprints : [];
     const fingerprintCount = fps.filter(
       (fp) => fp && String(fp.fingerData || "").trim() !== "",
@@ -1691,7 +1768,7 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       full_name: p.full_name || "",
       has_face: faceUrl.length > 0,
       has_password: password.length > 0,
-      has_card: cardNo.length > 0,
+      has_card: cardNos.length > 0,
       fingerprint_count: fingerprintCount,
       needs_sync: needsSync,
       needs_sync_steps: needsSyncSteps,

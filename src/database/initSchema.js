@@ -1292,6 +1292,28 @@ async function initSchema() {
     `);
     schemaLogger.info("person_ladder_cards 表已建立", { module: "initSchema" });
 
+    // 多卡號：card_no 改為可空且移除全域唯一（卡號 SSOT 在 persons.config.access_control.cards）
+    try {
+      await targetPool.query(`
+        ALTER TABLE person_ladder_cards DROP CONSTRAINT IF EXISTS person_ladder_cards_card_no_key
+      `);
+    } catch (err) {
+      schemaLogger.warn("person_ladder_cards card_no UNIQUE 移除略過", {
+        module: "initSchema",
+        error: err?.message,
+      });
+    }
+    try {
+      await targetPool.query(`
+        ALTER TABLE person_ladder_cards ALTER COLUMN card_no DROP NOT NULL
+      `);
+    } catch (err) {
+      schemaLogger.warn("person_ladder_cards card_no nullable 略過", {
+        module: "initSchema",
+        error: err?.message,
+      });
+    }
+
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_location_access (
         id SERIAL PRIMARY KEY,

@@ -7,6 +7,7 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
 const {
   buildIsapiValidPayloadFromPlatformValidity,
 } = require("../accessControl/accessControlValidityUtils");
+const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 
 const VALID_SYNC_STATUSES = new Set([
   "pending",
@@ -109,9 +110,15 @@ const hasAnyFloors = (storage) => {
   return false;
 };
 
-const resolveSyncFields = (personRow, floors) => {
+const resolveSyncFields = (personRow, floors, cardNoOverride = null) => {
   const ac = getAccessControlFromPerson(personRow);
-  const cardNo = ac.cardNo != null ? String(ac.cardNo).trim() : "";
+  const cardNos = resolveCardNos(ac);
+  const cardNo =
+    cardNoOverride != null
+      ? String(cardNoOverride).trim()
+      : cardNos[0] != null
+        ? String(cardNos[0]).trim()
+        : "";
   const valid = buildIsapiValidPayloadFromPlatformValidity(ac?.validity);
   const password =
     ac?.password != null && String(ac.password).trim() !== ""
@@ -120,6 +127,7 @@ const resolveSyncFields = (personRow, floors) => {
   const floorList = parseFloors(floors);
   return {
     cardNo,
+    cardNos,
     homeFloor: floorList[0] ?? 1,
     floors: floorList,
     cardType: 1,
@@ -129,22 +137,6 @@ const resolveSyncFields = (personRow, floors) => {
     validBegin: valid.beginTime || null,
     validEnd: valid.endTime || null,
   };
-};
-
-const assertCardNotOwnedByOther = async (cardNo, personId) => {
-  const normalized = String(cardNo || "").trim();
-  if (!normalized) return;
-  const rows = await db.query(
-    `SELECT person_id FROM person_ladder_cards WHERE card_no = ? LIMIT 1`,
-    [normalized],
-  );
-  const owner = rows?.[0]?.person_id;
-  if (owner != null && Number(owner) !== Number(personId)) {
-    throwApiError(
-      C.VALIDATION_CUSTOM,
-      `梯控卡號已被其他人員使用（person_id=${owner}）`,
-    );
-  }
 };
 
 const getByPersonId = async (personId) => {
@@ -161,17 +153,16 @@ const upsertForPerson = async (personId, input = {}) => {
   ]);
   const personRow = personRows?.[0] || null;
   const ac = getAccessControlFromPerson(personRow);
-  const cardNo = String(ac.cardNo ?? input.cardNo ?? input.card_no ?? "").trim();
-  if (!cardNo) {
+  const cardNos = resolveCardNos(ac);
+  if (!cardNos.length) {
     throwApiError(C.VALIDATION_CUSTOM, "請於卡片設定填寫卡號");
   }
+  const cardNo = cardNos[0];
 
   const floorsStorage = normalizeFloorsStorage(input.floors);
   if (!hasAnyFloors(floorsStorage)) {
     throwApiError(C.VALIDATION_CUSTOM, "請選擇授權樓層");
   }
-
-  await assertCardNotOwnedByOther(cardNo, personId);
 
   const firstFloors = (() => {
     if (Array.isArray(floorsStorage._legacy) && floorsStorage._legacy.length) {
@@ -251,12 +242,31 @@ const removeForPerson = async (personId) => {
 const getPersonIdByCardNo = async (cardNo) => {
   const normalized = String(cardNo || "").trim();
   if (!normalized) return null;
-  const rows = await db.query(
+  const ladderRows = await db.query(
     `SELECT person_id FROM person_ladder_cards WHERE card_no = ? LIMIT 1`,
     [normalized],
   );
-  const personId = rows?.[0]?.person_id;
-  return personId != null ? Number(personId) : null;
+  const ladderPersonId = ladderRows?.[0]?.person_id;
+  if (ladderPersonId != null) return Number(ladderPersonId);
+
+  const configRows = await db.query(
+    `SELECT id FROM persons
+     WHERE config IS NOT NULL
+       AND (
+         config->'access_control'->>'cardNo' = ?
+         OR EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(
+             COALESCE(config->'access_control'->'cards', '[]'::jsonb)
+           ) elem
+           WHERE elem->>'cardNo' = ?
+         )
+       )
+     LIMIT 1`,
+    [normalized, normalized],
+  );
+  const configPersonId = configRows?.[0]?.id;
+  return configPersonId != null ? Number(configPersonId) : null;
 };
 
 module.exports = {

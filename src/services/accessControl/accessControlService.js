@@ -17,6 +17,8 @@ const ISAPI_PATHS = {
   captureFaceData: "/ISAPI/AccessControl/CaptureFaceData",
   captureCardInfo: "/ISAPI/AccessControl/CaptureCardInfo?format=json",
   cardInfoSetUp: "/ISAPI/AccessControl/CardInfo/SetUp?format=json",
+  cardInfoSearch: "/ISAPI/AccessControl/CardInfo/Search?format=json",
+  cardInfoDelete: "/ISAPI/AccessControl/CardInfo/Delete?format=json",
   fingerPrintSetUp: "/ISAPI/AccessControl/FingerPrint/SetUp?format=json",
   captureFingerPrint: "/ISAPI/AccessControl/CaptureFingerPrint",
 };
@@ -501,6 +503,80 @@ async function setFingerPrint(deviceId, fingerPrintCfg) {
   return { success: true };
 }
 
+const extractCardNosFromSearchResponse = (data) => {
+  const out = [];
+  const push = (raw) => {
+    const c = raw?.cardNo ?? raw?.CardNo;
+    if (c != null) {
+      const s = String(c).trim();
+      if (s) out.push(s);
+    }
+  };
+  const walk = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (node.cardNo != null || node.CardNo != null) push(node);
+    if (node.CardInfo) walk(node.CardInfo);
+    if (node.CardInfoList) walk(node.CardInfoList);
+    if (node.MatchList) walk(node.MatchList);
+  };
+  walk(data);
+  return [...new Set(out)];
+};
+
+/**
+ * 查詢設備上指定工號的卡片卡號列表
+ * @param {number} deviceId
+ * @param {string} employeeNo
+ */
+async function searchCardInfoByEmployee(deviceId, employeeNo) {
+  const { client } = await getDeviceAndClient(deviceId);
+  const eno = employeeNo != null ? String(employeeNo).trim() : "";
+  if (!eno) return [];
+
+  const res = await client.request({
+    method: "POST",
+    path: ISAPI_PATHS.cardInfoSearch,
+    data: {
+      CardInfoSearchCond: {
+        searchID: String(Date.now()),
+        searchResultPosition: 0,
+        maxResults: 50,
+        EmployeeNoList: [{ employeeNo: eno }],
+      },
+    },
+  });
+  return extractCardNosFromSearchResponse(res?.data ?? res);
+}
+
+/**
+ * 刪除設備上的卡片綁定
+ * @param {number} deviceId
+ * @param {string} cardNo
+ */
+async function deleteCardInfo(deviceId, cardNo) {
+  const { client } = await getDeviceAndClient(deviceId);
+  const normalized = cardNo != null ? String(cardNo).trim() : "";
+  if (!normalized) {
+    throw createApiError(C.ACCESS_CONTROL_CARD_NO_REQUIRED, "請提供 cardNo");
+  }
+
+  await client.request({
+    method: "PUT",
+    path: ISAPI_PATHS.cardInfoDelete,
+    data: {
+      CardInfoDelCond: {
+        CardNoList: [{ cardNo: normalized }],
+      },
+    },
+  });
+  return { success: true };
+}
+
 module.exports = {
   getDeviceAndClient,
   searchUserInfo,
@@ -510,6 +586,8 @@ module.exports = {
   captureFaceData,
   captureCardInfo,
   setCardInfo,
+  searchCardInfoByEmployee,
+  deleteCardInfo,
   captureFingerPrint,
   setFingerPrint,
 };

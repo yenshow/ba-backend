@@ -12,6 +12,14 @@ const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const { formatMissingPersonIdLabels } = require("../../utils/personDisplayUtils");
+const {
+  normalizeAndValidateCardsInput,
+  applyCardsToAccessControl,
+} = require("../../utils/accessControlCardsUtils");
+const {
+  normalizeAndValidateFingerprintsInput,
+  applyFingerprintsToAccessControl,
+} = require("../../utils/accessControlFingerprintsUtils");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -1024,11 +1032,25 @@ async function setPersonAccessControlConfig(personId, params = {}) {
     config.access_control.validity = buildValidityPayload(v);
   }
 
-  // cardNo（允許 null/"" 代表清除）
-  if (Object.prototype.hasOwnProperty.call(params, "cardNo")) {
+  // cards（最多 5 張；空陣列代表清除）
+  if (Object.prototype.hasOwnProperty.call(params, "cards")) {
+    const validated = normalizeAndValidateCardsInput(
+      Array.isArray(params.cards) ? params.cards : [],
+    );
+    config.access_control = applyCardsToAccessControl(
+      config.access_control,
+      validated,
+    );
+  } else if (Object.prototype.hasOwnProperty.call(params, "cardNo")) {
+    // deprecated：單卡欄位相容
     const cardNo = params.cardNo == null ? "" : String(params.cardNo).trim();
-    if (!cardNo) delete config.access_control.cardNo;
-    else config.access_control.cardNo = cardNo;
+    const validated = cardNo
+      ? normalizeAndValidateCardsInput([{ cardNo, source: "manual" }])
+      : [];
+    config.access_control = applyCardsToAccessControl(
+      config.access_control,
+      validated,
+    );
   }
 
   // password（允許 null 代表清除；僅數字 4~12）
@@ -1045,16 +1067,25 @@ async function setPersonAccessControlConfig(personId, params = {}) {
     else config.access_control.password = pw;
   }
 
-  // fingerData（允許 null/"" 代表清除 fingerPrintID=1）
-  if (Object.prototype.hasOwnProperty.call(params, "fingerData")) {
+  // fingerprints（最多 5 筆；空陣列代表清除）
+  if (Object.prototype.hasOwnProperty.call(params, "fingerprints")) {
+    const validated = normalizeAndValidateFingerprintsInput(
+      Array.isArray(params.fingerprints) ? params.fingerprints : [],
+    );
+    config.access_control = applyFingerprintsToAccessControl(
+      config.access_control,
+      validated,
+    );
+  } else if (Object.prototype.hasOwnProperty.call(params, "fingerData")) {
+    // deprecated：單指紋欄位相容
     const fingerData = String(params.fingerData ?? "").trim();
-    const list = Array.isArray(config.access_control.fingerprints)
-      ? config.access_control.fingerprints
+    const validated = fingerData
+      ? normalizeAndValidateFingerprintsInput([{ fingerData, source: "manual" }])
       : [];
-    config.access_control.fingerprints = upsertFingerPrint(list, {
-      fingerData,
-      fingerPrintID: 1,
-    });
+    config.access_control = applyFingerprintsToAccessControl(
+      config.access_control,
+      validated,
+    );
   }
 
   await db.query("UPDATE persons SET config = ? WHERE id = ?", [

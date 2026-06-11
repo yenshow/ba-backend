@@ -50,6 +50,15 @@ function hashCard({ cardNo }) {
   return c ? sha256Hex(`cardNo:${c}`) : null;
 }
 
+function hashCards({ cardNos }) {
+  const list = Array.isArray(cardNos)
+    ? cardNos.map((c) => String(c ?? "").trim()).filter(Boolean)
+    : [];
+  if (!list.length) return null;
+  const sorted = [...new Set(list)].sort();
+  return sha256Hex(`cards:${sorted.join("|")}`);
+}
+
 function hashLadderCard({
   cardNo,
   homeFloor,
@@ -233,6 +242,7 @@ module.exports = {
   hashUserInfo,
   hashFace,
   hashCard,
+  hashCards,
   hashLadderCard,
   hashFingerprint,
   hashFingerprintTemplate,

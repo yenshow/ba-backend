@@ -12,6 +12,7 @@ const personLicensePlateService = require("../services/personnel/personLicensePl
 const personSyncJobService = require("../services/personnel/personSyncJobService");
 const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadService");
 const personImportService = require("../services/personnel/personImportService");
+const virtualCardService = require("../services/personnel/virtualCardService");
 const {
   PERSONNEL_FACE_MAX_BYTES,
   PERSONNEL_FACE_ALLOWED_MIME,
@@ -332,7 +333,8 @@ router.put(
  * PUT /api/personnel/persons/:personId/access-control-config
  * Body（節錄）:
  * - validity: { longTerm, beginTime, endTime }
- * - cardNo?: string | null
+ * - cards?: Array<{ cardNo: string, source?: "manual"|"captured"|"virtual" }>
+ * - cardNo?: string | null (deprecated)
  * - fingerData?: string | null
  * - password?: string | null
  */
@@ -347,6 +349,19 @@ router.put(
       req.body || {},
     );
     res.sendSuccess({ person });
+  }),
+);
+
+/**
+ * 產生虛擬卡號（10 碼：9 + 9 位隨機數字；全系統虛擬卡去重）
+ * POST /api/personnel/virtual-card/generate
+ */
+router.post(
+  "/virtual-card/generate",
+  requirePermission("system.personnel.sync.edit"),
+  asyncHandler(async (_req, res) => {
+    const result = await virtualCardService.generateVirtualCard();
+    res.sendSuccess(result);
   }),
 );
 
