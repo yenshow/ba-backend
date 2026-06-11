@@ -19,16 +19,9 @@ internal static class AcsEventNames
     {
         if (Names.TryGetValue((major, minor), out var name))
         {
-            return $"{MajorName(major)} / {name}";
+            return name;
         }
 
-        return $"{MajorName(major)} / 未知事件";
+        return "未知事件";
     }
-
-    private static string MajorName(uint major) => major switch
-    {
-        0x3 => "操作",
-        0x5 => "事件",
-        _ => $"Major=0x{major:x}",
-    };
 }

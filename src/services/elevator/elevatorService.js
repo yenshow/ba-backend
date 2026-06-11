@@ -23,6 +23,8 @@ const { aggregateElevatorLogs } = require("./elevatorLogAggregation");
 const db = require("../../database/db");
 
 const MAX_LOG_RECORDS = 500;
+/** 最新紀錄先多抓原始事件再合併，避免遠端操作被刷卡連續事件擠出 */
+const LATEST_LOG_RAW_FETCH_MIN = 50;
 
 async function refreshElevatorArming() {
   try {
@@ -379,11 +381,19 @@ async function getSiteLogs(locationId, options = {}) {
         MAX_LOG_RECORDS,
       );
       const offsetNum = Math.max(Number(offset) || 0, 0);
+      const needsAggregationBuffer =
+        offsetNum === 0 && limitNum <= 20;
+      const rawFetchLimit = needsAggregationBuffer
+        ? Math.min(
+            Math.max(limitNum * 10, LATEST_LOG_RAW_FETCH_MIN),
+            MAX_LOG_RECORDS,
+          )
+        : limitNum;
 
       const primaryDeviceId = deviceIds[0];
       const result = await sdkEventService.listEvents({
         deviceId: primaryDeviceId,
-        limit: limitNum,
+        limit: rawFetchLimit,
         offset: offsetNum,
         startTime: resolved.startTime,
         endTime: resolved.endTime,
@@ -392,6 +402,9 @@ async function getSiteLogs(locationId, options = {}) {
       let logs = (result.items || []).map(mapEventToLog);
       logs = filterLogsBySearch(logs, search);
       logs = aggregateElevatorLogs(logs);
+      if (needsAggregationBuffer && logs.length > limitNum) {
+        logs = logs.slice(0, limitNum);
+      }
 
       return {
         logs,
