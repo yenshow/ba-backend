@@ -295,9 +295,11 @@ router.put(
   asyncHandler(async (req, res) => {
     const personId = parseInt(req.params.id, 10);
     const plates = req.body?.licensePlates ?? req.body?.plates ?? [];
+    const syncToDevices = req.body?.syncToDevices === true;
     const result = await personnelService.replacePersonLicensePlates(
       personId,
       plates,
+      { syncToDevices },
     );
     res.sendSuccess(result);
   }),
@@ -467,6 +469,35 @@ router.get(
     const locationId = parseInt(req.params.locationId, 10);
     const ids = await personnelService.getLocationMemberIds(locationId);
     res.sendSuccess({ ids });
+  }),
+);
+
+/**
+ * 地點名單內人員車牌（平台 SSOT；供車牌管理 UI）
+ * GET /api/personnel/locations/:locationId/license-plates
+ */
+router.get(
+  "/locations/:locationId/license-plates",
+  validateIntegers("locationId"),
+  asyncHandler(async (req, res) => {
+    const locationId = parseInt(req.params.locationId, 10);
+    const items = await personnelService.listLicensePlatesByLocationId(locationId);
+    res.sendSuccess({ items });
+  }),
+);
+
+/**
+ * 重新將此地點名單內車牌推送至攝影機（不變更 person_location_access）
+ * POST /api/personnel/locations/:locationId/sync-plates
+ */
+router.post(
+  "/locations/:locationId/sync-plates",
+  requirePermission("system.personnel.sync.edit"),
+  validateIntegers("locationId"),
+  asyncHandler(async (req, res) => {
+    const locationId = parseInt(req.params.locationId, 10);
+    const result = await personnelService.syncLicensePlatesForLocation(locationId);
+    res.sendSuccess(result);
   }),
 );
 

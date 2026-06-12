@@ -7,6 +7,7 @@ const db = require("../../database/db");
 const personLicensePlateService = require("./personLicensePlateService");
 const personLadderCardService = require("./personLadderCardService");
 const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
+const locationMemberService = require("./locationMemberService");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
@@ -240,63 +241,6 @@ async function ensureLocationIsSyncable(locationId) {
   return id;
 }
 
-/** 地點名單管理：人流門禁或 ISAPI 車輛地點 */
-async function ensureLocationAllowsAccessMembers(locationId) {
-  const id = await ensureLocationExists(locationId);
-  const rows = await db.query(
-    `
-      SELECT ls.system_type, ls.system_config
-      FROM location_systems ls
-      WHERE ls.location_id = ?
-    `,
-    [id],
-  );
-  let allowed = false;
-  for (const row of rows || []) {
-    const cfg =
-      typeof row.system_config === "string"
-        ? (() => {
-            try {
-              return JSON.parse(row.system_config);
-            } catch {
-              return {};
-            }
-          })()
-        : row.system_config || {};
-    if (row.system_type === "people_counting") {
-      const entryIds = Array.isArray(cfg.entry_device_ids)
-        ? cfg.entry_device_ids
-        : [];
-      if (entryIds.length > 0) allowed = true;
-    }
-    if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
-      const entryCam = Array.isArray(cfg.entry_camera_device_ids)
-        ? cfg.entry_camera_device_ids
-        : [];
-      const exitCam = Array.isArray(cfg.exit_camera_device_ids)
-        ? cfg.exit_camera_device_ids
-        : [];
-      if (entryCam.length > 0 || exitCam.length > 0) allowed = true;
-    }
-  }
-  if (!allowed) {
-    throwApiError(
-      C.PERSONNEL_VALIDATION_FAILED,
-      "此地點不支援名單管理（需設定人流門禁入口設備或 ISAPI 車輛攝影機）",
-    );
-  }
-  return id;
-}
-
-async function triggerVehiclePlateSyncForLocation(locationId) {
-  try {
-    const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
-    await vehiclePlateSyncService.syncPlatesForLocation(locationId);
-  } catch {
-    // 非車輛地點或同步失敗不阻擋名單寫入
-  }
-}
-
 async function getPersonsByGroupId(personGroupId, options = {}) {
   const group = await ensurePersonGroupExists(personGroupId);
   const limit = clampInt(options.limit, { min: 1, max: 500, fallback: 200 });
@@ -455,114 +399,6 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
   });
 
   return getPersonsByGroupId(id, { limit: 500, offset: 0 });
-}
-
-async function getPersonsByLocationIdPaged(locationId, options = {}) {
-  const id = await ensureLocationAllowsAccessMembers(locationId);
-  const limit = clampInt(options.limit, { min: 1, max: 500, fallback: 20 });
-  const offset = clampInt(options.offset, {
-    min: 0,
-    max: Number.MAX_SAFE_INTEGER,
-    fallback: 0,
-  });
-  const status = options.status ? String(options.status).trim() : "";
-  const q = options.q != null ? String(options.q).trim() : "";
-
-  const whereParts = ["pla.location_id = ?"];
-  const params = [id];
-  if (status) {
-    params.push(status);
-    whereParts.push("p.status = ?");
-  }
-  if (q) {
-    params.push(`%${q}%`);
-    params.push(`%${q}%`);
-    whereParts.push("(p.employee_no ILIKE ? OR p.full_name ILIKE ?)");
-  }
-
-  const whereSql = `WHERE ${whereParts.join(" AND ")}`;
-
-  const countRows = await db.query(
-    `
-      SELECT COUNT(*)::int AS total
-      FROM person_location_access pla
-      INNER JOIN persons p ON pla.person_id = p.id
-      ${whereSql}
-    `,
-    params,
-  );
-  const total = countRows?.[0]?.total ?? 0;
-
-  const rows = await db.query(
-    `
-      SELECT p.*, pg.name AS group_name
-      FROM person_location_access pla
-      INNER JOIN persons p ON pla.person_id = p.id
-      LEFT JOIN person_groups pg ON p.person_group_id = pg.id
-      ${whereSql}
-      ORDER BY p.employee_no ASC
-      LIMIT ? OFFSET ?
-    `,
-    [...params, limit, offset],
-  );
-
-  return { items: rows || [], total, limit, offset };
-}
-
-async function replaceLocationMembers(locationId, memberPersonIds = []) {
-  const id = await ensureLocationAllowsAccessMembers(locationId);
-  const previousIds = await getPersonIdsByLocationId(id);
-
-  const rawIds = Array.isArray(memberPersonIds)
-    ? memberPersonIds
-        .map((x) => Number.parseInt(String(x), 10))
-        .filter((x) => Number.isFinite(x))
-    : [];
-  const nextIds = Array.from(new Set(rawIds));
-
-  if (nextIds.length > 0) {
-    const rows = await db.query(
-      `SELECT id FROM persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
-      nextIds,
-    );
-    const existing = new Set((rows || []).map((r) => r.id));
-    const missing = nextIds.filter((pid) => !existing.has(pid));
-    if (missing.length > 0) {
-      const labels = await formatMissingPersonIdLabels(missing);
-      throwApiError(
-        C.PERSONNEL_VALIDATION_FAILED,
-        `人員不存在：${labels.join("、")}`,
-      );
-    }
-  }
-
-  await db.transaction(async (query) => {
-    await query("DELETE FROM person_location_access WHERE location_id = ?", [
-      id,
-    ]);
-    if (nextIds.length > 0) {
-      const valuesSql = nextIds.map(() => "(?, ?)").join(", ");
-      const params = nextIds.flatMap((pid) => [pid, id]);
-      await query(
-        `INSERT INTO person_location_access (person_id, location_id) VALUES ${valuesSql}`,
-        params,
-      );
-    }
-  });
-
-  const removedPersonIds = (previousIds || []).filter((pid) => !nextIds.includes(pid));
-  if (removedPersonIds.length > 0) {
-    try {
-      const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
-      await vehiclePlateSyncService.reconcileLocationMemberChange(id, removedPersonIds);
-    } catch {
-      // 不阻擋名單寫入
-    }
-  }
-
-  void triggerVehiclePlateSyncForLocation(id);
-
-  return getPersonsByLocationIdPaged(id, { limit: 20, offset: 0 });
 }
 
 // ========== 人員 ==========
@@ -812,18 +648,6 @@ async function createPerson(data, createdBy = null) {
     ],
   );
   const created = rows[0];
-  if (Object.prototype.hasOwnProperty.call(data || {}, "licensePlates")) {
-    const vehicle_plate_sync =
-      await vehiclePlateSyncService.reconcilePersonGroupAndPlates(created.id, {
-        previousGroupId: null,
-        nextGroupId: personGroupId,
-        groupChanged: false,
-        platesInput: data.licensePlates,
-        oldPlates: [],
-      });
-    const person = await getPersonById(created.id);
-    return { ...person, vehicle_plate_sync };
-  }
   return { ...created, license_plates: [] };
 }
 
@@ -840,14 +664,6 @@ async function updatePerson(id, data) {
     nextGroupId = await resolvePersonGroupIdForPerson(data.personGroupId);
     groupChanged = prevGroupId !== nextGroupId;
   }
-
-  const hasLicensePlatesUpdate = Object.prototype.hasOwnProperty.call(
-    data || {},
-    "licensePlates",
-  );
-  const oldPlates = hasLicensePlatesUpdate
-    ? await personLicensePlateService.listByPersonId(id)
-    : [];
 
   const updates = [];
   const params = [];
@@ -870,9 +686,14 @@ async function updatePerson(id, data) {
     updates.push("full_name = ?");
     params.push(v);
   }
+  let statusChanged = false;
+  let prevStatus = existingPerson?.status;
+  let nextStatus = prevStatus;
   if (data.status !== undefined) {
     if (!VALID_STATUSES.includes(data.status))
       throwApiError(C.PERSONNEL_VALIDATION_FAILED,"無效的狀態");
+    nextStatus = data.status;
+    statusChanged = String(prevStatus) !== String(nextStatus);
     updates.push("status = ?");
     params.push(data.status);
   }
@@ -916,8 +737,6 @@ async function updatePerson(id, data) {
     updates.push("user_id = ?");
     params.push(data.userId ?? null);
   }
-  let vehiclePlateSync = null;
-
   if (updates.length > 0) {
     params.push(id);
     await db.query(
@@ -926,21 +745,11 @@ async function updatePerson(id, data) {
     );
   }
 
-  if (hasLicensePlatesUpdate || groupChanged) {
-    vehiclePlateSync =
-      await vehiclePlateSyncService.reconcilePersonGroupAndPlates(id, {
-        previousGroupId: prevGroupId,
-        nextGroupId,
-        groupChanged,
-        platesInput: hasLicensePlatesUpdate ? data.licensePlates : undefined,
-        oldPlates,
-      });
+  if (statusChanged) {
+    await locationMemberService.onPersonStatusChange(id, prevStatus, nextStatus);
   }
 
-  const person = await getPersonById(id);
-  return vehiclePlateSync
-    ? { ...person, vehicle_plate_sync: vehiclePlateSync }
-    : person;
+  return getPersonById(id);
 }
 
 // ========== 門禁資料（僅存平台，設備同步統一處理） ==========
@@ -1108,22 +917,32 @@ async function replacePersonLadderCard(personId, input) {
   return { ladder_card: ladderCard };
 }
 
-async function replacePersonLicensePlates(personId, platesInput) {
+async function replacePersonLicensePlates(
+  personId,
+  platesInput,
+  { syncToDevices = false } = {},
+) {
   const person = await getPersonById(personId);
-  const groupId =
-    person.person_group_id != null ? Number(person.person_group_id) : null;
-  const vehicle_plate_sync =
-    await vehiclePlateSyncService.reconcilePersonGroupAndPlates(personId, {
-      previousGroupId: groupId,
-      nextGroupId: groupId,
-      groupChanged: false,
+  const oldPlates = person.license_plates || [];
+  let vehicle_plate_sync;
+  if (syncToDevices) {
+    vehicle_plate_sync =
+      await vehiclePlateSyncService.saveAndSyncPersonLicensePlates(
+        personId,
+        platesInput,
+        oldPlates,
+      );
+  } else {
+    await vehiclePlateSyncService.savePersonLicensePlatesPlatform(
+      personId,
       platesInput,
-      oldPlates: person.license_plates || [],
-    });
+      oldPlates,
+    );
+  }
   const updated = await getPersonById(personId);
   return {
     licensePlates: updated.license_plates || [],
-    vehicle_plate_sync,
+    ...(vehicle_plate_sync ? { vehicle_plate_sync } : {}),
   };
 }
 
@@ -1137,41 +956,6 @@ async function deletePerson(id) {
   return { success: true };
 }
 
-async function getPersonIdsByLocationId(locationId) {
-  const rows = await db.query(
-    "SELECT person_id FROM person_location_access WHERE location_id = ?",
-    [locationId],
-  );
-  return (rows || []).map((r) => r.person_id);
-}
-
-async function getLocationMemberIds(locationId) {
-  const id = await ensureLocationAllowsAccessMembers(locationId);
-  const ids = await getPersonIdsByLocationId(id);
-  return Array.from(
-    new Set(
-      (ids || [])
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n) && n > 0)
-        .map((n) => Math.trunc(n)),
-    ),
-  );
-}
-
-async function getPersonsWithAccessByLocationId(locationId) {
-  const rows = await db.query(
-    `SELECT p.id, p.employee_no, p.full_name, p.status, p.face_url, p.config,
-            p.person_group_id, pg.name AS group_name
-     FROM person_location_access pla
-     INNER JOIN persons p ON pla.person_id = p.id
-     LEFT JOIN person_groups pg ON p.person_group_id = pg.id
-     WHERE pla.location_id = ? AND p.status = 'active'
-     ORDER BY p.employee_no`,
-    [locationId],
-  );
-  return rows || [];
-}
-
 module.exports = {
   getPersonGroups,
   getPersonGroupById,
@@ -1181,8 +965,8 @@ module.exports = {
   getPersonsByGroupId,
   getPersonGroupMemberIds,
   replacePersonGroupMembers,
-  getPersonsByLocationIdPaged,
-  replaceLocationMembers,
+  getPersonsByLocationIdPaged: locationMemberService.getPersonsByLocationIdPaged,
+  replaceLocationMembers: locationMemberService.replaceLocationMembers,
   getPersons,
   getPersonsPaged,
   getPersonById,
@@ -1192,8 +976,13 @@ module.exports = {
   replacePersonLicensePlates,
   replacePersonLadderCard,
   deletePerson,
-  getPersonIdsByLocationId,
-  getLocationMemberIds,
-  getPersonsWithAccessByLocationId,
+  getPersonIdsByLocationId: locationMemberService.getPersonIdsByLocationId,
+  getLocationMemberIds: locationMemberService.getLocationMemberIds,
+  getPersonsWithAccessByLocationId:
+    locationMemberService.getPersonsWithAccessByLocationId,
+  listLicensePlatesByLocationId:
+    locationMemberService.listLicensePlatesByLocationId,
+  syncLicensePlatesForLocation:
+    locationMemberService.syncLicensePlatesForLocation,
   setPersonAccessControlConfig,
 };

@@ -134,18 +134,15 @@ async function executeBatchImport({
       const isUpdate = Boolean(existing && existing.id);
 
       const person = isUpdate
-        ? await personnelService.updatePerson(existing.id, {
-            fullName,
-            ...(licensePlates.length > 0 ? { licensePlates } : {}),
-          })
+        ? await personnelService.updatePerson(existing.id, { fullName })
         : await personnelService.createPerson(
-            {
-              employeeNo,
-              fullName,
-              ...(licensePlates.length > 0 ? { licensePlates } : {}),
-            },
+            { employeeNo, fullName },
             createdBy,
           );
+
+      if (licensePlates.length > 0) {
+        await personnelService.replacePersonLicensePlates(person.id, licensePlates);
+      }
 
       created.push({ id: person.id, employeeNo: person.employee_no });
 

@@ -15,6 +15,22 @@ const SYNC_STATUS = {
   SKIPPED: "skipped",
 };
 
+function summarizePlateSyncError(failures) {
+  const messages = [
+    ...new Set(
+      (failures || [])
+        .map((f) => (f?.message != null ? String(f.message).trim() : ""))
+        .filter(Boolean),
+    ),
+  ];
+  if (messages.length === 0) return "同步失敗";
+  const combined = messages.join("；");
+  if (/timeout.*exceeded/i.test(combined)) {
+    return "請求逾時，請檢查攝影機連線";
+  }
+  return messages[0];
+}
+
 function buildIsapiTimesFromRow(row) {
   // 時間格式統一由 isapiVehicleDeviceService.formatIsapiTime 處理
   return {
@@ -221,7 +237,7 @@ async function syncPlateRowById(plateId, targets) {
   if (totalOk > 0) {
     await personLicensePlateService.updateSyncStatus(plateId, {
       status: SYNC_STATUS.PARTIAL,
-      error: allFailures[0]?.message || "部分設備同步失敗",
+      error: summarizePlateSyncError(allFailures) || "部分設備同步失敗",
       syncedAt: new Date(),
     });
     return {
@@ -233,7 +249,7 @@ async function syncPlateRowById(plateId, targets) {
 
   await personLicensePlateService.updateSyncStatus(plateId, {
     status: SYNC_STATUS.FAILED,
-    error: allFailures[0]?.message || "同步失敗",
+    error: summarizePlateSyncError(allFailures) || "同步失敗",
     syncedAt: null,
   });
   return {
@@ -305,11 +321,34 @@ async function syncPlatesForLocation(locationId) {
     [locId],
   );
 
+  const inactivePlateRows = await db.query(
+    `
+      SELECT plp.plate_number
+      FROM person_license_plates plp
+      INNER JOIN person_location_access pla ON pla.person_id = plp.person_id
+      INNER JOIN persons p ON p.id = plp.person_id
+      WHERE pla.location_id = ? AND p.status != 'active'
+    `,
+    [locId],
+  );
+
+  const cleanupFailures = [];
+  for (const row of inactivePlateRows || []) {
+    await removePlateFromTargets(row.plate_number, [target], cleanupFailures);
+  }
+
   const results = [];
   for (const row of plateRows || []) {
     results.push(await syncPlateRowById(row.id, [target]));
   }
-  return aggregateSyncResults(results);
+  const aggregated = aggregateSyncResults(results);
+  if (cleanupFailures.length > 0) {
+    aggregated.failures = [...(aggregated.failures || []), ...cleanupFailures];
+    if (aggregated.status === SYNC_STATUS.SYNCED) {
+      aggregated.status = SYNC_STATUS.PARTIAL;
+    }
+  }
+  return aggregated;
 }
 
 function mergeTargets(targetLists) {
@@ -472,37 +511,36 @@ async function reconcileLocationMemberChange(locationId, removedPersonIds = []) 
 }
 
 /**
- * 人員車牌變更後 reconcile + sync（可僅改群組、或僅改車牌、或兩者）
+ * 僅寫入平台 person_license_plates，並清理設備上已刪除的車牌
  */
-async function reconcilePersonGroupAndPlates(
-  personId,
-  { groupChanged, platesInput, oldPlates },
-) {
+async function savePersonLicensePlatesPlatform(personId, platesInput, oldPlates = []) {
   const pid = Number(personId);
-  let removedPlates = [];
-
-  if (platesInput !== undefined) {
-    await personLicensePlateService.replacePlatesForPerson(pid, platesInput);
-    const newPlates = await personLicensePlateService.listByPersonId(pid);
-    removedPlates = diffRemovedPlates(oldPlates, newPlates);
+  await personLicensePlateService.replacePlatesForPerson(pid, platesInput);
+  const newPlates = await personLicensePlateService.listByPersonId(pid);
+  const removedPlates = diffRemovedPlates(oldPlates, newPlates);
+  if (removedPlates.length > 0) {
+    await reconcileAfterPersonChange(pid, { removedPlates });
   }
+  return newPlates;
+}
 
-  if (platesInput !== undefined || groupChanged) {
-    if (removedPlates.length > 0) {
-      await reconcileAfterPersonChange(pid, { removedPlates });
-    }
-    return syncPersonPlates(pid);
-  }
-  return null;
+/**
+ * 平台儲存後推送至 ISAPI 攝影機
+ */
+async function saveAndSyncPersonLicensePlates(personId, platesInput, oldPlates = []) {
+  const pid = Number(personId);
+  await savePersonLicensePlatesPlatform(pid, platesInput, oldPlates);
+  return syncPersonPlates(pid);
 }
 
 module.exports = {
   SYNC_STATUS,
   resolveIsapiTargetsForPersonId,
+  savePersonLicensePlatesPlatform,
+  saveAndSyncPersonLicensePlates,
   syncPersonPlates,
   syncPlatesForLocation,
   reconcileAfterPersonChange,
   purgePersonPlatesFromDevices,
   reconcileLocationMemberChange,
-  reconcilePersonGroupAndPlates,
 };
