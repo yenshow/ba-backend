@@ -18,6 +18,8 @@ module.exports = {
   getLocationById: locationOps.getLocationById,
   getPeopleCountingSyncableLocationsWithAccessControlDevices:
     locationOps.getPeopleCountingSyncableLocationsWithAccessControlDevices,
+  getVehicleAccessSyncableLocationsWithIsapiCameras:
+    locationOps.getVehicleAccessSyncableLocationsWithIsapiCameras,
   createLocation: locationOps.createLocation,
   updateLocation: locationOps.updateLocation,
   deleteLocation: locationOps.deleteLocation,

@@ -5,6 +5,48 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const { formatMissingPersonIdLabels } = require("../../utils/personDisplayUtils");
+const logger = require("../../utils/logger").createLogger("LocationMemberService");
+
+function parseSystemConfig(raw) {
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  return raw || {};
+}
+
+async function getLocationSystemSyncFlags(locationId) {
+  const rows = await db.query(
+    `
+      SELECT system_type, system_config
+      FROM location_systems
+      WHERE location_id = ?
+    `,
+    [locationId],
+  );
+  let peopleCounting = false;
+  let vehiclePlates = false;
+  for (const row of rows || []) {
+    const cfg = parseSystemConfig(row.system_config);
+    if (row.system_type === "people_counting") {
+      const entryIds = Array.isArray(cfg.entry_device_ids) ? cfg.entry_device_ids : [];
+      if (entryIds.length > 0) peopleCounting = true;
+    }
+    if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
+      const entryCam = Array.isArray(cfg.entry_camera_device_ids)
+        ? cfg.entry_camera_device_ids
+        : [];
+      const exitCam = Array.isArray(cfg.exit_camera_device_ids)
+        ? cfg.exit_camera_device_ids
+        : [];
+      if (entryCam.length > 0 || exitCam.length > 0) vehiclePlates = true;
+    }
+  }
+  return { peopleCounting, vehiclePlates };
+}
 
 async function ensureLocationExists(locationId) {
   const id = Number.parseInt(String(locationId), 10);
@@ -80,7 +122,44 @@ async function syncLicensePlatesForLocation(locationId) {
 
 /** 套用名單後背景同步（不阻擋名單寫入） */
 function triggerVehiclePlateSyncForLocation(locationId) {
-  void syncLicensePlatesForLocation(locationId).catch(() => {});
+  void syncLicensePlatesForLocation(locationId).catch((err) => {
+    logger.error("車牌背景同步失敗", {
+      locationId,
+      message: err?.message || String(err),
+    });
+  });
+}
+
+function triggerPeopleCountingSyncForLocation(locationId) {
+  try {
+    const personSyncJobService = require("./personSyncJobService");
+    return personSyncJobService.startSyncLocationJob(locationId);
+  } catch (err) {
+    logger.error("人流門禁背景同步啟動失敗", {
+      locationId,
+      message: err?.message || String(err),
+    });
+    return null;
+  }
+}
+
+async function triggerDeviceSyncAfterMemberApply(locationId) {
+  const flags = await getLocationSystemSyncFlags(locationId);
+  const meta = {};
+
+  if (flags.peopleCounting) {
+    const started = triggerPeopleCountingSyncForLocation(locationId);
+    if (started?.jobId) {
+      meta.deviceSync = { triggered: true, jobId: started.jobId };
+    }
+  }
+
+  if (flags.vehiclePlates) {
+    triggerVehiclePlateSyncForLocation(locationId);
+    meta.plateSync = { triggered: true };
+  }
+
+  return meta;
 }
 
 async function getPersonIdsByLocationId(locationId) {
@@ -192,9 +271,9 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
     }
   }
 
-  void triggerVehiclePlateSyncForLocation(id);
-
-  return getPersonsByLocationIdPaged(id, { limit: 20, offset: 0 });
+  const syncMeta = await triggerDeviceSyncAfterMemberApply(id);
+  const paged = await getPersonsByLocationIdPaged(id, { limit: 20, offset: 0 });
+  return { ...paged, ...syncMeta };
 }
 
 async function getLocationMemberIds(locationId) {

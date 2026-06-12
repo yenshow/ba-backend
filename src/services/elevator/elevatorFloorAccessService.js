@@ -233,7 +233,26 @@ async function replaceFloorAccess(locationId, assignments = []) {
 
   await syncLadderFloorsFromLocationAssignments(Number(locationId), list);
 
-  return getFloorAccess(locationId);
+  const floorAccess = await getFloorAccess(locationId);
+  let deviceSync = null;
+  try {
+    const elevatorFloorSyncJobService = require("./elevatorFloorSyncJobService");
+    const started = await elevatorFloorSyncJobService.startLocationSyncJob(
+      Number(locationId),
+      null,
+    );
+    if (started?.jobId) {
+      deviceSync = { triggered: true, jobId: started.jobId };
+    }
+  } catch (err) {
+    const logger = require("../../utils/logger").createLogger("ElevatorFloorAccess");
+    logger.error("梯控背景同步啟動失敗", {
+      locationId,
+      message: err?.message || String(err),
+    });
+  }
+
+  return { ...floorAccess, deviceSync };
 }
 
 async function syncPersonFloorAccessFromLadderFloors(personId, floorsStorage) {

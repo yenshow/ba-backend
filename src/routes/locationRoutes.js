@@ -101,6 +101,16 @@ router.get(
   }),
 );
 
+router.get(
+  "/vehicle-access/syncable-locations",
+  noCache,
+  asyncHandler(async (_req, res) => {
+    const result =
+      await locationService.getVehicleAccessSyncableLocationsWithIsapiCameras();
+    res.sendSuccess(result);
+  }),
+);
+
 // 取得單一地點（含所有系統）
 router.get(
   "/:id",

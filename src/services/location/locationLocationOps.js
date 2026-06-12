@@ -146,6 +146,95 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
 }
 
 /**
+ * 取得「車輛進出（ISAPI 攝影機）」可同步地點 + 入口/出口攝影機（含名稱）
+ */
+async function getVehicleAccessSyncableLocationsWithIsapiCameras() {
+  const rows = await db.query(
+    `
+      SELECT
+        l.id,
+        l.name,
+        z.name AS zone_name,
+        COALESCE(ls.system_config->'entry_camera_device_ids', '[]'::jsonb) AS entry_camera_device_ids,
+        COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb) AS exit_camera_device_ids
+      FROM locations l
+      INNER JOIN zones z ON l.zone_id = z.id
+      INNER JOIN location_systems ls
+        ON l.id = ls.location_id AND ls.system_type = 'vehicle_access'
+      WHERE COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
+        AND (
+          COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
+          OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
+        )
+      ORDER BY z.name, l.name
+    `,
+    [],
+  );
+
+  const toIntList = (jsonbArr) => {
+    const arr = Array.isArray(jsonbArr) ? jsonbArr : [];
+    return Array.from(
+      new Set(
+        arr
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n) && n > 0)
+          .map((n) => Math.trunc(n)),
+      ),
+    );
+  };
+
+  const entryIdsByLoc = new Map();
+  const exitIdsByLoc = new Map();
+  const allDeviceIds = new Set();
+
+  for (const r of rows || []) {
+    const locId = Number(r.id);
+    const entry = toIntList(r.entry_camera_device_ids);
+    const exit = toIntList(r.exit_camera_device_ids);
+    entryIdsByLoc.set(locId, entry);
+    exitIdsByLoc.set(locId, exit);
+    for (const id of entry) allDeviceIds.add(id);
+    for (const id of exit) allDeviceIds.add(id);
+  }
+
+  const deviceIdList = Array.from(allDeviceIds);
+  const deviceNameById = new Map();
+  if (deviceIdList.length > 0) {
+    const devRows = await db.query(
+      `
+        SELECT id, name
+        FROM devices
+        WHERE id = ANY($1::int[])
+          AND type_code = 'camera'
+      `,
+      [deviceIdList],
+    );
+    for (const d of devRows || []) {
+      deviceNameById.set(
+        Number(d.id),
+        String(d.name || "").trim() || `#${d.id}`,
+      );
+    }
+  }
+
+  const mapDevices = (ids) =>
+    (ids || []).map((id) => ({ id, name: deviceNameById.get(id) || `#${id}` }));
+
+  const locations = (rows || []).map((r) => {
+    const id = Number(r.id);
+    return {
+      id,
+      name: r.name,
+      zone_name: r.zone_name,
+      entry_devices: mapDevices(entryIdsByLoc.get(id) || []),
+      exit_devices: mapDevices(exitIdsByLoc.get(id) || []),
+    };
+  });
+
+  return { locations };
+}
+
+/**
  * 建立地點（含系統）
  */
 async function createLocation(locationData, userId) {
@@ -280,6 +369,7 @@ async function deleteLocation(id) {
 module.exports = {
   getLocationById,
   getPeopleCountingSyncableLocationsWithAccessControlDevices,
+  getVehicleAccessSyncableLocationsWithIsapiCameras,
   createLocation,
   updateLocation,
   deleteLocation,
