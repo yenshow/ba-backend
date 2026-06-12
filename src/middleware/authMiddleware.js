@@ -64,6 +64,34 @@ const requirePermission = (requiredCode) => async (req, res, next) => {
   }
 };
 
+/** 具備任一權限碼即可通過（用於跨模組別名，如車牌設備同步） */
+const requireAnyPermission = (requiredCodes) => async (req, res, next) => {
+  const codes = Array.isArray(requiredCodes) ? requiredCodes : [requiredCodes];
+  if (codes.length === 0) {
+    return sendAuthFailure(res, 500, C.PERMISSION_LOAD_FAILED, "未設定權限檢查");
+  }
+  if (!req.user) {
+    return sendAuthFailure(res, 401, C.AUTH_UNAUTHENTICATED, "未認證");
+  }
+  if (req.user.role === "admin") {
+    return next();
+  }
+  try {
+    const effective = await attachEffectivePermissions(req);
+    if (codes.some((code) => permissionService.hasPermissionCode(effective, code))) {
+      return next();
+    }
+    return sendAuthFailure(res, 403, C.PERMISSION_DENIED, "權限不足");
+  } catch (err) {
+    return sendAuthFailure(
+      res,
+      500,
+      C.PERMISSION_LOAD_FAILED,
+      `無法取得權限：${err.message}`,
+    );
+  }
+};
+
 const AREA_POINT_MAP_MODULE = "system.area_point_map";
 
 const resolveAreaPointMapMutationCode = (req, action) => {
@@ -175,6 +203,7 @@ module.exports = {
   requireAdmin,
   attachEffectivePermissions,
   requirePermission,
+  requireAnyPermission,
   requireLocationMutation,
   requireLocationTypeModuleAccess,
   requirePlateUpsert,

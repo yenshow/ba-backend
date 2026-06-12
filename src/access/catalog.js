@@ -80,19 +80,20 @@ const SHARED_MODULES = [
   {
     code: "system.people_counting",
     name: "人流統計",
+    profileNames: { central: "門禁管理" },
     sort_order: 10,
     children: [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "report.full", name: "完整報表", sort_order: 4 },
       {
         code: "device_sync",
-        name: "設備同步",
+        name: "門禁設備同步",
         sort_order: 5,
         rbac_module: "system.personnel",
       },
       {
         code: "sync.edit",
-        name: "同步編輯",
+        name: "門禁名單編輯",
         sort_order: 6,
         rbac_module: "system.personnel",
       },
@@ -101,6 +102,7 @@ const SHARED_MODULES = [
       id: 6,
       icon: "people-counting",
       description: "人流統計與管理",
+      profileDescriptions: { central: "門禁管理與進出統計" },
       category: "construction-monitoring",
       routePrefix: "/construction-monitoring/people-counting",
       featureKey: "people_counting",
@@ -183,7 +185,7 @@ const CENTRAL_MODULES = [
   },
   {
     code: "system.elevator",
-    name: "電梯系統",
+    name: "電梯管理",
     sort_order: 19,
     children: [
       ...LOCATION_MUTATION_CHILDREN,
@@ -194,7 +196,7 @@ const CENTRAL_MODULES = [
     ui: {
       id: 12,
       icon: "elevator",
-      description: "電梯系統監控與管理",
+      description: "電梯監控與管理",
       category: "infrastructure",
       routePrefix: "/infrastructure/elevator",
       featureKey: "elevator",
@@ -250,13 +252,13 @@ const CENTRAL_MODULES = [
   },
   {
     code: "system.drainage",
-    name: "衛生排水",
+    name: "排水系統",
     sort_order: 23,
     children: LOCATION_MUTATION_CHILDREN,
     ui: {
       id: 13,
       icon: "drainage",
-      description: "衛生與排水系統管理",
+      description: "排水系統監控與管理",
       category: "infrastructure",
       routePrefix: "/infrastructure/drainage",
       featureKey: "drainage",
@@ -359,20 +361,31 @@ const LOCATION_TYPE_MODULE = {
 const normalizeProfile = (profile) =>
   profile === "construction" ? "construction" : "central";
 
+const resolveCatalogName = (mod, profile) => {
+  const p = normalizeProfile(profile);
+  return mod.profileNames?.[p] ?? mod.name;
+};
+
+const resolveCatalogUiDescription = (ui, profile) => {
+  if (!ui) return undefined;
+  const p = normalizeProfile(profile);
+  return ui.profileDescriptions?.[p] ?? ui.description;
+};
+
 function getCatalogModulesForProfile(profile) {
   const p = normalizeProfile(profile);
   if (p === "construction") return SHARED_MODULES;
   return MODULES;
 }
 
-function buildPermissionSeedRows(modules) {
+function buildPermissionSeedRows(modules, profile = "central") {
   const rows = [];
   for (const mod of modules) {
     rows.push({
       code: mod.code,
       category: "system",
       parent_code: null,
-      name: mod.name,
+      name: resolveCatalogName(mod, profile),
       sort_order: mod.sort_order,
     });
     for (const child of mod.children) {
@@ -389,15 +402,71 @@ function buildPermissionSeedRows(modules) {
   return rows;
 }
 
-function getPermissionSeedRows() {
-  return buildPermissionSeedRows(MODULES);
+function getPermissionSeedRows(profile = resolveDeploymentProfile()) {
+  const p = normalizeProfile(profile);
+  const modules = getCatalogModulesForProfile(p);
+  return buildPermissionSeedRows(modules, p);
+}
+
+function collectPermissionCodesFromModules(modules) {
+  const codes = [];
+  for (const mod of modules) {
+    codes.push(mod.code);
+    for (const child of mod.children) {
+      const rbacModule = child.rbac_module ?? mod.code;
+      codes.push(`${rbacModule}.${child.code}`);
+    }
+  }
+  return codes;
 }
 
 function getAllPermissionCodes(profile) {
   const modules =
     profile == null ? MODULES : getCatalogModulesForProfile(profile);
-  return buildPermissionSeedRows(modules).map((r) => r.code);
+  return collectPermissionCodesFromModules(modules);
 }
+
+const getModuleByCode = (code, profile = resolveDeploymentProfile()) => {
+  const modules = getCatalogModulesForProfile(profile);
+  return modules.find((m) => m.code === code) ?? null;
+};
+
+const getModuleDisplayNameByCode = (code, profile = resolveDeploymentProfile()) => {
+  const mod = getModuleByCode(code, profile);
+  return mod ? resolveCatalogName(mod, profile) : null;
+};
+
+const ALERT_SOURCE_EXTRA_LABELS = {
+  device: "設備",
+};
+
+/** 警報／報表 alert.source → 顯示名稱（依部署 profile，對齊 catalog） */
+const getAlertSourceLabel = (source, profile = resolveDeploymentProfile()) => {
+  const key = String(source || "").trim();
+  if (!key) return "未知";
+  const moduleCode = LOCATION_TYPE_MODULE[key];
+  if (moduleCode) {
+    const label = getModuleDisplayNameByCode(moduleCode, profile);
+    if (label) return label;
+  }
+  return ALERT_SOURCE_EXTRA_LABELS[key] ?? key;
+};
+
+const toRegistryModule = (catalogMod, profile) => {
+  const ui = catalogMod.ui;
+  if (!ui) return null;
+  return {
+    id: ui.id,
+    name: resolveCatalogName(catalogMod, profile),
+    icon: ui.icon,
+    description: resolveCatalogUiDescription(ui, profile),
+    category: ui.category,
+    routePrefix: ui.routePrefix,
+    featureKey: ui.featureKey ?? null,
+    permissionCode: catalogMod.code,
+    ...(ui.enabled === false ? { enabled: false } : {}),
+  };
+};
 
 function resolveDeploymentProfile() {
   try {
@@ -432,4 +501,7 @@ module.exports = {
   getAllPermissionCodes,
   resolveDeploymentProfile,
   getPermissionCodesForDeployment,
+  getModuleDisplayNameByCode,
+  getAlertSourceLabel,
+  toRegistryModule,
 };

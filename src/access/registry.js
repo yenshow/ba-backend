@@ -3,6 +3,7 @@ const yscpVehicleFeature = require("../utils/yscpVehicleAccessFeature");
 const {
   getCatalogModulesForProfile,
   resolveDeploymentProfile,
+  toRegistryModule,
 } = require("./catalog");
 
 /**
@@ -50,26 +51,10 @@ const isCategoryVisibleForProfile = (category, profile) => {
   return category === "core" || category === "construction-monitoring";
 };
 
-const mergeCatalogModule = (catalogMod) => {
-  const ui = catalogMod.ui;
-  if (!ui) return null;
-  return {
-    id: ui.id,
-    name: catalogMod.name,
-    icon: ui.icon,
-    description: ui.description,
-    category: ui.category,
-    routePrefix: ui.routePrefix,
-    featureKey: ui.featureKey ?? null,
-    permissionCode: catalogMod.code,
-    ...(ui.enabled === false ? { enabled: false } : {}),
-  };
-};
-
 const getModulesForProfile = (profile) => {
   const p = profile === "construction" ? "construction" : "central";
   const fromCatalog = getCatalogModulesForProfile(p)
-    .map(mergeCatalogModule)
+    .map((mod) => toRegistryModule(mod, p))
     .filter(Boolean)
     .filter((m) => isCategoryVisibleForProfile(m.category, p));
 

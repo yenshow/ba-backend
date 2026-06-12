@@ -5,7 +5,11 @@
  * 兩大流程：data_source = 'yscp'（YSCP 資料庫，人員/統計來自外部）；data_source = 'access_control'（門禁設備本系統，人員與權限由人員管理 API 處理）。
  */
 
+const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
+
+const peopleCountingModuleLabel = () =>
+  getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
 const locationService = require("../location/locationService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
@@ -321,7 +325,7 @@ async function getPeopleCountingLocations(options = {}) {
         locations: allLocations,
       };
     },
-    "取得人流統計地點列表失敗",
+    `取得${peopleCountingModuleLabel()}地點列表失敗`,
     { options },
   );
 }
@@ -347,7 +351,7 @@ async function getPeopleCountingLocationById(id) {
 
       return { location };
     },
-    "取得人流統計地點失敗",
+    `取得${peopleCountingModuleLabel()}地點失敗`,
     { id },
   );
 }
@@ -401,11 +405,11 @@ async function createPeopleCountingLocation(locationData, userId) {
       } catch (_e) {}
 
       return {
-        message: "人流統計地點建立成功",
+        message: `${peopleCountingModuleLabel()}地點建立成功`,
         location: result.location,
       };
     },
-    "建立人流統計地點失敗",
+    `建立${peopleCountingModuleLabel()}地點失敗`,
     { userId },
   );
 }
@@ -531,11 +535,11 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       } catch (_e) {}
 
       return {
-        message: "人流統計地點更新成功",
+        message: `${peopleCountingModuleLabel()}地點更新成功`,
         location: result.location,
       };
     },
-    "更新人流統計地點失敗",
+    `更新${peopleCountingModuleLabel()}地點失敗`,
     { id, userId },
   );
 }
@@ -559,7 +563,7 @@ async function deletePeopleCountingLocation(id) {
 
       return result;
     },
-    "刪除人流統計地點失敗",
+    `刪除${peopleCountingModuleLabel()}地點失敗`,
     { id },
   );
 }

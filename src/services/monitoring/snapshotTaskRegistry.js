@@ -1,3 +1,4 @@
+const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const { createSystemSnapshotMonitor } = require("./systemSnapshotMonitorFactory");
 const lightingStatusService = require("../snapshotStatus/lightingStatusService");
 const hvacStatusService = require("../snapshotStatus/hvacStatusService");
@@ -67,7 +68,7 @@ const snapshotTaskRegistry = [
     taskFunction: () => hvacSnapshotMonitor.check(),
   },
   {
-    systemName: "衛生排水系統",
+    systemName: getModuleDisplayNameByCode("system.drainage") ?? "排水系統",
     taskFunction: () => drainageSnapshotMonitor.check(),
   },
   {

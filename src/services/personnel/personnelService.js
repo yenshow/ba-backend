@@ -21,6 +21,7 @@ const {
   normalizeAndValidateFingerprintsInput,
   applyFingerprintsToAccessControl,
 } = require("../../utils/accessControlFingerprintsUtils");
+const { getModuleDisplayNameByCode } = require("../../access/catalog");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -236,7 +237,12 @@ async function ensureLocationIsSyncable(locationId) {
     [id],
   );
   if (!rows || rows.length === 0) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"地點不可同步（需在人流統計設定門禁入口設備）");
+    const moduleLabel =
+      getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      `地點不可同步（需在${moduleLabel}設定門禁入口設備）`,
+    );
   }
   return id;
 }

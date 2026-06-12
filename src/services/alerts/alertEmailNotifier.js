@@ -4,16 +4,7 @@ const { sendSmtpMailAndClose } = require("../notifications/mailer");
 
 const mailLogger = logger.createLogger("alertEmail");
 
-const SOURCE_LABELS_ZH_TW = {
-  device: "設備",
-  environment: "環境品質",
-  drainage: "衛生排水",
-  power: "電力",
-  air_circulation: "空氣循環",
-  fire: "消防",
-  emergency_rescue: "緊急求救",
-  smoke_alarm: "煙霧警報",
-};
+const { getAlertSourceLabel } = require("../../access/catalog");
 
 const getSeverityLabelZhTw = (severity) => {
   const s = String(severity || "")
@@ -25,10 +16,7 @@ const getSeverityLabelZhTw = (severity) => {
   return s || "未知";
 };
 
-const getSourceLabelZhTw = (source) => {
-  const key = String(source || "").trim();
-  return SOURCE_LABELS_ZH_TW[key] || key || "未知";
-};
+const getSourceLabelZhTw = (source) => getAlertSourceLabel(source);
 
 const normalizeEmailList = (list) => {
   const arr = Array.isArray(list) ? list : [];

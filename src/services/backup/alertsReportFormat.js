@@ -9,16 +9,7 @@ const {
   formatZoneLocation,
 } = require("./reportFormatUtils");
 
-const SOURCE_LABELS = {
-  device: "設備",
-  environment: "環境",
-  drainage: "衛生排水",
-  power: "電力",
-  air_circulation: "空氣循環",
-  fire: "消防",
-  emergency_rescue: "緊急求救",
-  smoke_alarm: "煙霧警報",
-};
+const { getAlertSourceLabel } = require("../../access/catalog");
 
 const TYPE_LABELS = { offline: "離線", error: "錯誤", threshold: "閾值" };
 const SEVERITY_LABELS = { warning: "警告", error: "錯誤", critical: "嚴重" };
@@ -36,7 +27,7 @@ function formatTypeSeverity(type, severity) {
 
 function alertToReportRow(alert) {
   return {
-    系統來源: SOURCE_LABELS[alert.source] ?? alert.source,
+    系統來源: getAlertSourceLabel(alert.source),
     "區域-地點": formatZoneLocation(alert.zone_name, alert.source_name),
     設備類型: alert.device_type_name ?? "",
     設備配置: getDeviceConfigDisplay(alert.device_config),

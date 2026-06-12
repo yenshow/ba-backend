@@ -2,6 +2,7 @@
  * 備份排程：歸檔過期 DB 列為 CSV，驗證通過後刪除；清理過期歸檔檔
  */
 
+const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const backupService = require("./backupService");
 const { getBackupConfig } = require("./backupConfig");
 const alertService = require("../alerts/alertService");
@@ -126,16 +127,19 @@ async function runBackup() {
       csvTransform: transformAlertsToReportFormat,
     });
 
+    const peopleModuleLabel =
+      getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
+
     let peopleYscpResult = { skipped: true };
     if (yscpPeopleFeature.isEnabled()) {
-      await runOptionalSync("人流統計（YSCP）", [
+      await runOptionalSync(`${peopleModuleLabel}（YSCP）`, [
         () => peopleCountingSyncService.syncYesterday(),
         () =>
           peopleCountingSyncService.syncDayAgo(
             getBackupConfig().retention.databaseDays + 1,
           ),
       ]);
-      peopleYscpResult = await runBackupJob("人流統計（YSCP）", async () => {
+      peopleYscpResult = await runBackupJob(`${peopleModuleLabel}（YSCP）`, async () => {
         const peopleRows =
           await backupService.getPeopleCountingForBackup(beforeDate);
         const physicalIds = [
@@ -164,7 +168,7 @@ async function runBackup() {
     }
 
     const peopleAccessIsapiResult = await backupIsapiEventTable(
-      "人流門禁（ISAPI）",
+      `${peopleModuleLabel}門禁（ISAPI）`,
       beforeDate,
       {
         tableName: "isapi_access_events",
@@ -174,7 +178,7 @@ async function runBackup() {
     );
 
     const peopleCameraIsapiResult = await backupIsapiEventTable(
-      "人流攝影機（ISAPI）",
+      `${peopleModuleLabel}攝影機（ISAPI）`,
       beforeDate,
       {
         tableName: "isapi_people_counting_events",

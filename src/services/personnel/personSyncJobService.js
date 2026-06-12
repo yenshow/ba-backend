@@ -1316,7 +1316,7 @@ async function syncLocation(locationId, reporter = null) {
   const warnings = [];
   const devs = await getPeopleCountingDevicesForLocation(locationId);
   if (!devs) {
-    throwApiError(C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED, "該地點未設定人流門禁入口設備");
+    throwApiError(C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED, "該地點未設定門禁入口設備");
   }
 
   const persons =

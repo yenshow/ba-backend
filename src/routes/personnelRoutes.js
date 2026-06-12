@@ -21,6 +21,7 @@ const {
 const {
   authenticate,
   requirePermission,
+  requireAnyPermission,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -492,7 +493,10 @@ router.get(
  */
 router.post(
   "/locations/:locationId/sync-plates",
-  requirePermission("system.personnel.sync.edit"),
+  requireAnyPermission([
+    "system.vehicle_access.plate.manage",
+    "system.personnel.device_sync",
+  ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
@@ -508,7 +512,10 @@ router.post(
  */
 router.put(
   "/locations/:locationId/members",
-  requirePermission("system.personnel.sync.edit"),
+  requireAnyPermission([
+    "system.personnel.sync.edit",
+    "system.vehicle_access.plate.manage",
+  ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
