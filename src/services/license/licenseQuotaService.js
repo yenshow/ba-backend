@@ -5,7 +5,7 @@ const db = require("../../database/db");
  * - camera -> surveillance（依 devices.type_code）
  * - sensor -> environment
  * - access_control -> people_counting
- * - controller（lighting/hvac/air_circulation/drainage/power/fire/emergency_rescue/smoke_alarm）-> 以 location_systems 綁定為準（系統內 DISTINCT 去重）
+ * - controller（elevator/lighting/hvac/air_circulation/drainage/power/fire/emergency_rescue/smoke_alarm）-> 以 location_systems 綁定為準（系統內 DISTINCT 去重）
  */
 const DEVICE_TYPE_CODE_TO_FEATURE = {
   camera: "surveillance",
@@ -14,6 +14,7 @@ const DEVICE_TYPE_CODE_TO_FEATURE = {
 };
 
 const CONTROLLER_SYSTEM_TYPES = new Set([
+  "elevator",
   "lighting",
   "hvac",
   "drainage",

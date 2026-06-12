@@ -16,7 +16,7 @@ const SETTINGS_KEYS = {
 
 /**
  * 智慧管理平台（central）：本後端可正規化與授權控管的全部 feature keys。
- * 對應 `requireFeature` 與 server 掛載之 API（人流、照明、排水、消防、緊急救援、環境、影像、車輛）。
+ * 對應 `requireFeature` 與 server 掛載之 API（人流、電梯、照明、排水、消防、緊急救援、環境、影像、車輛）。
  */
 const FEATURE_KEYS_CENTRAL = [
   "people_counting",

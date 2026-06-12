@@ -316,6 +316,7 @@ function buildSystemConfig(systemType, config) {
 }
 
 const CONTROLLER_QUOTA_SYSTEM_TYPES = new Set([
+  "elevator",
   "lighting",
   "hvac",
   "air_circulation",

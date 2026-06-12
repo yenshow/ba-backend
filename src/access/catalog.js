@@ -431,7 +431,10 @@ const getModuleByCode = (code, profile = resolveDeploymentProfile()) => {
   return modules.find((m) => m.code === code) ?? null;
 };
 
-const getModuleDisplayNameByCode = (code, profile = resolveDeploymentProfile()) => {
+const getModuleDisplayNameByCode = (
+  code,
+  profile = resolveDeploymentProfile(),
+) => {
   const mod = getModuleByCode(code, profile);
   return mod ? resolveCatalogName(mod, profile) : null;
 };
