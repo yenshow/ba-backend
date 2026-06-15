@@ -5,7 +5,7 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const elevatorService = require("./elevatorService");
-const { normalizeElevatorFloorConfig } = require("./elevatorFloorConfig");
+const { normalizeElevatorFloorConfig, defaultFloorName } = require("./elevatorFloorConfig");
 
 const personLadderCardService = require("../personnel/personLadderCardService");
 const {
@@ -72,7 +72,7 @@ async function getActivePersonsWithLadderFloors() {
 function buildFloorSlots(floorCount, floorNames) {
   return Array.from({ length: floorCount }, (_, i) => ({
     index: i + 1,
-    name: floorNames[i] || `Floor ${String(i + 1).padStart(2, "0")}`,
+    name: floorNames[i] || defaultFloorName(i + 1),
     personIds: [],
   }));
 }

@@ -8,10 +8,9 @@ const MAX_FLOOR_COUNT = 128;
 const DOOR_NAME_MAX_LEN = 32;
 const MIN_OPEN_DURATION = 1;
 const MAX_OPEN_DURATION = 255;
-const DEFAULT_OPEN_DURATION = 5;
+const DEFAULT_OPEN_DURATION = 30;
 
-const defaultFloorName = (index) =>
-  `Floor ${String(index).padStart(2, "0")}`;
+const defaultFloorName = (index) => `${index}F`;
 
 const buildDefaultFloorNames = (count) =>
   Array.from({ length: count }, (_, i) => defaultFloorName(i + 1));
@@ -160,6 +159,7 @@ function collectElevatorFloorSyncTasks(locations) {
 }
 
 module.exports = {
+  defaultFloorName,
   normalizeElevatorFloorConfig,
   validateElevatorFloorConfig,
   collectElevatorFloorSyncTasks,

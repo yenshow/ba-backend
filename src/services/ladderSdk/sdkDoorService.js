@@ -11,15 +11,16 @@ const { createApiError } = require("../../utils/apiErrorMeta");
 
 const syncFloorNames = async (deviceId, floors) => {
   const failures = [];
+  const { credentials } = await getLadderDevice(deviceId);
+  const bridgeDevice = toBridgeDevice(credentials);
 
   for (let i = 0; i < floors.length; i += 1) {
     const doorIndex = i + 1;
     const floor = floors[i];
     try {
-      const { credentials } = await getLadderDevice(deviceId);
       await invokeBridge({
         action: "door.set",
-        device: toBridgeDevice(credentials),
+        device: bridgeDevice,
         payload: {
           doorIndex,
           name: floor.name,
