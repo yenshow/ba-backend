@@ -14,9 +14,9 @@ const LOCATION_MUTATION_CHILDREN = [
 const SHARED_MODULES = [
   {
     code: "system.home",
-    name: "首頁設定",
+    name: "首頁",
     sort_order: 0,
-    children: [],
+    children: [{ code: "settings.update", name: "設定編輯", sort_order: 1 }],
   },
   {
     code: "system.equipment_management",
@@ -85,18 +85,8 @@ const SHARED_MODULES = [
     children: [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "report.full", name: "完整報表", sort_order: 4 },
-      {
-        code: "device_sync",
-        name: "門禁設備同步",
-        sort_order: 5,
-        rbac_module: "system.personnel",
-      },
-      {
-        code: "sync.edit",
-        name: "門禁名單編輯",
-        sort_order: 6,
-        rbac_module: "system.personnel",
-      },
+      { code: "device_sync", name: "門禁設備同步", sort_order: 5 },
+      { code: "sync.edit", name: "門禁名單編輯", sort_order: 6 },
     ],
     ui: {
       id: 6,
@@ -486,8 +476,8 @@ function getPermissionCodesForDeployment() {
   return getAllPermissionCodes(resolveDeploymentProfile());
 }
 
-/** 首頁／儀表板外觀設定（system_settings key）與 RBAC 對齊 */
-const HOME_SETTINGS_PERMISSION = "system.home";
+/** 首頁／儀表板外觀設定（system_settings key）寫入子權限 */
+const HOME_SETTINGS_PERMISSION = "system.home.settings.update";
 
 const isHomeAppearanceSettingKey = (key) => {
   if (key == null || typeof key !== "string") return false;

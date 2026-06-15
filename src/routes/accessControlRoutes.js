@@ -58,7 +58,7 @@ router.post(
  */
 router.put(
   "/devices/:deviceId/user-info",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -78,7 +78,7 @@ router.put(
  */
 router.delete(
   "/devices/:deviceId/user-info",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -95,7 +95,7 @@ router.delete(
  */
 router.put(
   "/devices/:deviceId/user-info/:employeeNo/face",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   uploadMemory.single("img"),
   asyncHandler(async (req, res) => {
@@ -125,7 +125,7 @@ router.put(
  */
 router.post(
   "/devices/:deviceId/capture-face",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -158,7 +158,7 @@ router.get(
  */
 router.put(
   "/devices/:deviceId/card-info",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -175,7 +175,7 @@ router.put(
  */
 router.post(
   "/devices/:deviceId/capture-fingerprint",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -191,7 +191,7 @@ router.post(
  */
 router.post(
   "/devices/:deviceId/fingerprint",
-  requirePermission("system.personnel.sync.edit"),
+  requirePermission("system.people_counting.sync.edit"),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);

@@ -17,10 +17,10 @@ async function migratePermissionOverrides(pool, oldCode, newCode) {
   );
 }
 
-/** 將 permission_definitions 與 catalog SSOT 對齊 */
+/** 將 permission_definitions 與 catalog SSOT 對齊（DB 存全量；執行期依 deployment profile 過濾） */
 async function syncDefinitions(pool) {
   const catalogCodes = getAllPermissionCodes();
-  for (const row of getPermissionSeedRows()) {
+  for (const row of getPermissionSeedRows("central")) {
     if (!row.parent_code) {
       await pool.query(
         `INSERT INTO permission_definitions (code, category, parent_id, name, sort_order)
@@ -51,6 +51,29 @@ async function syncDefinitions(pool) {
     pool,
     "system.elevator.card.manage",
     "system.elevator.floor.manage",
+  );
+
+  await migratePermissionOverrides(
+    pool,
+    "system.personnel.device_sync",
+    "system.people_counting.device_sync",
+  );
+  await migratePermissionOverrides(
+    pool,
+    "system.personnel.sync.edit",
+    "system.people_counting.sync.edit",
+  );
+
+  // 舊版 system.home 為單一寫入碼；拆分後補上子權限
+  await pool.query(
+    `INSERT INTO user_permission_overrides (user_id, permission_id, granted)
+     SELECT uo.user_id, child_p.id, uo.granted
+     FROM user_permission_overrides uo
+     INNER JOIN permission_definitions parent_p
+       ON parent_p.id = uo.permission_id AND parent_p.code = 'system.home'
+     INNER JOIN permission_definitions child_p
+       ON child_p.code = 'system.home.settings.update'
+     ON CONFLICT (user_id, permission_id) DO UPDATE SET granted = EXCLUDED.granted`,
   );
 
   await pool.query(

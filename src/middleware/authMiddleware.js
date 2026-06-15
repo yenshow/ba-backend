@@ -94,11 +94,10 @@ const requireAnyPermission = (requiredCodes) => async (req, res, next) => {
 
 const AREA_POINT_MAP_MODULE = "system.area_point_map";
 
-const resolveAreaPointMapMutationCode = (req, action) => {
+const resolveAreaPointMapDeleteCode = (req) => {
   const routePath = String(req.route?.path || "");
-  const isZoneRoute = routePath.startsWith("/zones");
-  const segment = isZoneRoute ? "zone" : "location";
-  return `${AREA_POINT_MAP_MODULE}.${segment}.${action}`;
+  const segment = routePath.startsWith("/zones") ? "zone" : "location";
+  return `${AREA_POINT_MAP_MODULE}.${segment}.delete`;
 };
 
 const requireLocationMutation = (action) => async (req, res, next) => {
@@ -110,7 +109,15 @@ const requireLocationMutation = (action) => async (req, res, next) => {
     ? LOCATION_TYPE_MODULE[String(locationType)]
     : null;
   if (!moduleCode) {
-    return requirePermission(resolveAreaPointMapMutationCode(req, action))(
+    if (action !== "delete") {
+      return sendAuthFailure(
+        res,
+        400,
+        C.VALIDATION_CUSTOM,
+        "區域／地點新增與編輯須指定 locationType，請於各系統模組內操作",
+      );
+    }
+    return requirePermission(resolveAreaPointMapDeleteCode(req))(
       req,
       res,
       next,

@@ -21,7 +21,7 @@ const routeLogger = logger.createLogger("settingsRoutes");
 
 const router = express.Router();
 
-/** 首頁外觀 key → system.home；其餘仍僅 admin */
+/** 首頁外觀 key → system.home.settings.update；其餘仍僅 admin */
 const requireSettingWrite = (req, res, next) => {
 	if (req.user?.role === "admin") {
 		return next();

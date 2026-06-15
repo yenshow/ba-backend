@@ -30,6 +30,13 @@ const C = require("../utils/apiErrorCodes");
 const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
 
 const router = express.Router();
+
+/** 人員主檔寫入（含平台門禁設定）；建立後首寫亦可用 create */
+const requirePersonWrite = requireAnyPermission([
+  "system.personnel.person.create",
+  "system.personnel.person.update",
+]);
+
 router.use(authenticate, requirePermission("system.personnel"));
 const isapiEventLogger = logger.createLogger("ISAPI Event");
 
@@ -343,7 +350,7 @@ router.put(
  */
 router.put(
   "/persons/:personId/access-control-config",
-  requirePermission("system.personnel.sync.edit"),
+  requirePersonWrite,
   validateIntegers("personId"),
   asyncHandler(async (req, res) => {
     const personId = parseInt(req.params.personId, 10);
@@ -361,7 +368,7 @@ router.put(
  */
 router.post(
   "/virtual-card/generate",
-  requirePermission("system.personnel.sync.edit"),
+  requirePersonWrite,
   asyncHandler(async (_req, res) => {
     const result = await virtualCardService.generateVirtualCard();
     res.sendSuccess(result);
@@ -384,7 +391,7 @@ router.delete(
 
 router.post(
   "/persons/:personId/upload-face",
-  requirePermission("system.personnel.person.update"),
+  requirePersonWrite,
   validateIntegers("personId"),
   personnelUpload.single("file"),
   asyncHandler(async (req, res) => {
@@ -495,7 +502,7 @@ router.post(
   "/locations/:locationId/sync-plates",
   requireAnyPermission([
     "system.vehicle_access.plate.manage",
-    "system.personnel.device_sync",
+    "system.people_counting.device_sync",
   ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
@@ -513,7 +520,7 @@ router.post(
 router.put(
   "/locations/:locationId/members",
   requireAnyPermission([
-    "system.personnel.sync.edit",
+    "system.people_counting.sync.edit",
     "system.vehicle_access.plate.manage",
   ]),
   validateIntegers("locationId"),
@@ -532,7 +539,7 @@ router.put(
 
 router.post(
   "/sync-location/:locationId",
-  requirePermission("system.personnel.device_sync"),
+  requirePermission("system.people_counting.device_sync"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const { warnings } = await personSyncJobService.syncLocation(
@@ -548,7 +555,7 @@ router.post(
 
 router.post(
   "/sync-location/:locationId/job",
-  requirePermission("system.personnel.device_sync"),
+  requirePermission("system.people_counting.device_sync"),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const { jobId } = personSyncJobService.startSyncLocationJob(
@@ -623,7 +630,7 @@ router.get(
 
 router.post(
   "/sync-all-locations",
-  requirePermission("system.personnel.device_sync"),
+  requirePermission("system.people_counting.device_sync"),
   asyncHandler(async (req, res) => {
     const job = personSyncJobService.startSyncAllLocationsJob();
     res.sendSuccess({ jobId: job.jobId }, 202);
