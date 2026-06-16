@@ -4,7 +4,6 @@
  */
 const locationService = require("../location/locationService");
 const sdkEventService = require("../ladderSdk/sdkEventService");
-const sdkArmingService = require("../ladderSdk/sdkArmingService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const {
@@ -14,7 +13,6 @@ const {
 } = require("../../utils/apiErrorMeta");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const {
-  validateElevatorFloorConfig,
   normalizeElevatorFloorConfig,
   mapElevatorLogsFloorDisplay,
 } = require("./elevatorFloorConfig");
@@ -26,12 +24,6 @@ const db = require("../../database/db");
 const MAX_LOG_RECORDS = 500;
 /** 最新紀錄先多抓原始事件再合併，避免遠端操作被刷卡連續事件擠出 */
 const LATEST_LOG_RAW_FETCH_MIN = 50;
-
-async function refreshElevatorArming() {
-  try {
-    await sdkArmingService.refresh();
-  } catch (_e) {}
-}
 
 async function handleServiceError(fn, errorMessage, context = {}) {
   try {
@@ -164,46 +156,6 @@ async function countTodayEventsByDeviceIds(deviceIds) {
   return countByDeviceId;
 }
 
-function validateLocationData(locationData, isUpdate = false) {
-  const { name, zoneId, deviceIds, floorCount, floorNames } = locationData;
-  if (!isUpdate && !name?.trim()) {
-    throwApiError(C.ELEVATOR_VALIDATION_FAILED, "地點名稱不能為空");
-  }
-  if (!isUpdate && !zoneId) {
-    throwApiError(C.ELEVATOR_VALIDATION_FAILED, "區域 ID 不能為空");
-  }
-  if (deviceIds !== undefined) {
-    const ids = ensureArray(deviceIds)
-      .map((id) => Number(id))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    if (ids.length === 0) {
-      throwApiError(C.ELEVATOR_VALIDATION_FAILED, "請綁定梯控設備");
-    }
-    validateElevatorFloorConfig({ deviceIds: ids, floorCount, floorNames });
-  }
-}
-
-async function getElevatorLocations(options = {}) {
-  return handleServiceError(
-    async () => {
-      const { zoneId } = options;
-      const result = await locationService.getZones({
-        locationType: "elevator",
-      });
-      const zones = result.zones;
-      if (zoneId) {
-        const zone = zones.find((z) => String(z.id) === String(zoneId));
-        return { locations: ensureArray(zone?.locations) };
-      }
-      return {
-        locations: zones.flatMap((zone) => ensureArray(zone.locations)),
-      };
-    },
-    "取得電梯地點列表失敗",
-    { options },
-  );
-}
-
 async function getElevatorLocationById(id) {
   return handleServiceError(
     async () => {
@@ -218,113 +170,6 @@ async function getElevatorLocationById(id) {
       return { location };
     },
     "取得電梯地點失敗",
-    { id },
-  );
-}
-
-async function createElevatorLocation(locationData, userId) {
-  return handleServiceError(
-    async () => {
-      const {
-        name,
-        zoneId,
-        deviceIds = [],
-        accessDeviceIds = [],
-        logDisplayColumns,
-        floorCount,
-        floorNames,
-      } = locationData;
-      validateLocationData(locationData, false);
-
-      const result = await locationService.createLocation(
-        {
-          zoneId: parseInt(zoneId, 10),
-          name: name.trim(),
-          locationType: "elevator",
-          config: {
-            deviceIds,
-            accessDeviceIds,
-            logDisplayColumns,
-            floorCount,
-            floorNames,
-          },
-        },
-        userId,
-      );
-
-      await refreshElevatorArming();
-
-      return {
-        message: "電梯地點建立成功",
-        location: result.location,
-      };
-    },
-    "建立電梯地點失敗",
-    { userId },
-  );
-}
-
-async function updateElevatorLocation(id, locationData, userId) {
-  return handleServiceError(
-    async () => {
-      const {
-        name,
-        deviceIds,
-        accessDeviceIds,
-        logDisplayColumns,
-        floorCount,
-        floorNames,
-      } = locationData;
-      await getElevatorLocationById(id);
-      validateLocationData(locationData, true);
-
-      const updates = {};
-      if (name !== undefined) updates.name = name.trim();
-
-      const configUpdates = {};
-      if (deviceIds !== undefined) configUpdates.deviceIds = deviceIds;
-      if (accessDeviceIds !== undefined) {
-        configUpdates.accessDeviceIds = accessDeviceIds;
-      }
-      if (logDisplayColumns !== undefined) {
-        configUpdates.logDisplayColumns = logDisplayColumns;
-      }
-      if (floorCount !== undefined) configUpdates.floorCount = floorCount;
-      if (floorNames !== undefined) configUpdates.floorNames = floorNames;
-      if (Object.keys(configUpdates).length > 0) {
-        updates.config = configUpdates;
-      }
-
-      const result = await locationService.updateLocation(
-        id,
-        {
-          ...updates,
-          locationType: "elevator",
-        },
-        userId,
-      );
-
-      await refreshElevatorArming();
-
-      return {
-        message: "電梯地點更新成功",
-        location: result.location,
-      };
-    },
-    "更新電梯地點失敗",
-    { id, userId },
-  );
-}
-
-async function deleteElevatorLocation(id) {
-  return handleServiceError(
-    async () => {
-      await getElevatorLocationById(id);
-      const result = await locationService.deleteLocation(id);
-      await refreshElevatorArming();
-      return result;
-    },
-    "刪除電梯地點失敗",
     { id },
   );
 }
@@ -485,11 +330,7 @@ async function getAllSiteLogs(options = {}) {
 
 module.exports = {
   MAX_LOG_RECORDS,
-  getElevatorLocations,
   getElevatorLocationById,
-  createElevatorLocation,
-  updateElevatorLocation,
-  deleteElevatorLocation,
   getSites,
   getSiteLogs,
   getAllSiteLogs,

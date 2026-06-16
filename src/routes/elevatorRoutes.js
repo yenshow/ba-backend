@@ -24,67 +24,6 @@ const {
 router.use(authenticate, requirePermission("system.elevator"));
 
 router.get(
-  "/locations",
-  noCache,
-  asyncHandler(async (req, res) => {
-    const { zoneId } = req.query;
-    const options = zoneId ? { zoneId: parseInt(zoneId, 10) } : {};
-    const result = await elevatorService.getElevatorLocations(options);
-    res.sendSuccess(result);
-  }),
-);
-
-router.get(
-  "/locations/:id",
-  noCache,
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const result = await elevatorService.getElevatorLocationById(
-      parseInt(req.params.id, 10),
-    );
-    res.sendSuccess(result);
-  }),
-);
-
-router.post(
-  "/locations",
-  requirePermission("system.elevator.location.create"),
-  asyncHandler(async (req, res) => {
-    const result = await elevatorService.createElevatorLocation(
-      req.body,
-      req.user.id,
-    );
-    res.sendSuccess(result, 201);
-  }),
-);
-
-router.put(
-  "/locations/:id",
-  requirePermission("system.elevator.location.update"),
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const result = await elevatorService.updateElevatorLocation(
-      parseInt(req.params.id, 10),
-      req.body,
-      req.user.id,
-    );
-    res.sendSuccess(result);
-  }),
-);
-
-router.delete(
-  "/locations/:id",
-  requirePermission("system.elevator.location.delete"),
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const result = await elevatorService.deleteElevatorLocation(
-      parseInt(req.params.id, 10),
-    );
-    res.sendSuccess(result);
-  }),
-);
-
-router.get(
   "/sites",
   noCache,
   asyncHandler(async (req, res) => {
@@ -111,19 +50,6 @@ router.get(
 );
 
 router.get(
-  "/sites/:id/logs/latest",
-  noCache,
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const result = await elevatorService.getSiteLogs(
-      parseInt(req.params.id, 10),
-      { limit: 5, offset: 0 },
-    );
-    res.sendSuccess(result);
-  }),
-);
-
-router.get(
   "/logs",
   requirePermission("system.elevator.report.full"),
   noCache,
@@ -140,28 +66,6 @@ router.get(
       endTime: resolved.endTime,
       search: search != null ? String(search).trim() : undefined,
     });
-    res.sendSuccess(result);
-  }),
-);
-
-router.get(
-  "/sites/:id/logs",
-  noCache,
-  validateIntegers("id"),
-  validateNumbers("limit", "offset"),
-  asyncHandler(async (req, res) => {
-    const { limit, offset, startTime, endTime, timeRange, search } = req.query;
-    const resolved = resolveTimeOptions({ startTime, endTime, timeRange });
-    const result = await elevatorService.getSiteLogs(
-      parseInt(req.params.id, 10),
-      {
-        limit: limit ? parseInt(limit, 10) : 50,
-        offset: offset ? parseInt(offset, 10) : 0,
-        startTime: resolved.startTime,
-        endTime: resolved.endTime,
-        search: search != null ? String(search).trim() : undefined,
-      },
-    );
     res.sendSuccess(result);
   }),
 );
