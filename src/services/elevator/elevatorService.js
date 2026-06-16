@@ -16,6 +16,7 @@ const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const {
   validateElevatorFloorConfig,
   normalizeElevatorFloorConfig,
+  mapElevatorLogsFloorDisplay,
 } = require("./elevatorFloorConfig");
 const { resolveTimeOptions } = require("../entryExit/resolveTimeOptions");
 const { formatAcsEventDisplayName } = require("../ladderSdk/acsEventLabels");
@@ -363,7 +364,7 @@ async function getSites() {
 async function getSiteLogs(locationId, options = {}) {
   return handleServiceError(
     async () => {
-      const { deviceIds } = await getSiteConfig(locationId);
+      const { deviceIds, floorNames } = await getSiteConfig(locationId);
       if (!deviceIds.length) return { logs: [], total: 0 };
 
       const {
@@ -402,6 +403,7 @@ async function getSiteLogs(locationId, options = {}) {
       let logs = (result.items || []).map(mapEventToLog);
       logs = filterLogsBySearch(logs, search);
       logs = aggregateElevatorLogs(logs);
+      logs = mapElevatorLogsFloorDisplay(logs, floorNames);
       if (needsAggregationBuffer && logs.length > limitNum) {
         logs = logs.slice(0, limitNum);
       }

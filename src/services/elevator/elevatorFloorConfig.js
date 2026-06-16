@@ -18,6 +18,42 @@ const defaultSlotName = (slotIndex) => `${slotIndex + 1}F`;
 const buildDefaultFloorNames = (count) =>
   Array.from({ length: count }, (_, i) => defaultSlotName(i));
 
+/** 設備門序（1-based gatewayIndex）→ 樓層顯示名稱 */
+const resolveElevatorFloorLabel = (gatewayIndex, floorNames) => {
+  const idx = Number(gatewayIndex);
+  if (!Number.isFinite(idx) || idx < 1) {
+    return gatewayIndex != null ? String(gatewayIndex) : null;
+  }
+  const slotIndex = idx - 1;
+  const name = Array.isArray(floorNames) ? floorNames[slotIndex]?.trim() : "";
+  return name || defaultSlotName(slotIndex);
+};
+
+/** 事件紀錄樓層欄：將設備門序轉為設定的樓層名稱（支援合併後的「1、5」格式） */
+const formatElevatorLogFloor = (floor, floorNames) => {
+  if (floor == null || String(floor).trim() === "") return floor;
+  const parts = String(floor)
+    .split("、")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.length) return floor;
+  return parts
+    .map((part) => {
+      const n = Number(part);
+      if (Number.isFinite(n) && n > 0) {
+        return resolveElevatorFloorLabel(n, floorNames);
+      }
+      return part;
+    })
+    .join("、");
+};
+
+const mapElevatorLogsFloorDisplay = (logs, floorNames) =>
+  (logs || []).map((log) => ({
+    ...log,
+    floor: formatElevatorLogFloor(log.floor, floorNames),
+  }));
+
 const normalizeFloorNumber = (value) => {
   if (value == null || value === "") return null;
   const n = Number(value);
@@ -217,6 +253,9 @@ function collectElevatorFloorSyncTasks(locations) {
 
 module.exports = {
   defaultFloorName: defaultSlotName,
+  resolveElevatorFloorLabel,
+  formatElevatorLogFloor,
+  mapElevatorLogsFloorDisplay,
   normalizeElevatorFloorConfig,
   validateElevatorFloorConfig,
   collectElevatorFloorSyncTasks,
