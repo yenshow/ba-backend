@@ -5,15 +5,56 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const MAX_FLOOR_COUNT = 128;
+const DEFAULT_FLOOR_START = 1;
+const MIN_FLOOR_NUMBER = -9;
+const MAX_FLOOR_NUMBER = 999;
 const DOOR_NAME_MAX_LEN = 32;
 const MIN_OPEN_DURATION = 1;
 const MAX_OPEN_DURATION = 255;
-const DEFAULT_OPEN_DURATION = 30;
+const DEFAULT_OPEN_DURATION = 5;
 
-const defaultFloorName = (index) => `${index}F`;
+const defaultSlotName = (slotIndex) => `${slotIndex + 1}F`;
 
 const buildDefaultFloorNames = (count) =>
-  Array.from({ length: count }, (_, i) => defaultFloorName(i + 1));
+  Array.from({ length: count }, (_, i) => defaultSlotName(i));
+
+const normalizeFloorNumber = (value) => {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
+  if (n < MIN_FLOOR_NUMBER || n > MAX_FLOOR_NUMBER) return null;
+  return n;
+};
+
+const deriveFloorCount = (floorStart, floorEnd) => {
+  if (!Number.isFinite(floorStart) || !Number.isFinite(floorEnd)) return null;
+  if (floorEnd < floorStart) return null;
+  const count = floorEnd - floorStart + 1;
+  if (count < 1 || count > MAX_FLOOR_COUNT) return null;
+  return count;
+};
+
+const resolveFloorRange = ({ floorCount, floorStart, floorEnd }) => {
+  const normalizedCount = normalizeFloorCount(floorCount);
+  if (normalizedCount == null) return null;
+
+  const normalizedStart = normalizeFloorNumber(floorStart);
+  const normalizedEnd = normalizeFloorNumber(floorEnd);
+
+  if (normalizedStart != null && normalizedEnd != null) {
+    const derivedCount = deriveFloorCount(normalizedStart, normalizedEnd);
+    if (derivedCount == null) return null;
+    return {
+      floorStart: normalizedStart,
+      floorEnd: normalizedEnd,
+      floorCount: derivedCount,
+    };
+  }
+
+  const start = normalizedStart ?? DEFAULT_FLOOR_START;
+  const end = normalizedEnd ?? start + normalizedCount - 1;
+  return { floorStart: start, floorEnd: end, floorCount: normalizedCount };
+};
 
 const normalizeFloorCount = (value) => {
   if (value == null || value === "") return null;
@@ -61,9 +102,16 @@ const normalizeDeviceIds = (config = {}) => {
 };
 
 function normalizeElevatorFloorConfig(config = {}) {
-  const floorCount = normalizeFloorCount(
-    config.floorCount ?? config.floor_count,
-  );
+  const range = resolveFloorRange({
+    floorCount: config.floorCount ?? config.floor_count,
+    floorStart: config.floorStart ?? config.floor_start,
+    floorEnd: config.floorEnd ?? config.floor_end,
+  });
+
+  const floorCount = range?.floorCount ?? null;
+  const floorStart = range?.floorStart ?? null;
+  const floorEnd = range?.floorEnd ?? null;
+
   let floorNames = Array.isArray(config.floorNames ?? config.floor_names)
     ? (config.floorNames ?? config.floor_names).map((item) =>
         String(item ?? "").trim(),
@@ -80,20 +128,27 @@ function normalizeElevatorFloorConfig(config = {}) {
   const floorOpenDurations =
     floorCount != null ? normalizeFloorOpenDurations(config, floorCount) : [];
 
-  return { floorCount, floorNames, floorOpenDurations };
+  return { floorCount, floorStart, floorEnd, floorNames, floorOpenDurations };
 }
 
 function validateElevatorFloorConfig(config = {}) {
   const deviceIds = normalizeDeviceIds(config);
   if (deviceIds.length === 0) {
-    return { deviceIds, floorCount: null, floorNames: [], floorOpenDurations: [] };
+    return {
+      deviceIds,
+      floorCount: null,
+      floorStart: null,
+      floorEnd: null,
+      floorNames: [],
+      floorOpenDurations: [],
+    };
   }
 
-  const { floorCount, floorNames, floorOpenDurations } =
+  const { floorCount, floorStart, floorEnd, floorNames, floorOpenDurations } =
     normalizeElevatorFloorConfig(config);
 
   if (floorCount == null) {
-    throwApiError(C.ELEVATOR_VALIDATION_FAILED, "請設定樓層數量");
+    throwApiError(C.ELEVATOR_VALIDATION_FAILED, "請設定樓層範圍");
   }
   if (floorNames.length !== floorCount) {
     throwApiError(
@@ -133,6 +188,8 @@ function validateElevatorFloorConfig(config = {}) {
   return {
     deviceIds,
     floorCount,
+    floorStart,
+    floorEnd,
     floorNames: validatedNames,
     floorOpenDurations: validatedOpenDurations,
   };
@@ -159,7 +216,7 @@ function collectElevatorFloorSyncTasks(locations) {
 }
 
 module.exports = {
-  defaultFloorName,
+  defaultFloorName: defaultSlotName,
   normalizeElevatorFloorConfig,
   validateElevatorFloorConfig,
   collectElevatorFloorSyncTasks,

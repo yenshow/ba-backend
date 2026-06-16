@@ -5,7 +5,10 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const elevatorService = require("./elevatorService");
-const { normalizeElevatorFloorConfig, defaultFloorName } = require("./elevatorFloorConfig");
+const {
+  normalizeElevatorFloorConfig,
+  defaultFloorName,
+} = require("./elevatorFloorConfig");
 
 const personLadderCardService = require("../personnel/personLadderCardService");
 const {
@@ -72,7 +75,7 @@ async function getActivePersonsWithLadderFloors() {
 function buildFloorSlots(floorCount, floorNames) {
   return Array.from({ length: floorCount }, (_, i) => ({
     index: i + 1,
-    name: floorNames[i] || defaultFloorName(i + 1),
+    name: floorNames[i] || defaultSlotName(i),
     personIds: [],
   }));
 }
@@ -117,7 +120,8 @@ function buildDefaultAssignments(
 }
 
 async function getFloorAccess(locationId) {
-  const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const { location } =
+    await elevatorService.getElevatorLocationById(locationId);
   const config = elevatorService.getElevatorConfig(location);
   const { floorCount, floorNames } = normalizeElevatorFloorConfig(config);
 
@@ -150,7 +154,8 @@ async function getFloorAccess(locationId) {
 }
 
 async function replaceFloorAccess(locationId, assignments = []) {
-  const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const { location } =
+    await elevatorService.getElevatorLocationById(locationId);
   const config = elevatorService.getElevatorConfig(location);
   const { floorCount } = normalizeElevatorFloorConfig(config);
 
@@ -163,14 +168,18 @@ async function replaceFloorAccess(locationId, assignments = []) {
 
   for (const item of list) {
     const floorIndex = Number(item.floorIndex ?? item.floor_index);
-    if (!Number.isFinite(floorIndex) || floorIndex < 1 || floorIndex > floorCount) {
+    if (
+      !Number.isFinite(floorIndex) ||
+      floorIndex < 1 ||
+      floorIndex > floorCount
+    ) {
       throwApiError(
         C.ELEVATOR_VALIDATION_FAILED,
         `樓層索引無效：${item.floorIndex ?? item.floor_index}`,
       );
     }
     const personIds = Array.isArray(item.personIds ?? item.person_ids)
-      ? item.personIds ?? item.person_ids
+      ? (item.personIds ?? item.person_ids)
       : [];
     const unique = Array.from(
       new Set(
@@ -202,7 +211,9 @@ async function replaceFloorAccess(locationId, assignments = []) {
 
     const missingCardPersons = (rows || []).filter(
       (row) =>
-        !String(personLadderCardService.resolveSyncFields(row, []).cardNo || "").trim(),
+        !String(
+          personLadderCardService.resolveSyncFields(row, []).cardNo || "",
+        ).trim(),
     );
     if (missingCardPersons.length > 0) {
       throwApiError(
@@ -245,7 +256,9 @@ async function replaceFloorAccess(locationId, assignments = []) {
       deviceSync = { triggered: true, jobId: started.jobId };
     }
   } catch (err) {
-    const logger = require("../../utils/logger").createLogger("ElevatorFloorAccess");
+    const logger = require("../../utils/logger").createLogger(
+      "ElevatorFloorAccess",
+    );
     logger.error("梯控背景同步啟動失敗", {
       locationId,
       message: err?.message || String(err),
@@ -293,7 +306,11 @@ async function syncPersonFloorAccessFromLadderFloors(personId, floorsStorage) {
       );
       if (!floors.length) continue;
       const valuesSql = floors.map(() => "(?, ?, ?)").join(", ");
-      const params = floors.flatMap((floorIndex) => [locationId, pid, floorIndex]);
+      const params = floors.flatMap((floorIndex) => [
+        locationId,
+        pid,
+        floorIndex,
+      ]);
       await query(
         `INSERT INTO person_elevator_floor_access (location_id, person_id, floor_index) VALUES ${valuesSql}`,
         params,
@@ -302,7 +319,10 @@ async function syncPersonFloorAccessFromLadderFloors(personId, floorsStorage) {
   });
 }
 
-async function syncLadderFloorsFromLocationAssignments(locationId, assignments = []) {
+async function syncLadderFloorsFromLocationAssignments(
+  locationId,
+  assignments = [],
+) {
   const locId = Number(locationId);
   if (!Number.isFinite(locId) || locId <= 0) return;
 
@@ -311,12 +331,13 @@ async function syncLadderFloorsFromLocationAssignments(locationId, assignments =
     const floorIndex = Number(item.floorIndex ?? item.floor_index);
     if (!Number.isFinite(floorIndex) || floorIndex < 1) continue;
     const personIds = Array.isArray(item.personIds ?? item.person_ids)
-      ? item.personIds ?? item.person_ids
+      ? (item.personIds ?? item.person_ids)
       : [];
     for (const rawId of personIds) {
       const personId = Number(rawId);
       if (!Number.isFinite(personId) || personId <= 0) continue;
-      if (!personFloorMap.has(personId)) personFloorMap.set(personId, new Set());
+      if (!personFloorMap.has(personId))
+        personFloorMap.set(personId, new Set());
       personFloorMap.get(personId).add(floorIndex);
     }
   }
@@ -346,8 +367,7 @@ async function syncLadderFloorsFromLocationAssignments(locationId, assignments =
     const personId = Number(card.person_id);
     if (!Number.isFinite(personId) || personId <= 0) continue;
 
-    const hadAtLocation =
-      parseFloorsForLocation(card.floors, locId).length > 0;
+    const hadAtLocation = parseFloorsForLocation(card.floors, locId).length > 0;
     const hasNew = personFloorMap.has(personId);
     if (!hadAtLocation && !hasNew) continue;
 
@@ -367,7 +387,9 @@ async function syncLadderFloorsFromLocationAssignments(locationId, assignments =
           : {};
 
     if (hasNew) {
-      byLocation[locKey] = [...personFloorMap.get(personId)].sort((a, b) => a - b);
+      byLocation[locKey] = [...personFloorMap.get(personId)].sort(
+        (a, b) => a - b,
+      );
     } else {
       delete byLocation[locKey];
     }

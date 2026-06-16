@@ -252,6 +252,12 @@ function buildSystemConfig(systemType, config) {
         result.floor_count = validated.floorCount;
         result.floor_names = validated.floorNames;
         result.floor_open_durations = validated.floorOpenDurations;
+        if (validated.floorStart != null) {
+          result.floor_start = validated.floorStart;
+        }
+        if (validated.floorEnd != null) {
+          result.floor_end = validated.floorEnd;
+        }
       }
       return result;
     }
@@ -666,9 +672,13 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
           const fn = location.floorNames ?? location.floor_names;
           const fod =
             location.floorOpenDurations ?? location.floor_open_durations;
+          const fs = location.floorStart ?? location.floor_start;
+          const fe = location.floorEnd ?? location.floor_end;
           if (fc !== undefined) systemConfig.floorCount = fc;
           if (fn !== undefined) systemConfig.floorNames = fn;
           if (fod !== undefined) systemConfig.floorOpenDurations = fod;
+          if (fs !== undefined) systemConfig.floorStart = fs;
+          if (fe !== undefined) systemConfig.floorEnd = fe;
           if (location.logDisplayColumns !== undefined) {
             systemConfig.logDisplayColumns = location.logDisplayColumns;
           }

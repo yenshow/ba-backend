@@ -416,6 +416,8 @@ function formatSystem(system) {
           ...(floors.floorCount != null
             ? {
                 floorCount: floors.floorCount,
+                floorStart: floors.floorStart ?? undefined,
+                floorEnd: floors.floorEnd ?? undefined,
                 floorNames: floors.floorNames,
                 floorOpenDurations: floors.floorOpenDurations,
               }
