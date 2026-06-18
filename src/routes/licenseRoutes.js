@@ -27,6 +27,22 @@ const toLicenseApiPayload = async (license) => ({
   licenseEntitlements: license.licenseEntitlements ?? [],
 });
 
+const trimLicenseKey = (raw) => {
+  if (raw == null || typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed || null;
+};
+
+const sendInvalidLicenseKey = (res) =>
+  res.sendFailure(
+    {
+      code: C.INVALID_LICENSE_PAYLOAD,
+      message: "請提供 licenseKey",
+      details: null,
+    },
+    400,
+  );
+
 /** GET /api/license 需認證；回傳本地授權狀態 */
 router.get(
   "/",
@@ -54,8 +70,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const { licenseKey, features } = req.body || {};
 
-    if (licenseKey && typeof licenseKey === "string") {
-      const trimmedKey = licenseKey.trim();
+    if (licenseKey != null && typeof licenseKey === "string") {
+      const trimmedKey = trimLicenseKey(licenseKey);
+      if (!trimmedKey) {
+        return sendInvalidLicenseKey(res);
+      }
       const deviceFingerprint = getDeviceFingerprint();
       const result = await licensePlatformService.activateOnline({
         licenseKey: trimmedKey,
@@ -178,23 +197,13 @@ router.post(
   authenticate,
   requireAdmin,
   asyncHandler(async (req, res) => {
-    const lk =
-      typeof req.body?.licenseKey === "string"
-        ? req.body.licenseKey.trim()
-        : null;
-    if (!lk) {
-      return res.sendFailure(
-        {
-          code: C.INVALID_LICENSE_PAYLOAD,
-          message: "請提供 licenseKey",
-          details: null,
-        },
-        400,
-      );
+    const trimmedKey = trimLicenseKey(req.body?.licenseKey);
+    if (!trimmedKey) {
+      return sendInvalidLicenseKey(res);
     }
 
     const deviceFingerprint = getDeviceFingerprint();
-    const json = JSON.stringify([lk, deviceFingerprint]);
+    const json = JSON.stringify([trimmedKey, deviceFingerprint]);
     const requestFileBase64 = Buffer.from(json, "utf8").toString("base64");
 
     return res.sendSuccess({ requestFileBase64 });
@@ -231,6 +240,17 @@ router.post(
   requireAdmin,
   asyncHandler(async (req, res) => {
     const payload = req.body;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return res.sendFailure(
+        {
+          code: C.INVALID_LICENSE_PAYLOAD,
+          message: "離線授權檔格式不正確",
+          details: null,
+        },
+        400,
+      );
+    }
+
     const secret = config.license?.signSecret;
     if (!secret) {
       return res.sendFailure(
