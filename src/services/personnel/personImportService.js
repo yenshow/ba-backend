@@ -1,6 +1,6 @@
 const path = require("path");
 const fs = require("fs").promises;
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
 const AdmZip = require("adm-zip");
 const personnelService = require("./personnelService");
 const {
@@ -10,6 +10,37 @@ const {
 } = require("./personnelFileHelpers");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+
+const IMPORT_HEADERS = [
+  "工號",
+  "姓名",
+  "有效起始日",
+  "有效結束日",
+  "門禁密碼",
+  "卡號",
+  "車牌",
+];
+
+const IMPORT_TEMPLATE_ROWS = [
+  {
+    工號: "A0001",
+    姓名: "王小明",
+    有效起始日: "2026-01-01",
+    有效結束日: "2030-12-31",
+    門禁密碼: "1234",
+    卡號: "0000123456",
+    車牌: "ABC1234,XYZ5678",
+  },
+  {
+    工號: "A0002",
+    姓名: "林小華",
+    有效起始日: "",
+    有效結束日: "",
+    門禁密碼: "",
+    卡號: "",
+    車牌: "",
+  },
+];
 
 function normalizeKey(k) {
   return String(k || "")
@@ -44,15 +75,60 @@ function buildZipIndexFromBuffer(zipBuffer) {
   return zipIndex;
 }
 
-function rowsFromExcelBuffer(excelBuffer) {
-  const workbook = XLSX.read(excelBuffer, {
-    type: "buffer",
-    cellDates: true,
+function cellValueToString(value) {
+  if (value == null || value === "") return "";
+  if (value instanceof Date) {
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = value.getFullYear();
+    const m = pad(value.getMonth() + 1);
+    const d = pad(value.getDate());
+    const h = value.getHours();
+    const min = value.getMinutes();
+    if (h === 0 && min === 0) return `${y}-${m}-${d}`;
+    return `${y}-${m}-${d}T${pad(h)}:${pad(min)}`;
+  }
+  if (typeof value === "object") {
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((part) => part.text || "").join("");
+    }
+    if (value.result !== undefined) return cellValueToString(value.result);
+    if (value.text != null) return String(value.text);
+  }
+  return String(value).trim();
+}
+
+async function rowsFromExcelBuffer(excelBuffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(excelBuffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) {
+    throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED, "Excel 無工作表");
+  }
+
+  let headers = [];
+  const rows = [];
+  sheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    if (rowNumber === 1) {
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        headers[colNumber - 1] = cellValueToString(cell.value);
+      });
+      while (headers.length > 0 && !headers[headers.length - 1]) {
+        headers.pop();
+      }
+      return;
+    }
+
+    const obj = {};
+    let hasAny = false;
+    headers.forEach((header, index) => {
+      if (!header) return;
+      const value = cellValueToString(row.getCell(index + 1).value);
+      obj[header] = value;
+      if (value !== "") hasAny = true;
+    });
+    if (hasAny) rows.push(obj);
   });
-  const firstSheetName = workbook.SheetNames?.[0];
-  if (!firstSheetName) throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"Excel 無工作表");
-  const sheet = workbook.Sheets[firstSheetName];
-  return XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  return rows;
 }
 
 const getEmployeeNoFromRow = (row) => pick(row, ["工號", "員工編號", "employeeNo"]);
@@ -89,7 +165,7 @@ async function executeBatchImport({
     throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"請上傳 Excel 檔（欄位名稱：excel）");
   }
 
-  const rows = rowsFromExcelBuffer(excelBuffer);
+  const rows = await rowsFromExcelBuffer(excelBuffer);
   let zipIndex = new Map();
   if (zipBuffer && Buffer.isBuffer(zipBuffer)) {
     try {
@@ -264,40 +340,17 @@ async function executeBatchImport({
   };
 }
 
-function getImportTemplateXlsxBuffer() {
-  const rows = [
-    {
-      工號: "A0001",
-      姓名: "王小明",
-      有效起始日: "2026-01-01",
-      有效結束日: "2030-12-31",
-      門禁密碼: "1234",
-      卡號: "0000123456",
-      車牌: "ABC1234,XYZ5678",
-    },
-    {
-      工號: "A0002",
-      姓名: "林小華",
-      有效起始日: "",
-      有效結束日: "",
-      門禁密碼: "",
-      卡號: "",
-      車牌: "",
-    },
-  ];
-
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows, {
-    header: ["工號", "姓名", "有效起始日", "有效結束日", "門禁密碼", "卡號", "車牌"],
+async function getImportTemplateXlsxBuffer() {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("template");
+  sheet.addRow(IMPORT_HEADERS);
+  IMPORT_TEMPLATE_ROWS.forEach((row) => {
+    sheet.addRow(IMPORT_HEADERS.map((header) => row[header] ?? ""));
   });
-  XLSX.utils.book_append_sheet(wb, ws, "template");
-
-  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
 module.exports = {
   executeBatchImport,
-  rowsFromExcelBuffer,
-  buildZipIndexFromBuffer,
   getImportTemplateXlsxBuffer,
 };

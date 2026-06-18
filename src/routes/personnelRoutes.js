@@ -657,7 +657,7 @@ router.get(
   "/import-template",
   asyncHandler(async (_req, res) => {
     const filename = "personnel_import_template.xlsx";
-    const buffer = personImportService.getImportTemplateXlsxBuffer();
+    const buffer = await personImportService.getImportTemplateXlsxBuffer();
 
     res.setHeader(
       "Content-Type",

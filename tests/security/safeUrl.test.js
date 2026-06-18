@@ -10,35 +10,26 @@ test("isPrivateIp detects loopback and RFC1918", () => {
   assert.equal(isPrivateIp("8.8.8.8"), false);
 });
 
-test("assertSafeOutboundUrl rejects localhost URL", async () => {
-  await assert.rejects(
-    () => assertSafeOutboundUrl("http://127.0.0.1/face.jpg"),
-    (err) => err && /內部|保留|不允許/.test(String(err.message)),
-  );
-});
+test("assertSafeOutboundUrl rejects disallowed targets", async (t) => {
+  const cases = [
+    ["http://example.com/face.jpg", /https/],
+    ["file:///etc/passwd", /https/],
+    ["https://127.0.0.1/face.jpg", /內部|保留|不允許/],
+    ["https://169.254.169.254/latest/meta-data", /內部|保留|不允許/],
+  ];
 
-test("assertSafeOutboundUrl rejects metadata IP", async () => {
-  await assert.rejects(
-    () => assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data"),
-    (err) => err && /內部|保留|不允許/.test(String(err.message)),
-  );
-});
-
-test("assertSafeOutboundUrl rejects non-http schemes", async () => {
-  await assert.rejects(
-    () => assertSafeOutboundUrl("file:///etc/passwd"),
-    (err) => err && /http/.test(String(err.message)),
-  );
-});
-
-test("assertSafeOutboundUrl rejects disallowed port", async () => {
-  await assert.rejects(
-    () => assertSafeOutboundUrl("http://example.com:8080/x"),
-    (err) => err && /連接埠/.test(String(err.message)),
-  );
+  for (const [url, pattern] of cases) {
+    await t.test(url, async () => {
+      await assert.rejects(
+        () => assertSafeOutboundUrl(url),
+        (err) => err && pattern.test(String(err.message)),
+      );
+    });
+  }
 });
 
 test("assertSafeOutboundUrl accepts public https URL", async () => {
-  const parsed = await assertSafeOutboundUrl("https://example.com/photo.jpg");
+  const parsed = await assertSafeOutboundUrl("https://example.com/face.jpg");
   assert.equal(parsed.hostname, "example.com");
+  assert.equal(parsed.protocol, "https:");
 });

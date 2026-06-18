@@ -167,7 +167,7 @@ async function loginUser(credentials) {
 
   const user = users[0];
   if (user.status !== "active") {
-    throwApiError(C.USER_ACCOUNT_INACTIVE, "帳號已被停用");
+    throwApiError(C.USER_AUTH_FAILED, "用戶名或密碼錯誤");
   }
 
   const isValidPassword = await verifyPassword(password, user.password_hash);

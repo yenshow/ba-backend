@@ -75,6 +75,11 @@ const sdkArmingService = require("./services/ladderSdk/sdkArmingService");
 
 const app = express();
 
+// 正式環境固定 trust proxy 1 hop（反向代理後限流 req.ip 正確）
+if (config.isProduction) {
+  app.set("trust proxy", 1);
+}
+
 const allowedOrigins = serverConfig.cors.origins;
 const corsOptions = {
   origin: (origin, callback) => {

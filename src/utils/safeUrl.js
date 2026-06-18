@@ -4,7 +4,7 @@ const { URL } = require("url");
 const C = require("./apiErrorCodes");
 const { throwApiError } = require("./apiErrorMeta");
 
-const DEFAULT_ALLOWED_PORTS = new Set([80, 443]);
+const DEFAULT_HTTPS_PORT = 443;
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -40,8 +40,8 @@ function isPrivateIp(ip) {
   return true;
 }
 
-function assertAllowedPort(port, allowedPorts = DEFAULT_ALLOWED_PORTS) {
-  if (!allowedPorts.has(port)) {
+function assertHttpsPort(port) {
+  if (port !== DEFAULT_HTTPS_PORT) {
     throwApiError(C.VALIDATION_CUSTOM, `不允許的外部 URL 連接埠：${port}`);
   }
 }
@@ -77,11 +77,10 @@ async function assertResolvedIpsSafe(hostname) {
 }
 
 /**
- * 驗證可對外 fetch 的 http(s) URL（SSRF 防護）
+ * 驗證可對外 fetch 的 https URL（SSRF 防護）
  * @param {string} rawUrl
- * @param {{ allowedPorts?: Set<number> }} [options]
  */
-async function assertSafeOutboundUrl(rawUrl, options = {}) {
+async function assertSafeOutboundUrl(rawUrl) {
   const trimmed = String(rawUrl || "").trim();
   if (!trimmed) {
     throwApiError(C.VALIDATION_CUSTOM, "外部 URL 不可為空");
@@ -94,21 +93,16 @@ async function assertSafeOutboundUrl(rawUrl, options = {}) {
     throwApiError(C.VALIDATION_CUSTOM, "外部 URL 格式不正確");
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throwApiError(C.VALIDATION_CUSTOM, "外部 URL 僅允許 http 或 https");
+  if (parsed.protocol !== "https:") {
+    throwApiError(C.VALIDATION_CUSTOM, "外部 URL 僅允許 https");
   }
 
   if (parsed.username || parsed.password) {
     throwApiError(C.VALIDATION_CUSTOM, "外部 URL 不可包含使用者資訊");
   }
 
-  const allowedPorts = options.allowedPorts || DEFAULT_ALLOWED_PORTS;
-  const port = parsed.port
-    ? Number.parseInt(parsed.port, 10)
-    : parsed.protocol === "https:"
-      ? 443
-      : 80;
-  assertAllowedPort(port, allowedPorts);
+  const port = parsed.port ? Number.parseInt(parsed.port, 10) : DEFAULT_HTTPS_PORT;
+  assertHttpsPort(port);
 
   const hostname = parsed.hostname;
   assertHostnameNotBlocked(hostname);
@@ -125,8 +119,7 @@ async function assertSafeOutboundUrl(rawUrl, options = {}) {
 }
 
 function isExternalHttpUrl(value) {
-  const trimmed = String(value || "").trim();
-  return /^https?:\/\//i.test(trimmed);
+  return /^https:\/\//i.test(String(value || "").trim());
 }
 
 module.exports = {
