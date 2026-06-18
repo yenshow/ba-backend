@@ -23,16 +23,38 @@ const {
   parseConfig,
   applyVehicleAccessEpochOnSave,
 } = require("../vehicleAccess/vehicleAccessValidation");
+const {
+  validatePeopleCountingSystemConfig,
+} = require("../peopleCounting/peopleCountingValidation");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const {
   ensureIntArray,
 } = require("./locationShared");
 
-async function validatePeopleCountingIsapiIfNeeded(systemConfig, locationId) {
-  if ((systemConfig?.data_source || "yscp") !== "isapi_camera") return;
-  // 目前規則：允許攝影機跨地點／跨系統重複使用（不在後端擋）。
-  // 保留 ensureIntArray 以維持呼叫點兼容（有需要時可在此加回驗證）。
-  ensureIntArray(systemConfig.camera_device_ids);
+async function loadLocationContextForValidation(query, locationId) {
+  const rows = await query(
+    "SELECT name, zone_id FROM locations WHERE id = $1",
+    [locationId],
+  );
+  if (rows.length === 0) return null;
+  return { name: rows[0].name, zoneId: rows[0].zone_id };
+}
+
+async function validatePeopleCountingSystemIfNeeded(
+  query,
+  systemType,
+  systemConfig,
+  locationId,
+  isUpdate,
+) {
+  if (systemType !== "people_counting") return;
+  const ctx = await loadLocationContextForValidation(query, locationId);
+  if (!ctx) return;
+  validatePeopleCountingSystemConfig(systemConfig, {
+    name: ctx.name,
+    zoneId: ctx.zoneId,
+    isUpdate,
+  });
 }
 
 function peopleCountingRowConfigToMergeInput(raw) {
@@ -438,7 +460,13 @@ async function createSystem(query, locationId, system) {
     systemConfig = applyVehicleAccessEpochOnSave(systemConfig, null);
     await validateVehicleAccessConfig(systemConfig, locationId);
   }
-  await validatePeopleCountingIsapiIfNeeded(systemConfig, locationId);
+  await validatePeopleCountingSystemIfNeeded(
+    query,
+    systemType,
+    systemConfig,
+    locationId,
+    false,
+  );
 
   // 授權/Quota（做法 B）：controller 類系統的用量以 location_systems 綁定計數
   await assertSystemLicensed(systemType);
@@ -541,7 +569,15 @@ async function updateSystem(query, systemId, system) {
     );
     await validateVehicleAccessConfig(systemConfig, vaLocationId);
   }
-  await validatePeopleCountingIsapiIfNeeded(systemConfig, vaLocationId);
+  if (vaLocationId != null) {
+    await validatePeopleCountingSystemIfNeeded(
+      query,
+      targetSystemType,
+      systemConfig,
+      vaLocationId,
+      true,
+    );
+  }
 
   await assertSystemLicensed(targetSystemType);
   await assertControllerQuotaWithinLimit({
