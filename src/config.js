@@ -187,6 +187,44 @@ const ladderSdk = {
   bridgeExePath: getEnv("LADDER_SDK_BRIDGE_EXE", ""),
 };
 
+const WEAK_JWT_SECRETS = new Set([
+  "your-secret-key-change-in-production",
+  "change-me",
+  "secret",
+  "jwt-secret",
+]);
+
+/**
+ * 正式環境啟動自檢（SEC-04）
+ */
+function validateProductionConfig() {
+  const warnings = [];
+  const errors = [];
+
+  if (!isProduction) {
+    return { warnings, errors };
+  }
+
+  const secret = String(jwt.secret || "").trim();
+  if (!secret || secret.length < 32 || WEAK_JWT_SECRETS.has(secret)) {
+    errors.push(
+      "JWT_SECRET 過弱或未設定（正式環境請使用至少 32 字元的強隨機字串）",
+    );
+  }
+
+  if (license.openAllFeatures) {
+    errors.push("LICENSE_OPEN_ALL_FEATURES 不可在正式環境啟用");
+  }
+
+  if (!cors.origins.length) {
+    warnings.push("CORS_ORIGINS 為空，跨域前端可能無法呼叫 API");
+  } else if (cors.origins.includes("*")) {
+    warnings.push("CORS_ORIGINS 含 *，搭配 credentials 可能不符合預期");
+  }
+
+  return { warnings, errors };
+}
+
 module.exports = {
   server,
   isProduction,
@@ -198,7 +236,7 @@ module.exports = {
   mediaMTX,
   ladderSdk,
   cors,
-  // 向後兼容：保留舊的配置結構
   serverHost: server.host,
   serverPort: server.port,
+  validateProductionConfig,
 };

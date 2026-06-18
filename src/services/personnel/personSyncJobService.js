@@ -18,6 +18,7 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
 const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
+const { assertSafeOutboundUrl } = require("../../utils/safeUrl");
 
 const SYNC_DELAY_MS = 300;
 
@@ -343,6 +344,7 @@ async function resolveFaceUrlToBuffer(faceUrl) {
       return await fs.readFile(fullPath);
     }
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      await assertSafeOutboundUrl(trimmed);
       const res = await fetch(trimmed, { method: "GET" });
       if (!res.ok) return null;
       const arrayBuffer = await res.arrayBuffer();

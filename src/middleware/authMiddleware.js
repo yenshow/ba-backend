@@ -8,23 +8,94 @@ const sendAuthFailure = (res, status, code, message) =>
 
 const { attachEffectivePermissions } = permissionService;
 
+/**
+ * 從 Authorization header 或（可選）query access_token 解析 JWT 字串
+ * @param {import('express').Request} req
+ * @param {{ allowQuery?: boolean }} [options]
+ */
+function resolveRequestToken(req, options = {}) {
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    return authHeader.startsWith("Bearer ")
+      ? authHeader.substring(7).trim()
+      : authHeader.trim();
+  }
+  if (options.allowQuery) {
+    const fromQuery = String(req.query?.access_token || "").trim();
+    if (fromQuery) return fromQuery;
+  }
+  return null;
+}
+
+/**
+ * 驗證 token 並回傳 decoded user；失敗時回傳 { error: { status, code, message } }
+ */
+async function authenticateToken(token) {
+  if (!token) {
+    return {
+      error: {
+        status: 401,
+        code: C.AUTH_TOKEN_MISSING,
+        message: "未提供認證 Token",
+      },
+    };
+  }
+
+  const decoded = userService.verifyToken(token);
+  if (!decoded) {
+    return {
+      error: {
+        status: 401,
+        code: C.AUTH_TOKEN_INVALID,
+        message: "無效的 Token",
+      },
+    };
+  }
+
+  const versionCheck = await userService.verifyTokenVersion(decoded);
+  if (!versionCheck.ok) {
+    return {
+      error: {
+        status: 401,
+        code: versionCheck.code,
+        message: versionCheck.message,
+      },
+    };
+  }
+
+  return { user: decoded };
+}
+
+async function applyAuthentication(req, res, options = {}) {
+  const token = resolveRequestToken(req, options);
+  const result = await authenticateToken(token);
+  if (result.error) {
+    sendAuthFailure(
+      res,
+      result.error.status,
+      result.error.code,
+      result.error.message,
+    );
+    return false;
+  }
+  req.user = result.user;
+  return true;
+}
+
 async function authenticate(req, res, next) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      return sendAuthFailure(res, 401, C.AUTH_TOKEN_MISSING, "未提供認證 Token");
-    }
-
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.substring(7)
-      : authHeader;
-    const decoded = userService.verifyToken(token);
-    if (!decoded) {
-      return sendAuthFailure(res, 401, C.AUTH_TOKEN_INVALID, "無效的 Token");
-    }
-
-    req.user = decoded;
+    if (!(await applyAuthentication(req, res))) return;
     await attachEffectivePermissions(req);
+    next();
+  } catch (error) {
+    return sendAuthFailure(res, 401, C.AUTH_FAILED, `認證失敗：${error.message}`);
+  }
+}
+
+/** GET /api/uploads/*：允許 query access_token（供 img 標籤） */
+async function authenticateUploadRead(req, res, next) {
+  try {
+    if (!(await applyAuthentication(req, res, { allowQuery: true }))) return;
     next();
   } catch (error) {
     return sendAuthFailure(res, 401, C.AUTH_FAILED, `認證失敗：${error.message}`);
@@ -207,6 +278,7 @@ const requirePlateUpsert = () => async (req, res, next) => {
 
 module.exports = {
   authenticate,
+  authenticateUploadRead,
   requireAdmin,
   attachEffectivePermissions,
   requirePermission,

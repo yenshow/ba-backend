@@ -130,6 +130,17 @@ async function initSchema() {
     // 為 users 表建立觸發器
     await createUpdatedAtTrigger(targetPool, "users");
 
+    try {
+      await targetPool.query(`
+        ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0
+      `);
+    } catch (e) {
+      const msg = e && e.message ? String(e.message) : "";
+      if (!/already exists|duplicate column/i.test(msg)) {
+        throw e;
+      }
+    }
+
     await targetPool.query(
       `UPDATE users SET status = 'inactive' WHERE status::text = 'suspended'`,
     );

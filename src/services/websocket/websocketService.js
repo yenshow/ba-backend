@@ -128,6 +128,9 @@ function initializeWebSocket(httpServer) {
         const decoded = userService.verifyToken(token);
         if (!decoded?.id) return;
 
+        const versionCheck = await userService.verifyTokenVersion(decoded);
+        if (!versionCheck.ok) return;
+
         const role = decoded.role || null;
         const result = await permissionService.getEffectivePermissionsForUser(
           decoded.id,

@@ -20,6 +20,7 @@ function generateToken(user) {
     id: user.id,
     username: user.username,
     role: user.role,
+    tokenVersion: Number(user.token_version) || 0,
   };
   return jwt.sign(payload, config.jwt.secret, {
     expiresIn: config.jwt.expiresIn,
@@ -32,6 +33,63 @@ function verifyToken(token) {
   } catch (error) {
     return null;
   }
+}
+
+async function getUserTokenVersion(userId) {
+  const rows = await db.query(
+    "SELECT token_version FROM users WHERE id = ?",
+    [userId],
+  );
+  if (rows.length === 0) {
+    return null;
+  }
+  return Number(rows[0].token_version) || 0;
+}
+
+/**
+ * 驗證 JWT 內 tokenVersion 是否與 DB 一致
+ * @returns {Promise<{ ok: true } | { ok: false, code: string, message: string }>}
+ */
+async function verifyTokenVersion(decoded) {
+  if (!decoded?.id) {
+    return {
+      ok: false,
+      code: C.AUTH_TOKEN_INVALID,
+      message: "無效的 Token",
+    };
+  }
+  const dbVersion = await getUserTokenVersion(decoded.id);
+  if (dbVersion === null) {
+    return {
+      ok: false,
+      code: C.AUTH_TOKEN_INVALID,
+      message: "無效的 Token",
+    };
+  }
+  const tokenVersion =
+    decoded.tokenVersion !== undefined && decoded.tokenVersion !== null
+      ? Number(decoded.tokenVersion)
+      : 0;
+  if (tokenVersion !== dbVersion) {
+    return {
+      ok: false,
+      code: C.AUTH_TOKEN_REVOKED,
+      message: "登入已失效，請重新登入",
+    };
+  }
+  return { ok: true };
+}
+
+async function revokeUserTokens(userId) {
+  await db.query(
+    "UPDATE users SET token_version = token_version + 1 WHERE id = ?",
+    [userId],
+  );
+}
+
+async function logoutUser(userId) {
+  await revokeUserTokens(userId);
+  return { message: "已登出" };
 }
 
 function validateRole(role) {
@@ -330,6 +388,7 @@ async function updatePassword(userId, oldPassword, newPassword, currentUser) {
     passwordHash,
     userId,
   ]);
+  await revokeUserTokens(userId);
 
   return { message: "密碼已更新" };
 }
@@ -368,4 +427,8 @@ module.exports = {
   verifyPassword,
   generateToken,
   verifyToken,
+  verifyTokenVersion,
+  revokeUserTokens,
+  logoutUser,
+  getUserTokenVersion,
 };

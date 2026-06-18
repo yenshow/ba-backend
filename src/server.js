@@ -2,9 +2,7 @@ const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const morgan = require("morgan");
-const multer = require("multer");
 const os = require("os");
-const path = require("path");
 const config = require("./config");
 
 // 向後兼容：使用新的配置結構
@@ -18,6 +16,10 @@ const serverConfig = {
 const errorHandler = require("./middleware/errorHandler");
 const responseHandler = require("./middleware/responseHandler");
 const { securityHeaders } = require("./middleware/common");
+const {
+  loginRateLimiter,
+  apiRateLimiter,
+} = require("./middleware/rateLimitMiddleware");
 const logger = require("./utils/logger");
 const C = require("./utils/apiErrorCodes");
 
@@ -45,6 +47,7 @@ const { bootstrapRuntimeInfrastructure } = require("./services/platform/runtimeC
 const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const moduleRegistryRoutes = require("./routes/moduleRegistryRoutes");
+const uploadRoutes = require("./routes/uploadRoutes");
 
 // 授權（Feature Gate）
 const { requireFeature } = require("./middleware/licenseMiddleware");
@@ -103,6 +106,9 @@ app.use(cors(corsOptions));
 // 安全標頭
 app.use(securityHeaders);
 
+// API 限流（登入路由在 userRoutes 內另掛更嚴格 limiter）
+app.use("/api", apiRateLimiter);
+
 // 請求體解析（10MB 限制）
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -125,10 +131,8 @@ app.use(
 // 統一響應格式中間件
 app.use(responseHandler);
 
-// 靜態檔案服務（用於提供上傳的檔案）
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
-// 若前端僅反代 /api（未反代 /uploads），仍可透過 /api/uploads 取用同一批靜態檔案
-app.use("/api/uploads", express.static(path.join(process.cwd(), "uploads")));
+// 受保護上傳讀取（需登入；img 可用 ?access_token=）
+app.use("/api/uploads", uploadRoutes);
 
 // 註冊路由：業務模組寫入以 requirePermission + requireFeature；平台管理以 requireAdmin
 app.use("/api/modbus", modbusRoutes);
@@ -216,6 +220,17 @@ function getLocalIPAddress() {
  */
 async function startServer() {
   const serverLogger = logger.createLogger("Server");
+
+  const prodCheck = config.validateProductionConfig();
+  for (const warning of prodCheck.warnings) {
+    serverLogger.warn(`正式環境設定警告：${warning}`);
+  }
+  if (prodCheck.errors.length > 0) {
+    for (const err of prodCheck.errors) {
+      serverLogger.error(`正式環境設定錯誤：${err}`);
+    }
+    process.exit(1);
+  }
 
   try {
     const localIP = getLocalIPAddress();

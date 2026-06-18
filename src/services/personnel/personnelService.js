@@ -22,6 +22,7 @@ const {
   applyFingerprintsToAccessControl,
 } = require("../../utils/accessControlFingerprintsUtils");
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
+const { assertSafeOutboundUrl, isExternalHttpUrl } = require("../../utils/safeUrl");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -612,6 +613,12 @@ function parseJson(value, fallback) {
   }
 }
 
+async function validateFaceUrlIfExternal(faceUrl) {
+  if (faceUrl != null && isExternalHttpUrl(faceUrl)) {
+    await assertSafeOutboundUrl(faceUrl);
+  }
+}
+
 async function createPerson(data, createdBy = null) {
   const employeeNo = (data.employeeNo || "").toString().trim();
   if (!employeeNo) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"員工編號不能為空");
@@ -623,6 +630,7 @@ async function createPerson(data, createdBy = null) {
       ? data.status
       : "active";
   const faceUrl = data.faceUrl != null ? data.faceUrl : null;
+  await validateFaceUrlIfExternal(faceUrl);
   const config =
     data.config != null
       ? typeof data.config === "string"
@@ -705,6 +713,7 @@ async function updatePerson(id, data) {
   }
   if (data.faceUrl !== undefined) {
     const nextFaceUrl = data.faceUrl ?? null;
+    await validateFaceUrlIfExternal(nextFaceUrl);
     updates.push("face_url = ?");
     params.push(nextFaceUrl);
 

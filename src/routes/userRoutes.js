@@ -9,15 +9,28 @@ const {
 const asyncHandler = require("../utils/asyncHandler");
 const websocketService = require("../services/websocket/websocketService");
 const {
+  loginRateLimiter,
+} = require("../middleware/rateLimitMiddleware");
+const {
   validateRequired,
   validateIntegers,
 } = require("../middleware/validation");
 
 router.post(
   "/login",
+  loginRateLimiter,
   validateRequired("username", "password"),
   asyncHandler(async (req, res) => {
     const result = await userService.loginUser(req.body);
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/logout",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const result = await userService.logoutUser(req.user.id);
     res.sendSuccess(result);
   }),
 );
