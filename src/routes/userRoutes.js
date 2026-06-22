@@ -68,6 +68,7 @@ router.get(
       offset,
       orderBy,
       order,
+      currentUser: req.user,
     });
     res.sendSuccess(result);
   }),

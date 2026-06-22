@@ -6,7 +6,7 @@ const router = express.Router();
 const licenseService = require("../services/license/licenseService");
 const licensePlatformService = require("../services/license/licensePlatformService");
 const licenseQuotaService = require("../services/license/licenseQuotaService");
-const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
+const { authenticate, requireAdmin, requirePlatformAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { verifyLicensePayload } = require("../utils/licenseSign");
 const config = require("../config");
@@ -211,12 +211,12 @@ router.post(
 );
 
 /**
- * POST /api/license/reset（需 admin）
+ * POST /api/license/reset（需 platform admin，username=admin）
  */
 router.post(
   "/reset",
   authenticate,
-  requireAdmin,
+  requirePlatformAdmin,
   asyncHandler(async (req, res) => {
     const next = await licenseService.resetLicenseState({
       description: `授權重置（by user:${req.user?.id ?? "unknown"}）`,

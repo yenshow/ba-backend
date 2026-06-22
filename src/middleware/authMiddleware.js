@@ -112,6 +112,16 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requirePlatformAdmin(req, res, next) {
+  if (!req.user) {
+    return sendAuthFailure(res, 401, C.AUTH_UNAUTHENTICATED, "未認證");
+  }
+  if (!userService.isPlatformAdminUser(req.user)) {
+    return sendAuthFailure(res, 403, C.PERMISSION_DENIED, "權限不足");
+  }
+  next();
+}
+
 const requirePermission = (requiredCode) => async (req, res, next) => {
   if (!req.user) {
     return sendAuthFailure(res, 401, C.AUTH_UNAUTHENTICATED, "未認證");
@@ -280,6 +290,7 @@ module.exports = {
   authenticate,
   authenticateUploadRead,
   requireAdmin,
+  requirePlatformAdmin,
   attachEffectivePermissions,
   requirePermission,
   requireAnyPermission,

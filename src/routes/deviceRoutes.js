@@ -8,6 +8,7 @@ const deviceConnectivityService = require("../services/devices/deviceConnectivit
 const {
   authenticate,
   requirePermission,
+  requirePlatformAdmin,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { noCache } = require("../middleware/common");
@@ -61,9 +62,10 @@ router.get(
   }),
 );
 
-// 建立設備型號
+// 建立設備型號（僅 platform admin）
 router.post(
   "/models",
+  requirePlatformAdmin,
   requirePermission("system.equipment_management.device.create"),
   asyncHandler(async (req, res) => {
     const result = await deviceModelService.createDeviceModel(
@@ -74,9 +76,10 @@ router.post(
   }),
 );
 
-// 更新設備型號
+// 更新設備型號（僅 platform admin）
 router.put(
   "/models/:id",
+  requirePlatformAdmin,
   requirePermission("system.equipment_management.device.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
@@ -90,9 +93,10 @@ router.put(
   }),
 );
 
-// 刪除設備型號
+// 刪除設備型號（僅 platform admin）
 router.delete(
   "/models/:id",
+  requirePlatformAdmin,
   requirePermission("system.equipment_management.device.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {

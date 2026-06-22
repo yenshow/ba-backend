@@ -6,6 +6,12 @@ const permissionService = require("../../access/permissionService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
+/** 安裝腳本建立之平台超級管理員（bootstrap）；與一般 role=admin 管理員區分 */
+const PLATFORM_ADMIN_USERNAME = "admin";
+
+const isPlatformAdminUser = (user) =>
+  user?.username === PLATFORM_ADMIN_USERNAME;
+
 async function hashPassword(password) {
   const saltRounds = 10;
   return await bcrypt.hash(password, saltRounds);
@@ -193,7 +199,7 @@ async function loginUser(credentials) {
 }
 
 async function getUsers(filters = {}) {
-  const { role, status, limit, offset, orderBy, order } = filters;
+  const { role, status, limit, offset, orderBy, order, currentUser } = filters;
 
   const parsedLimit =
     limit !== undefined && limit !== null
@@ -205,15 +211,22 @@ async function getUsers(filters = {}) {
       : 0;
 
   const { whereClause, params } = buildUserQueryConditions({ role, status });
+  let scopedWhere = whereClause;
+  const scopedParams = [...params];
+  if (currentUser && !isPlatformAdminUser(currentUser)) {
+    scopedWhere += " AND username != ?";
+    scopedParams.push(PLATFORM_ADMIN_USERNAME);
+  }
+
   const validOrderBy = ["id", "created_at", "username"].includes(orderBy)
     ? orderBy
     : "created_at";
   const validOrder = order === "asc" || order === "desc" ? order : "desc";
 
-  const query = `SELECT id, username, role, status, created_at, updated_at FROM users ${whereClause} ORDER BY ${validOrderBy} ${validOrder} LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
-  const users = await db.query(query, params);
+  const query = `SELECT id, username, role, status, created_at, updated_at FROM users ${scopedWhere} ORDER BY ${validOrderBy} ${validOrder} LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
+  const users = await db.query(query, scopedParams);
   const total = (
-    await db.query(`SELECT COUNT(*) as total FROM users ${whereClause}`, params)
+    await db.query(`SELECT COUNT(*) as total FROM users ${scopedWhere}`, scopedParams)
   )[0].total;
 
   return { users, total, limit: parsedLimit, offset: parsedOffset };
@@ -243,6 +256,9 @@ async function createManagedUser(creator, body) {
 
   if (creator.role !== "admin") {
     throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有管理員可以建立用戶");
+  }
+  if (!isPlatformAdminUser(creator) && role === "admin") {
+    throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有平台管理員可以建立管理員帳號");
   }
 
   const existingUser = await db.query(
@@ -278,16 +294,25 @@ async function updateUser(userId, updateData, currentUser) {
   const { username, role, status } = updateData;
 
   const existingRows = await db.query(
-    "SELECT id, role FROM users WHERE id = ?",
+    "SELECT id, role, username FROM users WHERE id = ?",
     [userId],
   );
   if (existingRows.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
   }
-  const previousRole = existingRows[0].role;
+  const targetUser = existingRows[0];
+  const previousRole = targetUser.role;
 
   if (currentUser.role !== "admin") {
     throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有管理員可以修改用戶資料");
+  }
+  if (!isPlatformAdminUser(currentUser)) {
+    if (targetUser.username === PLATFORM_ADMIN_USERNAME) {
+      throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "無法修改平台管理員帳號");
+    }
+    if (role === "admin") {
+      throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有平台管理員可以指派管理員角色");
+    }
   }
 
   const updates = [];
@@ -334,16 +359,19 @@ function assertPasswordChangeAllowed(currentUser, targetUser) {
   const isSelf = currentUser.id === targetUser.id;
 
   if (isSelf) {
-    if (currentUser.role === "admin") {
+    if (isPlatformAdminUser(currentUser)) {
       throwApiError(
         C.USER_FORBIDDEN_PASSWORD_SELF,
-        "管理員無法自行變更密碼，請由其他管理員於用戶管理重設",
+        "平台管理員無法自行變更密碼",
       );
     }
     return { requireOldPassword: true };
   }
 
   if (currentUser.role === "admin") {
+    if (isPlatformAdminUser(currentUser)) {
+      return { requireOldPassword: false };
+    }
     if (targetUser.role === "admin") {
       throwApiError(C.USER_FORBIDDEN_PASSWORD_TARGET, "無法重設其他管理員密碼");
     }
@@ -408,11 +436,19 @@ async function deleteUser(userId, currentUser) {
     throwApiError(C.USER_FORBIDDEN_DELETE_SELF, "不能刪除自己的帳號");
   }
 
-  const existing = await db.query("SELECT id, role FROM users WHERE id = ?", [
-    userId,
-  ]);
+  const existing = await db.query(
+    "SELECT id, role, username FROM users WHERE id = ?",
+    [userId],
+  );
   if (existing.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
+  }
+  const target = existing[0];
+  if (target.username === PLATFORM_ADMIN_USERNAME) {
+    throwApiError(C.USER_FORBIDDEN_DELETE, "無法刪除平台管理員帳號");
+  }
+  if (!isPlatformAdminUser(currentUser) && target.role === "admin") {
+    throwApiError(C.USER_FORBIDDEN_DELETE, "無法刪除其他管理員帳號");
   }
 
   await db.query("DELETE FROM users WHERE id = ?", [userId]);
@@ -421,6 +457,8 @@ async function deleteUser(userId, currentUser) {
 }
 
 module.exports = {
+  PLATFORM_ADMIN_USERNAME,
+  isPlatformAdminUser,
   createBootstrapAdminUser,
   createManagedUser,
   loginUser,
