@@ -36,10 +36,9 @@ function verifyToken(token) {
 }
 
 async function getUserTokenVersion(userId) {
-  const rows = await db.query(
-    "SELECT token_version FROM users WHERE id = ?",
-    [userId],
-  );
+  const rows = await db.query("SELECT token_version FROM users WHERE id = ?", [
+    userId,
+  ]);
   if (rows.length === 0) {
     return null;
   }
@@ -132,9 +131,10 @@ async function createBootstrapAdminUser({ username, password }) {
     throwApiError(C.USER_PASSWORD_TOO_SHORT, "密碼長度至少需要 6 個字元");
   }
 
-  const existingUser = await db.query("SELECT id FROM users WHERE username = ?", [
-    username,
-  ]);
+  const existingUser = await db.query(
+    "SELECT id FROM users WHERE username = ?",
+    [username],
+  );
   if (existingUser.length > 0) {
     throwApiError(C.USER_USERNAME_EXISTS, "用戶名已存在");
   }
@@ -155,7 +155,10 @@ async function loginUser(credentials) {
   const { username, password } = credentials;
 
   if (!username || !password) {
-    throwApiError(C.USER_CREDENTIALS_REQUIRED, "username 和 password 為必填欄位");
+    throwApiError(
+      C.USER_CREDENTIALS_REQUIRED,
+      "username 和 password 為必填欄位",
+    );
   }
 
   const users = await db.query("SELECT * FROM users WHERE username = ?", [
@@ -242,9 +245,10 @@ async function createManagedUser(creator, body) {
     throwApiError(C.USER_FORBIDDEN_ROLE_STATUS, "只有管理員可以建立用戶");
   }
 
-  const existingUser = await db.query("SELECT id FROM users WHERE username = ?", [
-    username,
-  ]);
+  const existingUser = await db.query(
+    "SELECT id FROM users WHERE username = ?",
+    [username],
+  );
   if (existingUser.length > 0) {
     throwApiError(C.USER_USERNAME_EXISTS, "用戶名已存在");
   }
@@ -273,9 +277,10 @@ async function createManagedUser(creator, body) {
 async function updateUser(userId, updateData, currentUser) {
   const { username, role, status } = updateData;
 
-  const existingRows = await db.query("SELECT id, role FROM users WHERE id = ?", [
-    userId,
-  ]);
+  const existingRows = await db.query(
+    "SELECT id, role FROM users WHERE id = ?",
+    [userId],
+  );
   if (existingRows.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
   }
@@ -340,10 +345,7 @@ function assertPasswordChangeAllowed(currentUser, targetUser) {
 
   if (currentUser.role === "admin") {
     if (targetUser.role === "admin") {
-      throwApiError(
-        C.USER_FORBIDDEN_PASSWORD_TARGET,
-        "無法重設其他管理員密碼",
-      );
+      throwApiError(C.USER_FORBIDDEN_PASSWORD_TARGET, "無法重設其他管理員密碼");
     }
     return { requireOldPassword: false };
   }
@@ -371,7 +373,11 @@ async function updatePassword(userId, oldPassword, newPassword, currentUser) {
   );
 
   if (requireOldPassword) {
-    if (!oldPassword || typeof oldPassword !== "string" || !oldPassword.trim()) {
+    if (
+      !oldPassword ||
+      typeof oldPassword !== "string" ||
+      !oldPassword.trim()
+    ) {
       throwApiError(C.USER_OLD_PASSWORD_REQUIRED, "請提供舊密碼");
     }
     const isValidPassword = await verifyPassword(

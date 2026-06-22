@@ -2,15 +2,14 @@ const express = require("express");
 const router = express.Router();
 const userService = require("../services/platform/userService");
 const permissionService = require("../access/permissionService");
-const {
-  authenticate,
-  requireAdmin,
-} = require("../middleware/authMiddleware");
+const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const websocketService = require("../services/websocket/websocketService");
 const {
-  loginRateLimiter,
+  loginRateLimitPrecheck,
+  recordFailedLoginAttempt,
 } = require("../middleware/rateLimitMiddleware");
+const C = require("../utils/apiErrorCodes");
 const {
   validateRequired,
   validateIntegers,
@@ -18,11 +17,18 @@ const {
 
 router.post(
   "/login",
-  loginRateLimiter,
+  loginRateLimitPrecheck,
   validateRequired("username", "password"),
   asyncHandler(async (req, res) => {
-    const result = await userService.loginUser(req.body);
-    res.sendSuccess(result);
+    try {
+      const result = await userService.loginUser(req.body);
+      res.sendSuccess(result);
+    } catch (error) {
+      if (error?.code === C.USER_AUTH_FAILED) {
+        recordFailedLoginAttempt(req);
+      }
+      throw error;
+    }
   }),
 );
 
@@ -107,7 +113,9 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const overrides = Array.isArray(req.body.overrides) ? req.body.overrides : [];
+    const overrides = Array.isArray(req.body.overrides)
+      ? req.body.overrides
+      : [];
     const sanitized = await permissionService.sanitizeOverrides(overrides);
     await permissionService.setUserPermissionOverrides(userId, sanitized);
     websocketService.emitPermissionsUpdated(userId);

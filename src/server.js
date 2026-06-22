@@ -16,10 +16,7 @@ const serverConfig = {
 const errorHandler = require("./middleware/errorHandler");
 const responseHandler = require("./middleware/responseHandler");
 const { securityHeaders } = require("./middleware/common");
-const {
-  loginRateLimiter,
-  apiRateLimiter,
-} = require("./middleware/rateLimitMiddleware");
+const { apiRateLimiter } = require("./middleware/rateLimitMiddleware");
 const logger = require("./utils/logger");
 const C = require("./utils/apiErrorCodes");
 
@@ -225,17 +222,6 @@ function getLocalIPAddress() {
  */
 async function startServer() {
   const serverLogger = logger.createLogger("Server");
-
-  const prodCheck = config.validateProductionConfig();
-  for (const warning of prodCheck.warnings) {
-    serverLogger.warn(`正式環境設定警告：${warning}`);
-  }
-  if (prodCheck.errors.length > 0) {
-    for (const err of prodCheck.errors) {
-      serverLogger.error(`正式環境設定錯誤：${err}`);
-    }
-    process.exit(1);
-  }
 
   try {
     const localIP = getLocalIPAddress();

@@ -293,13 +293,7 @@ async function initSchema() {
               config = EXCLUDED.config,
               updated_at = CURRENT_TIMESTAMP
         `,
-        [
-          m.name,
-          null,
-          m.description,
-          m.port,
-          JSON.stringify(m.config || {}),
-        ],
+        [m.name, null, m.description, m.port, JSON.stringify(m.config || {})],
       );
     }
     schemaLogger.info("device_models：控制器預設型號種子已插入", {
@@ -383,11 +377,14 @@ async function initSchema() {
         [legacyName],
       );
       if (patched.rowCount > 0) {
-        schemaLogger.info("device_models：已為舊泛用攝影機型號補上 category_code", {
-          module: "initSchema",
-          name: legacyName,
-          count: patched.rowCount,
-        });
+        schemaLogger.info(
+          "device_models：已為舊泛用攝影機型號補上 category_code",
+          {
+            module: "initSchema",
+            name: legacyName,
+            count: patched.rowCount,
+          },
+        );
       }
     }
 
@@ -1211,7 +1208,9 @@ async function initSchema() {
         END IF;
       END $BODY$;
     `);
-    schemaLogger.info("person_license_plates 表已建立", { module: "initSchema" });
+    schemaLogger.info("person_license_plates 表已建立", {
+      module: "initSchema",
+    });
 
     await targetPool.query(`
       DO $BODY$

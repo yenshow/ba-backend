@@ -45,11 +45,8 @@ const FEATURE_KEYS_CONSTRUCTION = [
   "vehicle_access",
 ];
 
-/** 依 `config.license.deploymentProfile` 取得本實例有效的 feature keys */
-const getActiveFeatureKeys = () =>
-  config.license?.deploymentProfile === "construction"
-    ? FEATURE_KEYS_CONSTRUCTION
-    : FEATURE_KEYS_CENTRAL;
+/** 本實例 API／授權檢查可用的 feature keys（雙前端並跑時不因 deployment profile 縮減） */
+const getActiveFeatureKeys = () => FEATURE_KEYS_CENTRAL;
 
 const CACHE_TTL_MS = 30_000;
 

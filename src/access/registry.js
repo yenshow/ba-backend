@@ -72,7 +72,8 @@ const getRegistry = () => {
   const profile = resolveDeploymentProfile();
   return {
     profile,
-    modules: getModulesForProfile(profile),
+    // 模組清單固定為 central 全量；construction 前端自行過濾子集
+    modules: getModulesForProfile("central"),
     serverFeatures: {
       enableYscpPeopleCounting: yscpPeopleFeature.isEnabled(),
       enableYscpVehicleAccess: yscpVehicleFeature.isEnabled(),
