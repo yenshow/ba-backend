@@ -29,13 +29,14 @@ module.exports = (() => {
 		"/overview/status",
 		noCache,
 		asyncHandler(async (req, res) => {
-			const activeFeatures = new Set(licenseService.getActiveFeatureKeys());
+			const license = await licenseService.getLicenseState();
+			const licensedFeatures = new Set(license.features || []);
 
 			const systems = getMonitoringOverviewSystems();
 
 			const enabled = systems.filter(
 				(s) =>
-					activeFeatures.has(s.featureKey) &&
+					licensedFeatures.has(s.featureKey) &&
 					canReadSystemStatusForOverview(req, s.permissionCode),
 			);
 

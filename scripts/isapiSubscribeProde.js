@@ -1,6 +1,8 @@
 /**
  * ISAPI subscribeEvent 探測（POST /ISAPI/Event/notification/subscribeEvent）
  *
+ * 現場排查 Runbook：docs/10-setting/troubleshooting-isapi-events.md
+ *
  * 用法：
  *   set ISAPI_PASSWORD=你的密碼
  *   node .\scripts\isapiSubscribeProde.js
@@ -231,7 +233,7 @@ async function main() {
   const port = ensureInt(process.env.ISAPI_PORT) ?? 80;
   const username = process.env.ISAPI_USERNAME || "admin";
   const password = process.env.ISAPI_PASSWORD || "Aa83124007";
-  const subscribeMode = String(process.env.ISAPI_SUBSCRIBE_MODE || "list")
+  const subscribeMode = String(process.env.ISAPI_SUBSCRIBE_MODE || "all")
     .trim()
     .toLowerCase();
   const channelIdRaw = process.env.ISAPI_CHANNEL_ID;

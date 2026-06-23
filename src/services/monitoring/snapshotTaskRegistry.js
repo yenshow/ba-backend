@@ -58,39 +58,36 @@ const smokeAlarmSnapshotMonitor = createSystemSnapshotMonitor({
   getSnapshot: () => smokeAlarmStatusService.getStatusSnapshot(),
 });
 
-const snapshotTaskRegistry = [
+const SNAPSHOT_TASK_DEFS = [
+  { systemKey: "lighting", systemName: "照明系統", monitor: lightingSnapshotMonitor },
+  { systemKey: "hvac", systemName: "空調系統", monitor: hvacSnapshotMonitor },
   {
-    systemName: "照明系統",
-    taskFunction: () => lightingSnapshotMonitor.check(),
-  },
-  {
-    systemName: "空調系統",
-    taskFunction: () => hvacSnapshotMonitor.check(),
-  },
-  {
+    systemKey: "drainage",
     systemName: getModuleDisplayNameByCode("system.drainage") ?? "排水系統",
-    taskFunction: () => drainageSnapshotMonitor.check(),
+    monitor: drainageSnapshotMonitor,
   },
+  { systemKey: "power", systemName: "電力系統", monitor: powerSnapshotMonitor },
   {
-    systemName: "電力系統",
-    taskFunction: () => powerSnapshotMonitor.check(),
-  },
-  {
+    systemKey: "air_circulation",
     systemName: "空氣循環系統",
-    taskFunction: () => airCirculationSnapshotMonitor.check(),
+    monitor: airCirculationSnapshotMonitor,
   },
+  { systemKey: "fire", systemName: "消防系統", monitor: fireSnapshotMonitor },
   {
-    systemName: "消防系統",
-    taskFunction: () => fireSnapshotMonitor.check(),
-  },
-  {
+    systemKey: "emergency_rescue",
     systemName: "緊急求救系統",
-    taskFunction: () => emergencyRescueSnapshotMonitor.check(),
+    monitor: emergencyRescueSnapshotMonitor,
   },
   {
+    systemKey: "smoke_alarm",
     systemName: "煙霧警報系統",
-    taskFunction: () => smokeAlarmSnapshotMonitor.check(),
+    monitor: smokeAlarmSnapshotMonitor,
   },
 ];
 
-module.exports = snapshotTaskRegistry;
+module.exports = SNAPSHOT_TASK_DEFS.map(({ systemKey, systemName, monitor }) => ({
+  taskId: systemKey,
+  systemName,
+  featureKey: systemKey,
+  taskFunction: () => monitor.check(),
+}));

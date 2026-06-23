@@ -13,7 +13,7 @@ const {
 } = require("./vehicleAccessConfig");
 const yscpProvider = require("./providers/yscpProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
-const isapiVehicleSubscribeService = require("./isapiVehicleSubscribeService");
+const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const vehiclePresenceService = require("./vehiclePresenceService");
 const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
@@ -337,9 +337,7 @@ async function getAllSiteLogs(options = {}) {
 }
 
 async function refreshSubscribeAfterLocationChange() {
-  try {
-    await isapiVehicleSubscribeService.refresh();
-  } catch (_e) {}
+  void isapiSubscribeHub.refreshForFeature("vehicle_access").catch(() => {});
 }
 
 async function getOrganizationGroups(siteId, options = {}) {

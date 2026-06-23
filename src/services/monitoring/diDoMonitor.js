@@ -299,6 +299,11 @@ async function checkDiDoAlerts() {
   }
 }
 
+const DI_DO_ALERT_FEATURE_KEYS = [
+  ...new Set(Object.values(SOURCE_TO_SYSTEM_TYPE)),
+];
+
 module.exports = {
   checkDiDoAlerts,
+  DI_DO_ALERT_FEATURE_KEYS,
 };

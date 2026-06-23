@@ -6,6 +6,7 @@ const router = express.Router();
 const licenseService = require("../services/license/licenseService");
 const licensePlatformService = require("../services/license/licensePlatformService");
 const licenseQuotaService = require("../services/license/licenseQuotaService");
+const licenseRuntimeService = require("../services/license/licenseRuntimeService");
 const { authenticate, requireAdmin, requirePlatformAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { verifyLicensePayload } = require("../utils/licenseSign");
@@ -42,6 +43,17 @@ const sendInvalidLicenseKey = (res) =>
     },
     400,
   );
+
+const sendLicenseMutationSuccess = async (res, license, reason) => {
+  await licenseRuntimeService.reconcileBackgroundServices({
+    reason,
+    licensedFeatures: licenseService.filterEffectiveFeatures(license.features),
+  });
+  return res.sendSuccess({
+    ...(await toLicenseApiPayload(license)),
+    canActivate: true,
+  });
+};
 
 /** GET /api/license 需認證；回傳本地授權狀態 */
 router.get(
@@ -111,10 +123,7 @@ router.post(
           description: `授權啟用（online 副LK, by user:${req.user?.id ?? "unknown"}）`,
         });
 
-        return res.sendSuccess({
-          ...(await toLicenseApiPayload(license)),
-          canActivate: true,
-        });
+        return sendLicenseMutationSuccess(res, license, "license_activate_extension");
       }
 
       const mainKey = result.licenseKey ?? trimmedKey;
@@ -136,10 +145,7 @@ router.post(
         description: `授權啟用（online 主LK, by user:${req.user?.id ?? "unknown"}）`,
       });
 
-      return res.sendSuccess({
-        ...(await toLicenseApiPayload(license)),
-        canActivate: true,
-      });
+      return sendLicenseMutationSuccess(res, license, "license_activate_main");
     }
 
     if (!Array.isArray(features) || features.length === 0) {
@@ -160,10 +166,7 @@ router.post(
       description: `授權啟用（manual, by user:${req.user?.id ?? "unknown"}）`,
     });
 
-    return res.sendSuccess({
-      ...(await toLicenseApiPayload(license)),
-      canActivate: true,
-    });
+    return sendLicenseMutationSuccess(res, license, "license_activate_manual");
   }),
 );
 
@@ -222,10 +225,7 @@ router.post(
       description: `授權重置（by user:${req.user?.id ?? "unknown"}）`,
     });
 
-    return res.sendSuccess({
-      ...(await toLicenseApiPayload(next)),
-      canActivate: true,
-    });
+    return sendLicenseMutationSuccess(res, next, "license_reset");
   }),
 );
 
@@ -331,10 +331,7 @@ router.post(
         description: `授權匯入（offline 首次, by user:${req.user?.id ?? "unknown"}）`,
       });
 
-      return res.sendSuccess({
-        ...(await toLicenseApiPayload(license)),
-        canActivate: true,
-      });
+      return sendLicenseMutationSuccess(res, license, "license_offline_import_main");
     }
 
     const license = await licenseService.setLicenseState({
@@ -358,10 +355,7 @@ router.post(
       description: `授權匯入（offline 追加, by user:${req.user?.id ?? "unknown"}）`,
     });
 
-    return res.sendSuccess({
-      ...(await toLicenseApiPayload(license)),
-      canActivate: true,
-    });
+    return sendLicenseMutationSuccess(res, license, "license_offline_import_extension");
   }),
 );
 

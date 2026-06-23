@@ -53,6 +53,7 @@ function registerMonitoringTask(
   systemName,
   taskFunction,
   intervalOrOptions = null,
+  taskId = null,
 ) {
   if (typeof taskFunction !== "function") {
     throwApiError(C.MONITOR_TASK_INVALID, `監控任務必須是一個函數: ${systemName}`);
@@ -64,6 +65,8 @@ function registerMonitoringTask(
       : intervalOrOptions != null
         ? { baseIntervalMs: intervalOrOptions }
         : {};
+
+  const resolvedTaskId = taskId || opts.taskId || systemName;
 
   const minIntervalMs = clampInt(
     opts.minIntervalMs ?? MIN_INTERVAL_MS,
@@ -87,6 +90,7 @@ function registerMonitoringTask(
   );
 
   monitoringTasks.push({
+    taskId: resolvedTaskId,
     systemName,
     taskFunction,
     baseIntervalMs,
@@ -94,14 +98,13 @@ function registerMonitoringTask(
     maxIntervalMs,
     maxBackoffIntervalMs,
     currentIntervalMs: baseIntervalMs,
-    nextRunAtMs: Date.now(), // 立即可跑一次
+    nextRunAtMs: Date.now(),
     lastRun: null,
     lastStartedAtMs: 0,
     isRunning: false,
     errorCount: 0,
   });
 
-  // 註冊 log 改為「啟動時一次性摘要」輸出，避免啟動刷屏
   monitorLogger.debug(`已註冊監控任務: ${systemName}`);
 }
 
@@ -333,6 +336,58 @@ function stopMonitoring() {
   });
 }
 
+function getRegisteredTaskIds() {
+  return monitoringTasks.map((task) => task.taskId);
+}
+
+function syncMonitoringTasks(desiredTasks) {
+  const desired = Array.isArray(desiredTasks) ? desiredTasks : [];
+  const desiredIds = new Set(
+    desired.map((task) => task.taskId).filter(Boolean),
+  );
+
+  for (let i = monitoringTasks.length - 1; i >= 0; i -= 1) {
+    if (!desiredIds.has(monitoringTasks[i].taskId)) {
+      monitoringTasks.splice(i, 1);
+    }
+  }
+
+  const existingIds = new Set(monitoringTasks.map((task) => task.taskId));
+  for (const task of desired) {
+    if (!task?.taskId || existingIds.has(task.taskId)) {
+      continue;
+    }
+    registerMonitoringTask(
+      task.systemName,
+      task.taskFunction,
+      task.options,
+      task.taskId,
+    );
+  }
+
+  const wasRunning = !!monitoringTimer;
+  if (monitoringTasks.length === 0) {
+    if (wasRunning) {
+      stopMonitoring();
+    }
+    return {
+      taskCount: 0,
+      taskIds: [],
+      schedulerRunning: false,
+    };
+  }
+
+  if (!wasRunning) {
+    startMonitoring();
+  }
+
+  return {
+    taskCount: monitoringTasks.length,
+    taskIds: getRegisteredTaskIds(),
+    schedulerRunning: !!monitoringTimer,
+  };
+}
+
 /**
  * 取得監控狀態
  */
@@ -353,6 +408,7 @@ function getMonitoringStatus() {
 
 module.exports = {
   registerMonitoringTask,
+  syncMonitoringTasks,
   startMonitoring,
   stopMonitoring,
   getMonitoringStatus,

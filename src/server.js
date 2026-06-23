@@ -55,20 +55,14 @@ const externalDb = require("./database/externalDb");
 const websocketService = require("./services/websocket/websocketService");
 const syncDefinitions = require("./access/syncDefinitions");
 
-// 背景監控服務
-const backgroundMonitor = require("./services/monitoring/backgroundMonitor");
-const monitoringTaskRegistry = require("./services/monitoring/monitoringTaskRegistry");
+// 背景監控與 License Runtime
+const licenseRuntimeService = require("./services/license/licenseRuntimeService");
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
 const {
   startAlertDailyRolloverScheduler,
 } = require("./services/alerts/alertRolloverScheduler");
-// 環境彙總排程（時／日／月）
-const environmentAggregationService = require("./services/environment/environmentAggregationService");
-// 門禁 ISAPI 佈防訂閱服務（全面改為佈防模式）
-const isapiSubscribeHub = require("./services/isapi/isapiSubscribeHub");
-const sdkArmingService = require("./services/ladderSdk/sdkArmingService");
 
 const app = express();
 
@@ -277,18 +271,11 @@ async function startServer() {
       serverLogger.warn("主資料庫未連線，略過 runtime 設定載入");
     }
 
-    // 註冊並啟動背景監控任務（固定啟用）
-    for (const task of monitoringTaskRegistry) {
-      backgroundMonitor.registerMonitoringTask(
-        task.systemName,
-        task.taskFunction,
-        task.options,
-      );
+    if (dbConnected) {
+      await licenseRuntimeService.reconcileBackgroundServices({ reason: "boot" });
+    } else {
+      serverLogger.warn("主資料庫未連線，略過授權背景服務協調");
     }
-    // 人流統計系統：已改為僅依賴 YSCP 事件觸發，不再使用定時任務
-
-    backgroundMonitor.startMonitoring();
-    serverLogger.info("背景監控服務已啟用");
 
     global.__backupSchedulerHandle = backupScheduler.startScheduler();
     serverLogger.info("備份排程已啟用");
@@ -296,106 +283,7 @@ async function startServer() {
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
 
-    // 環境彙總：每小時寫入「上一小時」hour（日／月由備份日執行）
-    const runHourAgg = async () => {
-      try {
-        await environmentAggregationService.computeAndSaveHour();
-      } catch (err) {
-        serverLogger.warn("環境彙總 hour 執行失敗", { error: err.message });
-      }
-    };
-    const runTodayHourBackfill = async () => {
-      try {
-        await environmentAggregationService.backfillTodayHours();
-        serverLogger.info("環境彙總 hour 今日補寫完成");
-      } catch (err) {
-        serverLogger.warn("環境彙總 hour 今日補寫失敗", { error: err.message });
-      }
-    };
-    setImmediate(async () => {
-      await runHourAgg();
-      await runTodayHourBackfill();
-    });
-    global.__envHourAggIntervalId = setInterval(runHourAgg, 60 * 60 * 1000);
-    global.__envPartialHourAggIntervalId = setInterval(
-      () =>
-        environmentAggregationService
-          .upsertPartialCurrentHour()
-          .catch((err) =>
-            serverLogger.warn("環境彙總 partial hour 失敗", {
-              error: err.message,
-            }),
-          ),
-      15 * 60 * 1000,
-    );
-    serverLogger.info("環境彙總排程已啟用（每小時 + 每 15 分鐘 partial hour）");
-
-    // 環境彙總（日）：獨立於備份排程，避免備份停擺導致 week/month 趨勢缺洞
-    // - 啟動時先補寫最近 7 天（不含今日）
-    // - 之後每天在「下一個 UTC 00:05」跑一次（避免卡在整點跨日）
-    const runDayAggBackfill = async () => {
-      try {
-        await environmentAggregationService.backfillRecentDays(7);
-        serverLogger.info("環境彙總 day 補寫完成（最近 7 天）");
-      } catch (err) {
-        serverLogger.warn("環境彙總 day 補寫失敗", { error: err.message });
-      }
-    };
-
-    const runDayAgg = async () => {
-      try {
-        await environmentAggregationService.computeAndSaveDay();
-      } catch (err) {
-        serverLogger.warn("環境彙總 day 執行失敗", { error: err.message });
-      }
-    };
-
-    const scheduleDailyAtUtc = (hour, minute, fn) => {
-      const now = new Date();
-      const next = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate(),
-          hour,
-          minute,
-          0,
-          0,
-        ),
-      );
-      if (next.getTime() <= now.getTime()) {
-        next.setUTCDate(next.getUTCDate() + 1);
-      }
-      const delay = Math.max(0, next.getTime() - now.getTime());
-      const safeRun = () => Promise.resolve(fn()).catch(() => {});
-      const timeoutId = setTimeout(() => {
-        void safeRun();
-        global.__envDayAggIntervalId = setInterval(
-          () => void safeRun(),
-          24 * 60 * 60 * 1000,
-        );
-      }, delay);
-      return timeoutId;
-    };
-
-    setImmediate(() => void runDayAggBackfill());
-    global.__envDayAggTimeoutId = scheduleDailyAtUtc(0, 5, runDayAgg);
-    serverLogger.info("環境彙總排程已啟用（每日 UTC 00:05，day bucket）");
-
     global.__httpServer = httpServer;
-
-    // ISAPI 佈防訂閱中心（門禁 / 人流 PeopleCounting / 車牌 ANPR）
-    isapiSubscribeHub.start().catch((err) => {
-      serverLogger.warn("ISAPI 佈防訂閱中心啟動時發生錯誤（將不影響其他功能）", {
-        error: err.message,
-      });
-    });
-
-    sdkArmingService.start().catch((err) => {
-      serverLogger.warn("梯控 SDK 佈防啟動時發生錯誤（將不影響其他功能）", {
-        error: err.message,
-      });
-    });
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
       serverLogger.error(
@@ -434,30 +322,8 @@ async function gracefulShutdown(signal) {
   shutdownLogger.info(`收到 ${signal}，正在關閉伺服器...`);
 
   try {
-    // 停止背景監控服務
-    await backgroundMonitor.stopMonitoring();
-    shutdownLogger.info("背景監控服務已停止");
-
-    isapiSubscribeHub.stop();
-    shutdownLogger.info("ISAPI 佈防訂閱中心已停止");
-
-    sdkArmingService.stop();
-    shutdownLogger.info("梯控 SDK 佈防已停止");
-
-    if (global.__envHourAggIntervalId) {
-      clearInterval(global.__envHourAggIntervalId);
-      global.__envHourAggIntervalId = null;
-    }
-
-    if (global.__envDayAggTimeoutId) {
-      clearTimeout(global.__envDayAggTimeoutId);
-      global.__envDayAggTimeoutId = null;
-    }
-
-    if (global.__envDayAggIntervalId) {
-      clearInterval(global.__envDayAggIntervalId);
-      global.__envDayAggIntervalId = null;
-    }
+    await licenseRuntimeService.stopLicensedBackgroundServices();
+    shutdownLogger.info("授權背景服務已停止");
 
     if (typeof global.__alertRolloverStop === "function") {
       global.__alertRolloverStop();

@@ -1,11 +1,16 @@
 /**
- * YSCP 車輛進出資料源功能旗標（ENABLE_YSCP_VEHICLE_ACCESS）
+ * YSCP 車輛進出資料源功能旗標（ENABLE_YSCP_VEHICLE_ACCESS + License vehicle_access）
  */
 
 const config = require("../config");
 const systemMapping = require("../services/externalData/systemMapping");
+const effectiveFeaturesCache = require("../services/license/effectiveFeaturesCache");
 
-const isEnabled = () => config.features?.enableYscpVehicleAccess !== false;
+const isLicenseGranted = () =>
+  effectiveFeaturesCache.hasCachedLicensedFeature("vehicle_access");
+
+const isEnabled = () =>
+  config.features?.enableYscpVehicleAccess !== false && isLicenseGranted();
 
 const shouldSkipYscp = (dataSource) =>
   dataSource === "yscp" && !isEnabled();

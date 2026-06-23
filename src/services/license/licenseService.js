@@ -577,6 +577,21 @@ async function resetLicenseState({ description } = {}) {
   return getLicenseState({ bypassCache: true });
 }
 
+const hasLicensedFeature = (features, key) =>
+  Array.isArray(features) && features.includes(key);
+
+const filterEffectiveFeatures = (features) => {
+  const allowed = new Set(getActiveFeatureKeys());
+  return (features || []).filter(
+    (key) => typeof key === "string" && allowed.has(key),
+  );
+};
+
+const getEffectiveLicensedFeatures = async () => {
+  const { features } = await getLicenseState();
+  return filterEffectiveFeatures(features);
+};
+
 module.exports = {
   SETTINGS_KEYS,
   FEATURE_KEYS_CENTRAL,
@@ -589,4 +604,7 @@ module.exports = {
   getLicenseState,
   setLicenseState,
   resetLicenseState,
+  filterEffectiveFeatures,
+  getEffectiveLicensedFeatures,
+  hasLicensedFeature,
 };
