@@ -61,6 +61,17 @@ async function runAll(run, profiles = PROFILES) {
   return results;
 }
 
+/** refresh 優先；無 refresh 的 profile（如攝影機人流）fallback start */
+function runProfileLifecycle(profile) {
+  if (typeof profile.service.refresh === "function") {
+    return profile.service.refresh();
+  }
+  if (typeof profile.service.start === "function") {
+    return profile.service.start();
+  }
+  return undefined;
+}
+
 async function start({ licensedFeatures } = {}) {
   return reconcile({ licensedFeatures });
 }
@@ -102,12 +113,7 @@ async function reconcile({ licensedFeatures } = {}) {
   }
 
   hubStarted = true;
-  await runAll((profile) => {
-    if (typeof profile.service.refresh === "function") {
-      return profile.service.refresh();
-    }
-    return profile.service.start();
-  }, enabledProfiles);
+  await runAll(runProfileLifecycle, enabledProfiles);
 
   return {
     started: true,
@@ -144,7 +150,7 @@ async function refreshProfiles(profileKeys, { licensedFeatures } = {}) {
   if (enabledProfiles.length === 0) {
     return {};
   }
-  return runAll((p) => p.service.refresh(), enabledProfiles);
+  return runAll(runProfileLifecycle, enabledProfiles);
 }
 
 async function refresh(options) {

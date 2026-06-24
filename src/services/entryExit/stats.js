@@ -96,9 +96,59 @@ function sumCumulativeParts(parts) {
   return computeCumulativeStats(entryCount, exitCount);
 }
 
+/**
+ * 單一人員在營運日內的在場狀態（與 computeTransitionStats / currentCount 口徑一致）
+ *
+ * @param {Array} events - 該人員在營運日內的進出事件
+ * @param {object} options
+ * @param {(event: *) => 'entry'|'exit'|null|undefined} options.getDirection
+ * @param {(event: *) => Date|string|number} options.getTime
+ * @param {boolean} [options.sortByTime=true]
+ * @returns {{
+ *   isInside: boolean,
+ *   lastEntryTime: Date|null,
+ *   lastExitTime: Date|null,
+ * }}
+ */
+function resolvePersonPresenceFromEvents(events, options) {
+  const { getDirection, getTime, sortByTime = true } = options;
+
+  let list = [...(events || [])];
+  if (sortByTime) {
+    list.sort(
+      (a, b) => new Date(getTime(a)).getTime() - new Date(getTime(b)).getTime(),
+    );
+  }
+
+  /** @type {'entry'|'exit'|undefined} */
+  let lastState;
+  let lastEntryTime = null;
+  let lastExitTime = null;
+
+  for (const event of list) {
+    const dir = getDirection(event);
+    if (dir !== "entry" && dir !== "exit") continue;
+
+    const ts = new Date(getTime(event));
+    if (lastState === undefined && dir === "exit") continue;
+
+    if (dir === "entry") lastEntryTime = ts;
+    else lastExitTime = ts;
+
+    lastState = dir;
+  }
+
+  return {
+    isInside: lastState === "entry",
+    lastEntryTime,
+    lastExitTime,
+  };
+}
+
 module.exports = {
   computeTransitionStats,
   computeCumulativeStats,
   sumCumulativeParts,
+  resolvePersonPresenceFromEvents,
 };
 

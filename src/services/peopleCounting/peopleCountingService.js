@@ -6,7 +6,7 @@
  */
 
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
-const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
+const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
 
 const peopleCountingModuleLabel = () =>
   getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
@@ -26,6 +26,11 @@ const { parseEventType } = require("./helpers/entryExitStats");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
 const { validateLocationData } = require("./peopleCountingValidation");
+const {
+  parsePeopleCountingConfigFields,
+  enrichOptionsWithStatsReset,
+} = require("./peopleCountingConfig");
+const db = require("../../database/db");
 
 const PROVIDERS = {
   yscp: yscpProvider,
@@ -256,6 +261,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         (s) => s.systemType === "people_counting",
       );
       const existingConfig = pcSystem?.config || {};
+      const resetFields = parsePeopleCountingConfigFields(existingConfig);
       const currentConfig = {
         person_group_ids: existingConfig.personGroupIds || [],
         entry_door_ids: Array.isArray(existingConfig.entryDoorIds)
@@ -279,6 +285,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         camera_channel_id: 1,
         prefer_region: existingConfig.preferRegion ?? false,
         access_control_groups: existingConfig.accessControlGroups || [],
+        stats_reset_at: resetFields.statsResetAt ?? undefined,
       };
 
       const config = {
@@ -329,6 +336,7 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               cameraChannelId: 1,
               preferRegion: config.prefer_region,
               accessControlGroups: config.access_control_groups,
+              statsResetAt: config.stats_reset_at ?? undefined,
             },
           },
         ],
@@ -429,6 +437,7 @@ async function getSites() {
           dataSource: "yscp",
           entryCount: data.entryCount,
           exitCount: data.exitCount,
+          currentCount: data.currentCount ?? 0,
           units: data.units,
         });
       }
@@ -446,6 +455,7 @@ async function getSites() {
         dataSource: "access_control",
         entryCount: data.entryCount,
         exitCount: data.exitCount,
+        currentCount: data.currentCount ?? 0,
         units: data.units,
       });
     }
@@ -464,6 +474,7 @@ async function getSites() {
         dataSource: "isapi_camera",
         entryCount: data.entryCount,
         exitCount: data.exitCount,
+        currentCount: data.currentCount ?? 0,
         units: data.units,
       });
     }
@@ -495,10 +506,6 @@ async function getSiteStats(siteId) {
   );
 }
 
-/**
- * 取得工地進出場記錄
- * 協調層：依 data_source 委派 provider.getSiteLogs
- */
 async function getSiteLogs(siteId, options = {}) {
   return handleServiceError(
     async () => {
@@ -508,11 +515,46 @@ async function getSiteLogs(siteId, options = {}) {
       }
       const provider = getProvider(dataSource);
       const context = dataSource === "yscp" ? { generateRecordId } : {};
-      return await provider.getSiteLogs(siteId, siteConfig, options, context);
+      const enriched = enrichOptionsWithStatsReset(siteConfig, options);
+      return await provider.getSiteLogs(siteId, siteConfig, enriched, context);
     },
     "取得工地進出場記錄失敗",
     { siteId, options },
   );
+}
+
+async function resetSiteStats(siteId, userId = null) {
+  const resetAt = new Date().toISOString();
+  const rows = await db.query(
+    `SELECT id, system_config FROM location_systems
+     WHERE location_id = ? AND system_type = 'people_counting'`,
+    [siteId],
+  );
+  if (!rows?.length) {
+    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點未設定人流統計系統");
+  }
+
+  const rawCfg =
+    typeof rows[0].system_config === "string"
+      ? JSON.parse(rows[0].system_config)
+      : rows[0].system_config || {};
+  rawCfg.stats_reset_at = resetAt;
+  await db.query(
+    `UPDATE location_systems
+     SET system_config = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [JSON.stringify(rawCfg), rows[0].id],
+  );
+
+  if (userId != null) {
+    await db.query(
+      `INSERT INTO people_counting_reset_log (location_id, reset_at, user_id)
+       VALUES (?, ?, ?)`,
+      [siteId, resetAt, userId],
+    );
+  }
+
+  return { statsResetAt: resetAt };
 }
 
 const ALL_SITE_LOGS_CONCURRENCY = 5;
@@ -666,6 +708,9 @@ function getPeopleCountingConfig(location) {
   const peopleCountingSystem = ensureArray(location.systems).find(
     (sys) => sys.systemType === "people_counting",
   );
+  const resetFields = parsePeopleCountingConfigFields(
+    peopleCountingSystem?.config || {},
+  );
   return {
     peopleCountingSystem,
     entryDoorIds: ensureArray(peopleCountingSystem?.config?.entryDoorIds),
@@ -685,6 +730,7 @@ function getPeopleCountingConfig(location) {
     logDisplayColumns: normalizeLogDisplayColumns(
       peopleCountingSystem?.config?.logDisplayColumns,
     ),
+    statsResetAt: resetFields.statsResetAt,
   };
 }
 
@@ -710,6 +756,7 @@ async function getSiteConfig(siteId) {
     cameraChannelId: 1,
     preferRegion: config.preferRegion,
     accessControlGroups: config.accessControlGroups,
+    statsResetAt: config.statsResetAt,
   };
 }
 
@@ -739,4 +786,5 @@ module.exports = {
   getSiteLogs,
   getAllSiteLogs,
   getUnitPersonnel,
+  resetSiteStats,
 };

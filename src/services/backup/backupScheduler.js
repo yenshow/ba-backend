@@ -25,8 +25,10 @@ const {
   transformIsapiPeopleCountingToReportFormat,
 } = require("./isapiEventsReportFormat");
 const logger = require("../../utils/logger");
-const yscpPeopleFeature = require("../../utils/yscpPeopleCountingFeature");
-const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
+const {
+  peopleCounting: yscpPeopleFeature,
+  vehicleAccess: yscpVehicleFeature,
+} = require("../../utils/yscpSystemFeature");
 
 const backupLogger = logger.createLogger("backupScheduler");
 

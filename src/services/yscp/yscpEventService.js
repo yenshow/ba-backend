@@ -1,7 +1,9 @@
 const logger = require("../../utils/logger");
 const websocketService = require("../websocket/websocketService");
-const yscpPeopleFeature = require("../../utils/yscpPeopleCountingFeature");
-const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
+const {
+  peopleCounting: yscpPeopleFeature,
+  vehicleAccess: yscpVehicleFeature,
+} = require("../../utils/yscpSystemFeature");
 
 const serviceLogger = logger.createLogger("YSCP Event Service");
 

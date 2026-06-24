@@ -320,8 +320,8 @@ function setupDatabase() {
   console.log(`  Password: postgres`);
   console.log("");
   console.log("使用方式:");
-  console.log(`  啟動: npm run postgres:start`);
-  console.log(`  停止: npm run postgres:stop`);
+  console.log(`  本機開發: npm run postgres:start / postgres:stop`);
+  console.log(`  安裝環境: PM2 ba-postgres（ecosystem.config.cjs）`);
 }
 
 async function main() {

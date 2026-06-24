@@ -4,7 +4,7 @@
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
-const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
+const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const { ensureIntArray } = require("../location/locationShared");
 const {
   normalizeOperationMode,

@@ -26,7 +26,7 @@ const {
 const {
   validatePeopleCountingSystemConfig,
 } = require("../peopleCounting/peopleCountingValidation");
-const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
+const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const {
   ensureIntArray,
 } = require("./locationShared");
@@ -82,6 +82,7 @@ function peopleCountingRowConfigToMergeInput(raw) {
     cameraChannelId: c.camera_channel_id,
     preferRegion: c.prefer_region,
     accessControlGroups: c.access_control_groups,
+    statsResetAt: c.stats_reset_at ?? c.statsResetAt,
   };
 }
 
@@ -213,6 +214,10 @@ function buildSystemConfig(systemType, config) {
         normalizeLogDisplayColumns,
         toStoredLogDisplayColumns,
       } = require("../peopleCounting/logDisplayColumns");
+      const {
+        parsePeopleCountingConfigFields,
+      } = require("../peopleCounting/peopleCountingConfig");
+      const resetFields = parsePeopleCountingConfigFields(config);
       const ids = Array.isArray(config.cameraDeviceIds)
         ? config.cameraDeviceIds
             .map((id) => Number(id))
@@ -243,6 +248,7 @@ function buildSystemConfig(systemType, config) {
           );
           return cols.length > 0 ? cols : undefined;
         })(),
+        stats_reset_at: resetFields.statsResetAt ?? config.statsResetAt ?? undefined,
       };
     }
 
@@ -452,7 +458,7 @@ async function createSystem(query, locationId, system) {
   ) {
     throwApiError(
       C.PEOPLE_COUNTING_VALIDATION_FAILED,
-      "YSCP 車輛資料源已關閉（ENABLE_YSCP_VEHICLE_ACCESS=false），請改用 ISAPI 車牌攝影機",
+      "YSCP 車輛資料源已關閉，請改用 ISAPI 車牌攝影機",
     );
   }
 

@@ -5,14 +5,14 @@ const { validateRequired } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrorMeta");
 const runtimeConfigService = require("../services/platform/runtimeConfigService");
+const { isDatabaseEnabled } = require("../utils/yscpSystemFeature");
 const logger = require("../utils/logger");
 
 const routeLogger = logger.createLogger("runtimeConfigRoutes");
 
 const router = express.Router();
 
-/** 表單區塊（供前端對齊 Central / Construction） */
-const FORM_SCHEMA = {
+const BASE_FORM_SCHEMA = {
   sections: [
     {
       title: "YSCP",
@@ -67,6 +67,15 @@ const FORM_SCHEMA = {
   ],
 };
 
+const buildFormSchema = () => {
+  if (isDatabaseEnabled()) {
+    return BASE_FORM_SCHEMA;
+  }
+  return {
+    sections: BASE_FORM_SCHEMA.sections.filter((s) => s.title !== "YSCP"),
+  };
+};
+
 /**
  * GET /api/runtime-config
  */
@@ -77,8 +86,11 @@ router.get(
   asyncHandler(async (req, res) => {
     await runtimeConfigService.init();
     res.sendSuccess({
-      schema: FORM_SCHEMA,
-      values: runtimeConfigService.getValues(),
+      schema: buildFormSchema(),
+      values: runtimeConfigService.getValuesForClient(),
+      capabilities: {
+        yscpDatabase: isDatabaseEnabled(),
+      },
     });
   }),
 );
@@ -106,17 +118,25 @@ router.put(
 
     await runtimeConfigService.init();
     const { changedKeys } = await runtimeConfigService.updateBatch(values);
-    await runtimeConfigService.applySideEffects(changedKeys);
+    const sideEffects =
+      changedKeys.length > 0
+        ? await runtimeConfigService.applySideEffects(changedKeys)
+        : {};
 
     routeLogger.info("已更新 runtime 設定", {
       userId: req.user?.id,
       changedKeys,
     });
 
+    const applied = changedKeys.length > 0;
     res.sendSuccess({
-      message: "已套用營運設定",
-      applied: true,
+      message: applied ? "已套用營運設定" : "設定未變更",
+      applied,
       changedKeys,
+      sideEffects,
+      capabilities: {
+        yscpDatabase: isDatabaseEnabled(),
+      },
     });
   }),
 );

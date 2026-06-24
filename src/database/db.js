@@ -13,7 +13,7 @@ const pool = new Pool({
   database: config.database.database,
   max: config.database.connectionLimit,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 10000,
 });
 
 // 測試連線

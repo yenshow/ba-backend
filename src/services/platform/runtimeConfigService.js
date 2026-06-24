@@ -7,6 +7,7 @@ const settingsService = require("./settingsService");
 const logger = require("../../utils/logger");
 const fs = require("fs");
 const path = require("path");
+const { Info } = require("luxon");
 
 const runtimeLogger = logger.createLogger("runtimeConfigService");
 
@@ -158,6 +159,15 @@ const getValues = () => {
   return values;
 };
 
+/** GET 回應用：密碼類鍵不回傳實際值 */
+const getValuesForClient = () => {
+  const values = getValues();
+  for (const key of SECRET_KEYS) {
+    values[key] = "";
+  }
+  return values;
+};
+
 async function loadFromDatabase() {
   const map = await settingsService.getSettingsByKeys(RUNTIME_KEYS);
   buildCacheFromMap({ ...DEFAULTS, ...map });
@@ -203,6 +213,11 @@ function validateValues(merged) {
       return `BACKUP_ROOT_DIR 無法建立或不可寫入：${e?.message || String(e)}`;
     }
   }
+  const tz = merged.ALERT_DAILY_ROLLOVER_TZ?.trim() ?? "";
+  if (tz && !Info.isValidIANAZone(tz)) {
+    return "ALERT_DAILY_ROLLOVER_TZ 須為有效 IANA 時區（例：Asia/Taipei）";
+  }
+
   const h = merged.ALERT_DAILY_ROLLOVER_LOCAL_HOUR?.trim() ?? "";
   if (h) {
     const n = Number(h);
@@ -273,9 +288,20 @@ const hasAny = (keys, set) => keys.some((k) => set.has(k));
 
 async function applySideEffects(changedKeys) {
   const set = new Set(changedKeys);
-  if (hasAny(YSCP_KEYS, set)) await applyHooks.onYscpChange();
-  if (hasAny(ALERT_KEYS, set)) await applyHooks.onAlertsChange();
-  if (hasAny(BACKUP_KEYS, set)) await applyHooks.onBackupChange();
+  /** @type {Record<string, unknown>} */
+  const sideEffects = {};
+
+  if (hasAny(YSCP_KEYS, set)) {
+    sideEffects.yscpExternalDb = await applyHooks.onYscpChange();
+  }
+  if (hasAny(ALERT_KEYS, set)) {
+    sideEffects.alerts = await applyHooks.onAlertsChange();
+  }
+  if (hasAny(BACKUP_KEYS, set)) {
+    sideEffects.backup = await applyHooks.onBackupChange();
+  }
+
+  return sideEffects;
 }
 
 module.exports = {
@@ -285,6 +311,7 @@ module.exports = {
   getAlerts,
   getBackup,
   getValues,
+  getValuesForClient,
   updateBatch,
   registerApplyHooks,
   applySideEffects,

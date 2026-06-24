@@ -7,12 +7,15 @@ const externalDb = require("../../../database/externalDb");
 const yscpPersonService = require("../../yscp/yscpPersonService");
 const peopleCountingSyncService = require("../peopleCountingSyncService");
 const { resolveStatsTimeRange } = require("../../entryExit/resolveTimeOptions");
+const { resolvePeopleCountingStatsTimeRange } = require("../peopleCountingConfig");
 const logger = require("../../../utils/logger");
 const {
   parseEventType,
-  sortRecordsByTime,
   calculateTodayStatsByPhysicalId,
+  groupEventsByKey,
+  personnelPresenceFields,
 } = require("../helpers/entryExitStats");
+const { resolvePersonPresenceFromEvents } = require("../../entryExit/stats");
 const { yscpEventLabel } = require("../accessControlLogLabels");
 
 function ensureArray(value) {
@@ -52,11 +55,14 @@ async function getPersonIdsByGroupIds(groupIds) {
   );
 }
 
-async function getTodayRecordsOnly(personIds) {
+async function getTodayRecordsOnly(personIds, statsResetAt) {
   if (personIds.length === 0) return [];
   return handleNonCriticalError(
     async () => {
-      const { start, end } = resolveStatsTimeRange({});
+      const { start, end } = resolvePeopleCountingStatsTimeRange(
+        {},
+        statsResetAt,
+      );
       const placeholders = generatePlaceholders(personIds);
       const sql = `
         SELECT * FROM baseacs.slot_card_records
@@ -200,7 +206,7 @@ async function batchGetSitesData(locations, getPeopleCountingConfig) {
     personIds.forEach((id) => allPersonIds.add(id)),
   );
   if (allPersonIds.size === 0) return siteDataMap;
-  const todayRecords = await getTodayRecordsOnly(Array.from(allPersonIds));
+  const todayRecords = await getTodayRecordsOnly(Array.from(allPersonIds), null);
   siteGroupMap.forEach((groupIds, siteId) => {
     const sitePersonIds = new Set();
     groupIds.forEach((groupId) => {
@@ -217,31 +223,6 @@ async function batchGetSitesData(locations, getPeopleCountingConfig) {
     });
   });
   return siteDataMap;
-}
-
-async function getLatestEntryExitRecords(personIds, entryDoorIds, exitDoorIds) {
-  if (personIds.length === 0) return new Map();
-  const placeholders = generatePlaceholders(personIds);
-  const sql = `
-    SELECT r.person_id, r.swip_card_rev_time, r.physical_id
-    FROM baseacs.slot_card_records r
-    WHERE r.person_id IN (${placeholders}) AND r.person_id != -1 AND r.is_deleted = false
-    ORDER BY r.swip_card_rev_time DESC`;
-  const allRecords = await externalDb.query(sql, personIds);
-  const personRecords = new Map();
-  personIds.forEach((id) =>
-    personRecords.set(id, { lastEntry: null, lastExit: null }),
-  );
-  allRecords.forEach((record) => {
-    const personId = record.person_id;
-    if (personId === -1) return;
-    const eventType = parseEventType(record, entryDoorIds, exitDoorIds);
-    if (eventType === null) return;
-    const pr = personRecords.get(personId);
-    if (eventType === "entry" && !pr.lastEntry) pr.lastEntry = record;
-    else if (eventType === "exit" && !pr.lastExit) pr.lastExit = record;
-  });
-  return personRecords;
 }
 
 async function batchGetHeadPics(personIds) {
@@ -302,7 +283,7 @@ async function getSiteData(siteId, config) {
   if (personIds.length === 0) {
     return { entryCount: 0, exitCount: 0, currentCount: 0, units: [] };
   }
-  const todayRecords = await getTodayRecordsOnly(personIds);
+  const todayRecords = await getTodayRecordsOnly(personIds, config.statsResetAt);
   const stats = calculateTodayStatsByPhysicalId(
     todayRecords,
     entryDoorIds,
@@ -341,14 +322,21 @@ async function getSitesData(locations, getPeopleCountingConfig) {
     const cfg = getPeopleCountingConfig(location);
     const data = siteDataMap.get(locationId);
     if (!data || cfg.personGroupIds.length === 0) continue;
+    const { start: effectiveStart } = resolvePeopleCountingStatsTimeRange(
+      {},
+      cfg.statsResetAt,
+    );
+    const siteRecords = data.records.filter(
+      (r) => new Date(r.swip_card_rev_time) >= effectiveStart,
+    );
     const stats = calculateTodayStatsByPhysicalId(
-      data.records,
+      siteRecords,
       cfg.entryDoorIds,
       cfg.exitDoorIds,
     );
     const units = await getUnitsByGroupIds(
       cfg.personGroupIds,
-      data.records,
+      siteRecords,
       cfg.entryDoorIds,
       cfg.exitDoorIds,
     );
@@ -378,6 +366,7 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
     unitId: options.unitId || null,
     startTime: options.startTime,
     endTime: options.endTime,
+    timeRange: options.timeRange,
   });
   const sortedRecords = [...records].sort(
     (a, b) =>
@@ -437,64 +426,32 @@ async function getUnitPersonnel(unitId, siteId, config) {
   }
   const personIds = persons.map((p) => p.id);
   const headPicMap = await batchGetHeadPics(personIds);
-  const todayRecords = await getTodayRecordsOnly(personIds);
-  const todayStats = calculateTodayStatsByPhysicalId(
+  const todayRecords = await getTodayRecordsOnly(personIds, config.statsResetAt);
+  const { entryCount, exitCount } = calculateTodayStatsByPhysicalId(
     todayRecords,
     entryDoorIds,
     exitDoorIds,
   );
-  const { start: todayStart, end: todayEnd } = resolveStatsTimeRange({});
-  const personTodayRecordsMap = new Map();
-  todayRecords.forEach((record) => {
-    if (record.person_id !== -1) {
-      if (!personTodayRecordsMap.has(record.person_id))
-        personTodayRecordsMap.set(record.person_id, []);
-      personTodayRecordsMap.get(record.person_id).push(record);
-    }
-  });
-  const latestRecords = await getLatestEntryExitRecords(
-    personIds,
-    entryDoorIds,
-    exitDoorIds,
+  const recordsByPersonId = groupEventsByKey(
+    todayRecords,
+    (record) => record.person_id,
   );
+  const getYscpDirection = (record) =>
+    parseEventType(record, entryDoorIds, exitDoorIds);
+
   const personnel = persons.map((person) => {
     const headPic = headPicMap.get(person.id);
-    const personTodayRecords = personTodayRecordsMap.get(person.id) || [];
-    const latestRecord = latestRecords.get(person.id);
-    let photoUrl;
-    if (headPic?.standard_head_portrait)
-      photoUrl = headPic.standard_head_portrait;
-    else if (headPic?.thumbnail_head_portrait)
-      photoUrl = headPic.thumbnail_head_portrait;
-    else photoUrl = undefined;
-    const lastEntryRecord = latestRecord?.lastEntry;
-    const lastExitRecord = latestRecord?.lastExit;
-    let lastEntryDate = null;
-    let isTodayEntry = false;
-    let entryTimeStr = null;
-    let exitTimeStr = null;
-    if (lastEntryRecord) {
-      const entryTime = new Date(lastEntryRecord.swip_card_rev_time);
-      isTodayEntry = entryTime >= todayStart && entryTime <= todayEnd;
-      lastEntryDate = formatDate(entryTime);
-      entryTimeStr = formatTime(entryTime);
-    }
-    if (isTodayEntry) {
-      const entryTime = lastEntryRecord
-        ? new Date(lastEntryRecord.swip_card_rev_time)
-        : null;
-      const todayExitRecord = personTodayRecords.find((r) => {
-        const recordTime = new Date(r.swip_card_rev_time);
-        const et = parseEventType(r, entryDoorIds, exitDoorIds);
-        return et === "exit" && recordTime > entryTime;
-      });
-      if (todayExitRecord)
-        exitTimeStr = formatTime(new Date(todayExitRecord.swip_card_rev_time));
-    } else if (lastExitRecord) {
-      exitTimeStr = formatTime(new Date(lastExitRecord.swip_card_rev_time));
-    }
-    const isInside =
-      !!(lastEntryRecord && isTodayEntry && !exitTimeStr);
+    const photoUrl =
+      headPic?.standard_head_portrait ||
+      headPic?.thumbnail_head_portrait ||
+      undefined;
+    const presence = resolvePersonPresenceFromEvents(
+      recordsByPersonId.get(String(person.id)) || [],
+      {
+        getDirection: getYscpDirection,
+        getTime: (record) => record.swip_card_rev_time,
+      },
+    );
     return {
       id: person.id,
       employeeId:
@@ -503,22 +460,10 @@ async function getUnitPersonnel(unitId, siteId, config) {
           : "",
       name: person.full_name || "",
       photoUrl,
-      isInside,
-      lastEntryTime: lastEntryRecord
-        ? lastEntryRecord.swip_card_rev_time
-        : null,
-      lastExitTime: lastExitRecord ? lastExitRecord.swip_card_rev_time : null,
-      lastEntryDate,
-      entryTime: entryTimeStr,
-      exitTime: exitTimeStr,
-      isTodayEntry,
+      ...personnelPresenceFields(presence, { formatDate, formatTime }),
     };
   });
-  return {
-    personnel,
-    entryCount: todayStats.entryCount,
-    exitCount: todayStats.exitCount,
-  };
+  return { personnel, entryCount, exitCount };
 }
 
 module.exports = {

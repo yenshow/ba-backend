@@ -5,7 +5,7 @@
 
 const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
-const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
+const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
 
 const syncLogger = logger.createLogger("peopleCountingSyncService");
 const db = require("../../database/db");

@@ -12,11 +12,29 @@ const {
   resolveAccessControlEvent,
   resolveVerifyMethodLabel,
 } = require("../accessControlLogLabels");
-const { computeTransitionStats } = require("../../entryExit/stats");
+const {
+  computeTransitionStats,
+  resolvePersonPresenceFromEvents,
+} = require("../../entryExit/stats");
+const {
+  groupEventsByKey,
+  personnelPresenceFields,
+  ISO_PERSONNEL_TIME_FORMAT,
+  filterLogsByEmployeeNos,
+  collectUnitLogs,
+  normalizeEmployeeNo,
+} = require("../helpers/entryExitStats");
 const {
   ENTRY_EXIT_MAX_RECORDS,
   resolveStatsTimeRange,
 } = require("../../entryExit/resolveTimeOptions");
+const { resolvePeopleCountingStatsTimeRange } = require("../peopleCountingConfig");
+
+function accessControlLogDirection(log) {
+  return log.eventType === "entry" || log.eventType === "exit"
+    ? log.eventType
+    : null;
+}
 
 function normalizeDeviceHost(host) {
   if (!host || typeof host !== "string") return "";
@@ -28,13 +46,7 @@ function normalizeDeviceHost(host) {
 function statsFromAccessControlLogs(logs) {
   return computeTransitionStats(logs || [], {
     getKey: (log) => log.employeeId,
-    getDirection: (log) => {
-      if (log.eventType === "failed") return null;
-      if (log.eventType === "entry" || log.eventType === "exit") {
-        return log.eventType;
-      }
-      return null;
-    },
+    getDirection: accessControlLogDirection,
     getTime: (log) => log.timestamp,
   });
 }
@@ -65,10 +77,16 @@ function groupPersonsByPersonGroup(persons) {
   });
 }
 
+function resolvePhotoUrl(person) {
+  const faceUrl = person.face_url != null ? String(person.face_url).trim() : "";
+  if (faceUrl === "") return undefined;
+  return faceUrl.startsWith("/") ? faceUrl : `/${faceUrl}`;
+}
+
 /**
  * 門禁地點進出紀錄：從 isapi_access_events 查詢
  */
-async function getAccessControlSiteLogs(siteId, options = {}) {
+async function getAccessControlSiteLogs(options = {}) {
   const {
     entryDeviceIds,
     exitDeviceIds,
@@ -214,16 +232,59 @@ async function getAccessControlSiteLogs(siteId, options = {}) {
   });
 }
 
-/**
- * 單一工地完整資料（統計 + 單位列表）
- */
-async function getSiteData(siteId, config) {
+/** 營運日設備事件 → 限縮為授權名單內人員（與 YSCP personGroup 範圍對齊） */
+async function getTodayAuthorizedLogs(siteId, config, persons, options = {}) {
   const entryDeviceIds = Array.isArray(config.entryDeviceIds)
     ? config.entryDeviceIds
     : [];
   const exitDeviceIds = Array.isArray(config.exitDeviceIds)
     ? config.exitDeviceIds
     : [];
+  if (entryDeviceIds.length === 0 && exitDeviceIds.length === 0) return [];
+
+  const { start, end } = resolvePeopleCountingStatsTimeRange(
+    {
+      startTime: options.startTime,
+      endTime: options.endTime,
+    },
+    config.statsResetAt,
+  );
+  const logs = await getAccessControlSiteLogs({
+    entryDeviceIds,
+    exitDeviceIds,
+    startTime: start.toISOString(),
+    endTime: end.toISOString(),
+    limit: options.limit ?? ENTRY_EXIT_MAX_RECORDS,
+    offset: options.offset ?? 0,
+  });
+  return filterLogsByEmployeeNos(logs, persons);
+}
+
+function buildPersonnelRows(list, logsByEmployeeNo) {
+  return list.map((p) => {
+    const no = normalizeEmployeeNo(p.employee_no);
+    const presence = resolvePersonPresenceFromEvents(
+      logsByEmployeeNo.get(no) || [],
+      {
+        getDirection: accessControlLogDirection,
+        getTime: (log) => log.timestamp,
+      },
+    );
+    return {
+      id: p.id,
+      unitId: p.person_group_id || 0,
+      employeeId: no,
+      name: p.full_name || p.employee_no || "",
+      photoUrl: resolvePhotoUrl(p),
+      ...personnelPresenceFields(presence, ISO_PERSONNEL_TIME_FORMAT),
+    };
+  });
+}
+
+/**
+ * 單一工地完整資料（統計 + 單位列表）
+ */
+async function getSiteData(siteId, config) {
   let units = [];
   let entryCount = 0;
   let exitCount = 0;
@@ -232,34 +293,24 @@ async function getSiteData(siteId, config) {
     const persons =
       await personnelService.getPersonsWithAccessByLocationId(siteId);
     const grouped = groupPersonsByPersonGroup(persons);
-    const { start, end } = resolveStatsTimeRange({});
-    const todayLogs =
-      entryDeviceIds.length > 0 || exitDeviceIds.length > 0
-        ? await getAccessControlSiteLogs(siteId, {
-            entryDeviceIds,
-            exitDeviceIds,
-            startTime: start.toISOString(),
-            endTime: end.toISOString(),
-            limit: ENTRY_EXIT_MAX_RECORDS,
-            offset: 0,
-          })
-        : [];
-    const siteStats = statsFromAccessControlLogs(todayLogs);
+    const authorizedLogs = await getTodayAuthorizedLogs(siteId, config, persons);
+    const siteStats = statsFromAccessControlLogs(authorizedLogs);
     entryCount = siteStats.entryCount;
     exitCount = siteStats.exitCount;
     currentCount = siteStats.currentCount;
-    units = grouped.map((group) => {
-      const employeeNos = new Set(group.list.map((p) => String(p.employee_no)));
-      const unitLogs = todayLogs.filter((log) =>
-        employeeNos.has(log.employeeId || ""),
-      );
-      return {
-        id: group.id,
-        name: group.name,
-        currentCount: statsFromAccessControlLogs(unitLogs).currentCount,
-        totalCount: group.list.length,
-      };
-    });
+
+    const logsByEmployeeNo = groupEventsByKey(
+      authorizedLogs,
+      (log) => log.employeeId,
+    );
+    units = grouped.map((group) => ({
+      id: group.id,
+      name: group.name,
+      currentCount: statsFromAccessControlLogs(
+        collectUnitLogs(group, logsByEmployeeNo),
+      ).currentCount,
+      totalCount: group.list.length,
+    }));
   } catch (err) {
     logger.warn("取得門禁地點可進出人員失敗，顯示空單位", {
       locationId: siteId,
@@ -273,7 +324,7 @@ async function getSiteData(siteId, config) {
  * 進出紀錄
  */
 async function getSiteLogs(siteId, config, options = {}) {
-  const accessControlLogs = await getAccessControlSiteLogs(siteId, {
+  const accessControlLogs = await getAccessControlSiteLogs({
     entryDeviceIds: config.entryDeviceIds,
     exitDeviceIds: config.exitDeviceIds,
     limit: options.limit ?? 50,
@@ -291,74 +342,13 @@ async function getUnitPersonnel(unitId, siteId, config) {
   const persons =
     await personnelService.getPersonsWithAccessByLocationId(siteId);
   const grouped = groupPersonsByPersonGroup(persons);
-  const targetGroupId = Number(unitId);
-  const match = grouped.find((g) => g.id === targetGroupId);
+  const match = grouped.find((g) => g.id === Number(unitId));
   if (!match) return { personnel: [], entryCount: 0, exitCount: 0 };
-  const list = match.list;
-  const employeeNosInUnit = new Set(list.map((p) => String(p.employee_no)));
 
-  const { start: todayStart, end: todayEnd } = resolveStatsTimeRange({});
-  const todayLogs = await getAccessControlSiteLogs(siteId, {
-    entryDeviceIds: config.entryDeviceIds,
-    exitDeviceIds: config.exitDeviceIds,
-    startTime: todayStart.toISOString(),
-    endTime: todayEnd.toISOString(),
-    limit: 500,
-    offset: 0,
-  });
-  const unitLogs = todayLogs.filter((log) =>
-    employeeNosInUnit.has(log.employeeId || ""),
-  );
-  const unitStats = statsFromAccessControlLogs(unitLogs);
-  const entryCount = unitStats.entryCount;
-  const exitCount = unitStats.exitCount;
-
-  const lastEntryByNo = new Map();
-  const lastExitByNo = new Map();
-  const setLatest = (map, key, ts) => {
-    const prev = map.get(key);
-    if (!prev || new Date(ts) > new Date(prev)) map.set(key, ts);
-  };
-  for (const log of todayLogs) {
-    const no = log.employeeId || "";
-    if (!employeeNosInUnit.has(no)) continue;
-    const ts = log.timestamp;
-    if (log.eventType === "entry") setLatest(lastEntryByNo, no, ts);
-    else if (log.eventType === "exit") setLatest(lastExitByNo, no, ts);
-  }
-
-  const personnel = list.map((p) => {
-    const no = String(p.employee_no);
-    const lastEntry = lastEntryByNo.get(no);
-    const lastExit = lastExitByNo.get(no);
-    const entryDate = lastEntry ? new Date(lastEntry) : null;
-    const exitDate = lastExit ? new Date(lastExit) : null;
-    const isInside =
-      !!lastEntry && (!lastExit || exitDate < entryDate);
-    const isTodayEntry =
-      entryDate && entryDate >= todayStart && entryDate <= todayEnd;
-    const faceUrl = p.face_url != null ? String(p.face_url).trim() : "";
-    const photoUrl =
-      faceUrl !== ""
-        ? faceUrl.startsWith("/")
-          ? faceUrl
-          : `/${faceUrl}`
-        : undefined;
-    return {
-      id: p.id,
-      unitId: p.person_group_id || 0,
-      employeeId: no,
-      name: p.full_name || p.employee_no || "",
-      photoUrl,
-      isInside,
-      lastEntryTime: lastEntry || null,
-      lastExitTime: lastExit || null,
-      lastEntryDate: entryDate ? entryDate.toISOString().slice(0, 10) : null,
-      entryTime: entryDate ? entryDate.toTimeString().slice(0, 8) : null,
-      exitTime: exitDate ? exitDate.toTimeString().slice(0, 8) : null,
-      isTodayEntry: !!isTodayEntry,
-    };
-  });
+  const unitLogs = await getTodayAuthorizedLogs(siteId, config, match.list);
+  const { entryCount, exitCount } = statsFromAccessControlLogs(unitLogs);
+  const logsByEmployeeNo = groupEventsByKey(unitLogs, (log) => log.employeeId);
+  const personnel = buildPersonnelRows(match.list, logsByEmployeeNo);
   return { personnel, entryCount, exitCount };
 }
 

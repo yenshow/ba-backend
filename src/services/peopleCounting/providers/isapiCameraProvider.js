@@ -17,6 +17,7 @@ const {
   ENTRY_EXIT_MAX_RECORDS,
   resolveStatsTimeRange,
 } = require("../../entryExit/resolveTimeOptions");
+const { resolvePeopleCountingStatsTimeRange, isStatsResetActive } = require("../peopleCountingConfig");
 const C = require("../../../utils/apiErrorCodes");
 const { throwApiError } = require("../../../utils/apiErrorMeta");
 const { ensureIntArray } = require("../../location/locationShared");
@@ -102,44 +103,103 @@ async function getLatestRegionTotalsByName(
   return Array.isArray(rows) ? rows : [];
 }
 
+async function getStatsFromDeltasByRegion(
+  siteId,
+  deviceIds,
+  channelId,
+  eventTimeRange,
+) {
+  const { start, end } = eventTimeRange;
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+  const rows = await db.query(
+    `SELECT region_name, enter_delta, exit_delta
+     FROM isapi_people_counting_events
+     WHERE location_id = ?
+       AND device_id = ANY(?::int[])
+       AND channel_id = ?
+       AND region_id IS NOT NULL
+       AND region_name IS NOT NULL
+       AND region_name != ''
+       AND event_time >= ?
+       AND event_time <= ?`,
+    [siteId, deviceIds, channelId, startIso, endIso],
+  );
+  const byRegion = new Map();
+  for (const r of rows || []) {
+    const name = String(r.region_name || "").trim() || "未命名區域";
+    if (!byRegion.has(name)) {
+      byRegion.set(name, { enter: 0, exit: 0 });
+    }
+    const agg = byRegion.get(name);
+    agg.enter += ensureInt(r.enter_delta) ?? 0;
+    agg.exit += ensureInt(r.exit_delta) ?? 0;
+  }
+  return byRegion;
+}
+
 async function getSiteData(siteId, config) {
   const { deviceIds, channelId } = await getSiteConfigOrThrow(siteId, config);
-  const today = resolveStatsTimeRange({});
+  const today = resolvePeopleCountingStatsTimeRange({}, config.statsResetAt);
   // 站點統計：依「分區累計」彙總（不使用 global 列）
   let entryCount = 0;
   let exitCount = 0;
   let currentCount = 0;
 
   let units = [];
-  const regionRows = await getLatestRegionTotalsByName(
-    siteId,
-    deviceIds,
-    channelId,
-    today,
-  );
-
-  if (regionRows.length > 0) {
-    const sorted = [...regionRows].sort((a, b) =>
-      String(a.region_name || "").localeCompare(
-        String(b.region_name || ""),
-        "zh-Hant",
-      ),
+  if (isStatsResetActive(config.statsResetAt)) {
+    const byRegion = await getStatsFromDeltasByRegion(
+      siteId,
+      deviceIds,
+      channelId,
+      today,
     );
-
-    units = sorted.map((r, idx) => {
-      const ent = ensureInt(r.enter) ?? 0;
-      const ex = ensureInt(r.exit) ?? 0;
-      const unitStats = computeCumulativeStats(ent, ex);
-      const name = String(r.region_name || "").trim() || "未命名區域";
+    const sortedNames = [...byRegion.keys()].sort((a, b) =>
+      a.localeCompare(b, "zh-Hant"),
+    );
+    units = sortedNames.map((name, idx) => {
+      const { enter, exit } = byRegion.get(name);
+      const unitStats = computeCumulativeStats(enter, exit);
       return {
         id: stableUnitIdFromName(name) || idx + 1,
         name,
         currentCount: unitStats.currentCount,
         entryCount: unitStats.entryCount,
         exitCount: unitStats.exitCount,
-        totalCount: Math.max(0, ent),
+        totalCount: Math.max(0, enter),
       };
     });
+  } else {
+    const regionRows = await getLatestRegionTotalsByName(
+      siteId,
+      deviceIds,
+      channelId,
+      today,
+    );
+
+    if (regionRows.length > 0) {
+      const sorted = [...regionRows].sort((a, b) =>
+        String(a.region_name || "").localeCompare(
+          String(b.region_name || ""),
+          "zh-Hant",
+        ),
+      );
+
+      units = sorted.map((r, idx) => {
+        const ent = ensureInt(r.enter) ?? 0;
+        const ex = ensureInt(r.exit) ?? 0;
+        const unitStats = computeCumulativeStats(ent, ex);
+        const name = String(r.region_name || "").trim() || "未命名區域";
+        return {
+          id: stableUnitIdFromName(name) || idx + 1,
+          name,
+          currentCount: unitStats.currentCount,
+          entryCount: unitStats.entryCount,
+          exitCount: unitStats.exitCount,
+          totalCount: Math.max(0, ent),
+        };
+      });
+    }
   }
 
   const totals = sumCumulativeParts(units);
@@ -152,7 +212,10 @@ async function getSiteData(siteId, config) {
 
 async function getSiteLogs(siteId, config, options = {}) {
   const { deviceIds, channelId } = await getSiteConfigOrThrow(siteId, config);
-  const { start, end } = resolveStatsTimeRange(options);
+  const { start, end } = resolvePeopleCountingStatsTimeRange(
+    options,
+    config.statsResetAt,
+  );
   const limit = Math.min(Math.max(Number(options.limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
   const offset = Math.max(Number(options.offset) || 0, 0);
 

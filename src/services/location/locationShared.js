@@ -385,6 +385,7 @@ function formatSystem(system) {
           preferRegion: config.prefer_region ?? undefined,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
           logDisplayColumns: normalizeLogDisplayColumns(config.log_display_columns),
+          statsResetAt: config.stats_reset_at ?? undefined,
         },
       };
     }

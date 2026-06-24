@@ -353,8 +353,6 @@ function stopLoopForDevice(deviceId) {
  */
 async function start() {
   if (started) return;
-  ensureUploadsDir();
-  started = true;
   await refresh();
 }
 
@@ -372,8 +370,10 @@ function stop() {
  * - 被移除的設備：中止串流並停止重連
  */
 async function refresh() {
-  if (!started) return { started: false, deviceIds: [] };
-  ensureUploadsDir();
+  if (!started) {
+    ensureUploadsDir();
+    started = true;
+  }
   const deviceIds = await getDeviceIdsToSubscribe();
   const nextSet = new Set(deviceIds);
   const prevSet = new Set(subscribedDeviceIds);

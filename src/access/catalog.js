@@ -87,6 +87,7 @@ const SHARED_MODULES = [
       { code: "report.full", name: "完整報表", sort_order: 4 },
       { code: "device_sync", name: "門禁設備同步", sort_order: 5 },
       { code: "sync.edit", name: "門禁名單編輯", sort_order: 6 },
+      { code: "statistics.reset", name: "重製統計", sort_order: 7 },
     ],
     ui: {
       id: 6,

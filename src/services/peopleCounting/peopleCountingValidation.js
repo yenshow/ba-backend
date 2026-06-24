@@ -3,7 +3,7 @@
  */
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
-const yscpFeature = require("../../utils/yscpPeopleCountingFeature");
+const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
 const { ensureIntArray } = require("../location/locationShared");
 
 /**
@@ -41,7 +41,7 @@ function validateLocationData(locationData, isUpdate = false) {
   if (yscpFeature.shouldSkipYscp(effectiveDataSource)) {
     throwApiError(
       C.PEOPLE_COUNTING_VALIDATION_FAILED,
-      "YSCP 人流資料源已關閉（ENABLE_YSCP_PEOPLE_COUNTING=false），請改用門禁設備或攝影機人流",
+      "YSCP 人流資料源已關閉，請改用門禁設備或攝影機人流",
     );
   }
 

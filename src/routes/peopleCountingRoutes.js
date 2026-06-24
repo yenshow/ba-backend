@@ -177,6 +177,18 @@ router.get(
   }),
 );
 
+router.post(
+  "/sites/:id/reset",
+  requirePermission("system.people_counting.statistics.reset"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const userId = req.user?.id != null ? Number(req.user.id) : null;
+    const result = await peopleCountingService.resetSiteStats(siteId, userId);
+    res.sendSuccess(result);
+  }),
+);
+
 /**
  * 取得工地進出場記錄（含資料關聯和事件類型判斷）
  * 固定最新 5 筆「事件」（enter/exit 展開後；與門禁／YSCP 主畫面一致）

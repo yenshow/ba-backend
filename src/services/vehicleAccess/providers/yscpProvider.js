@@ -2,7 +2,7 @@
  * YSCP 車輛進出（外部 vehiclebiz.passageway_log_data）
  */
 const handlerFactory = require("../../externalData/handlerFactory");
-const yscpVehicleFeature = require("../../../utils/yscpVehicleAccessFeature");
+const { vehicleAccess: yscpVehicleFeature } = require("../../../utils/yscpSystemFeature");
 const { normalizePlate } = require("../../../utils/vehiclePlateUtils");
 const { computeTransitionStats } = require("../../entryExit/stats");
 const {

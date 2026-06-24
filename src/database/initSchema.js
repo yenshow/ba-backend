@@ -816,6 +816,20 @@ async function initSchema() {
       ON vehicle_access_reset_log(location_id, reset_at DESC)
     `);
 
+    // 人流統計 Reset 稽核（可選）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS people_counting_reset_log (
+        id BIGSERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        reset_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_people_counting_reset_log_location
+      ON people_counting_reset_log(location_id, reset_at DESC)
+    `);
+
     // 建立統一警報表（支持多系統來源，精簡版）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS alerts (

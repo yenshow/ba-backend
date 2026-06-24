@@ -52,6 +52,7 @@ const { requireFeature } = require("./middleware/licenseMiddleware");
 // 服務
 const db = require("./database/db");
 const externalDb = require("./database/externalDb");
+const { isDatabaseEnabled } = require("./utils/yscpSystemFeature");
 const websocketService = require("./services/websocket/websocketService");
 const syncDefinitions = require("./access/syncDefinitions");
 
@@ -261,11 +262,15 @@ async function startServer() {
         serverLogger.warn("權限定義同步失敗", { error: err.message }),
       );
       await bootstrapRuntimeInfrastructure();
-      const externalDbConnected = await externalDb.testConnection();
-      if (!externalDbConnected) {
-        serverLogger.warn("外部資料庫連線失敗，外部資料功能可能無法使用");
+      if (isDatabaseEnabled()) {
+        const externalDbConnected = await externalDb.testConnection();
+        if (!externalDbConnected) {
+          serverLogger.warn("外部資料庫連線失敗，外部資料功能可能無法使用");
+        } else {
+          serverLogger.info("外部資料庫連線成功");
+        }
       } else {
-        serverLogger.info("外部資料庫連線成功");
+        serverLogger.info("YSCP 外部資料庫已關閉，略過連線測試");
       }
     } else {
       serverLogger.warn("主資料庫未連線，略過 runtime 設定載入");

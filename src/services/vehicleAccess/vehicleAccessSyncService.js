@@ -6,7 +6,7 @@
 const externalDb = require("../../database/externalDb");
 const db = require("../../database/db");
 const getLocationService = () => require("../location/locationService");
-const yscpVehicleFeature = require("../../utils/yscpVehicleAccessFeature");
+const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 
 /**
  * 取得 lane_id -> { zoneName, locationName, locationId } 映射

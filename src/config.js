@@ -103,18 +103,11 @@ const cors = {
 };
 
 /**
- * 功能旗標（YSCP 外部資料源）
- * 預設 true；設為 false 時略過對應 data_source=yscp 與外部 DB 查詢。
+ * 功能旗標（YSCP 外部資料庫）
+ * 預設 true；設為 false 時不連外部 CMS DB，人流／車輛等 YSCP 資料源皆停用。
  */
 const features = {
-  enableYscpPeopleCounting: toBoolean(
-    getEnv("ENABLE_YSCP_PEOPLE_COUNTING"),
-    true,
-  ),
-  enableYscpVehicleAccess: toBoolean(
-    getEnv("ENABLE_YSCP_VEHICLE_ACCESS"),
-    true,
-  ),
+  enableYscpDatabase: toBoolean(getEnv("ENABLE_YSCP_DATABASE"), true),
 };
 
 /**
