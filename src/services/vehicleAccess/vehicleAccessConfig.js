@@ -1,6 +1,7 @@
 /**
  * 車輛進出地點設定（operation_mode、session epoch）
  */
+const { parseStatsResetAtField } = require("../entryExit/locationStatsReset");
 const OPERATION_MODES = ["construction_flow", "parking"];
 
 function normalizeOperationMode(value) {
@@ -24,7 +25,7 @@ function parseVehicleAccessConfigFields(raw) {
   );
   const statsEpochStartedAt =
     c.stats_epoch_started_at ?? c.statsEpochStartedAt ?? null;
-  const statsResetAt = c.stats_reset_at ?? c.statsResetAt ?? null;
+  const statsResetAt = parseStatsResetAtField(c);
   const parkingCapacity = normalizeParkingCapacity(
     c.parking_capacity ?? c.parkingCapacity,
   );

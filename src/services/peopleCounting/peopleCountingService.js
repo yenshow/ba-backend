@@ -6,7 +6,9 @@
  */
 
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
-const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
+const {
+  peopleCounting: yscpFeature,
+} = require("../../utils/yscpSystemFeature");
 
 const peopleCountingModuleLabel = () =>
   getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
@@ -30,6 +32,7 @@ const {
   parsePeopleCountingConfigFields,
   enrichOptionsWithStatsReset,
 } = require("./peopleCountingConfig");
+const { performLocationStatsReset } = require("../entryExit/locationStatsReset");
 const db = require("../../database/db");
 
 const PROVIDERS = {
@@ -66,11 +69,10 @@ async function handleServiceError(fn, errorMessage, context = {}) {
       ...context,
       module: "peopleCountingService",
     });
-    throwApiError(
-      C.PEOPLE_COUNTING_OPERATION_FAILED,
-      errorMessage,
-      { statusCode: 500, details: causeDetails(error) },
-    );
+    throwApiError(C.PEOPLE_COUNTING_OPERATION_FAILED, errorMessage, {
+      statusCode: 500,
+      details: causeDetails(error),
+    });
   }
 }
 
@@ -218,7 +220,9 @@ async function createPeopleCountingLocation(locationData, userId) {
       );
 
       // 地點配置變更後，刷新 ISAPI 佈防訂閱（增量啟停）
-      void isapiSubscribeHub.refreshForFeature("people_counting").catch(() => {});
+      void isapiSubscribeHub
+        .refreshForFeature("people_counting")
+        .catch(() => {});
 
       return {
         message: `${peopleCountingModuleLabel()}地點建立成功`,
@@ -349,7 +353,9 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
       );
 
       // 地點配置變更後，刷新 ISAPI 佈防訂閱（增量啟停）
-      void isapiSubscribeHub.refreshForFeature("people_counting").catch(() => {});
+      void isapiSubscribeHub
+        .refreshForFeature("people_counting")
+        .catch(() => {});
 
       return {
         message: `${peopleCountingModuleLabel()}地點更新成功`,
@@ -374,7 +380,9 @@ async function deletePeopleCountingLocation(id) {
       const result = await locationService.deleteLocation(id);
 
       // 地點配置變更後，刷新 ISAPI 佈防訂閱（增量啟停）
-      void isapiSubscribeHub.refreshForFeature("people_counting").catch(() => {});
+      void isapiSubscribeHub
+        .refreshForFeature("people_counting")
+        .catch(() => {});
 
       return result;
     },
@@ -524,36 +532,13 @@ async function getSiteLogs(siteId, options = {}) {
 }
 
 async function resetSiteStats(siteId, userId = null) {
-  const resetAt = new Date().toISOString();
-  const rows = await db.query(
-    `SELECT id, system_config FROM location_systems
-     WHERE location_id = ? AND system_type = 'people_counting'`,
-    [siteId],
-  );
-  if (!rows?.length) {
-    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點未設定人流統計系統");
-  }
-
-  const rawCfg =
-    typeof rows[0].system_config === "string"
-      ? JSON.parse(rows[0].system_config)
-      : rows[0].system_config || {};
-  rawCfg.stats_reset_at = resetAt;
-  await db.query(
-    `UPDATE location_systems
-     SET system_config = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [JSON.stringify(rawCfg), rows[0].id],
-  );
-
-  if (userId != null) {
-    await db.query(
-      `INSERT INTO people_counting_reset_log (location_id, reset_at, user_id)
-       VALUES (?, ?, ?)`,
-      [siteId, resetAt, userId],
-    );
-  }
-
+  const resetAt = await performLocationStatsReset({
+    systemType: "people_counting",
+    scope: "people_counting",
+    locationId: siteId,
+    notFoundMessage: "地點未設定人流統計系統",
+    userId,
+  });
   return { statsResetAt: resetAt };
 }
 

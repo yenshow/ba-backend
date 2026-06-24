@@ -14,6 +14,7 @@ const {
   calculateTodayStatsByPhysicalId,
   groupEventsByKey,
   personnelPresenceFields,
+  filterRecordsByDoorIds,
 } = require("../helpers/entryExitStats");
 const { resolvePersonPresenceFromEvents } = require("../../entryExit/stats");
 const { yscpEventLabel } = require("../accessControlLogLabels");
@@ -271,6 +272,33 @@ function generateRecordId(personId, timestamp) {
   return `${personId}-${new Date(timestamp).getTime()}`;
 }
 
+/** 批次路徑：營運日全量紀錄再依地點 reset 起點與門禁 physical_id 裁切 */
+function sliceSiteRecords(records, statsResetAt, entryDoorIds, exitDoorIds) {
+  const { start } = resolvePeopleCountingStatsTimeRange({}, statsResetAt);
+  const startMs = start.getTime();
+  return filterRecordsByDoorIds(
+    (records || []).filter(
+      (r) => new Date(r.swip_card_rev_time).getTime() >= startMs,
+    ),
+    entryDoorIds,
+    exitDoorIds,
+  );
+}
+
+/** 單站／單位：SQL 已帶 stats_reset_at，再依門禁 physical_id 裁切 */
+async function recordsForSiteStats(
+  personIds,
+  statsResetAt,
+  entryDoorIds,
+  exitDoorIds,
+) {
+  return filterRecordsByDoorIds(
+    await getTodayRecordsOnly(personIds, statsResetAt),
+    entryDoorIds,
+    exitDoorIds,
+  );
+}
+
 /**
  * 單一工地完整資料（統計 + 單位列表），供 getSites / getSiteStats 使用
  */
@@ -283,7 +311,12 @@ async function getSiteData(siteId, config) {
   if (personIds.length === 0) {
     return { entryCount: 0, exitCount: 0, currentCount: 0, units: [] };
   }
-  const todayRecords = await getTodayRecordsOnly(personIds, config.statsResetAt);
+  const todayRecords = await recordsForSiteStats(
+    personIds,
+    config.statsResetAt,
+    entryDoorIds,
+    exitDoorIds,
+  );
   const stats = calculateTodayStatsByPhysicalId(
     todayRecords,
     entryDoorIds,
@@ -322,12 +355,11 @@ async function getSitesData(locations, getPeopleCountingConfig) {
     const cfg = getPeopleCountingConfig(location);
     const data = siteDataMap.get(locationId);
     if (!data || cfg.personGroupIds.length === 0) continue;
-    const { start: effectiveStart } = resolvePeopleCountingStatsTimeRange(
-      {},
+    const siteRecords = sliceSiteRecords(
+      data.records,
       cfg.statsResetAt,
-    );
-    const siteRecords = data.records.filter(
-      (r) => new Date(r.swip_card_rev_time) >= effectiveStart,
+      cfg.entryDoorIds,
+      cfg.exitDoorIds,
     );
     const stats = calculateTodayStatsByPhysicalId(
       siteRecords,
@@ -426,7 +458,12 @@ async function getUnitPersonnel(unitId, siteId, config) {
   }
   const personIds = persons.map((p) => p.id);
   const headPicMap = await batchGetHeadPics(personIds);
-  const todayRecords = await getTodayRecordsOnly(personIds, config.statsResetAt);
+  const todayRecords = await recordsForSiteStats(
+    personIds,
+    config.statsResetAt,
+    entryDoorIds,
+    exitDoorIds,
+  );
   const { entryCount, exitCount } = calculateTodayStatsByPhysicalId(
     todayRecords,
     entryDoorIds,

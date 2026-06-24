@@ -233,7 +233,7 @@ async function getAccessControlSiteLogs(options = {}) {
 }
 
 /** 營運日設備事件 → 限縮為授權名單內人員（與 YSCP personGroup 範圍對齊） */
-async function getTodayAuthorizedLogs(siteId, config, persons, options = {}) {
+async function getTodayAuthorizedLogs(config, persons, options = {}) {
   const entryDeviceIds = Array.isArray(config.entryDeviceIds)
     ? config.entryDeviceIds
     : [];
@@ -293,7 +293,7 @@ async function getSiteData(siteId, config) {
     const persons =
       await personnelService.getPersonsWithAccessByLocationId(siteId);
     const grouped = groupPersonsByPersonGroup(persons);
-    const authorizedLogs = await getTodayAuthorizedLogs(siteId, config, persons);
+    const authorizedLogs = await getTodayAuthorizedLogs(config, persons);
     const siteStats = statsFromAccessControlLogs(authorizedLogs);
     entryCount = siteStats.entryCount;
     exitCount = siteStats.exitCount;
@@ -345,7 +345,7 @@ async function getUnitPersonnel(unitId, siteId, config) {
   const match = grouped.find((g) => g.id === Number(unitId));
   if (!match) return { personnel: [], entryCount: 0, exitCount: 0 };
 
-  const unitLogs = await getTodayAuthorizedLogs(siteId, config, match.list);
+  const unitLogs = await getTodayAuthorizedLogs(config, match.list);
   const { entryCount, exitCount } = statsFromAccessControlLogs(unitLogs);
   const logsByEmployeeNo = groupEventsByKey(unitLogs, (log) => log.employeeId);
   const personnel = buildPersonnelRows(match.list, logsByEmployeeNo);

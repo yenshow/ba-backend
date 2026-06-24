@@ -20,6 +20,7 @@ const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
 const { computeTransitionStats } = require("../entryExit/stats");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
 const { normalizeVehicleDirection } = require("./normalizeVehicleDirection");
+const { performLocationStatsReset } = require("../entryExit/locationStatsReset");
 const logger = require("../../utils/logger");
 
 const PROVIDERS = {
@@ -206,39 +207,17 @@ async function resetSiteStats(siteId, userId = null) {
     );
   }
 
-  const resetAt = new Date().toISOString();
-  const rows = await db.query(
-    `SELECT id, system_config FROM location_systems
-     WHERE location_id = ? AND system_type = 'vehicle_access'`,
-    [siteId],
-  );
-  if (!rows?.length) {
-    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點未設定車輛進出系統");
-  }
-
-  const rawCfg =
-    typeof rows[0].system_config === "string"
-      ? JSON.parse(rows[0].system_config)
-      : rows[0].system_config || {};
-  rawCfg.stats_reset_at = resetAt;
-  await db.query(
-    `UPDATE location_systems
-     SET system_config = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [JSON.stringify(rawCfg), rows[0].id],
-  );
+  const resetAt = await performLocationStatsReset({
+    systemType: "vehicle_access",
+    scope: "vehicle_access",
+    locationId: siteId,
+    notFoundMessage: "地點未設定車輛進出系統",
+    userId,
+  });
 
   await vehiclePresenceService.resetPresence(siteId);
   const { invalidateLocationIngestCache } = require("./isapiVehiclePersistence");
   invalidateLocationIngestCache(siteId);
-
-  if (userId != null) {
-    await db.query(
-      `INSERT INTO vehicle_access_reset_log (location_id, reset_at, user_id)
-       VALUES (?, ?, ?)`,
-      [siteId, resetAt, userId],
-    );
-  }
 
   return { statsResetAt: resetAt };
 }

@@ -2,16 +2,13 @@
  * 人流統計地點設定（stats_reset_at）
  */
 const { resolveStatsTimeRange } = require("../entryExit/resolveTimeOptions");
+const { parseStatsResetAtField } = require("../entryExit/locationStatsReset");
 
 /**
  * @param {object} raw - DB snake_case 或 API camelCase
  */
 function parsePeopleCountingConfigFields(raw) {
-  const c = raw && typeof raw === "object" ? raw : {};
-  const statsResetAt = c.stats_reset_at ?? c.statsResetAt ?? null;
-  return {
-    statsResetAt: statsResetAt != null ? String(statsResetAt) : null,
-  };
+  return { statsResetAt: parseStatsResetAtField(raw) };
 }
 
 /**

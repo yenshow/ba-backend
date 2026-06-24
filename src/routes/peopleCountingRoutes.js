@@ -183,8 +183,10 @@ router.post(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
-    const userId = req.user?.id != null ? Number(req.user.id) : null;
-    const result = await peopleCountingService.resetSiteStats(siteId, userId);
+    const result = await peopleCountingService.resetSiteStats(
+      siteId,
+      req.user?.id ?? null,
+    );
     res.sendSuccess(result);
   }),
 );

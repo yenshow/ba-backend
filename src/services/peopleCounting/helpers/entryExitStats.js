@@ -104,6 +104,19 @@ function collectUnitLogs(group, logsByEmployeeNo) {
   });
 }
 
+function filterRecordsByDoorIds(records, entryDoorIds, exitDoorIds) {
+  const doorSet = new Set(
+    [...(entryDoorIds || []), ...(exitDoorIds || [])]
+      .map((id) => Number(id))
+      .filter((n) => Number.isFinite(n) && n > 0),
+  );
+  if (doorSet.size === 0) return records || [];
+  return (records || []).filter((r) => {
+    const pid = Number(r.physical_id);
+    return Number.isFinite(pid) && doorSet.has(pid);
+  });
+}
+
 module.exports = {
   parseEventType,
   sortRecordsByTime,
@@ -115,4 +128,5 @@ module.exports = {
   employeeNosFromPersons,
   filterLogsByEmployeeNos,
   collectUnitLogs,
+  filterRecordsByDoorIds,
 };
