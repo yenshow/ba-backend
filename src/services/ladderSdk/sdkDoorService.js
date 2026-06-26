@@ -5,17 +5,20 @@ const { invokeBridge } = require("./sdkBridgeClient");
 const { getLadderDevice, toBridgeDevice } = require("./sdkLadderDeviceService");
 const {
   collectElevatorFloorSyncTasks,
-} = require("../elevator/elevatorFloorConfig");
+} = require("../elevator/elevatorFloorModel");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
 
-const syncFloorNames = async (deviceId, floors) => {
+const syncFloorNames = async (deviceId, floors, doorIndexes) => {
   const failures = [];
   const { credentials } = await getLadderDevice(deviceId);
   const bridgeDevice = toBridgeDevice(credentials);
 
   for (let i = 0; i < floors.length; i += 1) {
-    const doorIndex = i + 1;
+    const doorIndex =
+      Array.isArray(doorIndexes) && doorIndexes[i] != null
+        ? Number(doorIndexes[i])
+        : i + 1;
     const floor = floors[i];
     try {
       await invokeBridge({
@@ -49,7 +52,7 @@ const syncFloorNames = async (deviceId, floors) => {
 const syncElevatorFloorsFromLocations = async (locations) => {
   const tasks = collectElevatorFloorSyncTasks(locations);
   for (const task of tasks) {
-    await syncFloorNames(task.deviceId, task.floors);
+    await syncFloorNames(task.deviceId, task.floors, task.doorIndexes);
   }
 };
 

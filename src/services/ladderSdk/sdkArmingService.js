@@ -107,20 +107,18 @@ const startDeviceLoop = async (deviceId) => {
 const getLadderDeviceIds = async () => {
   const rows = await db.query(
     `
-      SELECT DISTINCT (jsonb_array_elements_text(ls.system_config->'device_ids'))::int AS id
+      SELECT DISTINCT (ls.system_config->'ladder_device'->>'device_id')::int AS id
       FROM location_systems ls
       WHERE ls.system_type = 'elevator'
-        AND COALESCE(jsonb_array_length(ls.system_config->'device_ids'), 0) > 0
+        AND ls.system_config ? 'ladder_device'
+        AND (ls.system_config->'ladder_device'->>'device_id') ~ '^[0-9]+$'
     `,
     [],
   );
 
-  const ids = new Set();
-  for (const r of rows || []) {
-    const n = r.id != null ? parseInt(String(r.id), 10) : NaN;
-    if (Number.isFinite(n)) ids.add(n);
-  }
-  return Array.from(ids);
+  return (rows || [])
+    .map((r) => Number(r.id))
+    .filter((n) => Number.isFinite(n) && n > 0);
 };
 
 const start = async () => {

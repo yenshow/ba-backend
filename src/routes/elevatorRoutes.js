@@ -33,17 +33,34 @@ router.get(
 );
 
 router.get(
+  "/sites/:id/live",
+  noCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const live = await elevatorService.getSiteLiveState(parseInt(req.params.id, 10));
+    res.sendSuccess({ live });
+  }),
+);
+
+router.get(
   "/sites/:id",
   noCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
-    const [locationResult, logsResult] = await Promise.all([
+    const [locationResult, logsResult, live] = await Promise.all([
       elevatorService.getElevatorLocationById(siteId),
       elevatorService.getSiteLogs(siteId, { limit: 5, offset: 0 }),
+      elevatorService.getSiteLiveState(siteId),
     ]);
+    const location = locationResult.location;
+    const config = elevatorService.getElevatorConfig(location);
     res.sendSuccess({
-      ...locationResult,
+      location: {
+        ...location,
+        elevatorConfig: config,
+      },
+      live,
       latestLogs: logsResult.logs,
     });
   }),

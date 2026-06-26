@@ -128,11 +128,22 @@ sdk/
 
 底層：`NET_DVR_GetDVRConfig` / `SetDVRConfig`，command `2108` / `2109`，欄位 `byDoorName[32]`、`byOpenDuration`（1–255 秒）。
 
-**呼梯**
+**呼梯／門控（`control.gateway`）**
 
 | action            | payload                   | 說明                                                                                                               |
 | ----------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `control.gateway` | `gatewayIndex`, `command` | `gatewayIndex`：-1 全部，≥1 指定樓層；`command`：0~6（0 關、1 開、2 常開、3 常閉、4 恢復、5 訪客呼梯、6 住戶呼梯） |
+| `control.gateway` | `gatewayIndex`, `command` | `gatewayIndex`：-1 全部，≥1 指定樓層；`command` 見下表 |
+
+Node `sdkControlService` 字串對照：
+
+| command 字串 | SDK 值 | 用途 |
+|--------------|--------|------|
+| `open` / `manual` | 1 | 梯控手動開門 |
+| `normally_open` | 2 | 梯控常開 |
+| `normally_closed` | 3 | 梯控常閉 |
+| `visitor_call` | 5 | 呼梯（訪客） |
+
+電梯監控：梯控操作走 `ladder_device` + `ladder_gateway`；呼梯走 `call_device` + `call_gateway`；僅 `visitor_call` 會觸發平台運行態動畫。
 
 ### 佈防（`HcNetSdkBridge.exe --arming`）
 
@@ -245,15 +256,7 @@ npm run test:sdk-ladder-events
 
 **樓層名稱（併入地點儲存）**
 
-區域管理 → 梯控地點儲存時，平台寫入 `location_systems.system_config` 並以 `door.set` 同步至設備：
-
-```json
-{
-  "device_ids": [12],
-  "floor_count": 4,
-  "floor_names": ["Floor 01", "Floor 02", "Floor 03", "Floor 04"]
-}
-```
+區域管理 → 電梯地點儲存時，平台寫入 `location_systems.system_config.floors[]`（含 `label`、`ladder_gateway` 等），並以 `door.set` 同步梯控門名至設備。詳見 `docs/40-systems/elevator.md`。
 
 下發失敗時 API 回傳 `ELEVATOR_FLOOR_SYNC_FAILED`（DB 已寫入，需重試同步）。
 
@@ -294,7 +297,7 @@ npm run test:sdk-ladder-events
 }
 ```
 
-**佈防自動啟動**：`server.js` 啟動時 `sdkArmingService.start()`，掃描 `location_systems`（`system_type = 'elevator'`）的 `device_ids`，每台設備建立佈防子程序；斷線 10 秒後重連。
+**佈防自動啟動**：`server.js` 啟動時 `sdkArmingService.start()`，掃描 `location_systems`（`system_type = 'elevator'`）的 `ladder_device.device_id`，每台梯控設備建立佈防子程序；斷線 10 秒後重連。
 
 ---
 

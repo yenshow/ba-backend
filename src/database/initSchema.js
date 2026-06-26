@@ -622,6 +622,36 @@ async function initSchema() {
           OR (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_ids')
         )
     `);
+    // elevator：移除已廢棄的 direction_detection / directionDetection
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config = COALESCE(system_config, '{}'::jsonb)
+          - 'direction_detection' - 'directionDetection',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE system_type = 'elevator'
+        AND (
+          (COALESCE(system_config, '{}'::jsonb) ? 'direction_detection')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'directionDetection')
+        )
+    `);
+    // elevator：移除舊線性模型鍵（device_ids / floor_start / floor_names 等）
+    await targetPool.query(`
+      UPDATE location_systems
+      SET system_config = COALESCE(system_config, '{}'::jsonb)
+          - 'device_ids' - 'deviceIds' - 'device_id' - 'deviceId'
+          - 'floor_start' - 'floor_names' - 'floor_count',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE system_type = 'elevator'
+        AND (
+          (COALESCE(system_config, '{}'::jsonb) ? 'device_ids')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceIds')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'device_id')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceId')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'floor_start')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'floor_names')
+          OR (COALESCE(system_config, '{}'::jsonb) ? 'floor_count')
+        )
+    `);
     schemaLogger.info(
       "location_systems：已套用 system_config（device_ids／camera_device_ids）migration",
       {

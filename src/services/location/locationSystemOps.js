@@ -258,42 +258,18 @@ function buildSystemConfig(systemType, config) {
         toStoredLogDisplayColumns,
       } = require("../elevator/logDisplayColumns");
       const {
-        validateElevatorFloorConfig,
-      } = require("../elevator/elevatorFloorConfig");
-      const validated = validateElevatorFloorConfig(config);
-      const accessDeviceIds = Array.isArray(config.accessDeviceIds)
-        ? config.accessDeviceIds
-            .map((id) => Number(id))
-            .filter((n) => Number.isFinite(n) && n > 0)
-        : [];
-      const result = {
-        device_ids: validated.deviceIds,
-        access_device_ids: accessDeviceIds,
-        log_display_columns: (() => {
-          const cols = toStoredLogDisplayColumns(
-            normalizeLogDisplayColumns(config.logDisplayColumns),
-          );
-          return cols.length > 0 ? cols : undefined;
-        })(),
-      };
-      if (validated.floorCount != null) {
-        result.floor_count = validated.floorCount;
-        result.floor_names = validated.floorNames;
-        result.floor_open_durations = validated.floorOpenDurations;
-        if (validated.floorStart != null) {
-          result.floor_start = validated.floorStart;
-        }
-        if (validated.floorEnd != null) {
-          result.floor_end = validated.floorEnd;
-        }
+        validateElevatorLocationConfig,
+        toStoredConfig,
+      } = require("../elevator/elevatorFloorModel");
+      const validated = validateElevatorLocationConfig(config);
+      const stored = toStoredConfig(validated);
+      const cols = toStoredLogDisplayColumns(
+        normalizeLogDisplayColumns(validated.logDisplayColumns),
+      );
+      if (cols.length > 0) {
+        stored.log_display_columns = cols;
       }
-      if (validated.floorDetection) {
-        result.floor_detection = validated.floorDetection;
-      }
-      if (validated.callDevices?.length) {
-        result.call_devices = validated.callDevices;
-      }
-      return result;
+      return stored;
     }
 
     case "vehicle_access": {
@@ -709,29 +685,26 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
             systemConfig.accessControlGroups = accessControlGroups;
           break;
         case "elevator": {
-          assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
-          const acIds =
-            location.accessDeviceIds ?? location.access_device_ids;
-          if (acIds !== undefined) {
-            systemConfig.accessDeviceIds = Array.isArray(acIds)
-              ? acIds
+          if (location.accessDeviceIds !== undefined) {
+            systemConfig.accessDeviceIds = Array.isArray(location.accessDeviceIds)
+              ? location.accessDeviceIds
                   .map((id) => Number(id))
                   .filter((n) => Number.isFinite(n) && n > 0)
               : [];
           }
-          const fc = location.floorCount ?? location.floor_count;
-          const fn = location.floorNames ?? location.floor_names;
-          const fod =
-            location.floorOpenDurations ?? location.floor_open_durations;
-          const fs = location.floorStart ?? location.floor_start;
-          const fe = location.floorEnd ?? location.floor_end;
-          if (fc !== undefined) systemConfig.floorCount = fc;
-          if (fn !== undefined) systemConfig.floorNames = fn;
-          if (fod !== undefined) systemConfig.floorOpenDurations = fod;
-          if (fs !== undefined) systemConfig.floorStart = fs;
-          if (fe !== undefined) systemConfig.floorEnd = fe;
+          if (location.panel !== undefined) systemConfig.panel = location.panel;
+          if (location.floors !== undefined) systemConfig.floors = location.floors;
+          if (location.ladderDevice !== undefined)
+            systemConfig.ladderDevice = location.ladderDevice;
+          if (location.callDevice !== undefined)
+            systemConfig.callDevice = location.callDevice;
+          if (location.floorDetection !== undefined)
+            systemConfig.floorDetection = location.floorDetection;
           if (location.logDisplayColumns !== undefined) {
             systemConfig.logDisplayColumns = location.logDisplayColumns;
+          }
+          if (location.callCommandType !== undefined) {
+            systemConfig.callCommandType = location.callCommandType;
           }
           break;
         }

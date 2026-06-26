@@ -1,6 +1,5 @@
 /**
  * 電梯系統地點管理與事件查詢服務
- * location_type = 'elevator'；事件來源 ladder_sdk_events
  */
 const locationService = require("../location/locationService");
 const sdkEventService = require("../ladderSdk/sdkEventService");
@@ -13,16 +12,16 @@ const {
 } = require("../../utils/apiErrorMeta");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const {
-  normalizeElevatorFloorConfig,
+  getElevatorConfigFromLocation,
   mapElevatorLogsFloorDisplay,
-} = require("./elevatorFloorConfig");
+} = require("./elevatorFloorModel");
+const elevatorRuntimeService = require("./elevatorRuntimeService");
 const { resolveTimeOptions } = require("../entryExit/resolveTimeOptions");
 const { formatAcsEventDisplayName } = require("../ladderSdk/acsEventLabels");
 const { aggregateElevatorLogs } = require("./elevatorLogAggregation");
 const db = require("../../database/db");
 
 const MAX_LOG_RECORDS = 500;
-/** 最新紀錄先多抓原始事件再合併，避免遠端操作被刷卡連續事件擠出 */
 const LATEST_LOG_RAW_FETCH_MIN = 50;
 
 async function handleServiceError(fn, errorMessage, context = {}) {
@@ -51,32 +50,17 @@ function normalizeId(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function getElevatorSystem(location) {
-  return ensureArray(location?.systems).find(
-    (sys) => sys.systemType === "elevator",
-  );
-}
-
 function getElevatorConfig(location) {
-  const sys = getElevatorSystem(location);
-  const config = sys?.config || {};
-  const deviceIds = Array.isArray(config.deviceIds)
-    ? config.deviceIds
-        .map((id) => Number(id))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    : [];
-  const accessDeviceIds = Array.isArray(config.accessDeviceIds)
-    ? config.accessDeviceIds
-        .map((id) => Number(id))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    : [];
-  const floors = normalizeElevatorFloorConfig(config);
+  const config = getElevatorConfigFromLocation(location);
   return {
-    deviceIds,
-    accessDeviceIds,
+    accessDeviceIds: config.accessDeviceIds ?? [],
+    floors: config.floors ?? [],
+    panel: config.panel,
+    ladderDevice: config.ladderDevice,
+    callDevice: config.callDevice,
+    floorDetection: config.floorDetection,
+    callCommandType: config.callCommandType ?? "visitor",
     logDisplayColumns: normalizeLogDisplayColumns(config.logDisplayColumns),
-    floorCount: floors.floorCount ?? undefined,
-    floorNames: floors.floorNames,
   };
 }
 
@@ -125,7 +109,6 @@ function getTodayRange() {
   };
 }
 
-/** 批次統計今日事件（依 device_id），供 getSites 一次查詢（對齊人流 getSitesData 批次模式） */
 async function countTodayEventsByDeviceIds(deviceIds) {
   const ids = [
     ...new Set(
@@ -186,22 +169,38 @@ async function getSites() {
 
     const locationEntries = allLocations.map((location) => {
       const locationId = normalizeId(location.id);
-      const { deviceIds } = getElevatorConfig(location);
-      return { locationId, name: location.name, deviceIds };
+      const cfg = getElevatorConfig(location);
+      return { locationId, name: location.name, location, cfg };
     });
 
-    const allDeviceIds = locationEntries.flatMap((entry) => entry.deviceIds);
+    const allDeviceIds = locationEntries
+      .map((entry) => entry.cfg.ladderDevice?.deviceId)
+      .filter((id) => id != null);
     const countByDeviceId = await countTodayEventsByDeviceIds(allDeviceIds);
 
-    const sites = locationEntries.map(({ locationId, name, deviceIds }) => ({
-      id: locationId,
-      name,
-      deviceIds,
-      todayEventCount: deviceIds.reduce(
-        (sum, deviceId) => sum + (countByDeviceId.get(deviceId) ?? 0),
-        0,
-      ),
-    }));
+    const sites = await Promise.all(
+      locationEntries.map(async ({ locationId, name, location, cfg }) => {
+        let live = elevatorRuntimeService.getPublicRuntime(locationId);
+        try {
+          live = await elevatorRuntimeService.pollLocationRuntime(location);
+        } catch {
+          /* keep cached */
+        }
+        const ladderDeviceId = cfg.ladderDevice?.deviceId ?? null;
+        return {
+          id: locationId,
+          name,
+          ladderDevice: cfg.ladderDevice ?? null,
+          callDevice: cfg.callDevice ?? null,
+          floors: cfg.floors,
+          panel: cfg.panel,
+          todayEventCount: ladderDeviceId
+            ? countByDeviceId.get(ladderDeviceId) ?? 0
+            : 0,
+          live,
+        };
+      }),
+    );
     return { sites };
   }, "取得電梯地點列表失敗");
 }
@@ -209,7 +208,10 @@ async function getSites() {
 async function getSiteLogs(locationId, options = {}) {
   return handleServiceError(
     async () => {
-      const { deviceIds, floorNames } = await getSiteConfig(locationId);
+      const { ladderDevice, callDevice, floors } = await getSiteConfig(locationId);
+      const deviceIds = [ladderDevice?.deviceId, callDevice?.deviceId]
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0);
       if (!deviceIds.length) return { logs: [], total: 0 };
 
       const {
@@ -227,8 +229,7 @@ async function getSiteLogs(locationId, options = {}) {
         MAX_LOG_RECORDS,
       );
       const offsetNum = Math.max(Number(offset) || 0, 0);
-      const needsAggregationBuffer =
-        offsetNum === 0 && limitNum <= 20;
+      const needsAggregationBuffer = offsetNum === 0 && limitNum <= 20;
       const rawFetchLimit = needsAggregationBuffer
         ? Math.min(
             Math.max(limitNum * 10, LATEST_LOG_RAW_FETCH_MIN),
@@ -236,9 +237,8 @@ async function getSiteLogs(locationId, options = {}) {
           )
         : limitNum;
 
-      const primaryDeviceId = deviceIds[0];
       const result = await sdkEventService.listEvents({
-        deviceId: primaryDeviceId,
+        deviceIds,
         limit: rawFetchLimit,
         offset: offsetNum,
         startTime: resolved.startTime,
@@ -248,7 +248,7 @@ async function getSiteLogs(locationId, options = {}) {
       let logs = (result.items || []).map(mapEventToLog);
       logs = filterLogsBySearch(logs, search);
       logs = aggregateElevatorLogs(logs);
-      logs = mapElevatorLogsFloorDisplay(logs, floorNames);
+      logs = mapElevatorLogsFloorDisplay(logs, floors);
       if (needsAggregationBuffer && logs.length > limitNum) {
         logs = logs.slice(0, limitNum);
       }
@@ -328,6 +328,11 @@ async function getAllSiteLogs(options = {}) {
   );
 }
 
+async function getSiteLiveState(locationId) {
+  const { location } = await getElevatorLocationById(locationId);
+  return elevatorRuntimeService.pollLocationRuntime(location);
+}
+
 module.exports = {
   MAX_LOG_RECORDS,
   getElevatorLocationById,
@@ -335,4 +340,5 @@ module.exports = {
   getSiteLogs,
   getAllSiteLogs,
   getElevatorConfig,
+  getSiteLiveState,
 };

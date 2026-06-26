@@ -1,4 +1,7 @@
 const environmentMonitor = require("./environmentMonitor");
+const {
+  checkElevatorRuntime,
+} = require("./elevatorFloorDetectionMonitor");
 const snapshotTaskRegistry = require("./snapshotTaskRegistry");
 const {
   checkDiDoAlerts,
@@ -34,6 +37,17 @@ const monitoringTaskRegistry = [
     systemName: "環境系統",
     featureKey: "environment",
     taskFunction: environmentMonitor.checkEnvironmentLocations,
+  },
+  {
+    taskId: "elevator",
+    systemName: "電梯運行態",
+    featureKey: "elevator",
+    taskFunction: checkElevatorRuntime,
+    options: {
+      baseIntervalMs: 2000,
+      minIntervalMs: 2000,
+      maxIntervalMs: 2000,
+    },
   },
   {
     taskId: TASK_IDS.diDo,

@@ -261,8 +261,10 @@ async function syncLocationToDevice(
 
 async function syncLocationCards(locationId, job = null) {
   const { location } = await elevatorService.getElevatorLocationById(locationId);
-  const { deviceIds, accessDeviceIds } = elevatorService.getElevatorConfig(location);
-  if (!deviceIds.length && !accessDeviceIds.length) {
+  const { ladderDevice, accessDeviceIds } =
+    elevatorService.getElevatorConfig(location);
+  const ladderDeviceIds = ladderDevice?.deviceId ? [ladderDevice.deviceId] : [];
+  if (!ladderDeviceIds.length && !accessDeviceIds.length) {
     throwApiError(
       C.ELEVATOR_VALIDATION_FAILED,
       "該地點未設定梯控或門禁設備",
@@ -291,12 +293,12 @@ async function syncLocationCards(locationId, job = null) {
   const syncedDeviceIds = [];
   const syncedAccessDeviceIds = [];
   const deviceNameById = await getDeviceNameByIds([
-    ...deviceIds,
+    ...ladderDeviceIds,
     ...accessDeviceIds,
   ]);
 
-  if (deviceIds.length) {
-    for (const deviceId of deviceIds) {
+  if (ladderDeviceIds.length) {
+    for (const deviceId of ladderDeviceIds) {
       const { warnings, deviceId: syncedId } = await syncLocationToDevice(
         locationId,
         deviceId,
@@ -387,13 +389,15 @@ function mapCardSyncStatus(raw) {
 
 async function getSyncCandidatesForLocation(locationId) {
   const { location } = await elevatorService.getElevatorLocationById(locationId);
-  const { deviceIds, accessDeviceIds } = elevatorService.getElevatorConfig(location);
+  const { ladderDevice, accessDeviceIds } =
+    elevatorService.getElevatorConfig(location);
+  const ladderDeviceIds = ladderDevice?.deviceId ? [ladderDevice.deviceId] : [];
   const persons =
     await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
   const employeeNos = persons.map((p) => String(p.employee_no));
 
   const stateMaps = [];
-  for (const deviceId of deviceIds) {
+  for (const deviceId of ladderDeviceIds) {
     stateMaps.push({
       deviceId,
       map: await personDeviceSyncStateService.getStatesForDevice(
@@ -438,7 +442,7 @@ async function getSyncCandidatesForLocation(locationId) {
 
     if (!cardNos.length) {
       needsSync = true;
-    } else if (!deviceIds.length) {
+    } else if (!ladderDeviceIds.length) {
       needsSync = true;
     } else {
       let allSynced = true;

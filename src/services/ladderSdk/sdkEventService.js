@@ -24,6 +24,7 @@ const mapEventRow = (row) => ({
 const listEvents = async (options = {}) => {
   const {
     deviceId,
+    deviceIds,
     cardNo,
     limit = 50,
     offset = 0,
@@ -34,7 +35,15 @@ const listEvents = async (options = {}) => {
   const where = ["1=1"];
   const params = [];
 
-  if (deviceId != null) {
+  const ids = Array.isArray(deviceIds)
+    ? deviceIds
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  if (ids.length > 0) {
+    where.push("e.device_id = ANY(?::int[])");
+    params.push(ids);
+  } else if (deviceId != null) {
     where.push("e.device_id = ?");
     params.push(Number(deviceId));
   }

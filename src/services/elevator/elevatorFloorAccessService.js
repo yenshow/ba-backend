@@ -6,9 +6,9 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const elevatorService = require("./elevatorService");
 const {
-  normalizeElevatorFloorConfig,
-  defaultFloorName,
-} = require("./elevatorFloorConfig");
+  getElevatorConfigFromLocation,
+  logicalIndicesToLadderGateways,
+} = require("./elevatorFloorModel");
 
 const personLadderCardService = require("../personnel/personLadderCardService");
 const {
@@ -72,10 +72,10 @@ async function getActivePersonsWithLadderFloors() {
   }));
 }
 
-function buildFloorSlots(floorCount, floorNames) {
-  return Array.from({ length: floorCount }, (_, i) => ({
+function buildFloorSlots(floors) {
+  return floors.map((floor, i) => ({
     index: i + 1,
-    name: floorNames[i] || defaultSlotName(i),
+    name: floor.label,
     personIds: [],
   }));
 }
@@ -89,20 +89,17 @@ function applyRowsToFloors(floors, rows) {
     if (!personIdsByFloor.has(floorIndex)) personIdsByFloor.set(floorIndex, []);
     personIdsByFloor.get(floorIndex).push(personId);
   }
-  return floors.map((floor) => ({
+  const slots = buildFloorSlots(floors);
+  return slots.map((floor) => ({
     ...floor,
     personIds: personIdsByFloor.get(floor.index) || [],
   }));
 }
 
-function buildDefaultAssignments(
-  floorCount,
-  persons,
-  floorNames = [],
-  locationId = null,
-) {
-  const floors = buildFloorSlots(floorCount, floorNames);
-  const byFloor = new Map(floors.map((f) => [f.index, []]));
+function buildDefaultAssignments(floors, persons, locationId = null) {
+  const slots = buildFloorSlots(floors);
+  const floorCount = floors.length;
+  const byFloor = new Map(slots.map((f) => [f.index, []]));
   for (const person of persons) {
     const defaults =
       locationId != null
@@ -113,7 +110,7 @@ function buildDefaultAssignments(
       byFloor.get(floorIndex).push(Number(person.id));
     }
   }
-  return floors.map((f) => ({
+  return slots.map((f) => ({
     ...f,
     personIds: byFloor.get(f.index) || [],
   }));
@@ -122,44 +119,35 @@ function buildDefaultAssignments(
 async function getFloorAccess(locationId) {
   const { location } =
     await elevatorService.getElevatorLocationById(locationId);
-  const config = elevatorService.getElevatorConfig(location);
-  const { floorCount, floorNames } = normalizeElevatorFloorConfig(config);
+  const config = getElevatorConfigFromLocation(location);
+  const floors = config.floors || [];
 
-  if (floorCount == null || floorCount < 1) {
+  if (!floors.length) {
     throwApiError(C.ELEVATOR_VALIDATION_FAILED, "此地點尚未設定樓層");
   }
 
   const stored = await hasStoredAccess(locationId);
-  let floors = buildFloorSlots(floorCount, floorNames);
+  let resultFloors = buildFloorSlots(floors);
 
   if (stored) {
     const rows = await getStoredAccessRows(locationId);
-    floors = applyRowsToFloors(floors, rows);
-    return { floors, defaultsApplied: false, hasStoredAccess: true };
+    resultFloors = applyRowsToFloors(floors, rows);
+    return { floors: resultFloors, defaultsApplied: false, hasStoredAccess: true };
   }
 
   const persons = await getActivePersonsWithLadderFloors();
-  const defaultFloors = buildDefaultAssignments(
-    floorCount,
-    persons,
-    floorNames,
-    locationId,
-  );
-  floors = buildFloorSlots(floorCount, floorNames).map((f, i) => ({
-    ...f,
-    personIds: defaultFloors[i]?.personIds || [],
-  }));
-
-  return { floors, defaultsApplied: true, hasStoredAccess: false };
+  const defaultFloors = buildDefaultAssignments(floors, persons, locationId);
+  return { floors: defaultFloors, defaultsApplied: true, hasStoredAccess: false };
 }
 
 async function replaceFloorAccess(locationId, assignments = []) {
   const { location } =
     await elevatorService.getElevatorLocationById(locationId);
-  const config = elevatorService.getElevatorConfig(location);
-  const { floorCount } = normalizeElevatorFloorConfig(config);
+  const config = getElevatorConfigFromLocation(location);
+  const floors = config.floors || [];
+  const floorCount = floors.length;
 
-  if (floorCount == null || floorCount < 1) {
+  if (!floorCount) {
     throwApiError(C.ELEVATOR_VALIDATION_FAILED, "此地點尚未設定樓層");
   }
 
@@ -409,9 +397,7 @@ async function syncLadderFloorsFromLocationAssignments(
 
 async function getPersonIdsWithFloorAccess(locationId) {
   const rows = await db.query(
-    `SELECT DISTINCT person_id
-     FROM person_elevator_floor_access
-     WHERE location_id = ?`,
+    `SELECT DISTINCT person_id FROM person_elevator_floor_access WHERE location_id = ?`,
     [Number(locationId)],
   );
   return (rows || [])
@@ -420,6 +406,11 @@ async function getPersonIdsWithFloorAccess(locationId) {
 }
 
 async function aggregateFloorsForPerson(locationId, personId) {
+  const { location } =
+    await elevatorService.getElevatorLocationById(locationId);
+  const config = getElevatorConfigFromLocation(location);
+  const floors = config.floors || [];
+
   const rows = await db.query(
     `SELECT floor_index
      FROM person_elevator_floor_access
@@ -427,9 +418,11 @@ async function aggregateFloorsForPerson(locationId, personId) {
      ORDER BY floor_index ASC`,
     [Number(locationId), Number(personId)],
   );
-  return (rows || [])
+  const logicalIndices = (rows || [])
     .map((r) => Number(r.floor_index))
     .filter((n) => Number.isFinite(n) && n > 0);
+
+  return logicalIndicesToLadderGateways(floors, logicalIndices);
 }
 
 async function getPersonsWithFloorAccess(locationId) {

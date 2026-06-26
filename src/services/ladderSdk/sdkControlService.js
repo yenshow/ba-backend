@@ -6,13 +6,18 @@ const { getLadderDevice, toBridgeDevice } = require("./sdkLadderDeviceService");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
 
-/** dwStaic 對照 */
+/** dwStaic 對照（HCNetSDK NET_DVR_ControlGateway） */
 const GATEWAY_COMMANDS = {
   close: 0,
   open: 1,
+  manual: 1,
   normally_open: 2,
   normally_closed: 3,
+  recovery: 4,
+  visitor_call: 5,
 };
+
+const CALL_ELEVATOR_COMMANDS = new Set([GATEWAY_COMMANDS.visitor_call]);
 
 const resolveCommand = (raw) => {
   if (raw == null) {
@@ -30,8 +35,13 @@ const resolveCommand = (raw) => {
 
   throw createApiError(
     C.LADDER_SDK_INVALID_COMMAND,
-    "command 須為 open / close / normally_open / normally_closed",
+    "command 須為 open / manual / normally_open / normally_closed / visitor_call",
   );
+};
+
+const isCallElevatorCommand = (raw) => {
+  const resolved = resolveCommand(raw);
+  return CALL_ELEVATOR_COMMANDS.has(resolved);
 };
 
 const controlGateway = async (deviceId, options = {}) => {
@@ -55,7 +65,7 @@ const controlGateway = async (deviceId, options = {}) => {
 };
 
 module.exports = {
-  GATEWAY_COMMANDS,
   controlGateway,
   resolveCommand,
+  isCallElevatorCommand,
 };

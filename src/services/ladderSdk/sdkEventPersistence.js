@@ -11,6 +11,8 @@ const ALLOWED_EVENT_KEYS = new Set([
   "3:1025",
   "3:1026",
   "3:1027",
+  "3:1028",
+  "3:1029",
   "5:1",
   "5:95",
   "5:96",
@@ -91,6 +93,32 @@ const persistLadderSdkEvent = async (options) => {
   return { inserted: true, id };
 };
 
+const CALL_EVENT_BY_COMMAND = {
+  visitor_call: { minor: 1028, eventName: "訪客呼梯" },
+};
+
+/**
+ * 平台 API 呼梯成功後寫入稽核事件（呼梯設備未必有佈防）
+ */
+const recordPlatformCallElevator = async ({
+  deviceId,
+  gatewayIndex,
+  command,
+}) => {
+  const key = String(command || "visitor_call").trim().toLowerCase();
+  const meta = CALL_EVENT_BY_COMMAND[key] ?? CALL_EVENT_BY_COMMAND.visitor_call;
+  return persistLadderSdkEvent({
+    deviceId,
+    eventTime: new Date().toISOString(),
+    major: 3,
+    minor: meta.minor,
+    eventName: meta.eventName,
+    floor: gatewayIndex != null ? Number(gatewayIndex) : null,
+    payload: { source: "platform_call", command: key },
+  });
+};
+
 module.exports = {
   persistLadderSdkEvent,
+  recordPlatformCallElevator,
 };

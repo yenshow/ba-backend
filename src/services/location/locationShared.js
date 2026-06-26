@@ -7,12 +7,7 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
 /**
  * 處理唯一性約束錯誤
  */
-function handleUniqueConstraintError(
-  error,
-  constraintName,
-  code,
-  errorMessage,
-) {
+function handleUniqueConstraintError(error, constraintName, code, errorMessage) {
   if (error.code === "23505" && error.constraint === constraintName) {
     throwApiError(code, errorMessage);
   }
@@ -389,9 +384,7 @@ function formatSystem(system) {
           cameraChannelId: config.camera_channel_id ?? undefined,
           preferRegion: config.prefer_region ?? undefined,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
-          logDisplayColumns: normalizeLogDisplayColumns(
-            config.log_display_columns,
-          ),
+          logDisplayColumns: normalizeLogDisplayColumns(config.log_display_columns),
           statsResetAt: config.stats_reset_at ?? undefined,
         },
       };
@@ -402,34 +395,32 @@ function formatSystem(system) {
         normalizeLogDisplayColumns,
       } = require("../elevator/logDisplayColumns");
       const {
-        normalizeElevatorFloorConfig,
-      } = require("../elevator/elevatorFloorConfig");
-      const floors = normalizeElevatorFloorConfig(config);
+        normalizeElevatorLocationConfig,
+      } = require("../elevator/elevatorFloorModel");
+      const normalized = normalizeElevatorLocationConfig(config);
       return {
         ...baseSystem,
         config: {
-          deviceIds: Array.isArray(config.device_ids)
-            ? config.device_ids
-                .map((id) => Number(id))
-                .filter((n) => Number.isFinite(n) && n > 0)
-            : [],
-          accessDeviceIds: Array.isArray(config.access_device_ids)
-            ? config.access_device_ids
-                .map((id) => Number(id))
-                .filter((n) => Number.isFinite(n) && n > 0)
-            : [],
+          panel: normalized.panel,
+          floors: normalized.floors.map((f) => ({
+            label: f.label,
+            rank: f.rank,
+            panelCol: f.panelCol,
+            panelRow: f.panelRow,
+            openDuration: f.openDuration,
+            ladderGateway: f.ladderGateway ?? undefined,
+            callGateway: f.callGateway ?? undefined,
+            diAddress: f.diAddress ?? undefined,
+            bindingOverridden: f.bindingOverridden || undefined,
+          })),
+          ladderDevice: normalized.ladderDevice ?? undefined,
+          callDevice: normalized.callDevice ?? undefined,
+          floorDetection: normalized.floorDetection ?? undefined,
+          accessDeviceIds: normalized.accessDeviceIds,
+          callCommandType: normalized.callCommandType,
           logDisplayColumns: normalizeLogDisplayColumns(
-            config.log_display_columns,
+            normalized.logDisplayColumns,
           ),
-          ...(floors.floorCount != null
-            ? {
-                floorCount: floors.floorCount,
-                floorStart: floors.floorStart ?? undefined,
-                floorEnd: floors.floorEnd ?? undefined,
-                floorNames: floors.floorNames,
-                floorOpenDurations: floors.floorOpenDurations,
-              }
-            : {}),
         },
       };
     }

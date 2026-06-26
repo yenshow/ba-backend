@@ -564,6 +564,12 @@ function emitPermissionsUpdated(userId) {
   );
 }
 
+function emitElevatorRuntimeUpdate(payload) {
+  safeEmit("elevator:runtime:update", payload, {
+    logMessage: `elevator runtime ${payload?.locationId}`,
+  });
+}
+
 function emitYscpEvent(type) {
   const eventMap = {
     vehicle_access: "yscp:event:vehicle",
@@ -607,6 +613,7 @@ module.exports = {
   emitIsapiAccessEvent,
   emitIsapiPeopleCountingEvent,
   emitLadderSdkEvent,
+  emitElevatorRuntimeUpdate,
   emitVehicleAccessIsapiEvent,
   emitYscpEvent,
   emitPermissionsUpdated,

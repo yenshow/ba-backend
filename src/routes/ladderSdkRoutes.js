@@ -6,9 +6,11 @@ const sdkCardService = require("../services/ladderSdk/sdkCardService");
 const sdkControlService = require("../services/ladderSdk/sdkControlService");
 const sdkArmingService = require("../services/ladderSdk/sdkArmingService");
 const sdkEventService = require("../services/ladderSdk/sdkEventService");
+const { recordPlatformCallElevator } = require("../services/ladderSdk/sdkEventPersistence");
 const {
   authenticate,
   requirePermission,
+  requireAnyPermission,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -103,11 +105,15 @@ router.delete(
 
 /**
  * POST /api/ladder-sdk/devices/:deviceId/control
- * Body: { gatewayIndex?: number, command: 'open'|'close'|'normally_open'|'normally_closed' }
+ * Body: { gatewayIndex?, command, locationId?, targetLogicalIndex? }
+ * command: open|manual|normally_open|normally_closed|visitor_call
  */
 router.post(
   "/devices/:deviceId/control",
-  requirePermission("system.equipment_management.device.update"),
+  requireAnyPermission([
+    "system.equipment_management.device.update",
+    "system.elevator.device.control",
+  ]),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);
@@ -115,7 +121,36 @@ router.post(
       throwApiError(C.LADDER_SDK_INVALID_COMMAND, "請提供 command");
     }
     const result = await sdkControlService.controlGateway(deviceId, req.body);
-    res.sendSuccess(result);
+    const locationId = req.body?.locationId ?? req.body?.location_id;
+    const targetLogicalIndex =
+      req.body?.targetLogicalIndex ?? req.body?.target_logical_index;
+    const gatewayIndex =
+      req.body?.gatewayIndex ?? req.body?.gateway_index ?? null;
+    let live;
+    if (
+      locationId != null &&
+      targetLogicalIndex != null &&
+      sdkControlService.isCallElevatorCommand(req.body.command)
+    ) {
+      const elevatorRuntimeService = require("../services/elevator/elevatorRuntimeService");
+      const { getElevatorConfigFromLocation } = require("../services/elevator/elevatorFloorModel");
+      const elevatorService = require("../services/elevator/elevatorService");
+      const { location } = await elevatorService.getElevatorLocationById(
+        Number(locationId),
+      );
+      const config = getElevatorConfigFromLocation(location);
+      live = elevatorRuntimeService.notifyCallElevator(
+        Number(locationId),
+        Number(targetLogicalIndex),
+        config,
+      );
+      await recordPlatformCallElevator({
+        deviceId,
+        gatewayIndex,
+        command: req.body.command,
+      });
+    }
+    res.sendSuccess(live != null ? { ...result, live } : result);
   }),
 );
 
