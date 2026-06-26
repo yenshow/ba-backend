@@ -11,6 +11,7 @@ const {
   parseVehicleAccessConfigFields,
   applyVehicleAccessEpochOnSave,
 } = require("./vehicleAccessConfig");
+const { parseLaneId } = require("./normalizeVehicleDirection");
 
 function parseConfig(config) {
   const c =
@@ -75,6 +76,20 @@ async function validateVehicleAccessConfig(
       throwApiError(
         C.PEOPLE_COUNTING_VALIDATION_FAILED,
         "YSCP 車道地點不可設為停車場模式",
+      );
+    }
+    const entry = parseLaneId(cfg.entryLaneId);
+    const exit = parseLaneId(cfg.exitLaneId);
+    if (entry == null) {
+      throwApiError(
+        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        "YSCP 車輛地點至少需要設定入口車道",
+      );
+    }
+    if (entry != null && exit != null && entry === exit) {
+      throwApiError(
+        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        "入口與出口車道不可相同",
       );
     }
     return cfg;

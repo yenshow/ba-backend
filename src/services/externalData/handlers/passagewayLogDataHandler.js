@@ -18,7 +18,7 @@ class PassagewayLogDataHandler extends BaseExternalDataService {
       defaultOrderBy: "trigger_time",
       defaultOrderDirection: "DESC",
       defaultLimit: 50,
-      maxLimit: 1000,
+      maxLimit: 10000,
     });
   }
 

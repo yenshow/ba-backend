@@ -27,7 +27,6 @@
     "postgres:download": "node scripts/download-portable-postgres.js",
     "postgres:start": "node scripts/start-portable-postgres.js",
     "postgres:stop": "node scripts/stop-portable-postgres.js",
-    "alerts:clear": "node scripts/clearAlerts.js",
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",
     "yscp:subscribe": "node scripts/yscpEventSubscribe.js subscribe",
@@ -37,8 +36,7 @@
     "mediamtx": "node scripts/start-mediamtx.js",
     "mediamtx:generate": "node scripts/generate-mediamtx-config.js",
     "mediamtx:pm2:start": "pm2 start ../ecosystem.config.cjs --only ba-mediamtx",
-    "mediamtx:pm2:stop": "pm2 stop ba-mediamtx",
-    "test:security:safe-url": "node --test tests/security/safeUrl.test.js"
+    "mediamtx:pm2:stop": "pm2 stop ba-mediamtx"
   },
   "keywords": [],
   "author": "",

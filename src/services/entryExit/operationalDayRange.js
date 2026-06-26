@@ -73,9 +73,31 @@ function getLast7OperationalDaysTimeRange(now = new Date()) {
   };
 }
 
+/**
+ * 往前第 N 個完整營運日（1 = 上一營運日，與 getPreviousOperationalDayTimeRange 相同）
+ * @param {number} daysAgo
+ * @param {Date} [now]
+ * @returns {{ start: Date, end: Date }}
+ */
+function getOperationalDayRangeDaysAgo(daysAgo, now = new Date()) {
+  const n = Math.max(1, Math.trunc(Number(daysAgo) || 1));
+  const current = getOperationalDayTimeRange(now);
+  const { timezone } = getRolloverConfig();
+  const startDt = DateTime.fromJSDate(current.start, { zone: "utc" }).setZone(
+    timezone,
+  );
+  const targetStart = startDt.minus({ days: n });
+  const targetEnd = targetStart.plus({ days: 1 }).minus({ milliseconds: 1 });
+  return {
+    start: targetStart.toUTC().toJSDate(),
+    end: targetEnd.toUTC().toJSDate(),
+  };
+}
+
 module.exports = {
   getOperationalDayTimeRange,
   getPreviousOperationalDayTimeRange,
   getLast7OperationalDaysTimeRange,
+  getOperationalDayRangeDaysAgo,
   getRolloverConfig,
 };

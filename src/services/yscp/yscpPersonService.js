@@ -3,7 +3,7 @@ const https = require("https");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const runtimeConfigService = require("../platform/runtimeConfigService");
+const config = require("../../config");
 const logger = require("../../utils/logger");
 
 const serviceLogger = logger.createLogger("YSCP Person Service");
@@ -15,10 +15,6 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
  * 處理人員資訊和圖片資料的獲取
  */
 class YscpPersonService {
-	_yscp() {
-		return runtimeConfigService.getYscp();
-	}
-
 	/**
 	 * 從 output 文件讀取人員 ID 列表
 	 * @param {string} filePath - 文件路徑（相對於 output 目錄或絕對路徑）
@@ -73,7 +69,7 @@ class YscpPersonService {
 		const contentType = "application/json;charset=UTF-8";
 		const textToSign = `${method}\n${accept}\n${contentType}\n${urlPath}`;
 		const signature = crypto
-			.createHmac("sha256", this._yscp().secretKey)
+			.createHmac("sha256", config.yscp.secretKey)
 			.update(textToSign)
 			.digest("base64");
 		return signature;
@@ -95,11 +91,11 @@ class YscpPersonService {
 			headers: {
 				Accept: accept,
 				"Content-Type": contentType,
-				"X-Ca-Key": this._yscp().accessKey,
+				"X-Ca-Key": config.yscp.accessKey,
 				"X-Ca-Signature": signature,
 			},
 			httpsAgent: new https.Agent({
-				rejectUnauthorized: this._yscp().rejectUnauthorized,
+				rejectUnauthorized: config.yscp.rejectUnauthorized,
 			}),
 			timeout: 30000,
 			...options,
@@ -114,7 +110,7 @@ class YscpPersonService {
 	async getPersonInfo(personId) {
 		try {
 			const urlPath = `/artemis/api/resource/v1/person/personId/personInfo`;
-			const fullUrl = `${this._yscp().host}${urlPath}`;
+			const fullUrl = `${config.yscp.host}${urlPath}`;
 			const requestConfig = this._buildRequestConfig(urlPath);
 
 			const response = await axios.post(
@@ -157,7 +153,7 @@ class YscpPersonService {
 	async getPersonPicture(personId, picUri) {
 		try {
 			const urlPath = `/artemis/api/resource/v1/person/picture_data`;
-			const fullUrl = `${this._yscp().host}${urlPath}`;
+			const fullUrl = `${config.yscp.host}${urlPath}`;
 			const requestConfig = this._buildRequestConfig(urlPath, "POST", {
 				responseType: "text",
 			});

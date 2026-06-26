@@ -18,7 +18,7 @@ const crypto = require("crypto");
 const https = require("https");
 
 const API_VER = "v1";
-const DEFAULT_EVENT_TYPES = [196893, 131622];
+const DEFAULT_EVENT_TYPES = [130, 131, 131622, 196893, 198914];
 const LOCAL = {
   hostinfo: "https://127.0.0.1",
   eventDest: "http://127.0.0.1:4000/api/yscp/event-receiver",
@@ -45,7 +45,9 @@ const pick = (...values) => {
 };
 
 const normalizeHostinfo = (raw) => {
-  const s = String(raw || "").trim().replace(/\/+$/, "");
+  const s = String(raw || "")
+    .trim()
+    .replace(/\/+$/, "");
   if (!s) return "";
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 };
@@ -132,7 +134,9 @@ const postArtemis = async (cfg, path, body = {}) => {
         ? "（HOSTINFO 應為 YSCP Artemis，非 BA 後端 :4000；本機通常為 https://127.0.0.1）"
         : "";
     const bodyText =
-      typeof res.data === "string" ? res.data.slice(0, 200) : JSON.stringify(res.data);
+      typeof res.data === "string"
+        ? res.data.slice(0, 200)
+        : JSON.stringify(res.data);
     throw new Error(`HTTP ${res.status}${hint}\n${bodyText}`);
   }
   if (String(res.headers["content-type"] || "").includes("text/html")) {

@@ -104,10 +104,42 @@ const cors = {
 
 /**
  * 功能旗標（YSCP 外部資料庫）
- * 預設 true；設為 false 時不連外部 CMS DB，人流／車輛等 YSCP 資料源皆停用。
+ * 預設 false；設為 true 時才連外部 CMS DB。
  */
 const features = {
-  enableYscpDatabase: toBoolean(getEnv("ENABLE_YSCP_DATABASE"), true),
+  enableYscpDatabase: toBoolean(getEnv("ENABLE_YSCP_DATABASE"), false),
+};
+
+const DEFAULT_YSCP_HOST = "192.168.2.2";
+
+const normalizeYscpHost = (raw) =>
+  String(raw ?? DEFAULT_YSCP_HOST)
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .split(":")[0] || DEFAULT_YSCP_HOST;
+
+/**
+ * YSCP／外部平台（Bootstrap；由安裝精靈寫入 .env，變更後須重啟 PM2）
+ */
+const yscpHost = normalizeYscpHost(getEnv("YSCP_HOST", DEFAULT_YSCP_HOST));
+
+const yscp = {
+  host: `https://${yscpHost}`,
+  hostRaw: yscpHost,
+  accessKey: getEnv("YSCP_AK", ""),
+  secretKey: getEnv("YSCP_SK", ""),
+  apiVersion: "v1",
+  rejectUnauthorized: false,
+};
+
+const externalDatabase = {
+  host: yscpHost,
+  port: 5432,
+  user: "postgres",
+  password: getEnv("YSCP_DB_PASSWORD", ""),
+  database: "cms",
+  connectionLimit: 10,
 };
 
 /**
@@ -187,6 +219,8 @@ module.exports = {
   database,
   jwt,
   features,
+  yscp,
+  externalDatabase,
   license,
   mediaMTX,
   ladderSdk,

@@ -7,6 +7,9 @@ const externalDb = require("../../database/externalDb");
 const db = require("../../database/db");
 const getLocationService = () => require("../location/locationService");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
+const {
+  getOperationalDayRangeDaysAgo,
+} = require("../entryExit/operationalDayRange");
 
 /**
  * 取得 lane_id -> { zoneName, locationName, locationId } 映射
@@ -119,36 +122,16 @@ async function syncRecords(start, end) {
  * @returns {Promise<{ synced: number }>}
  */
 async function syncYesterday() {
-  const now = new Date();
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0, 0)
-  );
-  const end = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate() - 1,
-      23,
-      59,
-      59,
-      999
-    )
-  );
-  return syncRecords(start, end);
+  return syncDayAgo(1);
 }
 
 /**
- * 同步指定天數前的單日記錄
- * @param {number} daysAgo - 幾天前（1 = 昨天）
+ * 同步指定營運日數前的單日記錄
+ * @param {number} daysAgo - 幾個營運日前（1 = 上一營運日）
  * @returns {Promise<{ synced: number }>}
  */
 async function syncDayAgo(daysAgo) {
-  const now = new Date();
-  const d = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo, 0, 0, 0, 0)
-  );
-  const start = d;
-  const end = new Date(d.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const { start, end } = getOperationalDayRangeDaysAgo(daysAgo);
   return syncRecords(start, end);
 }
 

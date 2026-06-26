@@ -1,6 +1,6 @@
 /**
- * 營運設定（system_settings）：YSCP、警報日界線、備份排程。
- * Bootstrap（伺服器/JWT/主庫/MediaMTX/功能開關）仍由 .env 管理。
+ * 營運設定（system_settings）：警報日界線、備份排程。
+ * Bootstrap（伺服器/JWT/主庫/MediaMTX/YSCP/功能開關）由 .env 管理（安裝精靈）。
  */
 
 const settingsService = require("./settingsService");
@@ -12,10 +12,6 @@ const { Info } = require("luxon");
 const runtimeLogger = logger.createLogger("runtimeConfigService");
 
 const RUNTIME_KEYS = [
-  "YSCP_HOST",
-  "YSCP_DB_PASSWORD",
-  "YSCP_AK",
-  "YSCP_SK",
   "ALERT_DAILY_ROLLOVER_TZ",
   "ALERT_DAILY_ROLLOVER_LOCAL_HOUR",
   "ALERT_DAILY_ROLLOVER_LOCAL_MINUTE",
@@ -26,11 +22,6 @@ const RUNTIME_KEYS = [
 ];
 
 const RUNTIME_KEY_SET = new Set(RUNTIME_KEYS);
-
-/** 空字串表示「不變更」 */
-const SECRET_KEYS = new Set(["YSCP_DB_PASSWORD", "YSCP_AK", "YSCP_SK"]);
-
-const YSCP_KEYS = ["YSCP_HOST", "YSCP_DB_PASSWORD", "YSCP_AK", "YSCP_SK"];
 
 const ALERT_KEYS = [
   "ALERT_DAILY_ROLLOVER_TZ",
@@ -54,10 +45,6 @@ const buildDefaultBackupRootDir = () => {
 };
 
 const DEFAULTS = {
-  YSCP_HOST: "192.168.2.2",
-  YSCP_DB_PASSWORD: "",
-  YSCP_AK: "",
-  YSCP_SK: "",
   ALERT_DAILY_ROLLOVER_TZ: "Asia/Taipei",
   ALERT_DAILY_ROLLOVER_LOCAL_HOUR: "0",
   ALERT_DAILY_ROLLOVER_LOCAL_MINUTE: "5",
@@ -77,13 +64,6 @@ const toNumber = (value, fallback) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-const normalizeYscpHost = (raw) =>
-  String(raw ?? DEFAULTS.YSCP_HOST)
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .split("/")[0]
-    .split(":")[0] || DEFAULTS.YSCP_HOST;
-
 const buildCacheFromMap = (map) => {
   const next = { ...DEFAULTS };
   for (const key of RUNTIME_KEYS) {
@@ -93,30 +73,6 @@ const buildCacheFromMap = (map) => {
     }
   }
   cache = next;
-};
-
-const getYscp = () => {
-  const host = normalizeYscpHost(cache.YSCP_HOST);
-  return {
-    host: `https://${host}`,
-    hostRaw: host,
-    accessKey: cache.YSCP_AK ?? "",
-    secretKey: cache.YSCP_SK ?? "",
-    apiVersion: "v1",
-    rejectUnauthorized: false,
-  };
-};
-
-const getExternalDatabase = () => {
-  const host = normalizeYscpHost(cache.YSCP_HOST);
-  return {
-    host,
-    port: 5432,
-    user: "postgres",
-    password: cache.YSCP_DB_PASSWORD ?? "",
-    database: "cms",
-    connectionLimit: 10,
-  };
 };
 
 const getAlerts = () => ({
@@ -159,15 +115,6 @@ const getValues = () => {
   return values;
 };
 
-/** GET 回應用：密碼類鍵不回傳實際值 */
-const getValuesForClient = () => {
-  const values = getValues();
-  for (const key of SECRET_KEYS) {
-    values[key] = "";
-  }
-  return values;
-};
-
 async function loadFromDatabase() {
   const map = await settingsService.getSettingsByKeys(RUNTIME_KEYS);
   buildCacheFromMap({ ...DEFAULTS, ...map });
@@ -177,9 +124,7 @@ async function init() {
   if (initialized) return;
   await loadFromDatabase();
   initialized = true;
-  runtimeLogger.info("Runtime 設定已載入", {
-    yscpHost: normalizeYscpHost(cache.YSCP_HOST),
-  });
+  runtimeLogger.info("Runtime 設定已載入");
 }
 
 function validateValues(merged) {
@@ -187,8 +132,6 @@ function validateValues(merged) {
     const n = Number(raw);
     return Number.isFinite(n) && Number.isInteger(n) && n >= 1;
   };
-
-  if (!merged.YSCP_HOST?.trim()) return "主機不可為空白";
 
   for (const k of [
     "BACKUP_DATABASE_CUTOFF_DAYS",
@@ -247,13 +190,7 @@ async function updateBatch(partial) {
     if (!RUNTIME_KEY_SET.has(key)) continue;
 
     const val = String(raw ?? "").trim();
-    if (SECRET_KEYS.has(key) && val === "") continue;
-
-    if (key === "YSCP_HOST") {
-      next[key] = normalizeYscpHost(val);
-    } else {
-      next[key] = val;
-    }
+    next[key] = val;
     if (next[key] === (cache[key] ?? "")) continue;
 
     changedKeys.push(key);
@@ -275,7 +212,6 @@ async function updateBatch(partial) {
 }
 
 let applyHooks = {
-  onYscpChange: async () => {},
   onAlertsChange: async () => {},
   onBackupChange: async () => {},
 };
@@ -288,30 +224,15 @@ const hasAny = (keys, set) => keys.some((k) => set.has(k));
 
 async function applySideEffects(changedKeys) {
   const set = new Set(changedKeys);
-  /** @type {Record<string, unknown>} */
-  const sideEffects = {};
-
-  if (hasAny(YSCP_KEYS, set)) {
-    sideEffects.yscpExternalDb = await applyHooks.onYscpChange();
-  }
-  if (hasAny(ALERT_KEYS, set)) {
-    sideEffects.alerts = await applyHooks.onAlertsChange();
-  }
-  if (hasAny(BACKUP_KEYS, set)) {
-    sideEffects.backup = await applyHooks.onBackupChange();
-  }
-
-  return sideEffects;
+  if (hasAny(ALERT_KEYS, set)) await applyHooks.onAlertsChange();
+  if (hasAny(BACKUP_KEYS, set)) await applyHooks.onBackupChange();
 }
 
 module.exports = {
   init,
-  getYscp,
-  getExternalDatabase,
   getAlerts,
   getBackup,
   getValues,
-  getValuesForClient,
   updateBatch,
   registerApplyHooks,
   applySideEffects,

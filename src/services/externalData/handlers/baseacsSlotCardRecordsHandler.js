@@ -3,7 +3,7 @@ const { applyDefaultTimeFilters } = require("../../../utils/dateRangeUtils");
 const axios = require("axios");
 const https = require("https");
 const crypto = require("crypto");
-const runtimeConfigService = require("../../platform/runtimeConfigService");
+const config = require("../../../config");
 const logger = require("../../../utils/logger");
 
 /**
@@ -95,7 +95,7 @@ class BaseacsSlotCardRecordsHandler extends BaseExternalDataService {
 
     try {
       // 構建 URL 路徑
-      const yscp = runtimeConfigService.getYscp();
+      const yscp = config.yscp;
       const urlPath = `/artemis/api/eventService/${yscp.apiVersion}/image_data`;
       const fullUrl = `${yscp.host}${urlPath}`;
 

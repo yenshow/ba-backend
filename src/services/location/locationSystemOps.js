@@ -287,6 +287,12 @@ function buildSystemConfig(systemType, config) {
           result.floor_end = validated.floorEnd;
         }
       }
+      if (validated.floorDetection) {
+        result.floor_detection = validated.floorDetection;
+      }
+      if (validated.callDevices?.length) {
+        result.call_devices = validated.callDevices;
+      }
       return result;
     }
 
@@ -565,7 +571,10 @@ async function updateSystem(query, systemId, system) {
     targetSystemType === "vehicle_access" &&
     yscpVehicleFeature.shouldSkipYscp(systemConfig.data_source)
   ) {
-    return;
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "YSCP 車輛資料源已關閉，請改用 ISAPI 車牌攝影機",
+    );
   }
 
   if (targetSystemType === "vehicle_access") {
