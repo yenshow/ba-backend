@@ -50,6 +50,17 @@ router.get(
 );
 
 router.get(
+  "/sites/:id/live",
+  disableHttpCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const siteId = parseInt(req.params.id, 10);
+    const live = await elevatorService.getSiteLiveState(siteId);
+    res.sendSuccess({ live });
+  }),
+);
+
+router.get(
   "/logs",
   requirePermission("system.elevator.report.full"),
   disableHttpCache,

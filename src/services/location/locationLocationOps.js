@@ -355,6 +355,8 @@ async function deleteLocation(id) {
       throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
     }
 
+    shared.refreshAfterLocationOrZoneDelete(locationLogger);
+
     return {
       message: "地點刪除成功",
       id: String(id),

@@ -4,6 +4,8 @@
  * - 其餘 controller 系統：system_config.device_ids[0]
  */
 
+const db = require("../../database/db");
+
 const parsePositiveInt = (v) => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
@@ -34,7 +36,26 @@ const CONTROLLER_DEVICE_ID_SQL = `
   WHERE device_id IS NOT NULL
 `;
 
+/** 梯控／呼梯設備是否已綁定於任一電梯地點 */
+async function isElevatorBoundDeviceId(deviceId) {
+  const id = parsePositiveInt(deviceId);
+  if (!id) return false;
+  const rows = await db.query(
+    `SELECT 1
+     FROM location_systems ls
+     WHERE ls.system_type = 'elevator'
+       AND (
+         (ls.system_config->'ladder_device'->>'device_id')::int = ?
+         OR (ls.system_config->'call_device'->>'device_id')::int = ?
+       )
+     LIMIT 1`,
+    [id, id],
+  );
+  return Array.isArray(rows) && rows.length > 0;
+}
+
 module.exports = {
   getPrimaryControllerDeviceId,
   CONTROLLER_DEVICE_ID_SQL,
+  isElevatorBoundDeviceId,
 };

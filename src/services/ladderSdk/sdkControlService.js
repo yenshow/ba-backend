@@ -3,6 +3,9 @@
  */
 const { invokeBridge } = require("./sdkBridgeClient");
 const { getLadderDevice, toBridgeDevice } = require("./sdkLadderDeviceService");
+const { isElevatorBoundDeviceId } = require("../location/controllerBindingUtils");
+const elevatorService = require("../elevator/elevatorService");
+const elevatorRuntimeService = require("../elevator/elevatorRuntimeService");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
 
@@ -64,8 +67,69 @@ const controlGateway = async (deviceId, options = {}) => {
   });
 };
 
+async function resolveCallElevatorContext(deviceId, options) {
+  const locationId = Number(options.locationId);
+  const targetLogicalIndex = Number(options.targetLogicalIndex);
+  if (
+    !Number.isFinite(locationId) ||
+    locationId <= 0 ||
+    !Number.isFinite(targetLogicalIndex) ||
+    targetLogicalIndex <= 0
+  ) {
+    return null;
+  }
+
+  const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const config = elevatorService.getElevatorConfig(location);
+  const callDeviceId = Number(config.callDevice?.deviceId);
+  if (callDeviceId !== Number(deviceId)) {
+    throw createApiError(C.ELEVATOR_VALIDATION_FAILED, "呼梯設備與地點不符", {
+      statusCode: 400,
+    });
+  }
+
+  return { locationId, targetLogicalIndex, config };
+}
+
+/**
+ * 電梯監控頁控制：設備管理員可控制任意梯控；僅具 elevator.device.control 者限已綁定電梯地點的設備。
+ * 呼梯（visitor_call）且帶 locationId／targetLogicalIndex 時更新運行態並回傳 live。
+ */
+const controlGatewayForElevatorRequest = async (
+  deviceId,
+  options = {},
+  { allowAnyLadderDevice = false } = {},
+) => {
+  if (!allowAnyLadderDevice) {
+    const bound = await isElevatorBoundDeviceId(deviceId);
+    if (!bound) {
+      throw createApiError(C.PERMISSION_DENIED, "設備不屬於電梯系統", {
+        statusCode: 403,
+      });
+    }
+  }
+
+  const callContext = isCallElevatorCommand(options.command)
+    ? await resolveCallElevatorContext(deviceId, options)
+    : null;
+
+  const bridgeResult = await controlGateway(deviceId, options);
+
+  if (!callContext) {
+    return bridgeResult;
+  }
+
+  const live = elevatorRuntimeService.notifyCallElevator(
+    callContext.locationId,
+    callContext.targetLogicalIndex,
+    callContext.config,
+  );
+  return { ...bridgeResult, live };
+};
+
 module.exports = {
   controlGateway,
+  controlGatewayForElevatorRequest,
   resolveCommand,
   isCallElevatorCommand,
 };

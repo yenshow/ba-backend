@@ -204,6 +204,12 @@ const requireLocationMutation = (action) => async (req, res, next) => {
       next,
     );
   }
+  if (action === "update" && req.query.locationType) {
+    return requireAnyPermission([
+      `${moduleCode}.location.update`,
+      `${moduleCode}.location.delete`,
+    ])(req, res, next);
+  }
   return requirePermission(`${moduleCode}.location.${action}`)(req, res, next);
 };
 

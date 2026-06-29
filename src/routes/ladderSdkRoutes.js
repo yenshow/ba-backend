@@ -9,7 +9,10 @@ const sdkEventService = require("../services/ladderSdk/sdkEventService");
 const {
   authenticate,
   requirePermission,
+  requireAnyPermission,
 } = require("../middleware/authMiddleware");
+const { requireFeature } = require("../middleware/licenseMiddleware");
+const permissionService = require("../access/permissionService");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
@@ -103,18 +106,33 @@ router.delete(
 
 /**
  * POST /api/ladder-sdk/devices/:deviceId/control
- * Body: { gatewayIndex?: number, command: 'open'|'close'|'normally_open'|'normally_closed' }
+ * Body: { gatewayIndex?, command, locationId?, targetLogicalIndex? }
  */
 router.post(
   "/devices/:deviceId/control",
-  requirePermission("system.equipment_management.device.update"),
+  requireFeature("elevator"),
+  requireAnyPermission([
+    "system.equipment_management.device.update",
+    "system.elevator.device.control",
+  ]),
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);
     if (!req.body?.command) {
       throwApiError(C.LADDER_SDK_INVALID_COMMAND, "請提供 command");
     }
-    const result = await sdkControlService.controlGateway(deviceId, req.body);
+    const codes = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+    const allowAnyLadderDevice =
+      req.user?.role === "admin" ||
+      permissionService.hasPermissionCode(
+        codes,
+        "system.equipment_management.device.update",
+      );
+    const result = await sdkControlService.controlGatewayForElevatorRequest(
+      deviceId,
+      req.body,
+      { allowAnyLadderDevice },
+    );
     res.sendSuccess(result);
   }),
 );

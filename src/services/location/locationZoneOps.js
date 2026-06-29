@@ -537,12 +537,21 @@ async function deleteZone(id) {
       throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
     }
 
+    shared.refreshAfterLocationOrZoneDelete(locationLogger);
+
     return {
       message: "區域刪除成功",
     };
   } catch (error) {
     rethrowIfApiError(error);
     if (error.code === "23503") {
+      locationLogger.error("刪除區域被外鍵阻擋", {
+        id,
+        code: error.code,
+        constraint: error.constraint,
+        detail: error.detail,
+        module: "locationService",
+      });
       throwApiError(
         C.LOCATION_ZONE_DELETE_FORBIDDEN,
         "無法刪除區域：仍有地點關聯到此區域",

@@ -2,31 +2,31 @@
 
 後端業務邏輯層；HTTP 入口見 `src/routes/`。新增 service 請依 **領域** 放入對應子資料夾，**勿**再建立 `systems/` 總包目錄。
 
-## 目錄一覽（約 103 檔）
+## 目錄一覽（約 162 檔 `.js`）
 
 | 資料夾 | 檔案數 | 職責 |
 |--------|--------|------|
-| `platform/` | 6 | 使用者、權限、`settingsService`、`runtimeConfig*`、`moduleRegistry` |
-| `license/` | 3 | 授權狀態、配額、平台線上啟用 |
-| `location/` | 2+ | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
-| `elevator/` | 8 | 電梯地點、運行態、樓層授權、梯控同步 job |
-| `ladderSdk/` | 6+ | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
-| `snapshotStatus/` | 8 | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
-| `environment/` | 4 | 環境讀數、衍生指標、彙總排程 |
-| `peopleCounting/` | 11 | 人流 API、sync、providers；含 ISAPI 攝影機訂閱（`isapiPeopleCounting*`） |
-| `vehicleAccess/` | 2 | 車輛進出日同步（備份排程用）、方向正規化 |
-| `entryExit/` | 7 | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
+| `platform/` | 4 | `userService`、`settingsService`、`runtimeConfig*`（**不含** `moduleRegistry`；見 `src/access/registry.js`） |
+| `license/` | 5 | 授權狀態、配額、平台線上啟用、`effectiveFeaturesCache` |
+| `location/` | 6 | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
+| `elevator/` | 7 | 電梯地點、運行態、樓層授權、梯控同步 job |
+| `ladderSdk/` | 10 | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
+| `snapshotStatus/` | 9 | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
+| `environment/` | 6 | 環境讀數、衍生指標、彙總排程 |
+| `peopleCounting/` | 13 | 人流 API、sync、providers；含 ISAPI 攝影機訂閱（`isapiPeopleCounting*`） |
+| `vehicleAccess/` | 18 | 車輛進出 API、ISAPI 訂閱／持久化、方向正規化、備份同步 |
+| `entryExit/` | 4 | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 10 | 設備 CRUD、Modbus、`modbusDiDoConfig` |
-| `monitoring/` | 8 | 背景監控、`systemSnapshotStatusFields`、`snapshotTaskRegistry` |
+| `monitoring/` | 11 | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／電梯／快照／DI-DO 監控 |
 | `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
 | `backup/` | 8 | 備份排程與各系統報表格式 |
 | `accessControl/` | 5 | 門禁業務、ISAPI 訂閱／持久化 |
-| `isapi/` | 2 | **佈防訂閱中心** `isapiSubscribeHub`（見 `isapi/README.md`） |
+| `isapi/` | 1 | **佈防訂閱中心** `isapiSubscribeHub`（`licenseRuntimeService` reconcile） |
 | `externalData/` | 14 | 外部 DB handler 與車輛群組彙總 |
 | `communication/` | 2 | MediaMTX 串流（對應 license `surveillance`） |
-| `personnel/` | 7 | 人員、匯入、人臉、同步 job |
+| `personnel/` | 11 | 人員、匯入、人臉、同步 job |
 | `yscp/` | 2 | YSCP 人員／事件 |
-| `websocket/` | 1 | WebSocket 推播 |
+| `websocket/` | 2 | WebSocket 推播、`wsEventPermissions` |
 | `multimedia/` | 1 | 多媒體儀表板 |
 | `notifications/` | 1 | SMTP mailer |
 
@@ -57,6 +57,7 @@
 - **深度**：`services/<domain>/` 下一層檔案引用 DB／config／utils 用 `../../database`、`../../config`、`../../utils`。
 - **跨域**：優先 `require("../<domain>/...")`，避免在 `routes` 外再包一層 `systems`。
 - **快照監控**：`monitoring/snapshotTaskRegistry` 註冊各 `snapshotStatus/*`；共用欄位語意見 `monitoring/systemSnapshotStatusFields.js`。
+- **人流統計**：**不**註冊於 `monitoringTaskRegistry`／`backgroundMonitor`；即時刷新依 YSCP 事件（`yscpEventRoutes`）、門禁／攝影機 ISAPI 訂閱與 WS 提示 → REST 校準（見 `docs/40-systems/people-counting.md`）。舊版定時輪詢 `peopleCountingMonitor.js` 已移除，勿恢復。
 - **Modbus DI/DO**：照明／空調與 `devices/modbusDiDoConfig.js` 共用，勿在單一 `*StatusService` 內複製位址解析。
 
 ## 新增子系統時放哪裡？

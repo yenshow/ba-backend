@@ -661,6 +661,22 @@ async function deleteEmptyZoneIfNeeded(query, zoneId) {
   return false;
 }
 
+const {
+  invalidateLocationCache: invalidateElevatorLocationCache,
+} = require("../monitoring/elevatorLocationCache");
+
+function refreshAfterLocationOrZoneDelete(logger) {
+  invalidateElevatorLocationCache();
+  try {
+    require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+  } catch (error) {
+    logger?.warn("刪除後刷新車輛訂閱失敗", {
+      error: error?.message || String(error),
+      module: "locationService",
+    });
+  }
+}
+
 module.exports = {
   handleUniqueConstraintError,
   assertValidSystemType,
@@ -682,4 +698,5 @@ module.exports = {
   deleteLocationsWithoutSystems,
   deleteLocationsByIdsWithoutSystems,
   deleteEmptyZoneIfNeeded,
+  refreshAfterLocationOrZoneDelete,
 };
