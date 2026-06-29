@@ -1452,7 +1452,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_sync_jobs (
         job_id VARCHAR(80) PRIMARY KEY,
-        job_type VARCHAR(24) NOT NULL CHECK (job_type IN ('sync_location', 'sync_all_locations')),
+        job_type VARCHAR(24) NOT NULL CHECK (job_type IN ('sync_location', 'sync_all_locations', 'elevator_sync_location')),
         location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         status VARCHAR(16) NOT NULL CHECK (status IN ('queued','running','completed')),
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1514,7 +1514,21 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // ISAPI 監聽主機收到之門禁事件（非 heartBeat），payload 存巢狀 AccessControllerEvent；附圖存 uploads/access-events，路徑存 picture_path
+    // person_sync_jobs：擴充 job_type 支援電梯樓層同步
+    await targetPool.query(`
+      ALTER TABLE person_sync_jobs
+      DROP CONSTRAINT IF EXISTS person_sync_jobs_job_type_check
+    `);
+    await targetPool.query(`
+      ALTER TABLE person_sync_jobs
+      ADD CONSTRAINT person_sync_jobs_job_type_check
+      CHECK (job_type IN ('sync_location', 'sync_all_locations', 'elevator_sync_location'))
+    `);
+    schemaLogger.info("person_sync_jobs job_type 已擴充 elevator_sync_location", {
+      module: "initSchema",
+    });
+
+    // ISAPI 監聽主機收到之門禁事件
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS isapi_access_events (
         id BIGSERIAL PRIMARY KEY,

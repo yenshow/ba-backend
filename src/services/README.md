@@ -8,7 +8,9 @@
 |--------|--------|------|
 | `platform/` | 6 | 使用者、權限、`settingsService`、`runtimeConfig*`、`moduleRegistry` |
 | `license/` | 3 | 授權狀態、配額、平台線上啟用 |
-| `location/` | 1 | 區域／地點／`location_systems`（多系統共用） |
+| `location/` | 2+ | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
+| `elevator/` | 8 | 電梯地點、運行態、樓層授權、梯控同步 job |
+| `ladderSdk/` | 6+ | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
 | `snapshotStatus/` | 8 | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
 | `environment/` | 4 | 環境讀數、衍生指標、彙總排程 |
 | `peopleCounting/` | 11 | 人流 API、sync、providers；含 ISAPI 攝影機訂閱（`isapiPeopleCounting*`） |
@@ -44,6 +46,8 @@
 | `accessControlRoutes` | `accessControl/accessControlService` |
 | `externalDataRoutes` | `externalData/*` |
 | `personnelRoutes` | `personnel/*` |
+| `elevatorRoutes` | `elevator/*`、`elevatorFloorSyncJobService` |
+| `ladderSdkRoutes` | `ladderSdk/*` |
 | `multimediaDashboardRoutes` | `multimedia/multimediaDashboardService` |
 
 啟動時另見 `server.js`：`platform/runtimeConfigApply`、`environment/environmentAggregationService`、備份／警報排程、ISAPI 訂閱等。

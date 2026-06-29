@@ -1,4 +1,5 @@
 const db = require("../../database/db");
+const { CONTROLLER_DEVICE_ID_SQL } = require("../location/controllerBindingUtils");
 
 /**
  * v1 quota 計數策略（避免先做 schema migration）：
@@ -45,11 +46,7 @@ const countControllersBySystemBinding = async (systemType) => {
   const rows = await db.query(
     `SELECT COUNT(*)::int AS count
      FROM (
-       SELECT DISTINCT
-        (ls.system_config->'device_ids'->>0)::int AS device_id
-       FROM location_systems ls
-       WHERE ls.system_type = ?
-         AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
+       ${CONTROLLER_DEVICE_ID_SQL}
      ) x
      INNER JOIN devices d ON d.id = x.device_id
      WHERE d.type_code = 'controller'`,

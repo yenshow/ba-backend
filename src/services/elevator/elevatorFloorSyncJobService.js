@@ -11,11 +11,11 @@ const sdkCardService = require("../ladderSdk/sdkCardService");
 const elevatorService = require("./elevatorService");
 const elevatorFloorAccessService = require("./elevatorFloorAccessService");
 const personSyncJobService = require("../personnel/personSyncJobService");
+const personSyncJobStore = require("../personnel/personSyncJobStore");
 const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 
 const SYNC_DELAY_MS = 300;
-const jobs = new Map();
 
 const randomJobId = () =>
   `elevator_sync_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -23,6 +23,12 @@ const randomJobId = () =>
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const toMessage = (err) => err?.message ?? String(err);
+
+const flushJobProgress = (job, force = false) => {
+  if (job?._flushProgress) {
+    void job._flushProgress(force);
+  }
+};
 
 const updateLadderCardSyncStatus = async (personId, status, error = null) => {
   await db.query(
@@ -118,6 +124,7 @@ async function syncLocationToDevice(
       deviceId,
       totalOps: (job.progress?.totalOps || 0) + persons.length,
     };
+    flushJobProgress(job, true);
   }
 
   for (const person of persons) {
@@ -131,7 +138,10 @@ async function syncLocationToDevice(
         type: "skip_no_card",
         message: "人員未設定卡號（請於人員主檔卡片設定填寫）",
       });
-      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      if (job) {
+        job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+        flushJobProgress(job);
+      }
       continue;
     }
     if (!ladderCard) {
@@ -139,7 +149,10 @@ async function syncLocationToDevice(
         type: "skip_no_ladder_floors",
         message: "人員未設定梯控授權樓層",
       });
-      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      if (job) {
+        job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+        flushJobProgress(job);
+      }
       continue;
     }
 
@@ -152,7 +165,10 @@ async function syncLocationToDevice(
         type: "skip_no_floors",
         message: "人員未授權任何樓層",
       });
-      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      if (job) {
+        job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+        flushJobProgress(job);
+      }
       continue;
     }
 
@@ -195,7 +211,10 @@ async function syncLocationToDevice(
         });
       }
 
-      if (job) job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+      if (job) {
+        job.progress.doneOps = (job.progress.doneOps || 0) + 1;
+        flushJobProgress(job);
+      }
       await sleep(SYNC_DELAY_MS);
     }
 
@@ -287,6 +306,7 @@ async function syncLocationCards(locationId, job = null) {
       doneOps: 0,
       totalOps: 0,
     };
+    flushJobProgress(job, true);
   }
 
   const allWarnings = [];
@@ -331,51 +351,98 @@ async function syncLocationCards(locationId, job = null) {
   };
 }
 
-async function runJob(jobId) {
-  const job = jobs.get(jobId);
-  if (!job) return;
-  job.status = "running";
-  job.startedAt = Date.now();
-  try {
-    const result = await syncLocationCards(job.locationId, job);
-    job.status = "completed";
-    job.finishedAt = Date.now();
-    job.result = result;
-  } catch (err) {
-    job.status = "completed";
-    job.finishedAt = Date.now();
-    job.error = toMessage(err);
-    job.result = { warnings: [] };
-  }
-}
+const toElevatorJobView = (stored) => {
+  if (!stored) return null;
+  return {
+    jobId: stored.jobId,
+    status: stored.status,
+    progress: stored.progress || {},
+    result: stored.result || null,
+    error: stored.error?.message ?? null,
+  };
+};
 
 async function startLocationSyncJob(locationId, _userId) {
   const jobId = randomJobId();
-  const job = {
+  const locId = Number(locationId);
+  const progress = { doneOps: 0, totalOps: 0 };
+
+  await personSyncJobStore.createJob({
     jobId,
     jobType: "elevator_sync_location",
-    locationId: Number(locationId),
+    locationId: locId,
     status: "queued",
-    createdAt: Date.now(),
-    startedAt: null,
-    finishedAt: null,
-    progress: {},
-    result: null,
-    error: null,
-  };
-  jobs.set(jobId, job);
-  setImmediate(() => {
-    void runJob(jobId);
+    progress,
+    itemsMeta: {},
   });
+
+  void (async () => {
+    const job = {
+      jobId,
+      locationId: locId,
+      status: "running",
+      progress,
+      result: null,
+      error: null,
+    };
+    let lastProgressFlushAt = 0;
+    job._flushProgress = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastProgressFlushAt < 2000) return;
+      lastProgressFlushAt = now;
+      await personSyncJobStore.updateJob(jobId, {
+        progress: { ...job.progress },
+      });
+    };
+    const startedAt = Date.now();
+    try {
+      await personSyncJobStore.updateJob(jobId, {
+        status: "running",
+        startedAt,
+        progress,
+      });
+      const result = await syncLocationCards(locId, job);
+      const finishedAt = Date.now();
+      job.status = "completed";
+      job.finishedAt = finishedAt;
+      job.result = result;
+      await personSyncJobStore.replaceWarnings(
+        jobId,
+        result?.warnings ?? [],
+        locId,
+      );
+      await personSyncJobStore.updateJob(jobId, {
+        status: "completed",
+        finishedAt,
+        progress: job.progress,
+        result,
+        error: null,
+      });
+    } catch (err) {
+      const finishedAt = Date.now();
+      job.status = "completed";
+      job.finishedAt = finishedAt;
+      job.error = toMessage(err);
+      job.result = { warnings: [] };
+      await personSyncJobStore.updateJob(jobId, {
+        status: "completed",
+        finishedAt,
+        progress: job.progress,
+        result: job.result,
+        error: { message: toMessage(err) },
+      });
+    }
+  })();
+
   return { jobId };
 }
 
-function getJob(jobId) {
-  const job = jobs.get(String(jobId || "").trim());
-  if (!job) {
+async function getJob(jobId) {
+  const stored = await personSyncJobStore.getJob(String(jobId || "").trim());
+  if (!stored) {
     throwApiError(C.ELEVATOR_SYNC_JOB_NOT_FOUND, "同步工作不存在");
   }
-  return { job };
+  return { job: toElevatorJobView(stored) };
 }
 
 function mapCardSyncStatus(raw) {

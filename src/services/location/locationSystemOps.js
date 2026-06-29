@@ -26,6 +26,9 @@ const {
 const {
   validatePeopleCountingSystemConfig,
 } = require("../peopleCounting/peopleCountingValidation");
+const {
+  getPrimaryControllerDeviceId,
+} = require("./controllerBindingUtils");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const {
   ensureIntArray,
@@ -401,12 +404,18 @@ async function assertControllerQuotaWithinLimit({
        COUNT(*)::int AS used,
        SUM(CASE WHEN device_id = $2 THEN 1 ELSE 0 END)::int AS has
      FROM (
-       SELECT DISTINCT
-        (ls.system_config->'device_ids'->>0)::int AS device_id
-       FROM location_systems ls
-       WHERE ls.system_type = $1
-         AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
-         AND ($3::int IS NULL OR ls.id <> $3::int)
+       SELECT DISTINCT device_id
+       FROM (
+         SELECT
+           CASE
+             WHEN ls.system_type = 'elevator' THEN (ls.system_config->'ladder_device'->>'device_id')::int
+             ELSE (ls.system_config->'device_ids'->>0)::int
+           END AS device_id
+         FROM location_systems ls
+         WHERE ls.system_type = $1
+           AND ($3::int IS NULL OR ls.id <> $3::int)
+       ) x
+       WHERE device_id IS NOT NULL
      ) t`,
     [
       systemType,
@@ -461,9 +470,7 @@ async function createSystem(query, locationId, system) {
   await assertControllerQuotaWithinLimit({
     query,
     systemType,
-    nextDeviceId: Array.isArray(systemConfig?.device_ids)
-      ? systemConfig.device_ids[0] ?? null
-      : null,
+    nextDeviceId: getPrimaryControllerDeviceId(systemType, systemConfig),
   });
 
   const result = await query(
@@ -516,8 +523,10 @@ async function updateSystem(query, systemId, system) {
           }
         })()
       : existing[0].system_config || {};
-  const currentDeviceId =
-    deviceIdsFromDbSystemConfig(currentSystemConfig)[0] ?? null;
+  const currentDeviceId = getPrimaryControllerDeviceId(
+    currentSystemType,
+    currentSystemConfig,
+  );
   const targetSystemType = systemType || currentSystemType;
 
   assertValidSystemType(targetSystemType);
@@ -574,9 +583,7 @@ async function updateSystem(query, systemId, system) {
   await assertControllerQuotaWithinLimit({
     query,
     systemType: targetSystemType,
-    nextDeviceId: Array.isArray(systemConfig?.device_ids)
-      ? systemConfig.device_ids[0] ?? null
-      : null,
+    nextDeviceId: getPrimaryControllerDeviceId(targetSystemType, systemConfig),
     currentDeviceId:
       targetSystemType === currentSystemType ? currentDeviceId : null,
     excludeSystemId: systemId,

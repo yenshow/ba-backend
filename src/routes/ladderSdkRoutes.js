@@ -12,6 +12,7 @@ const {
   requirePermission,
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
+const { requireFeature } = require("../middleware/licenseMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
@@ -110,6 +111,7 @@ router.delete(
  */
 router.post(
   "/devices/:deviceId/control",
+  requireFeature("elevator"),
   requireAnyPermission([
     "system.equipment_management.device.update",
     "system.elevator.device.control",

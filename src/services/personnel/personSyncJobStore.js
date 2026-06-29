@@ -3,7 +3,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
 const ITEM_TYPES = new Set(["issues", "tail"]);
-const JOB_TYPES = new Set(["sync_location", "sync_all_locations"]);
+const JOB_TYPES = new Set(["sync_location", "sync_all_locations", "elevator_sync_location"]);
 const JOB_STATUSES = new Set(["queued", "running", "completed"]);
 
 const MAX_JOB_ISSUES_ITEMS = 2000;

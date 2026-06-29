@@ -2,6 +2,7 @@
  * 電梯運行態（DI 樓層、方向、呼梯目標）
  */
 const websocketService = require("../websocket/websocketService");
+const logger = require("../../utils/logger").createLogger("ElevatorRuntime");
 const {
   resolveDeviceConfig,
   readDiscreteBitRange,
@@ -88,13 +89,20 @@ async function readFloorDetectionBits(floorDetection, floors) {
   return readDiscreteBitRange(deviceConfig, start, end, { noCache: true });
 }
 
-function resolveCurrentFloorFromBits(floors, bits) {
+function resolveCurrentFloorFromBits(floors, bits, locationId = null) {
   const active = floors.filter((f) => {
     const addr = Number(f.diAddress);
     return Number.isFinite(addr) && bits.get(addr) === true;
   });
   if (!active.length) return null;
   const pick = [...active].sort((a, b) => a.rank - b.rank)[0];
+  if (active.length > 1) {
+    logger.warn("電梯 DI 多個樓層同時 active", {
+      locationId,
+      ranks: active.map((f) => f.rank),
+      pickedRank: pick.rank,
+    });
+  }
   return floorSnapshot(floors.indexOf(pick) + 1, pick);
 }
 
@@ -102,7 +110,7 @@ function resolveCurrentFloorFromBits(floors, bits) {
  * currentFloor 僅來自 DI；無 active bit 或讀取失敗時維持上一樓層，僅初次無樓層才預設 1F。
  */
 function resolveFloorFromDetection(diReadOk, floors, bits, state) {
-  const matched = resolveCurrentFloorFromBits(floors, bits);
+  const matched = resolveCurrentFloorFromBits(floors, bits, state.locationId);
   if (matched) {
     return { currentFloor: matched, floorDetection: { readOk: diReadOk } };
   }
