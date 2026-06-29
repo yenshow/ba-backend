@@ -125,18 +125,62 @@ function initializeWebSocket(httpServer) {
   });
 
   const logConnections = true;
+
+  const ensureSessionLog = (socket) => {
+    if (!socket.data.sessionLog) {
+      socket.data.sessionLog = { logged: false, permReady: false };
+    }
+    return socket.data.sessionLog;
+  };
+
+  const maybeLogSessionReady = (socket) => {
+    if (!logConnections) return;
+    const session = socket.data.sessionLog;
+    if (!session || session.logged || !session.permReady || !session.app) {
+      return;
+    }
+    session.logged = true;
+    wsLogger.info("WebSocket 會話就緒", {
+      event: "ws:session:ready",
+      socketId: socket.id,
+      userId: session.userId ?? null,
+      role: session.role ?? null,
+      permissionCount: session.permissionCount ?? 0,
+      app: session.app,
+      room: `app:${session.app}`,
+    });
+  };
+
   ioInstance.on("connection", (socket) => {
+    ensureSessionLog(socket);
+
     // 依 permissions 自動加入 rooms（不依賴 license；由後端驗證 token）
     (async () => {
+      const session = ensureSessionLog(socket);
       try {
         const token = String(socket.handshake?.auth?.token || "").trim();
-        if (!token) return;
+        if (!token) {
+          session.permReady = true;
+          session.permissionCount = 0;
+          maybeLogSessionReady(socket);
+          return;
+        }
 
         const decoded = userService.verifyToken(token);
-        if (!decoded?.id) return;
+        if (!decoded?.id) {
+          session.permReady = true;
+          session.permissionCount = 0;
+          maybeLogSessionReady(socket);
+          return;
+        }
 
         const versionCheck = await userService.verifyTokenVersion(decoded);
-        if (!versionCheck.ok) return;
+        if (!versionCheck.ok) {
+          session.permReady = true;
+          session.permissionCount = 0;
+          maybeLogSessionReady(socket);
+          return;
+        }
 
         const role = decoded.role || null;
         const result = await permissionService.getEffectivePermissionsForUser(
@@ -155,30 +199,21 @@ function initializeWebSocket(httpServer) {
           socket.join(`${PERM_ROOM_PREFIX}${code}`);
         }
 
-        if (logConnections) {
-          wsLogger.info("客戶端已加入 permission rooms", {
-            socketId: socket.id,
-            event: "ws:perm:join",
-            userId: decoded.id,
-            role: decoded.role,
-            permissionCount: codes.length,
-          });
-        }
+        session.userId = decoded.id;
+        session.role = decoded.role;
+        session.permissionCount = codes.length;
+        session.permReady = true;
+        maybeLogSessionReady(socket);
       } catch (error) {
         wsLogger.warn("permission rooms join 失敗", {
           socketId: socket.id,
           event: "ws:perm:join:error",
           error: error?.message || String(error),
         });
+        session.permReady = true;
+        maybeLogSessionReady(socket);
       }
     })();
-
-    if (logConnections) {
-      wsLogger.info("客戶端已連接", {
-        socketId: socket.id,
-        event: "ws:connect",
-      });
-    }
 
     // App 識別：client:hello 加入 app:central | app:construction
     socket.on("client:hello", (payload = {}) => {
@@ -195,14 +230,9 @@ function initializeWebSocket(httpServer) {
 
         socket.join(`app:${app}`);
 
-        if (logConnections) {
-          wsLogger.info("客戶端已識別 app", {
-            socketId: socket.id,
-            event: "ws:client:hello",
-            app,
-            room: `app:${app}`,
-          });
-        }
+        const session = ensureSessionLog(socket);
+        session.app = app;
+        maybeLogSessionReady(socket);
       } catch (error) {
         wsLogger.warn("處理 client:hello 失敗", {
           socketId: socket.id,
@@ -424,22 +454,6 @@ function emitMonitoringSnapshotUpdated(payload) {
 }
 
 /**
- * 推送監控任務執行摘要事件
- * @deprecated 前端不需要此事件，已停用。如需監控任務狀態，請使用 REST API 或管理員專用監控面板
- * @param {Object} summary - 監控摘要數據
- * @param {string} summary.timestamp - 時間戳
- * @param {Array} summary.tasks - 任務列表
- * @param {number} summary.totalDuration - 總執行時間（毫秒）
- */
-function emitMonitoringStatus(summary) {
-  // 前端不需要 monitoring:status 事件，已停用推送
-  // 保留函數以維持 API 兼容性（未來管理員監控面板可能需要）
-  // safeEmit("monitoring:status", summary, {
-  //   logMessage: `${summary.tasks?.length || 0} 個任務`,
-  // });
-}
-
-/**
  * 推送設備創建事件
  * @param {Object} data - 事件資料
  * @param {Object} data.device - 設備資料
@@ -636,7 +650,6 @@ module.exports = {
   emitDeviceStatus,
   emitBatchDeviceStatus,
   emitMonitoringSnapshotUpdated,
-  emitMonitoringStatus,
   emitDeviceCreated,
   emitDeviceUpdated,
   emitDeviceDeleted,

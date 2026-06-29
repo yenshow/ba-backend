@@ -236,25 +236,21 @@ async function startServer() {
       );
     });
 
-    serverLogger.info(
-      `BA 系統後端服務已啟動，監聽 ${config.serverHost}:${config.serverPort}`,
-    );
-    serverLogger.info(`本機連線: http://localhost:${config.serverPort}`);
-    serverLogger.info(`區域網路連線: http://${localIP}:${config.serverPort}`);
-    serverLogger.info(`WebSocket 服務已啟用 (Socket.IO)`);
-
-    if (localIP !== "localhost") {
-      serverLogger.info(
-        `其他裝置可透過以下網址訪問: http://${localIP}:${config.serverPort}`,
-      );
-    }
+    const lanUrl =
+      localIP !== "localhost"
+        ? `http://${localIP}:${config.serverPort}`
+        : undefined;
+    serverLogger.info("BA 系統後端服務已啟動", {
+      listen: `${config.serverHost}:${config.serverPort}`,
+      localUrl: `http://localhost:${config.serverPort}`,
+      ...(lanUrl ? { lanUrl } : {}),
+      websocket: "Socket.IO",
+    });
 
     // 測試資料庫連線（listen 成功後再做，避免啟動失敗時觸發一堆背景任務）
     const dbConnected = await db.testConnection();
     if (!dbConnected) {
       serverLogger.warn("資料庫連線失敗，但伺服器仍會啟動");
-    } else {
-      serverLogger.info("資料庫連線成功");
     }
 
     if (dbConnected) {
@@ -266,11 +262,7 @@ async function startServer() {
         const externalDbConnected = await externalDb.testConnection();
         if (!externalDbConnected) {
           serverLogger.warn("外部資料庫連線失敗，外部資料功能可能無法使用");
-        } else {
-          serverLogger.info("外部資料庫連線成功");
         }
-      } else {
-        serverLogger.info("YSCP 外部資料庫已關閉，略過連線測試");
       }
     } else {
       serverLogger.warn("主資料庫未連線，略過 runtime 設定載入");
@@ -283,7 +275,6 @@ async function startServer() {
     }
 
     global.__backupSchedulerHandle = backupScheduler.startScheduler();
-    serverLogger.info("備份排程已啟用");
 
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");

@@ -141,11 +141,7 @@ async function checkEnvironmentLocations() {
         ? config.device_ids
             .map((id) => parseInt(id, 10))
             .filter((n) => !Number.isNaN(n))
-        : config.device_id != null && config.device_id !== ""
-          ? [parseInt(String(config.device_id), 10)]
-          : config.deviceId != null && config.deviceId !== ""
-            ? [parseInt(String(config.deviceId), 10)]
-            : [];
+        : [];
       for (const deviceId of deviceIds) {
         if (Number.isNaN(deviceId)) continue;
         allDeviceIds.add(deviceId);
@@ -198,6 +194,7 @@ async function checkEnvironmentLocations() {
 
     let successCount = 0;
     let failCount = 0;
+    const failures = [];
 
     // 併發控制由 modbusClient（全域 limiter）統一處理
     const checkPromises = locations.map(async (location) => {
@@ -448,11 +445,28 @@ async function checkEnvironmentLocations() {
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
         if (result.value.success) successCount++;
-        else failCount++;
+        else {
+          failCount++;
+          const location = locations[index];
+          if (location) {
+            failures.push({
+              locationId: location.location_id,
+              locationName: location.location_name,
+              deviceId: location.device_id,
+              reason: result.value.reason || "讀取失敗",
+            });
+          }
+        }
       } else {
         failCount++;
         const location = locations[index];
         if (location) {
+          failures.push({
+            locationId: location.location_id,
+            locationName: location.location_name,
+            deviceId: location.device_id,
+            reason: result.reason?.message || String(result.reason),
+          });
           logger.error("檢查位置失敗 (Promise rejected)", {
             error: result.reason?.message || result.reason,
             locationId: location.location_id,
@@ -499,21 +513,22 @@ async function checkEnvironmentLocations() {
 
     const hasMeaningfulChange = statusUpdates.length > 0 || failCount > 0;
     const summary = `檢查完成: 成功 ${successCount} 個，失敗 ${failCount} 個`;
-    if (hasMeaningfulChange) {
-      logger.info(summary, {
-        successCount,
-        failCount,
-        statusUpdates: statusUpdates.length,
-        module: "environmentMonitor",
-      });
-    } else {
-      // `logger.debug` 僅在非 production（NODE_ENV !== "production"）輸出
-      logger.debug(summary, {
-        successCount,
-        failCount,
-        module: "environmentMonitor",
-      });
+    const meta = {
+      successCount,
+      failCount,
+      statusUpdates: statusUpdates.length,
+      module: "environmentMonitor",
+      ...(failures.length > 0 ? { failures } : {}),
+    };
+    if (!hasMeaningfulChange) {
+      logger.debug(summary, { successCount, failCount, module: "environmentMonitor" });
+      return;
     }
+    if (failCount > 0) {
+      logger.warn(summary, meta);
+      return;
+    }
+    logger.info(summary, meta);
   } catch (error) {
     logger.error("檢查環境位置失敗", {
       error,

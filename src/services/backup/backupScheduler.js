@@ -258,12 +258,18 @@ async function runBackup() {
       deletedFiles,
     };
 
-    backupLogger.info("備份完成", {
+    const noopBackup = backed === 0 && deleted === 0 && deletedFiles === 0;
+    const backupMeta = {
       totalBacked: backed,
       totalDeleted: deleted,
       deletedFiles,
       module: "backupScheduler",
-    });
+    };
+    if (noopBackup) {
+      backupLogger.debug("備份完成（無資料異動）", backupMeta);
+    } else {
+      backupLogger.info("備份完成", backupMeta);
+    }
 
     return results;
   } catch (error) {

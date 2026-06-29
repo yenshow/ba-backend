@@ -54,7 +54,7 @@ const startEnvironmentAggregationScheduler = () => {
   const runTodayHourBackfill = async () => {
     try {
       await environmentAggregationService.backfillTodayHours();
-      logger.info("環境彙總 hour 今日補寫完成");
+      logger.debug("環境彙總 hour 今日補寫完成");
     } catch (err) {
       logger.warn("環境彙總 hour 今日補寫失敗", { error: err.message });
     }
@@ -63,7 +63,7 @@ const startEnvironmentAggregationScheduler = () => {
   const runDayAggBackfill = async () => {
     try {
       await environmentAggregationService.backfillRecentDays(7);
-      logger.info("環境彙總 day 補寫完成（最近 7 天）");
+      logger.debug("環境彙總 day 補寫完成（最近 7 天）");
     } catch (err) {
       logger.warn("環境彙總 day 補寫失敗", { error: err.message });
     }
@@ -91,11 +91,14 @@ const startEnvironmentAggregationScheduler = () => {
         ),
     15 * 60 * 1000,
   );
-  logger.info("環境彙總排程已啟用（每小時 + 每 15 分鐘 partial hour）");
+  logger.info("環境彙總排程已啟用", {
+    hourInterval: "1h",
+    partialHourInterval: "15m",
+    dayBucket: "UTC 00:05",
+  });
 
   setImmediate(() => void runDayAggBackfill());
   dayAggTimeoutId = scheduleDailyAtUtc(0, 5, runDayAgg);
-  logger.info("環境彙總排程已啟用（每日 UTC 00:05，day bucket）");
 
   return { started: true, alreadyRunning: false };
 };

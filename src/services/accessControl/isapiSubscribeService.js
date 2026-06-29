@@ -390,11 +390,10 @@ async function refresh() {
   for (const id of toStart) startLoopForDevice(id);
 
   subscribedDeviceIds = deviceIds;
-  logger.info("[ISAPI] 訂閱刷新完成", {
-    start: toStart.join(",") || "",
-    stop: toStop.join(",") || "",
-    count: subscribedDeviceIds.length,
-  });
+  const refreshMeta = { count: subscribedDeviceIds.length };
+  if (toStart.length > 0) refreshMeta.start = toStart.join(",");
+  if (toStop.length > 0) refreshMeta.stop = toStop.join(",");
+  logger.info("[ISAPI] 訂閱刷新完成", refreshMeta);
   return { started: true, deviceIds: [...subscribedDeviceIds] };
 }
 

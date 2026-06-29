@@ -218,29 +218,13 @@ async function runSchedulerTick() {
     const dueSummary = `本輪執行任務數: ${due.length}（${due
       .map((t) => t.systemName)
       .join("、")}）`;
-    // 只要進到這裡代表本輪真的有「到期任務」要跑，因此用 info 代表有實際工作發生
-    monitorLogger.info(dueSummary);
+    monitorLogger.debug(dueSummary);
 
     // 並行執行「到期」任務（同一任務不重疊）
     await Promise.all(due.map((task) => runTask(task)));
 
     const totalDuration = Date.now() - startTime;
     monitorLogger.debug(`本輪到期任務完成（總耗時: ${totalDuration}ms）`);
-
-    // 註解：前端不需要 monitoring:status 事件
-    // 如需監控任務狀態，可透過 REST API 查詢，或實作管理員專用的監控面板
-    /*
-		// 推送 WebSocket 事件：監控任務執行摘要
-		websocketService.emitMonitoringStatus({
-			timestamp: new Date().toISOString(),
-			totalDuration,
-			tasks: monitoringTasks.map(task => ({
-				systemName: task.systemName,
-				lastRun: task.lastRun,
-				errorCount: task.errorCount,
-			})),
-		});
-		*/
   } catch (error) {
     monitorLogger.error("執行監控任務時發生未預期的錯誤", {
       error: error?.message || error,
@@ -274,7 +258,7 @@ function scheduleNextTick() {
 /**
  * 啟動背景監控服務
  */
-function startMonitoring() {
+function startMonitoring({ quiet = false } = {}) {
   if (monitoringTimer) {
     monitorLogger.warn("監控服務已在運行中");
     return;
@@ -287,17 +271,16 @@ function startMonitoring() {
     return;
   }
 
-  // 啟動時一次性輸出註冊任務摘要（取代逐筆註冊 log）
-  monitorLogger.info(
-    `已註冊監控任務: ${monitoringTasks
-      .map((t) => t.systemName)
-      .filter(Boolean)
-      .join("、")}（共 ${monitoringTasks.length} 個）`,
-  );
+  const taskNames = monitoringTasks
+    .map((t) => t.systemName)
+    .filter(Boolean)
+    .join("、");
 
-  monitorLogger.info(
-    `啟動背景監控服務（Mode A，自適應排程；任務數: ${monitoringTasks.length}）`,
-  );
+  if (!quiet) {
+    monitorLogger.info(
+      `背景監控已啟動（Mode A 自適應排程；任務: ${taskNames}；共 ${monitoringTasks.length} 個）`,
+    );
+  }
 
   // 立即安排一次 tick（各任務 nextRunAtMs 初始化為 now）
   scheduleNextTick();
@@ -366,6 +349,7 @@ function syncMonitoringTasks(desiredTasks) {
   }
 
   const wasRunning = !!monitoringTimer;
+  const taskNames = monitoringTasks.map((task) => task.systemName).filter(Boolean);
   if (monitoringTasks.length === 0) {
     if (wasRunning) {
       stopMonitoring();
@@ -373,18 +357,23 @@ function syncMonitoringTasks(desiredTasks) {
     return {
       taskCount: 0,
       taskIds: [],
+      taskNames: [],
       schedulerRunning: false,
+      startedNow: false,
     };
   }
 
-  if (!wasRunning) {
-    startMonitoring();
+  const startedNow = !wasRunning;
+  if (startedNow) {
+    startMonitoring({ quiet: true });
   }
 
   return {
     taskCount: monitoringTasks.length,
     taskIds: getRegisteredTaskIds(),
+    taskNames,
     schedulerRunning: !!monitoringTimer,
+    startedNow,
   };
 }
 

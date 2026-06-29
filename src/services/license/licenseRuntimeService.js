@@ -65,14 +65,22 @@ const reconcileBackgroundServices = async ({
 
   logger.info("背景服務 reconcile 完成", {
     reason,
-    features,
-    monitoring: {
-      taskCount: monitoring.taskCount,
-      tasks: desiredTasks.map((task) => task.systemName),
-    },
+    monitoringTaskCount: monitoring.taskCount,
     environment: environmentOn ? "on" : "off",
     isapi: isapi.profileKeys || [],
     elevator: elevator.armed ? "on" : "off",
+  });
+
+  if (monitoring.startedNow && monitoring.taskNames.length > 0) {
+    logger.info(
+      `背景監控已啟動（Mode A 自適應排程；任務: ${monitoring.taskNames.join("、")}；共 ${monitoring.taskCount} 個）`,
+    );
+  }
+
+  logger.debug("背景服務 reconcile 詳情", {
+    reason,
+    features,
+    monitoringTaskIds: monitoring.taskIds,
   });
 
   return {

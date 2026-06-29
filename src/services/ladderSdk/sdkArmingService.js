@@ -123,7 +123,7 @@ const getLadderDeviceIds = async () => {
 
 const start = async () => {
   const ids = await getLadderDeviceIds();
-  logger.info("啟動梯控 SDK 佈防", { count: ids.length });
+  logger.debug("啟動梯控 SDK 佈防", { count: ids.length });
   await Promise.all(ids.map((id) => startDeviceLoop(id)));
   return { started: true, deviceIds: ids };
 };
