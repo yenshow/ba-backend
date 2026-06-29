@@ -124,6 +124,20 @@ const normalizeYscpHost = (raw) =>
  */
 const yscpHost = normalizeYscpHost(getEnv("YSCP_HOST", DEFAULT_YSCP_HOST));
 
+const DEFAULT_YSCP_EVENT_TYPES = [130, 131, 131622, 196899, 198914];
+
+const normalizeYscpEventDest = (raw) => {
+  try {
+    const url = new URL(raw);
+    if (url.hostname === "0.0.0.0") {
+      url.hostname = "127.0.0.1";
+    }
+    return url.toString();
+  } catch {
+    return raw;
+  }
+};
+
 const yscp = {
   host: `https://${yscpHost}`,
   hostRaw: yscpHost,
@@ -131,6 +145,12 @@ const yscp = {
   secretKey: getEnv("YSCP_SK", ""),
   apiVersion: "v1",
   rejectUnauthorized: false,
+  eventDest: normalizeYscpEventDest(
+    `http://127.0.0.1:${server.port}/api/yscp/event-receiver`,
+  ),
+  eventTypes: DEFAULT_YSCP_EVENT_TYPES,
+  eventToken: "anything",
+  dbRetryIntervalMs: 30000,
 };
 
 const externalDatabase = {

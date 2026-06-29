@@ -25,7 +25,7 @@
 | `externalData/` | 14 | 外部 DB handler 與車輛群組彙總 |
 | `communication/` | 2 | MediaMTX 串流（對應 license `surveillance`） |
 | `personnel/` | 11 | 人員、匯入、人臉、同步 job |
-| `yscp/` | 2 | YSCP 人員／事件 |
+| `yscp/` | 5 | YSCP Artemis 客戶端、事件訂閱、Runtime、人員／事件接收 |
 | `websocket/` | 2 | WebSocket 推播、`wsEventPermissions` |
 | `multimedia/` | 1 | 多媒體儀表板 |
 | `notifications/` | 1 | SMTP mailer |

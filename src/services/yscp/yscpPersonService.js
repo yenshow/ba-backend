@@ -1,10 +1,7 @@
-const axios = require("axios");
-const https = require("https");
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const config = require("../../config");
 const logger = require("../../utils/logger");
+const yscpArtemisClient = require("./yscpArtemisClient");
 
 const serviceLogger = logger.createLogger("YSCP Person Service");
 const C = require("../../utils/apiErrorCodes");
@@ -59,50 +56,6 @@ class YscpPersonService {
 	}
 
 	/**
-	 * 構建 YSCP API 簽名
-	 * @param {string} urlPath - API 路徑
-	 * @param {string} method - HTTP 方法（預設 POST）
-	 * @returns {string} Base64 編碼的簽名
-	 */
-	_buildSignature(urlPath, method = "POST") {
-		const accept = "application/json";
-		const contentType = "application/json;charset=UTF-8";
-		const textToSign = `${method}\n${accept}\n${contentType}\n${urlPath}`;
-		const signature = crypto
-			.createHmac("sha256", config.yscp.secretKey)
-			.update(textToSign)
-			.digest("base64");
-		return signature;
-	}
-
-	/**
-	 * 構建 YSCP API 請求配置（通用方法）
-	 * @param {string} urlPath - API 路徑
-	 * @param {string} method - HTTP 方法（預設 POST）
-	 * @param {object} options - 額外選項
-	 * @returns {object} 包含 headers、httpsAgent 等的配置對象
-	 */
-	_buildRequestConfig(urlPath, method = "POST", options = {}) {
-		const accept = "application/json";
-		const contentType = "application/json;charset=UTF-8";
-		const signature = this._buildSignature(urlPath, method);
-
-		return {
-			headers: {
-				Accept: accept,
-				"Content-Type": contentType,
-				"X-Ca-Key": config.yscp.accessKey,
-				"X-Ca-Signature": signature,
-			},
-			httpsAgent: new https.Agent({
-				rejectUnauthorized: config.yscp.rejectUnauthorized,
-			}),
-			timeout: 30000,
-			...options,
-		};
-	}
-
-	/**
 	 * 獲取人員資訊（包含 picUri）
 	 * @param {string|number} personId - 人員 ID
 	 * @returns {Promise<object>} 人員資訊
@@ -110,14 +63,9 @@ class YscpPersonService {
 	async getPersonInfo(personId) {
 		try {
 			const urlPath = `/artemis/api/resource/v1/person/personId/personInfo`;
-			const fullUrl = `${config.yscp.host}${urlPath}`;
-			const requestConfig = this._buildRequestConfig(urlPath);
-
-			const response = await axios.post(
-				fullUrl,
-				{ personId: String(personId) },
-				requestConfig
-			);
+			const response = await yscpArtemisClient.post(urlPath, {
+				personId: String(personId),
+			});
 
 			if (response.data.code !== "0") {
 				throwApiError(
@@ -153,18 +101,13 @@ class YscpPersonService {
 	async getPersonPicture(personId, picUri) {
 		try {
 			const urlPath = `/artemis/api/resource/v1/person/picture_data`;
-			const fullUrl = `${config.yscp.host}${urlPath}`;
-			const requestConfig = this._buildRequestConfig(urlPath, "POST", {
-				responseType: "text",
-			});
-
-			const response = await axios.post(
-				fullUrl,
+			const response = await yscpArtemisClient.post(
+				urlPath,
 				{
 					personId: String(personId),
 					picUri: picUri,
 				},
-				requestConfig
+				{ responseType: "text" },
 			);
 
 			let pictureData = null;

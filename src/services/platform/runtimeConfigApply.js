@@ -2,10 +2,8 @@
  * 將 runtime 設定變更套用至連線池與背景排程（由 server 啟動時註冊）
  */
 
-const externalDb = require("../../database/externalDb");
-const config = require("../../config");
 const runtimeConfigService = require("./runtimeConfigService");
-const { isDatabaseEnabled } = require("../../utils/yscpSystemFeature");
+const yscpRuntimeService = require("../yscp/yscpRuntimeService");
 const backupScheduler = require("../backup/backupScheduler");
 const {
   startAlertDailyRolloverScheduler,
@@ -30,11 +28,7 @@ async function bootstrapRuntimeInfrastructure() {
   });
 
   await runtimeConfigService.init();
-  if (!isDatabaseEnabled()) {
-    applyLogger.info("YSCP 外部資料庫已關閉，略過連線池初始化");
-    return;
-  }
-  await externalDb.reconnect(config.externalDatabase);
+  await yscpRuntimeService.start();
 }
 
 module.exports = { bootstrapRuntimeInfrastructure };
