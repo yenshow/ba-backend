@@ -2,16 +2,22 @@
  * 電梯運行態（DI 樓層、方向、呼梯目標）
  */
 const websocketService = require("../websocket/websocketService");
-const modbusBatchService = require("../devices/modbusBatchService");
+const {
+  resolveDeviceConfig,
+  readDiscreteBitRange,
+} = require("../snapshotStatus/modbusSnapshotHelpers");
 const {
   resolveDefaultDisplayFloor,
   getElevatorConfigFromLocation,
 } = require("./elevatorFloorModel");
 
-const getDeviceService = () => require("../devices/deviceService");
-
 const POLL_MOVING_TIMEOUT_MS = 60_000;
 const ARRIVED_HOLD_MS = 1500;
+/** 背景輪詢：idle 間隔（與前端 ELEVATOR_RUNTIME_POLL_MS 對齊） */
+const ELEVATOR_POLL_IDLE_MS = 2000;
+/** 背景輪詢：任一電梯 moving 時加速 */
+const ELEVATOR_POLL_MOVING_MS = 1000;
+const READ_FAILED = Object.freeze({ bits: new Map(), readOk: false });
 
 /** @type {Map<number, object>} */
 const runtimeByLocation = new Map();
@@ -25,6 +31,7 @@ const emptyRuntime = (locationId) => ({
   targetFloor: null,
   phase: "idle",
   updatedAt: nowIso(),
+  floorDetection: null,
   _prevRank: null,
   _arrivedAt: null,
   _movingSince: null,
@@ -71,56 +78,46 @@ function resolveRuntimeDirection(state, floors, currentFloor) {
   return "idle";
 }
 
-async function resolveDeviceModbusConfig(deviceId) {
-  if (!deviceId) return null;
-  try {
-    const { device } = await getDeviceService().getDeviceById(Number(deviceId));
-    const c = device?.config || {};
-    if (!c.host || c.port == null) return null;
-    return {
-      host: c.host,
-      port: Number(c.port),
-      unitId: Number(c.unitId ?? 1),
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function readDiscreteBits(deviceConfig, start, end) {
-  if (!deviceConfig || start == null || end == null || end < start) {
-    return new Map();
-  }
-  const length = end - start + 1;
-  const results = await modbusBatchService.batchRead([
-    {
-      host: deviceConfig.host,
-      port: deviceConfig.port,
-      unitId: deviceConfig.unitId,
-      registerType: "discrete",
-      address: start,
-      length,
-      meta: { elevator: true },
-    },
-  ]);
-  const first = results?.[0];
-  if (!first || first.ok !== true || !Array.isArray(first.data)) {
-    return new Map();
-  }
-  const map = new Map();
-  for (let i = 0; i < first.data.length; i += 1) {
-    map.set(start + i, Boolean(first.data[i]));
-  }
-  return map;
+async function readFloorDetectionBits(floorDetection, floors) {
+  if (!floorDetection?.deviceId) return READ_FAILED;
+  const deviceConfig = await resolveDeviceConfig(floorDetection.deviceId);
+  const start = floorDetection.pointStart ?? 0;
+  const end =
+    floorDetection.pointEnd ??
+    Math.max(...floors.map((f) => f.diAddress ?? start));
+  return readDiscreteBitRange(deviceConfig, start, end, { noCache: true });
 }
 
 function resolveCurrentFloorFromBits(floors, bits) {
-  const active = floors.filter((f) => f.diAddress != null && bits.get(f.diAddress));
-  if (active.length === 1) {
-    const idx = floors.indexOf(active[0]) + 1;
-    return floorSnapshot(idx, active[0]);
+  const active = floors.filter((f) => {
+    const addr = Number(f.diAddress);
+    return Number.isFinite(addr) && bits.get(addr) === true;
+  });
+  if (!active.length) return null;
+  const pick = [...active].sort((a, b) => a.rank - b.rank)[0];
+  return floorSnapshot(floors.indexOf(pick) + 1, pick);
+}
+
+/**
+ * currentFloor 僅來自 DI；無 active bit 或讀取失敗時維持上一樓層，僅初次無樓層才預設 1F。
+ */
+function resolveFloorFromDetection(diReadOk, floors, bits, state) {
+  const matched = resolveCurrentFloorFromBits(floors, bits);
+  if (matched) {
+    return { currentFloor: matched, floorDetection: { readOk: diReadOk } };
   }
-  return null;
+  if (state.currentFloor) {
+    return { currentFloor: state.currentFloor, floorDetection: { readOk: diReadOk } };
+  }
+  const fallback = resolveDefaultDisplayFloor(floors);
+  if (!fallback) {
+    return { currentFloor: null, floorDetection: { readOk: diReadOk } };
+  }
+  const floor = floors[fallback.index - 1];
+  return {
+    currentFloor: floorSnapshot(fallback.index, floor),
+    floorDetection: { readOk: diReadOk },
+  };
 }
 
 function resolveDirectionToTarget(state, floors, targetRank) {
@@ -143,9 +140,14 @@ function runtimeSnapshot(state) {
     direction: state.direction,
     targetFloor: state.targetFloor,
     phase: state.phase,
+    floorDetection: state.floorDetection,
   });
 }
 
+/**
+ * phase：moving = 呼梯目標未抵達或自然 rank 變化中；arrived = DI 與 target 一致；idle = 靜止。
+ * direction：有 target 且 moving 時依 current→target rank；否則依輪詢 rank 差。
+ */
 function applyPhaseTransition(state, currentFloor, floors, direction) {
   const now = Date.now();
 
@@ -207,16 +209,23 @@ function applyPhaseTransition(state, currentFloor, floors, direction) {
   }
 }
 
-function emitRuntimeUpdate(state) {
-  const payload = {
-    locationId: state.locationId,
+function toPublicRuntime(state) {
+  return {
     currentFloor: state.currentFloor,
     direction: state.direction,
     targetFloor: state.targetFloor,
     phase: state.phase,
-    timestamp: state.updatedAt,
+    floorDetection: state.floorDetection,
+    updatedAt: state.updatedAt,
   };
-  websocketService.emitElevatorRuntimeUpdate(payload);
+}
+
+function emitRuntimeUpdate(state) {
+  websocketService.emitElevatorRuntimeUpdate({
+    locationId: state.locationId,
+    ...toPublicRuntime(state),
+    timestamp: state.updatedAt,
+  });
 }
 
 async function pollLocationRuntime(location) {
@@ -229,32 +238,22 @@ async function pollLocationRuntime(location) {
     return getPublicRuntime(locationId);
   }
 
-  let bits = new Map();
-  if (config.floorDetection?.deviceId) {
-    const deviceConfig = await resolveDeviceModbusConfig(
-      config.floorDetection.deviceId,
-    );
-    const start = config.floorDetection.pointStart ?? 0;
-    const end =
-      config.floorDetection.pointEnd ??
-      Math.max(...floors.map((f) => f.diAddress ?? start));
-    bits = await readDiscreteBits(deviceConfig, start, end);
-  }
-
-  let currentFloor = resolveCurrentFloorFromBits(floors, bits);
-  if (!currentFloor) {
-    const fallback = resolveDefaultDisplayFloor(floors);
-    if (fallback) {
-      const floor = floors[fallback.index - 1];
-      currentFloor = floorSnapshot(fallback.index, floor);
-    }
-  }
+  const { bits, readOk: diReadOk } = await readFloorDetectionBits(
+    config.floorDetection,
+    floors,
+  );
+  const { currentFloor, floorDetection } = resolveFloorFromDetection(
+    diReadOk,
+    floors,
+    bits,
+    state,
+  );
 
   const direction = resolveRuntimeDirection(state, floors, currentFloor);
-
   const prevSnapshot = runtimeSnapshot(state);
 
   state.currentFloor = currentFloor;
+  state.floorDetection = floorDetection;
   state.direction = direction;
   state.updatedAt = nowIso();
 
@@ -273,14 +272,7 @@ async function pollLocationRuntime(location) {
 }
 
 function getPublicRuntime(locationId) {
-  const state = getRuntime(locationId);
-  return {
-    currentFloor: state.currentFloor,
-    direction: state.direction,
-    targetFloor: state.targetFloor,
-    phase: state.phase,
-    updatedAt: state.updatedAt,
-  };
+  return toPublicRuntime(getRuntime(locationId));
 }
 
 function notifyCallElevator(locationId, targetLogicalIndex, config) {
@@ -299,27 +291,30 @@ function notifyCallElevator(locationId, targetLogicalIndex, config) {
   return getPublicRuntime(locationId);
 }
 
-async function pollAllElevatorLocations(getLocations) {
-  const locations = await getLocations();
-  const results = [];
+function hasAnyMovingElevator() {
+  for (const state of runtimeByLocation.values()) {
+    if (state.phase === "moving" || state.phase === "arrived") return true;
+  }
+  return false;
+}
+
+async function pollAllElevatorLocations(locations) {
   for (const loc of locations) {
     try {
-      const live = await pollLocationRuntime(loc);
-      results.push({ locationId: Number(loc.id), live });
+      await pollLocationRuntime(loc);
     } catch {
-      results.push({
-        locationId: Number(loc.id),
-        live: getPublicRuntime(Number(loc.id)),
-      });
+      /* 保留記憶體快取 */
     }
   }
-  return results;
 }
 
 module.exports = {
+  ELEVATOR_POLL_IDLE_MS,
+  ELEVATOR_POLL_MOVING_MS,
   getRuntime,
   getPublicRuntime,
   pollLocationRuntime,
   pollAllElevatorLocations,
   notifyCallElevator,
+  hasAnyMovingElevator,
 };

@@ -108,6 +108,45 @@ function parseZoneIdsQuery(raw) {
     .filter((n) => !Number.isNaN(n));
 }
 
+const EMPTY_BITS = Object.freeze({ bits: new Map(), readOk: false });
+
+/**
+ * 讀取 Modbus discrete 位址範圍 [start, end]（含端點）；對齊排水／消防 statusPoints 的 batchRead 路徑。
+ * @returns {{ bits: Map<number, boolean>, readOk: boolean }}
+ */
+async function readDiscreteBitRange(deviceConfig, start, end, options = {}) {
+  if (!deviceConfig || start == null || end == null || end < start) {
+    return EMPTY_BITS;
+  }
+  const modbusBatchService = require("../devices/modbusBatchService");
+  const length = end - start + 1;
+  const noCache = options.noCache !== false;
+  try {
+    const results = await modbusBatchService.batchRead([
+      {
+        host: deviceConfig.host,
+        port: deviceConfig.port,
+        unitId: deviceConfig.unitId,
+        registerType: "discrete",
+        address: start,
+        length,
+        meta: { noCache },
+      },
+    ]);
+    const first = results?.[0];
+    if (!first?.ok || !Array.isArray(first.data)) {
+      return { bits: new Map(), readOk: false };
+    }
+    const bits = new Map();
+    for (let i = 0; i < first.data.length; i += 1) {
+      bits.set(start + i, Boolean(first.data[i]));
+    }
+    return { bits, readOk: true };
+  } catch {
+    return { bits: new Map(), readOk: false };
+  }
+}
+
 module.exports = {
   DEVICE_CFG_CACHE_TTL,
   ALLOWED_REGISTER_TYPES,
@@ -118,4 +157,5 @@ module.exports = {
   normalizeRegisterType,
   deriveConnectivityUiStatus,
   parseZoneIdsQuery,
+  readDiscreteBitRange,
 };

@@ -178,29 +178,22 @@ async function getSites() {
       .filter((id) => id != null);
     const countByDeviceId = await countTodayEventsByDeviceIds(allDeviceIds);
 
-    const sites = await Promise.all(
-      locationEntries.map(async ({ locationId, name, location, cfg }) => {
-        let live = elevatorRuntimeService.getPublicRuntime(locationId);
-        try {
-          live = await elevatorRuntimeService.pollLocationRuntime(location);
-        } catch {
-          /* keep cached */
-        }
-        const ladderDeviceId = cfg.ladderDevice?.deviceId ?? null;
-        return {
-          id: locationId,
-          name,
-          ladderDevice: cfg.ladderDevice ?? null,
-          callDevice: cfg.callDevice ?? null,
-          floors: cfg.floors,
-          panel: cfg.panel,
-          todayEventCount: ladderDeviceId
-            ? countByDeviceId.get(ladderDeviceId) ?? 0
-            : 0,
-          live,
-        };
-      }),
-    );
+    const sites = locationEntries.map(({ locationId, name, cfg }) => {
+      const live = elevatorRuntimeService.getPublicRuntime(locationId);
+      const ladderDeviceId = cfg.ladderDevice?.deviceId ?? null;
+      return {
+        id: locationId,
+        name,
+        ladderDevice: cfg.ladderDevice ?? null,
+        callDevice: cfg.callDevice ?? null,
+        floors: cfg.floors,
+        panel: cfg.panel,
+        todayEventCount: ladderDeviceId
+          ? countByDeviceId.get(ladderDeviceId) ?? 0
+          : 0,
+        live,
+      };
+    });
     return { sites };
   }, "取得電梯地點列表失敗");
 }

@@ -1,4 +1,5 @@
 const C = require("../utils/apiErrorCodes");
+const { sendFailure } = require("./responseHandler");
 
 /** @type {Map<string, { count: number, resetAt: number }>} */
 const apiBuckets = new Map();
@@ -9,8 +10,28 @@ const WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILED = 10;
 const API_MAX = 300;
 
-const rateLimitHandler = (req, res) => {
-  res.sendFailure(
+const SNAPSHOT_SYSTEM_SLUGS =
+  "lighting|drainage|hvac|air-circulation|power|fire|emergency-rescue|smoke-alarm";
+
+/** 已登入監控頁高頻輪詢 GET（電梯 live、快照 status 等）不計入全站限流 */
+const isAuthenticatedMonitoringPollGet = (req) => {
+  if (req.method !== "GET" || !req.headers.authorization) return false;
+  const path = String(req.originalUrl || req.url || "").split("?")[0];
+  if (/^\/api\/elevator\/sites\/\d+\/live$/.test(path)) return true;
+  if (
+    new RegExp(`^/api/(?:${SNAPSHOT_SYSTEM_SLUGS})(?:/zones/\\d+)?/status$`).test(
+      path,
+    )
+  ) {
+    return true;
+  }
+  if (path === "/api/monitoring/overview/status") return true;
+  return false;
+};
+
+const rateLimitHandler = (req, res) =>
+  sendFailure(
+    res,
     {
       code: C.RATE_LIMIT_EXCEEDED,
       message: "請求過於頻繁，請稍後再試",
@@ -18,7 +39,6 @@ const rateLimitHandler = (req, res) => {
     },
     429,
   );
-};
 
 const getClientIpKey = (req) =>
   String(req.ip || req.socket?.remoteAddress || "unknown");
@@ -74,7 +94,8 @@ const apiRateLimiter = createRateLimiter({
   max: API_MAX,
   skip: (req) => {
     const url = String(req.originalUrl || req.url || "");
-    return req.method === "GET" && url.startsWith("/api/uploads");
+    if (req.method === "GET" && url.startsWith("/api/uploads")) return true;
+    return isAuthenticatedMonitoringPollGet(req);
   },
 });
 

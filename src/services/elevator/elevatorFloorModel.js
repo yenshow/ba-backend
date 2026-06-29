@@ -497,10 +497,15 @@ function getElevatorConfigFromLocation(location) {
   const sys = (location?.systems || []).find(
     (s) => s.systemType === "elevator",
   );
-  if (!sys?.config) {
-    return normalizeElevatorLocationConfig({});
-  }
-  return normalizeElevatorLocationConfig(sys.config);
+  const normalized = normalizeElevatorLocationConfig(sys?.config ?? {});
+  return {
+    ...normalized,
+    floors: autoFillBindings(normalized.floors, {
+      ladderDevice: normalized.ladderDevice,
+      callDevice: normalized.callDevice,
+      floorDetection: normalized.floorDetection,
+    }),
+  };
 }
 
 module.exports = {

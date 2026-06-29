@@ -45,7 +45,7 @@ const monitoringTaskRegistry = [
     taskFunction: checkElevatorRuntime,
     options: {
       baseIntervalMs: 2000,
-      minIntervalMs: 2000,
+      minIntervalMs: 1000,
       maxIntervalMs: 2000,
     },
   },

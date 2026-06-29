@@ -29,12 +29,16 @@ const { createLocationWithSystems, updateLocationWithSystems } = systemOps;
 const {
   syncElevatorFloorsFromLocations,
 } = require("../ladderSdk/sdkDoorService");
+const {
+  invalidateLocationCache: invalidateElevatorLocationCache,
+} = require("../monitoring/elevatorLocationCache");
 
 const syncElevatorFloorsIfPresent = async (locations) => {
   if (locations === undefined) return;
   const validLocations = getValidLocations(locations);
   if (validLocations.length > 0) {
     await syncElevatorFloorsFromLocations(validLocations);
+    invalidateElevatorLocationCache();
   }
 };
 

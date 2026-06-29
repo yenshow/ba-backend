@@ -1,47 +1,45 @@
 /**
  * 電梯樓層偵測背景輪詢
  */
-const locationService = require("../location/locationService");
 const elevatorRuntimeService = require("../elevator/elevatorRuntimeService");
+const {
+  getCachedLocations,
+  setCachedLocations,
+  invalidateLocationCache,
+} = require("./elevatorLocationCache");
 const logger = require("../../utils/logger").createLogger("ElevatorFloorMonitor");
 
-const BASE_INTERVAL_MS = 2000;
+const { ELEVATOR_POLL_IDLE_MS, ELEVATOR_POLL_MOVING_MS } = elevatorRuntimeService;
 
-let cachedLocations = [];
-let lastLocationFetch = 0;
-const LOCATION_CACHE_MS = 30_000;
+const getLocationService = () => require("../location/locationService");
 
 async function getElevatorLocations() {
-  const now = Date.now();
-  if (now - lastLocationFetch < LOCATION_CACHE_MS && cachedLocations.length) {
-    return cachedLocations;
-  }
-  const result = await locationService.getZones({ locationType: "elevator" });
-  cachedLocations = (result.zones || []).flatMap((z) => z.locations || []);
-  lastLocationFetch = now;
-  return cachedLocations;
+  const hit = getCachedLocations();
+  if (hit) return hit;
+
+  const result = await getLocationService().getZones({ locationType: "elevator" });
+  const locations = (result.zones || []).flatMap((z) => z.locations || []);
+  setCachedLocations(locations);
+  return locations;
 }
 
 async function checkElevatorRuntime() {
   try {
     const locations = await getElevatorLocations();
-    if (!locations.length) return { nextIntervalMs: BASE_INTERVAL_MS };
+    if (!locations.length) return { nextIntervalMs: ELEVATOR_POLL_IDLE_MS };
 
-    await elevatorRuntimeService.pollAllElevatorLocations(async () => locations);
-    return { nextIntervalMs: BASE_INTERVAL_MS };
+    await elevatorRuntimeService.pollAllElevatorLocations(locations);
+    const nextIntervalMs = elevatorRuntimeService.hasAnyMovingElevator()
+      ? ELEVATOR_POLL_MOVING_MS
+      : ELEVATOR_POLL_IDLE_MS;
+    return { nextIntervalMs };
   } catch (error) {
     logger.warn("電梯運行態輪詢失敗", { error: error?.message || String(error) });
-    return { nextIntervalMs: BASE_INTERVAL_MS };
+    return { nextIntervalMs: ELEVATOR_POLL_IDLE_MS };
   }
-}
-
-function invalidateLocationCache() {
-  lastLocationFetch = 0;
-  cachedLocations = [];
 }
 
 module.exports = {
   checkElevatorRuntime,
   invalidateLocationCache,
-  BASE_INTERVAL_MS,
 };

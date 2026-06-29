@@ -103,6 +103,9 @@ app.use(cors(corsOptions));
 // 安全標頭
 app.use(securityHeaders);
 
+// 統一響應格式（須早於限流，供 rateLimitHandler 等使用 sendFailure）
+app.use(responseHandler);
+
 // API 限流（登入路由在 userRoutes 內另掛更嚴格 limiter）
 app.use("/api", apiRateLimiter);
 
@@ -124,9 +127,6 @@ app.use(
     },
   }),
 );
-
-// 統一響應格式中間件
-app.use(responseHandler);
 
 // 受保護上傳讀取（需登入；img 可用 ?access_token=）
 app.use("/api/uploads", uploadRoutes);

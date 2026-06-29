@@ -23,6 +23,9 @@ const { createLocationWithSystems, updateLocationWithSystems } = systemOps;
 const {
   syncElevatorFloorsFromLocations,
 } = require("../ladderSdk/sdkDoorService");
+const {
+  invalidateLocationCache: invalidateElevatorLocationCache,
+} = require("../monitoring/elevatorLocationCache");
 
 const locationLogger = logger.createLogger("locationLocationOps");
 
@@ -305,6 +308,7 @@ async function updateLocation(id, locationData, userId) {
 
     if (!locationDeleted) {
       await syncElevatorFloorsFromLocations([locationData]);
+      invalidateElevatorLocationCache();
     }
 
     // 如果地點已被刪除（因為變成無系統），返回特殊訊息
