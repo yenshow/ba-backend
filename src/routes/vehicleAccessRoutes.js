@@ -13,7 +13,7 @@ const {
   requirePlateUpsert,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   resolveTimeOptions,
@@ -29,7 +29,7 @@ router.use(
 
 router.get(
   "/sites",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const result = await vehicleAccessService.getSites();
     res.sendSuccess(result);
@@ -43,7 +43,7 @@ router.get(
 router.get(
   "/logs",
   requirePermission("system.vehicle_access.report.full"),
-  noCache,
+  disableHttpCache,
   validateNumbers("siteId", "limit", "offset"),
   asyncHandler(async (req, res) => {
     const { limit, offset, siteId, startTime, endTime, timeRange, search } =
@@ -63,7 +63,7 @@ router.get(
 
 router.get(
   "/sites/:id/stats",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -79,7 +79,7 @@ router.get(
 
 router.get(
   "/sites/:id/organization-groups",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -90,7 +90,7 @@ router.get(
 
 router.get(
   "/sites/:id/session-stats",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -101,7 +101,7 @@ router.get(
 
 router.get(
   "/sites/:id/presence",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -112,7 +112,7 @@ router.get(
 
 router.get(
   "/sites/:id/presence/plates",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -137,7 +137,7 @@ router.post(
 
 router.get(
   "/sites/:id/logs/latest",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -153,7 +153,7 @@ router.get(
 
 router.get(
   "/sites/:id/logs",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
@@ -175,7 +175,7 @@ router.get(
 
 router.get(
   "/subscribe-status",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     res.sendSuccess(isapiVehicleSubscribeService.getSubscribeStatus());
   }),
@@ -188,7 +188,7 @@ router.get(
 router.post(
   "/devices/:deviceId/license-plates/search",
   requirePermission("system.vehicle_access.plate.manage"),
-  noCache,
+  disableHttpCache,
   validateIntegers("deviceId"),
   asyncHandler(async (req, res) => {
     const deviceId = parseInt(req.params.deviceId, 10);

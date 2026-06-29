@@ -10,23 +10,11 @@ const WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILED = 10;
 const API_MAX = 300;
 
-const SNAPSHOT_SYSTEM_SLUGS =
-  "lighting|drainage|hvac|air-circulation|power|fire|emergency-rescue|smoke-alarm";
-
-/** 已登入監控頁高頻輪詢 GET（電梯 live、快照 status 等）不計入全站限流 */
-const isAuthenticatedMonitoringPollGet = (req) => {
+/** 已登入電梯 live（mount／visibility 偶發 GET）不計入全站限流 */
+const isAuthenticatedElevatorLiveGet = (req) => {
   if (req.method !== "GET" || !req.headers.authorization) return false;
   const path = String(req.originalUrl || req.url || "").split("?")[0];
-  if (/^\/api\/elevator\/sites\/\d+\/live$/.test(path)) return true;
-  if (
-    new RegExp(`^/api/(?:${SNAPSHOT_SYSTEM_SLUGS})(?:/zones/\\d+)?/status$`).test(
-      path,
-    )
-  ) {
-    return true;
-  }
-  if (path === "/api/monitoring/overview/status") return true;
-  return false;
+  return /^\/api\/elevator\/sites\/\d+\/live$/.test(path);
 };
 
 const rateLimitHandler = (req, res) =>
@@ -95,7 +83,7 @@ const apiRateLimiter = createRateLimiter({
   skip: (req) => {
     const url = String(req.originalUrl || req.url || "");
     if (req.method === "GET" && url.startsWith("/api/uploads")) return true;
-    return isAuthenticatedMonitoringPollGet(req);
+    return isAuthenticatedElevatorLiveGet(req);
   },
 });
 

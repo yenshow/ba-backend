@@ -7,7 +7,7 @@ const {
   requireLocationMutation,
   requireLocationTypeModuleAccess,
 } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
@@ -25,7 +25,7 @@ router.get(
     }
     return requirePermission("system.area_point_map")(req, res, next);
   },
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { locationType } = req.query;
     const filters = locationType ? { locationType } : {};
@@ -37,7 +37,7 @@ router.get(
 // 取得單一區域
 router.get(
   "/zones/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -93,7 +93,7 @@ router.delete(
 // people_counting（門禁來源）可同步地點 + 入口/出口門禁設備（含名稱）
 router.get(
   "/people-counting/syncable-locations",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (_req, res) => {
     const result =
       await locationService.getPeopleCountingSyncableLocationsWithAccessControlDevices();
@@ -103,7 +103,7 @@ router.get(
 
 router.get(
   "/vehicle-access/syncable-locations",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (_req, res) => {
     const result =
       await locationService.getVehicleAccessSyncableLocationsWithIsapiCameras();
@@ -114,7 +114,7 @@ router.get(
 // 取得單一地點（含所有系統）
 router.get(
   "/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

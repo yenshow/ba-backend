@@ -6,7 +6,7 @@ const {
   requirePermission,
   requireEnvironmentReportFullIfScoped,
 } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
@@ -18,7 +18,7 @@ router.use(authenticate, requirePermission("system.environment"));
 // 取得區域列表
 router.get(
   "/zones",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const result = await environmentService.getZones();
     res.sendSuccess(result);
@@ -28,7 +28,7 @@ router.get(
 // 取得單一區域
 router.get(
   "/zones/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -81,7 +81,7 @@ router.delete(
 router.get(
   "/readings/:locationId/aggregated",
   requireEnvironmentReportFullIfScoped(),
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { locationId } = req.params;
     const { bucket, startTime, endTime } = req.query;
@@ -98,7 +98,7 @@ router.get(
 router.get(
   "/readings/:locationId",
   requireEnvironmentReportFullIfScoped(),
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { locationId } = req.params;
     const { startTime, endTime, limit, order } = req.query;

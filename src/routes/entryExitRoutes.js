@@ -3,7 +3,7 @@
  */
 const express = require("express");
 const { authenticate } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   getOperationalDayRangeResponse,
@@ -19,7 +19,7 @@ router.use(authenticate);
  */
 router.get(
   "/time-range",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const preset = req.query.preset || "today";
     res.sendSuccess({

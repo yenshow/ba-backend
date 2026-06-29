@@ -9,7 +9,7 @@ const {
   authenticate,
   requirePermission,
 } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   resolveTimeOptions,
@@ -28,7 +28,7 @@ router.use(authenticate, requirePermission("system.people_counting"));
 // 取得人流統計地點列表
 router.get(
   "/locations",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { zoneId } = req.query;
     const options = zoneId ? { zoneId: parseInt(zoneId) } : {};
@@ -41,7 +41,7 @@ router.get(
 // 取得單一地點
 router.get(
   "/locations/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -104,7 +104,7 @@ router.delete(
 router.get(
   "/logs",
   requirePermission("system.people_counting.report.full"),
-  noCache,
+  disableHttpCache,
   validateNumbers("siteId", "limit", "offset"),
   asyncHandler(async (req, res) => {
     const { limit, offset, siteId, startTime, endTime, timeRange, search } =
@@ -129,7 +129,7 @@ router.get(
  */
 router.get(
   "/sites",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const result = await peopleCountingService.getSites();
     res.sendSuccess(result);
@@ -143,7 +143,7 @@ router.get(
  */
 router.get(
   "/sites/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -168,7 +168,7 @@ router.get(
  */
 router.get(
   "/sites/:id/stats",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -198,7 +198,7 @@ router.post(
  */
 router.get(
   "/sites/:id/logs/latest",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -218,7 +218,7 @@ router.get(
  */
 router.get(
   "/sites/:id/logs",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   validateNumbers("limit", "offset", "unitId"),
   asyncHandler(async (req, res) => {
@@ -250,7 +250,7 @@ router.get(
  */
 router.get(
   "/units/:id/personnel",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   validateNumbers("siteId"),
   asyncHandler(async (req, res) => {

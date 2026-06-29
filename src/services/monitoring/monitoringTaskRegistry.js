@@ -18,6 +18,9 @@ const TASK_IDS = {
   diDo: "platform:di_do",
 };
 
+/** 環境 Modbus 輪詢固定間隔（不再使用 backgroundMonitor 自適應放慢） */
+const ENVIRONMENT_POLL_INTERVAL_MS = 15_000;
+
 const monitoringTaskRegistry = [
   {
     taskId: TASK_IDS.deviceConnectivity,
@@ -37,6 +40,11 @@ const monitoringTaskRegistry = [
     systemName: "環境系統",
     featureKey: "environment",
     taskFunction: environmentMonitor.checkEnvironmentLocations,
+    options: {
+      baseIntervalMs: ENVIRONMENT_POLL_INTERVAL_MS,
+      minIntervalMs: ENVIRONMENT_POLL_INTERVAL_MS,
+      maxIntervalMs: ENVIRONMENT_POLL_INTERVAL_MS,
+    },
   },
   {
     taskId: "elevator",
@@ -97,4 +105,5 @@ const getLicensedMonitoringTasks = (licensedFeatures) => {
 module.exports = {
   getLicensedMonitoringTasks,
   TASK_IDS,
+  ENVIRONMENT_POLL_INTERVAL_MS,
 };

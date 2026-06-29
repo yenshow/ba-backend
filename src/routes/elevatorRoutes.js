@@ -11,7 +11,7 @@ const {
   authenticate,
   requirePermission,
 } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   resolveTimeOptions,
@@ -25,7 +25,7 @@ router.use(authenticate, requirePermission("system.elevator"));
 
 router.get(
   "/sites",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const result = await elevatorService.getSites();
     res.sendSuccess(result);
@@ -33,34 +33,17 @@ router.get(
 );
 
 router.get(
-  "/sites/:id/live",
-  noCache,
-  validateIntegers("id"),
-  asyncHandler(async (req, res) => {
-    const live = await elevatorService.getSiteLiveState(parseInt(req.params.id, 10));
-    res.sendSuccess({ live });
-  }),
-);
-
-router.get(
   "/sites/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const siteId = parseInt(req.params.id, 10);
-    const [locationResult, logsResult, live] = await Promise.all([
+    const [locationResult, logsResult] = await Promise.all([
       elevatorService.getElevatorLocationById(siteId),
       elevatorService.getSiteLogs(siteId, { limit: 5, offset: 0 }),
-      elevatorService.getSiteLiveState(siteId),
     ]);
-    const location = locationResult.location;
-    const config = elevatorService.getElevatorConfig(location);
     res.sendSuccess({
-      location: {
-        ...location,
-        elevatorConfig: config,
-      },
-      live,
+      ...locationResult,
       latestLogs: logsResult.logs,
     });
   }),
@@ -69,7 +52,7 @@ router.get(
 router.get(
   "/logs",
   requirePermission("system.elevator.report.full"),
-  noCache,
+  disableHttpCache,
   validateNumbers("siteId", "limit", "offset"),
   asyncHandler(async (req, res) => {
     const { limit, offset, siteId, startTime, endTime, timeRange, search } =
@@ -89,7 +72,7 @@ router.get(
 
 router.get(
   "/locations/:id/floor-access",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const result = await elevatorFloorAccessService.getFloorAccess(
@@ -114,7 +97,7 @@ router.put(
 
 router.get(
   "/locations/:id/sync-candidates",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const result = await elevatorFloorSyncJobService.getSyncCandidatesForLocation(

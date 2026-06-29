@@ -11,7 +11,7 @@ const {
   requirePlatformAdmin,
 } = require("../middleware/authMiddleware");
 const { requireFeature } = require("../middleware/licenseMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 
@@ -24,7 +24,7 @@ router.use(authenticate);
 // 取得所有設備類型
 router.get(
   "/types",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const result = await deviceTypeService.getAllDeviceTypes();
     res.sendSuccess(result);
@@ -39,7 +39,7 @@ router.get(
 // 取得設備型號列表（支援按類型篩選）
 router.get(
   "/models",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { type_code, category_code } = req.query;
     const result = await deviceModelService.getAllDeviceModels({
@@ -53,7 +53,7 @@ router.get(
 // 取得單一設備型號
 router.get(
   "/models/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -113,7 +113,7 @@ router.delete(
 // - 或用 device_ids=1,2,3 指定清單
 router.get(
   "/connectivity",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { type_code, device_ids, debug } = req.query;
     // 若指定 device_ids：即時檢測一次，避免一直 unknown（特別是剛重啟/剛進頁面）
@@ -143,7 +143,7 @@ router.get(
 // 取得設備列表（支援篩選）
 router.get(
   "/",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { type_code, group, limit, offset, orderBy, order } = req.query;
     const result = await deviceService.getDevices({
@@ -161,7 +161,7 @@ router.get(
 // 取得攝影機群組列表（供篩選下拉，須在 /:id 之前）
 router.get(
   "/groups",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { type_code } = req.query;
     if (type_code !== "camera") {
@@ -175,7 +175,7 @@ router.get(
 // ========== 攝影機串流 API（影像監控系統，需授權 surveillance）==========
 router.post(
   "/:id/stream/start",
-  noCache,
+  disableHttpCache,
   requireFeature("surveillance"),
   requirePermission("system.video_surveillance.stream.control"),
   validateIntegers("id"),
@@ -188,7 +188,7 @@ router.post(
 
 router.post(
   "/:id/stream/stop",
-  noCache,
+  disableHttpCache,
   requireFeature("surveillance"),
   requirePermission("system.video_surveillance.stream.control"),
   validateIntegers("id"),
@@ -201,7 +201,7 @@ router.post(
 
 router.get(
   "/:id/stream/status",
-  noCache,
+  disableHttpCache,
   requireFeature("surveillance"),
   requirePermission("system.video_surveillance"),
   validateIntegers("id"),
@@ -215,7 +215,7 @@ router.get(
 // 取得單一設備（必須放在最後，避免與 /types 和 /models 衝突）
 router.get(
   "/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

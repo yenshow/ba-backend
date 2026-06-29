@@ -1,11 +1,14 @@
 const express = require("express");
 const asyncHandler = require("../utils/asyncHandler");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const { authenticate } = require("../middleware/authMiddleware");
 const { hasPermissionCode } = require("../access/permissionService");
 const licenseService = require("../services/license/licenseService");
 const locationService = require("../services/location/locationService");
 const { getMonitoringOverviewSystems } = require("./snapshotSystems");
+const {
+	resolveStatusSnapshot,
+} = require("../services/monitoring/resolveStatusSnapshot");
 
 const hasPermission = (req, requiredCode) => {
 	if (!req.user) return false;
@@ -27,7 +30,7 @@ module.exports = (() => {
 	 */
 	router.get(
 		"/overview/status",
-		noCache,
+		disableHttpCache,
 		asyncHandler(async (req, res) => {
 			const license = await licenseService.getLicenseState();
 			const licensedFeatures = new Set(license.features || []);
@@ -43,7 +46,9 @@ module.exports = (() => {
 			const pairs = await Promise.allSettled(
 				enabled.map(async (s) => {
 					const zonesRes = await locationService.getZones({ locationType: s.locationType });
-					const statusRes = await s.statusService.getStatusSnapshot({ zoneIds: undefined });
+					const statusRes = await resolveStatusSnapshot(s.key, s.statusService, {
+						zoneIds: undefined,
+					});
 					return [
 						s.key,
 						{

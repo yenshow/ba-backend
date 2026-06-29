@@ -9,7 +9,7 @@ const {
 const {
   MODBUS_CONTROL_SCOPE_PERMISSION,
 } = require("../access/catalog");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const {
   validateRequired,
@@ -99,7 +99,7 @@ const routeFactory = (reader) =>
 
 router.get(
   "/health",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const deviceConfig = parseDeviceParams(req);
     const status = modbusClient.getStatus(deviceConfig);
@@ -124,7 +124,7 @@ router.get(
 // POST /batch-read - 批次讀取（自動合併連續 address 範圍、內建快取/去重）
 router.post(
   "/batch-read",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const requests = req.body?.requests;
     if (!Array.isArray(requests)) {
@@ -172,7 +172,7 @@ const requireModbusControlScope = (req, res, next) => {
 // PUT /coils - 寫入單個或多個 DO（需 controlScope 對應開關控制權限）
 router.put(
   "/coils",
-  noCache,
+  disableHttpCache,
   requireModbusControlScope,
   validateRequired("address"),
   asyncHandler(async (req, res) => {

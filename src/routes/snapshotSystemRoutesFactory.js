@@ -12,7 +12,7 @@ const {
   requireAdmin,
   requirePermission,
 } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const systemAlert = require("../services/alerts/systemAlertHelper");
@@ -49,7 +49,7 @@ function createSnapshotSystemRouter(config) {
 
   router.get(
     "/zones",
-    noCache,
+    disableHttpCache,
     asyncHandler(async (req, res) => {
       const result = await locationService.getZones({ locationType });
       res.sendSuccess(result);
@@ -58,7 +58,7 @@ function createSnapshotSystemRouter(config) {
 
   router.get(
     "/zones/:id",
-    noCache,
+    disableHttpCache,
     validateIntegers("id"),
     asyncHandler(async (req, res) => {
       const { id } = req.params;
@@ -106,7 +106,7 @@ function createSnapshotSystemRouter(config) {
 
   router.get(
     "/status",
-    noCache,
+    disableHttpCache,
     asyncHandler(async (req, res) => {
       const zoneIds = parseZoneIdsQuery(req.query.zoneIds);
       const result = await statusService.getStatusSnapshot({
@@ -118,7 +118,7 @@ function createSnapshotSystemRouter(config) {
 
   router.get(
     "/zones/:id/status",
-    noCache,
+    disableHttpCache,
     validateIntegers("id"),
     asyncHandler(async (req, res) => {
       const { id } = req.params;

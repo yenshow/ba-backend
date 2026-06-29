@@ -8,6 +8,7 @@
 
 const logger = require("../../utils/logger");
 const websocketService = require("../websocket/websocketService");
+const monitoringSnapshotCache = require("./monitoringSnapshotCache");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
@@ -130,27 +131,43 @@ function createSystemSnapshotMonitor(options) {
 
   const check = async () => {
     try {
-      const { items } = await getSnapshot();
+      const snapshot = await getSnapshot();
+      const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+      const fetchedAt = new Date().toISOString();
+
+      const hadPriorSnapshot = monitoringSnapshotCache.hasSnapshot(systemKey);
+      const changedItems = monitoringSnapshotCache.diffChangedItems(
+        systemKey,
+        items,
+      );
+      monitoringSnapshotCache.setSnapshot(systemKey, { items });
+
+      if (hadPriorSnapshot && changedItems.length > 0) {
+        websocketService.emitMonitoringSnapshotUpdated({
+          system: systemKey,
+          items: changedItems,
+          fetchedAt,
+        });
+      }
+
       const statusUpdates = [];
 
-      if (Array.isArray(items)) {
-        for (const item of items) {
-          const systemId = getSystemId(item);
-          if (!systemId) continue;
+      for (const item of items) {
+        const systemId = getSystemId(item);
+        if (!systemId) continue;
 
-          const currentStatus = isOnline(item) ? "online" : "offline";
-          const key = `${systemKey}:${systemId}`;
-          const lastStatus = lastDeviceStatus.get(key);
+        const currentStatus = isOnline(item) ? "online" : "offline";
+        const key = `${systemKey}:${systemId}`;
+        const lastStatus = lastDeviceStatus.get(key);
 
-          if (lastStatus !== currentStatus) {
-            lastDeviceStatus.set(key, currentStatus);
-            statusUpdates.push({
-              system: systemKey,
-              sourceId: Number(systemId),
-              deviceId: getDeviceId(item) ?? null,
-              status: currentStatus,
-            });
-          }
+        if (lastStatus !== currentStatus) {
+          lastDeviceStatus.set(key, currentStatus);
+          statusUpdates.push({
+            system: systemKey,
+            sourceId: Number(systemId),
+            deviceId: getDeviceId(item) ?? null,
+            status: currentStatus,
+          });
         }
       }
 

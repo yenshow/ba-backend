@@ -13,7 +13,7 @@ const {
   requirePermission,
   requireAlertExportIfBulk,
 } = require("../middleware/authMiddleware");
-const { noCache } = require("../middleware/common");
+const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
@@ -387,7 +387,7 @@ router.use(requirePermission("system.alert_log"));
 router.get(
   "/",
   requireAlertExportIfBulk(),
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const {
       source,
@@ -430,7 +430,7 @@ router.get(
 // 取得未解決的警示數量（支持時間範圍篩選）
 router.get(
   "/unresolved/count",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const {
       source,
@@ -461,7 +461,7 @@ router.get(
 // 取得警報規則（用於前端顯示狀態）
 router.get(
   "/rules",
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const { source, alert_type, parameter } = req.query;
 
@@ -500,7 +500,7 @@ router.get(
 router.post(
   "/rules/integrations/batch",
   requirePermission("system.alert_log.alert.update"),
-  noCache,
+  disableHttpCache,
   asyncHandler(async (req, res) => {
     const raw = req.body || {};
     const ruleIds = Array.isArray(raw.ruleIds) ? raw.ruleIds : [];
@@ -570,7 +570,7 @@ router.post(
 router.get(
   "/rules/:id/integrations",
   requirePermission("system.alert_log"),
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const ruleId = Number(req.params.id);
@@ -774,7 +774,7 @@ router.delete(
 // 取得單一警示
 router.get(
   "/:id",
-  noCache,
+  disableHttpCache,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;

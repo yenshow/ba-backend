@@ -5,10 +5,10 @@
  */
 
 /**
- * 禁用快取的中間件
- * 用於 API 響應，確保客戶端不緩存結果
+ * 設定 HTTP 回應標頭，禁止瀏覽器／代理快取 API 結果。
+ * 注意：與快照 REST query `?noCache=true`（略過 monitoringSnapshotCache、觸發 Modbus）無關。
  */
-const noCache = (req, res, next) => {
+const disableHttpCache = (req, res, next) => {
   res.set({
     "Cache-Control": "no-cache, must-revalidate",
     Pragma: "no-cache",
@@ -24,18 +24,17 @@ const noCache = (req, res, next) => {
 const securityHeaders = (req, res, next) => {
   // 防止點擊劫持
   res.setHeader("X-Frame-Options", "DENY");
-  
+
   // 防止 MIME 類型嗅探
   res.setHeader("X-Content-Type-Options", "nosniff");
-  
+
   // XSS 保護
   res.setHeader("X-XSS-Protection", "1; mode=block");
-  
+
   next();
 };
 
 module.exports = {
-  noCache,
+  disableHttpCache,
   securityHeaders,
 };
-

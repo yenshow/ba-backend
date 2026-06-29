@@ -8,10 +8,14 @@ const logger = require("../../utils/logger");
 const userService = require("../platform/userService");
 const permissionService = require("../../access/permissionService");
 
+const {
+  getEventPermissionCodes,
+  getSnapshotSystemPermissionCode,
+} = require("./wsEventPermissions");
+
 let ioInstance = null;
 const wsLogger = logger.createLogger("WebSocket");
 
-const ROOM_LEGACY = "app:legacy";
 const APP_ROOMS = new Set(["central", "construction"]);
 const ROOMS_ALL_APPS = ["app:central", "app:construction"];
 const PERM_ROOM_PREFIX = "perm:";
@@ -33,35 +37,43 @@ function isAvailable() {
 
 /**
  * 通用的 WebSocket 事件推送函數（帶錯誤處理和日誌）
- * 預設全廣播；若指定 rooms 則推送到指定 rooms（並保留 legacy room 做向下相容）
+ * 預設依 wsEventPermissions 推 perm rooms，否則推 app rooms
  * @param {string} eventName - 事件名稱
  * @param {*} data - 事件資料
  * @param {Object} options - 選項
  * @param {string} options.logMessage - 日誌訊息（可選）
- * @param {string[]} options.rooms - 推送的 rooms（可選）
+ * @param {string[]} options.rooms - 推送的 rooms（可選；如 user:{id}）
+ * @param {string|string[]} options.permissionCodes - 覆寫預設 perm rooms（可選）
  * @param {boolean} options.forceBroadcast - 強制全廣播 io.emit（可選；預設 false）
  */
+function resolveTargetRooms(eventName, options = {}) {
+  const { rooms, permissionCodes } = options;
+
+  if (Array.isArray(rooms) && rooms.length > 0) {
+    return rooms.filter(Boolean);
+  }
+
+  const codes = getEventPermissionCodes(eventName, permissionCodes);
+  if (codes.length > 0) {
+    return codes.map((code) => `${PERM_ROOM_PREFIX}${code}`);
+  }
+
+  return ROOMS_ALL_APPS;
+}
+
 function safeEmit(eventName, data, options = {}) {
   if (!isAvailable()) {
     return;
   }
 
-  const { logMessage, rooms, forceBroadcast } = options;
+  const { logMessage, forceBroadcast } = options;
 
-  // 預設 rooms 策略（向下相容）：
-  // - 未指定 rooms：推送到「所有 app rooms」+ legacy
-  // - 指定 rooms：推送到「指定 rooms」+ legacy
-  // - forceBroadcast=true：強制全廣播（少數情境才用）
+  let targetRooms;
   if (forceBroadcast === true) {
     ioInstance.emit(eventName, data);
   } else {
-    const targetRooms =
-      Array.isArray(rooms) && rooms.length > 0 ? rooms : ROOMS_ALL_APPS;
-
-    const uniqueRooms = Array.from(
-      new Set([...targetRooms, ROOM_LEGACY]),
-    ).filter(Boolean);
-    for (const room of uniqueRooms) {
+    targetRooms = resolveTargetRooms(eventName, options);
+    for (const room of targetRooms) {
       ioInstance.to(room).emit(eventName, data);
     }
   }
@@ -70,7 +82,7 @@ function safeEmit(eventName, data, options = {}) {
     wsLogger.debug("推送事件", {
       event: eventName,
       message: logMessage,
-      rooms: Array.isArray(rooms) ? rooms : undefined,
+      rooms: targetRooms,
     });
   }
 }
@@ -114,12 +126,7 @@ function initializeWebSocket(httpServer) {
 
   const logConnections = true;
   ioInstance.on("connection", (socket) => {
-    // 預設加入 legacy room，直到前端發送 client:hello 進行識別
-    socket.join(ROOM_LEGACY);
-
     // 依 permissions 自動加入 rooms（不依賴 license；由後端驗證 token）
-    // - token 來源：socket.io-client 的 auth.token
-    // - 若無 token 或無效：維持 app:legacy/app:* 的基本分流即可
     (async () => {
       try {
         const token = String(socket.handshake?.auth?.token || "").trim();
@@ -173,7 +180,7 @@ function initializeWebSocket(httpServer) {
       });
     }
 
-    // App 識別（向下相容：未發送仍留在 legacy）
+    // App 識別：client:hello 加入 app:central | app:construction
     socket.on("client:hello", (payload = {}) => {
       try {
         const app = String(payload?.app || "").trim();
@@ -186,7 +193,6 @@ function initializeWebSocket(httpServer) {
           return;
         }
 
-        socket.leave(ROOM_LEGACY);
         socket.join(`app:${app}`);
 
         if (logConnections) {
@@ -391,6 +397,30 @@ function emitBatchDeviceStatus(updates) {
       },
     );
   });
+}
+
+/**
+ * 推送監控快照變更（uiStatus / raw / error 等 UI 所需欄位）
+ * @param {{ system: string, items: object[], fetchedAt: string }} payload
+ */
+function emitMonitoringSnapshotUpdated(payload) {
+  if (!payload?.system || !Array.isArray(payload.items) || payload.items.length === 0) {
+    return;
+  }
+
+  safeEmit(
+    "monitoring:snapshot:updated",
+    {
+      system: payload.system,
+      items: payload.items,
+      fetchedAt: payload.fetchedAt || new Date().toISOString(),
+      timestamp: new Date().toISOString(),
+    },
+    {
+      logMessage: `${payload.system}: ${payload.items.length} 筆快照變更`,
+      permissionCodes: getSnapshotSystemPermissionCode(payload.system),
+    },
+  );
 }
 
 /**
@@ -605,6 +635,7 @@ module.exports = {
   emitAlertDailyRollover,
   emitDeviceStatus,
   emitBatchDeviceStatus,
+  emitMonitoringSnapshotUpdated,
   emitMonitoringStatus,
   emitDeviceCreated,
   emitDeviceUpdated,
