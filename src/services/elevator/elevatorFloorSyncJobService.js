@@ -9,6 +9,10 @@ const personLadderCardService = require("../personnel/personLadderCardService");
 const personDeviceSyncStateService = require("../personnel/personDeviceSyncStateService");
 const sdkCardService = require("../ladderSdk/sdkCardService");
 const elevatorService = require("./elevatorService");
+const {
+  getElevatorConfigFromLocation,
+  buildPersonFloorAccessView,
+} = require("./elevatorFloorModel");
 const elevatorFloorAccessService = require("./elevatorFloorAccessService");
 const personSyncJobService = require("../personnel/personSyncJobService");
 const personSyncJobStore = require("../personnel/personSyncJobStore");
@@ -89,6 +93,7 @@ async function syncLocationToDevice(
   deviceId,
   job = null,
   deviceNameById = null,
+  floorCtx = null,
 ) {
   const persons =
     await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
@@ -156,10 +161,15 @@ async function syncLocationToDevice(
       continue;
     }
 
-    const floors = await elevatorFloorAccessService.aggregateFloorsForPerson(
-      locationId,
-      person.id,
-    );
+    const floors = floorCtx
+      ? buildPersonFloorAccessView(
+          floorCtx.configFloors,
+          floorCtx.accessIndexByPerson.get(person.id) || [],
+        ).authorized_ladder_gateways
+      : await elevatorFloorAccessService.aggregateFloorsForPerson(
+          locationId,
+          person.id,
+        );
     if (!floors.length) {
       pushPersonSyncWarning(warnings, person, {
         type: "skip_no_floors",
@@ -317,6 +327,11 @@ async function syncLocationCards(locationId, job = null) {
     ...accessDeviceIds,
   ]);
 
+  const configFloors = getElevatorConfigFromLocation(location).floors || [];
+  const accessIndexByPerson =
+    await elevatorFloorAccessService.getFloorAccessIndexByPerson(locationId);
+  const floorCtx = { configFloors, accessIndexByPerson };
+
   if (ladderDeviceIds.length) {
     for (const deviceId of ladderDeviceIds) {
       const { warnings, deviceId: syncedId } = await syncLocationToDevice(
@@ -324,6 +339,7 @@ async function syncLocationCards(locationId, job = null) {
         deviceId,
         job,
         deviceNameById,
+        floorCtx,
       );
       allWarnings.push(...warnings);
       syncedDeviceIds.push(syncedId);
@@ -456,11 +472,14 @@ function mapCardSyncStatus(raw) {
 
 async function getSyncCandidatesForLocation(locationId) {
   const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const configFloors = getElevatorConfigFromLocation(location).floors || [];
   const { ladderDevice, accessDeviceIds } =
     elevatorService.getElevatorConfig(location);
   const ladderDeviceIds = ladderDevice?.deviceId ? [ladderDevice.deviceId] : [];
-  const persons =
-    await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
+  const [persons, accessIndexByPerson] = await Promise.all([
+    elevatorFloorAccessService.getPersonsWithFloorAccess(locationId),
+    elevatorFloorAccessService.getFloorAccessIndexByPerson(locationId),
+  ]);
   const employeeNos = persons.map((p) => String(p.employee_no));
 
   const stateMaps = [];
@@ -491,16 +510,15 @@ async function getSyncCandidatesForLocation(locationId) {
   const results = [];
   for (const person of persons) {
     const ladderCard = await personLadderCardService.getByPersonId(person.id);
-    const floors = await elevatorFloorAccessService.aggregateFloorsForPerson(
-      locationId,
-      person.id,
-    );
-    const resolved = personLadderCardService.resolveSyncFields(person, floors);
+    const logicalIndices = accessIndexByPerson.get(person.id) || [];
+    const floorAccess = buildPersonFloorAccessView(configFloors, logicalIndices);
+    const ladderGateways = floorAccess.authorized_ladder_gateways;
+    const resolved = personLadderCardService.resolveSyncFields(person, ladderGateways);
     const cardNos = Array.isArray(resolved.cardNos)
       ? resolved.cardNos.map((c) => String(c).trim()).filter(Boolean)
       : [];
     const desiredHash = cardNos.length
-      ? buildLadderDesiredHash(person, floors, resolved)
+      ? buildLadderDesiredHash(person, ladderGateways, resolved)
       : null;
 
     let cardStatus = "no_data";
@@ -537,7 +555,8 @@ async function getSyncCandidatesForLocation(locationId) {
       employee_no: person.employee_no,
       full_name: person.full_name,
       has_ladder_card: Boolean(cardNos.length && ladderCard),
-      authorized_floors: floors,
+      authorized_floor_labels: floorAccess.authorized_floor_labels,
+      authorized_ladder_gateways: floorAccess.authorized_ladder_gateways,
       needs_sync: needsSync || needsAccessSync,
       needs_ladder_sync: needsSync,
       needs_access_sync: needsAccessSync,

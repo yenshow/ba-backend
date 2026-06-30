@@ -253,6 +253,10 @@ async function startServer() {
     }
 
     if (dbConnected) {
+      const { runSchemaPatches } = require("./database/schemaPatches");
+      await runSchemaPatches(db.pool).catch((err) =>
+        serverLogger.warn("schema patches 失敗", { error: err.message }),
+      );
       await syncDefinitions(db.pool).catch((err) =>
         serverLogger.warn("權限定義同步失敗", { error: err.message }),
       );

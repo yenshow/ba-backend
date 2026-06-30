@@ -1515,15 +1515,8 @@ async function initSchema() {
     });
 
     // person_sync_jobs：擴充 job_type 支援電梯樓層同步
-    await targetPool.query(`
-      ALTER TABLE person_sync_jobs
-      DROP CONSTRAINT IF EXISTS person_sync_jobs_job_type_check
-    `);
-    await targetPool.query(`
-      ALTER TABLE person_sync_jobs
-      ADD CONSTRAINT person_sync_jobs_job_type_check
-      CHECK (job_type IN ('sync_location', 'sync_all_locations', 'elevator_sync_location'))
-    `);
+    const { patchPersonSyncJobTypes } = require("./schemaPatches");
+    await patchPersonSyncJobTypes(targetPool);
     schemaLogger.info("person_sync_jobs job_type 已擴充 elevator_sync_location", {
       module: "initSchema",
     });

@@ -7,7 +7,7 @@ const { throwApiError } = require("../../utils/apiErrorMeta");
 const elevatorService = require("./elevatorService");
 const {
   getElevatorConfigFromLocation,
-  logicalIndicesToLadderGateways,
+  buildPersonFloorAccessView,
 } = require("./elevatorFloorModel");
 
 const personLadderCardService = require("../personnel/personLadderCardService");
@@ -155,7 +155,7 @@ async function replaceFloorAccess(locationId, assignments = []) {
   const pairs = [];
 
   for (const item of list) {
-    const floorIndex = Number(item.floorIndex ?? item.floor_index);
+    const floorIndex = Number(item.floorIndex);
     if (
       !Number.isFinite(floorIndex) ||
       floorIndex < 1 ||
@@ -163,12 +163,10 @@ async function replaceFloorAccess(locationId, assignments = []) {
     ) {
       throwApiError(
         C.ELEVATOR_VALIDATION_FAILED,
-        `樓層索引無效：${item.floorIndex ?? item.floor_index}`,
+        `樓層索引無效：${item.floorIndex}`,
       );
     }
-    const personIds = Array.isArray(item.personIds ?? item.person_ids)
-      ? (item.personIds ?? item.person_ids)
-      : [];
+    const personIds = Array.isArray(item.personIds) ? item.personIds : [];
     const unique = Array.from(
       new Set(
         personIds
@@ -316,11 +314,9 @@ async function syncLadderFloorsFromLocationAssignments(
 
   const personFloorMap = new Map();
   for (const item of assignments || []) {
-    const floorIndex = Number(item.floorIndex ?? item.floor_index);
+    const floorIndex = Number(item.floorIndex);
     if (!Number.isFinite(floorIndex) || floorIndex < 1) continue;
-    const personIds = Array.isArray(item.personIds ?? item.person_ids)
-      ? (item.personIds ?? item.person_ids)
-      : [];
+    const personIds = Array.isArray(item.personIds) ? item.personIds : [];
     for (const rawId of personIds) {
       const personId = Number(rawId);
       if (!Number.isFinite(personId) || personId <= 0) continue;
@@ -405,12 +401,27 @@ async function getPersonIdsWithFloorAccess(locationId) {
     .filter((n) => Number.isFinite(n) && n > 0);
 }
 
-async function aggregateFloorsForPerson(locationId, personId) {
-  const { location } =
-    await elevatorService.getElevatorLocationById(locationId);
-  const config = getElevatorConfigFromLocation(location);
-  const floors = config.floors || [];
+async function getFloorAccessIndexByPerson(locationId) {
+  const rows = await db.query(
+    `SELECT person_id, floor_index
+     FROM person_elevator_floor_access
+     WHERE location_id = ?
+     ORDER BY person_id ASC, floor_index ASC`,
+    [Number(locationId)],
+  );
+  const map = new Map();
+  for (const row of rows || []) {
+    const personId = Number(row.person_id);
+    const floorIndex = Number(row.floor_index);
+    if (!Number.isFinite(personId) || personId <= 0) continue;
+    if (!Number.isFinite(floorIndex) || floorIndex <= 0) continue;
+    if (!map.has(personId)) map.set(personId, []);
+    map.get(personId).push(floorIndex);
+  }
+  return map;
+}
 
+async function getPersonFloorLogicalIndices(locationId, personId) {
   const rows = await db.query(
     `SELECT floor_index
      FROM person_elevator_floor_access
@@ -418,11 +429,27 @@ async function aggregateFloorsForPerson(locationId, personId) {
      ORDER BY floor_index ASC`,
     [Number(locationId), Number(personId)],
   );
-  const logicalIndices = (rows || [])
+  return (rows || [])
     .map((r) => Number(r.floor_index))
     .filter((n) => Number.isFinite(n) && n > 0);
+}
 
-  return logicalIndicesToLadderGateways(floors, logicalIndices);
+async function getPersonFloorAccessView(locationId, personId, preload = null) {
+  const floors =
+    preload?.floors ??
+    getElevatorConfigFromLocation(
+      (await elevatorService.getElevatorLocationById(locationId)).location,
+    ).floors ??
+    [];
+  const logicalIndices =
+    preload?.logicalIndices ??
+    (await getPersonFloorLogicalIndices(locationId, personId));
+  return buildPersonFloorAccessView(floors, logicalIndices);
+}
+
+async function aggregateFloorsForPerson(locationId, personId, preload = null) {
+  const view = await getPersonFloorAccessView(locationId, personId, preload);
+  return view.authorized_ladder_gateways;
 }
 
 async function getPersonsWithFloorAccess(locationId) {
@@ -444,7 +471,9 @@ module.exports = {
   replaceFloorAccess,
   syncPersonFloorAccessFromLadderFloors,
   getPersonIdsWithFloorAccess,
+  getFloorAccessIndexByPerson,
   aggregateFloorsForPerson,
+  getPersonFloorAccessView,
   getPersonsWithFloorAccess,
   getActivePersonsWithLadderFloors,
 };

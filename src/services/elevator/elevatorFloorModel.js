@@ -383,6 +383,16 @@ const logicalIndicesToLadderGateways = (floors, logicalIndices) =>
     .map((idx) => resolveLadderGateway(floors, idx))
     .filter((n) => Number.isFinite(n) && n > 0);
 
+const buildPersonFloorAccessView = (floors, logicalIndices) => ({
+  authorized_floor_labels: (logicalIndices || [])
+    .map((idx) => resolveFloorLabel(floors, idx))
+    .filter(Boolean),
+  authorized_ladder_gateways: logicalIndicesToLadderGateways(
+    floors,
+    logicalIndices,
+  ),
+});
+
 const findFloorByLadderGateway = (floors, gateway) => {
   const gw = Number(gateway);
   if (!Number.isFinite(gw)) return null;
@@ -521,6 +531,7 @@ module.exports = {
   resolveFloorLabel,
   resolveLadderGateway,
   logicalIndicesToLadderGateways,
+  buildPersonFloorAccessView,
   findFloorByLadderGateway,
   findFloorByDiAddress,
   resolveDefaultDisplayFloor,
