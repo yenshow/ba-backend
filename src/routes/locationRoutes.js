@@ -55,7 +55,12 @@ router.post(
   "/zones",
   requireLocationMutation("create"),
   asyncHandler(async (req, res) => {
-    const result = await locationService.createZone(req.body, req.user.id);
+    const { locationType } = req.query;
+    const result = await locationService.createZone(
+      req.body,
+      req.user.id,
+      locationType ? { systemTypeScope: locationType } : undefined,
+    );
     res.sendSuccess(result, 201);
   }),
 );
@@ -67,10 +72,12 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const { locationType } = req.query;
     const result = await locationService.updateZone(
       parseInt(id),
       req.body,
       req.user.id,
+      locationType ? { systemTypeScope: locationType } : undefined,
     );
     res.sendSuccess(result);
   }),
@@ -140,10 +147,12 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const { locationType } = req.query;
     const result = await locationService.updateLocation(
       parseInt(id),
       req.body,
       req.user.id,
+      locationType ? { systemTypeScope: locationType } : undefined,
     );
     res.sendSuccess(result);
   }),

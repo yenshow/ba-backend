@@ -647,6 +647,28 @@ async function deleteLocationsByIdsWithoutSystems(query, locationIds) {
 }
 
 /**
+ * 若地點已無任何系統則刪除地點，並在區域變空時刪除區域（用於事務內部）
+ */
+async function deleteLocationIfNoSystemsRemain(query, locationId) {
+  const remainingSystems = await query(
+    "SELECT id FROM location_systems WHERE location_id = $1",
+    [locationId],
+  );
+  if (remainingSystems.length > 0) return false;
+
+  const locationInfo = await query(
+    "SELECT zone_id FROM locations WHERE id = $1",
+    [locationId],
+  );
+  const zoneId = locationInfo[0]?.zone_id;
+  await query("DELETE FROM locations WHERE id = $1", [locationId]);
+  if (zoneId) {
+    await deleteEmptyZoneIfNeeded(query, zoneId);
+  }
+  return true;
+}
+
+/**
  * 檢查並刪除空區域（用於事務內部）
  */
 async function deleteEmptyZoneIfNeeded(query, zoneId) {
@@ -697,6 +719,7 @@ module.exports = {
   getValidLocations,
   deleteLocationsWithoutSystems,
   deleteLocationsByIdsWithoutSystems,
+  deleteLocationIfNoSystemsRemain,
   deleteEmptyZoneIfNeeded,
   refreshAfterLocationOrZoneDelete,
 };

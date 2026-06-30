@@ -283,7 +283,7 @@ async function createLocation(locationData, userId) {
 /**
  * 更新地點（含系統）
  */
-async function updateLocation(id, locationData, userId) {
+async function updateLocation(id, locationData, userId, options = {}) {
   try {
     // 檢查地點是否存在
     const existing = await db.query("SELECT * FROM locations WHERE id = $1", [
@@ -296,7 +296,13 @@ async function updateLocation(id, locationData, userId) {
     // 使用事務更新地點和系統
     let locationDeleted = false;
     await db.transaction(async (query) => {
-      await updateLocationWithSystems(query, id, locationData, userId);
+      await updateLocationWithSystems(
+        query,
+        id,
+        locationData,
+        userId,
+        options,
+      );
 
       // 檢查地點是否已被刪除（因為變成無系統）
       const locationCheck = await query(

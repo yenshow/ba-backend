@@ -31,7 +31,11 @@ async function writeLocationStatsResetAt(systemType, locationId, notFoundMessage
     [locationId, systemType],
   );
   if (!rows?.length) {
-    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, notFoundMessage);
+    const code =
+      systemType === "vehicle_access"
+        ? C.VEHICLE_ACCESS_VALIDATION_FAILED
+        : C.PEOPLE_COUNTING_VALIDATION_FAILED;
+    throwApiError(code, notFoundMessage);
   }
 
   const rawCfg =

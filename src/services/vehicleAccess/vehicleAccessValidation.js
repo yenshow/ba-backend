@@ -56,14 +56,14 @@ async function validateVehicleAccessConfig(
 
   if (cfg.operationMode === "parking" && cfg.dataSource !== "isapi_camera") {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "停車場模式僅允許 ISAPI 車牌攝影機資料來源",
     );
   }
 
   if (cfg.operationMode === "parking" && cfg.parkingCapacity == null) {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "停車場模式請填寫在場車輛上限（正整數）",
     );
   }
@@ -74,7 +74,7 @@ async function validateVehicleAccessConfig(
   ) {
     if (cfg.operationMode === "parking") {
       throwApiError(
-        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        C.VEHICLE_ACCESS_VALIDATION_FAILED,
         "YSCP 車道地點不可設為停車場模式",
       );
     }
@@ -82,13 +82,13 @@ async function validateVehicleAccessConfig(
     const exit = parseLaneId(cfg.exitLaneId);
     if (entry == null) {
       throwApiError(
-        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        C.VEHICLE_ACCESS_VALIDATION_FAILED,
         "YSCP 車輛地點至少需要設定入口車道",
       );
     }
     if (entry != null && exit != null && entry === exit) {
       throwApiError(
-        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        C.VEHICLE_ACCESS_VALIDATION_FAILED,
         "入口與出口車道不可相同",
       );
     }
@@ -97,7 +97,7 @@ async function validateVehicleAccessConfig(
 
   if (cfg.entryCameraDeviceIds.length === 0) {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "ISAPI 車輛地點至少需要一個入口攝影機",
     );
   }
@@ -107,7 +107,7 @@ async function validateVehicleAccessConfig(
   for (const id of entrySet) {
     if (exitSet.has(id)) {
       throwApiError(
-        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        C.VEHICLE_ACCESS_VALIDATION_FAILED,
         "入口與出口不可選擇同一台攝影機",
       );
     }
@@ -122,7 +122,7 @@ async function validateVehicleAccessConfig(
   for (const d of typeRows || []) {
     if (String(d.type_code || "").toLowerCase() !== "camera") {
       throwApiError(
-        C.PEOPLE_COUNTING_VALIDATION_FAILED,
+        C.VEHICLE_ACCESS_VALIDATION_FAILED,
         `設備 ${d.id} 必須為攝影機（type_code=camera）`,
       );
     }

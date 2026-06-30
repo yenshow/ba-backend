@@ -50,7 +50,11 @@ const EXTRA_MODULES = [
 
 const isCategoryVisibleForProfile = (category, profile) => {
   if (profile === "central") return true;
-  return category === "core" || category === "construction-monitoring";
+  return (
+    category === "core" ||
+    category === "access-control" ||
+    category === "security"
+  );
 };
 
 const getModulesForProfile = (profile) => {

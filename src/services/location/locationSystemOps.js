@@ -14,7 +14,7 @@ const {
   deviceIdsFromApiSystemConfig,
   deviceIdsFromDbSystemConfig,
   stripLegacyModbusDeviceId,
-  deleteEmptyZoneIfNeeded,
+  deleteLocationIfNoSystemsRemain,
 } = shared;
 
 const locationLogger = logger.createLogger("locationSystemOps");
@@ -448,7 +448,7 @@ async function createSystem(query, locationId, system) {
     yscpVehicleFeature.shouldSkipYscp(systemConfig.data_source)
   ) {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "YSCP 車輛資料源已關閉，請改用 ISAPI 車牌攝影機",
     );
   }
@@ -557,7 +557,7 @@ async function updateSystem(query, systemId, system) {
     yscpVehicleFeature.shouldSkipYscp(systemConfig.data_source)
   ) {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "YSCP 車輛資料源已關閉，請改用 ISAPI 車牌攝影機",
     );
   }
@@ -614,8 +614,15 @@ async function updateSystem(query, systemId, system) {
  * 建立地點和系統（用於事務內部）
  * 如果地點已存在，則使用現有地點並添加系統（支援跨系統共用）
  */
-async function createLocationWithSystems(query, zoneId, location, userId) {
+async function createLocationWithSystems(
+  query,
+  zoneId,
+  location,
+  userId,
+  options = {},
+) {
   const { name, description, systems = [], locationType } = location;
+  const systemTypeScope = options.systemTypeScope || null;
 
   // 如果沒有 systems 但有 locationType，自動轉換為 systems 陣列（向後兼容）
   let finalSystems = systems;
@@ -785,6 +792,13 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
     locationId = locationResult[0].id;
   }
 
+  if (systemTypeScope) {
+    finalSystems = finalSystems.filter((s) => s?.systemType === systemTypeScope);
+    if (finalSystems.length === 0) {
+      return locationId;
+    }
+  }
+
   // 建立或更新系統（如果系統已存在則更新，否則建立）
   for (const system of finalSystems) {
     const { systemType } = system;
@@ -811,8 +825,15 @@ async function createLocationWithSystems(query, zoneId, location, userId) {
 /**
  * 更新地點和系統（用於事務內部）
  */
-async function updateLocationWithSystems(query, locationId, location, userId) {
+async function updateLocationWithSystems(
+  query,
+  locationId,
+  location,
+  userId,
+  options = {},
+) {
   const { name, description, systems } = location;
+  const systemTypeScope = options.systemTypeScope || null;
 
   // 更新地點基本資訊
   const updates = [];
@@ -865,13 +886,34 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
 
   // 處理系統更新
   if (systems !== undefined) {
-    // 查詢現有系統，建立兩個索引：
-    // 1. 以 id 為鍵（用於更新現有系統）
-    // 2. 以 (location_id, system_type) 為鍵（用於檢查唯一約束）
+    const scopedSystems = systemTypeScope
+      ? systems.filter((s) => s?.systemType === systemTypeScope)
+      : systems;
+
     const existingSystems = await query(
       "SELECT id, system_type FROM location_systems WHERE location_id = $1",
       [locationId],
     );
+
+    // 區域 PUT（locationType）：payload 僅含其他系統地點 → 不觸及
+    if (systemTypeScope && scopedSystems.length === 0 && systems.length > 0) {
+      return;
+    }
+
+    // 地點 PUT（locationType + systems: []）：僅移除該系統類型
+    if (systemTypeScope && systems.length === 0) {
+      const systemsToDelete = existingSystems
+        .filter((s) => s.system_type === systemTypeScope)
+        .map((s) => s.id);
+      if (systemsToDelete.length > 0) {
+        await query(`DELETE FROM location_systems WHERE id = ANY($1::int[])`, [
+          systemsToDelete,
+        ]);
+      }
+      await deleteLocationIfNoSystemsRemain(query, locationId);
+      return;
+    }
+
     const existingSystemIds = new Set(existingSystems.map((s) => String(s.id)));
     const existingSystemTypes = new Map(
       existingSystems.map((s) => [s.system_type, s.id]),
@@ -880,7 +922,7 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
     const updatedSystemIds = new Set();
     const processedSystemTypes = new Set();
 
-    for (const system of systems) {
+    for (const system of scopedSystems) {
       const { systemType } = system;
       if (!systemType) {
         throwApiError(C.LOCATION_SYSTEM_TYPE_REQUIRED, "系統類型不能為空");
@@ -913,37 +955,23 @@ async function updateLocationWithSystems(query, locationId, location, userId) {
       }
     }
 
-    // 刪除不在更新列表中的系統
-    const systemsToDelete = Array.from(existingSystemIds).filter(
-      (id) => !updatedSystemIds.has(id),
-    );
+    // 刪除不在更新列表中的系統（有 systemTypeScope 時僅刪該類型）
+    const systemsToDelete = systemTypeScope
+      ? existingSystems
+          .filter(
+            (s) =>
+              s.system_type === systemTypeScope &&
+              !updatedSystemIds.has(String(s.id)),
+          )
+          .map((s) => String(s.id))
+      : Array.from(existingSystemIds).filter((id) => !updatedSystemIds.has(id));
     if (systemsToDelete.length > 0) {
       await query(`DELETE FROM location_systems WHERE id = ANY($1::int[])`, [
         systemsToDelete.map((id) => parseInt(id)),
       ]);
     }
 
-    // 檢查更新後地點是否還有系統，如果沒有則刪除地點
-    const remainingSystems = await query(
-      "SELECT id FROM location_systems WHERE location_id = $1",
-      [locationId],
-    );
-    if (remainingSystems.length === 0) {
-      // 獲取 zoneId 以便後續清理
-      const locationInfo = await query(
-        "SELECT zone_id FROM locations WHERE id = $1",
-        [locationId],
-      );
-      const zoneId = locationInfo[0]?.zone_id;
-
-      // 刪除無系統的地點
-      await query("DELETE FROM locations WHERE id = $1", [locationId]);
-
-      // 如果區域沒有地點了，刪除區域
-      if (zoneId) {
-        await deleteEmptyZoneIfNeeded(query, zoneId);
-      }
-    }
+    await deleteLocationIfNoSystemsRemain(query, locationId);
   }
 }
 

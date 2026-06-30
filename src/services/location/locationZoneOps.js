@@ -177,7 +177,9 @@ async function getZoneById(id, systemTypeOrLocationType = null) {
 /**
  * 建立區域
  */
-async function createZone(zoneData, userId) {
+async function createZone(zoneData, userId, options = {}) {
+  const systemTypeScope = options.systemTypeScope || null;
+  const locationMutationOptions = systemTypeScope ? { systemTypeScope } : {};
   try {
     const {
       name,
@@ -279,6 +281,7 @@ async function createZone(zoneData, userId) {
             zoneId,
             location,
             userId,
+            locationMutationOptions,
           );
           orderedLocationIds.push(nid);
         }
@@ -318,7 +321,9 @@ async function createZone(zoneData, userId) {
 /**
  * 更新區域
  */
-async function updateZone(id, zoneData, userId) {
+async function updateZone(id, zoneData, userId, options = {}) {
+  const systemTypeScope = options.systemTypeScope || null;
+  const locationMutationOptions = systemTypeScope ? { systemTypeScope } : {};
   try {
     const { name, buildingId, imageUrl, description, locations, sortOrder } =
       zoneData;
@@ -367,6 +372,7 @@ async function updateZone(id, zoneData, userId) {
               targetZoneId,
               location,
               userId,
+              locationMutationOptions,
             );
           }
         }
@@ -462,6 +468,7 @@ async function updateZone(id, zoneData, userId) {
               parseInt(locationIdStr, 10),
               location,
               userId,
+              locationMutationOptions,
             );
             resolvedId = parseInt(locationIdStr, 10);
             updatedLocationIds.add(locationIdStr);
@@ -471,6 +478,7 @@ async function updateZone(id, zoneData, userId) {
               id,
               location,
               userId,
+              locationMutationOptions,
             );
             updatedLocationIds.add(String(resolvedId));
           }

@@ -67,7 +67,7 @@ async function getSiteConfig(siteId) {
     (s) => s.systemType === "vehicle_access",
   );
   if (!hasVa) {
-    throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "地點未設定車輛進出系統");
+    throwApiError(C.VEHICLE_ACCESS_VALIDATION_FAILED, "地點未設定車輛進出系統");
   }
   const vaCfg = getVehicleAccessConfig(location);
   const createdAt =
@@ -147,13 +147,13 @@ async function getSiteSessionStats(siteId) {
     await getSiteConfig(siteId);
   if (operationMode !== "parking") {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "僅停車場模式可使用 session 統計",
     );
   }
   if (dataSource !== "isapi_camera") {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "停車場 session 統計僅支援 ISAPI",
     );
   }
@@ -202,7 +202,7 @@ async function resetSiteStats(siteId, userId = null) {
   const { operationMode } = await getSiteConfig(siteId);
   if (operationMode !== "parking") {
     throwApiError(
-      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "僅停車場模式可重製統計",
     );
   }
