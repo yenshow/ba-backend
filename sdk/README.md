@@ -160,19 +160,21 @@ stdout 逐行 NDJSON，由 `sdkArmingService` 注入 `SDK_DEVICE_*` 環境變數
 
 ## 佈防事件白名單
 
-Bridge 佈防輸出**全部** ACS 事件；後端 `sdkEventPersistence` 寫入 DB／WebSocket 前套用白名單：
+Bridge 佈防輸出**全部** ACS 事件；後端 `sdkEventPersistence` 寫入 DB／WebSocket 前依 `acsEventLabels.js` 的 `ALLOWED_EVENT_KEYS` 過濾：
 
 | Major | Minor | 說明           |
 | ----- | ----- | -------------- |
 | 0x3   | 0x400 | 遠端開門       |
-| 0x3   | 0x401 | 遠端關門       |
 | 0x3   | 0x402 | 遠端常開       |
 | 0x3   | 0x403 | 遠端常閉       |
+| 0x3   | 0x404 | 訪客呼梯       |
+| 0x3   | 0x405 | 住戶呼梯       |
 | 0x5   | 0x01  | 合法卡通行     |
 | 0x5   | 0x5f  | 呼梯繼電器斷開 |
 | 0x5   | 0x60  | 呼梯繼電器閉合 |
-| 0x5   | 0x63  | 關門           |
 | 0x5   | 0x64  | 開門           |
+
+> **不寫入**：遠端關門（0x3/0x401）、關門（0x5/0x63）；監控頁紀錄亦不顯示。
 
 ---
 

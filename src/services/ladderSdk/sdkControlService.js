@@ -3,6 +3,7 @@
  */
 const { invokeBridge } = require("./sdkBridgeClient");
 const { getLadderDevice, toBridgeDevice } = require("./sdkLadderDeviceService");
+const { recordPlatformCallElevator } = require("./sdkEventPersistence");
 const { isElevatorBoundDeviceId } = require("../location/controllerBindingUtils");
 const elevatorService = require("../elevator/elevatorService");
 const elevatorRuntimeService = require("../elevator/elevatorRuntimeService");
@@ -109,11 +110,21 @@ const controlGatewayForElevatorRequest = async (
     }
   }
 
-  const callContext = isCallElevatorCommand(options.command)
+  const isCall = isCallElevatorCommand(options.command);
+  const callContext = isCall
     ? await resolveCallElevatorContext(deviceId, options)
     : null;
 
   const bridgeResult = await controlGateway(deviceId, options);
+
+  if (isCall) {
+    const gatewayIndex =
+      options.gatewayIndex != null ? Number(options.gatewayIndex) : 1;
+    void recordPlatformCallElevator({
+      deviceId: Number(deviceId),
+      gatewayIndex,
+    }).catch(() => {});
+  }
 
   if (!callContext) {
     return bridgeResult;

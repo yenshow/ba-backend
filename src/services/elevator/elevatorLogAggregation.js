@@ -1,43 +1,43 @@
 /**
- * 電梯事件報表合併：刷卡／手動操作後的多筆開／關門收斂為各一筆
+ * 電梯事件報表合併：刷卡／手動開門收斂；略過關閉類與呼梯副作用繼電器事件
  */
 const {
   ACS_DOOR_OPEN_LABEL,
-  ACS_DOOR_CLOSE_LABEL,
   ACS_MANUAL_OPEN_LABEL,
-  ACS_MANUAL_CLOSE_LABEL,
 } = require("../ladderSdk/acsEventLabels");
 
 const SESSION_TAIL_MS = 120_000;
 const ORPHAN_GROUP_MS = 5_000;
+const CALL_RELAY_SUPPRESS_MS = ORPHAN_GROUP_MS * 2;
 
 const isCardSwipe = (log) => log.major === 5 && log.minor === 1;
 const isDoorOpen = (log) => log.major === 5 && log.minor === 100;
 const isDoorClose = (log) => log.major === 5 && log.minor === 99;
-const isRemoteOp = (log) => log.major === 3;
 const isManualOpen = (log) => log.major === 3 && log.minor === 1024;
 const isManualClose = (log) => log.major === 3 && log.minor === 1025;
-const isManualDoorOp = (log) => isManualOpen(log) || isManualClose(log);
+const isCallElevator = (log) =>
+  log.major === 3 && (log.minor === 1028 || log.minor === 1029);
 const isRelayEvent = (log) =>
   log.major === 5 && (log.minor === 95 || log.minor === 96);
+
+const isSuppressedEvent = (log) => isDoorClose(log) || isManualClose(log);
+const isPassThroughRemoteOp = (log) =>
+  log.major === 3 && !isManualOpen(log) && !isSuppressedEvent(log);
 
 const eventMs = (log) => new Date(log.time).getTime();
 
 const formatFloors = (events) => {
   const floors = [
     ...new Set(
-      events
-        .map((e) => Number(e.floor))
-        .filter((n) => Number.isFinite(n)),
+      events.map((e) => Number(e.floor)).filter((n) => Number.isFinite(n)),
     ),
   ].sort((a, b) => a - b);
   return floors.length ? floors.join("、") : null;
 };
 
-const makeMergedRow = (anchor, events, eventLabel, isClose) => {
+const makeMergedRow = (anchor, events, eventLabel) => {
   const sorted = [...events].sort((a, b) => eventMs(a) - eventMs(b));
   const first = sorted[0] || anchor;
-  const last = sorted[sorted.length - 1] || anchor;
   return {
     id: first.id,
     deviceId: anchor.deviceId,
@@ -51,7 +51,7 @@ const makeMergedRow = (anchor, events, eventLabel, isClose) => {
     personId: anchor.personId || first.personId || null,
     floor: formatFloors(sorted),
     event: eventLabel,
-    time: isClose ? last.time : first.time,
+    time: first.time,
   };
 };
 
@@ -83,18 +83,12 @@ const forEachNearby = (
   return undefined;
 };
 
-const findNearbyManualDoorLabel = (asc, anchorIndex, consumed, isClose) => {
-  const match = isClose ? isManualClose : isManualOpen;
-  const fallback = isClose ? ACS_MANUAL_CLOSE_LABEL : ACS_MANUAL_OPEN_LABEL;
-
-  return (
-    forEachNearby(asc, anchorIndex, consumed, (other, j) => {
-      if (!match(other)) return undefined;
-      consumed.add(j);
-      return other.event || fallback;
-    }) ?? null
-  );
-};
+const findNearbyManualOpenLabel = (asc, anchorIndex, consumed) =>
+  forEachNearby(asc, anchorIndex, consumed, (other, j) => {
+    if (!isManualOpen(other)) return undefined;
+    consumed.add(j);
+    return other.event || ACS_MANUAL_OPEN_LABEL;
+  }) ?? null;
 
 const findNearbyCardSwipe = (asc, anchorIndex, consumed) =>
   forEachNearby(
@@ -143,6 +137,17 @@ const aggregateElevatorLogs = (logs) => {
   if (!Array.isArray(logs) || logs.length === 0) return [];
 
   const asc = [...logs].sort((a, b) => eventMs(a) - eventMs(b));
+  const callEventTimes = asc.filter(isCallElevator).map(eventMs);
+  const isNearCallElevator = (log) => {
+    if (!callEventTimes.length) return false;
+    const ms = eventMs(log);
+    return callEventTimes.some(
+      (t) => Math.abs(ms - t) <= CALL_RELAY_SUPPRESS_MS,
+    );
+  };
+  const isCallRelaySideEffect = (log) =>
+    isNearCallElevator(log) && (isRelayEvent(log) || isDoorOpen(log));
+
   const consumed = new Set();
   const out = [];
 
@@ -150,34 +155,32 @@ const aggregateElevatorLogs = (logs) => {
     if (consumed.has(i)) continue;
     const log = asc[i];
 
+    if (isSuppressedEvent(log) || isCallRelaySideEffect(log)) {
+      consumed.add(i);
+      continue;
+    }
+
     if (isRelayEvent(log)) {
       out.push(toPublicLog(log));
       consumed.add(i);
       continue;
     }
 
-    if (isManualDoorOp(log)) {
+    if (isManualOpen(log)) {
       consumed.add(i);
-      const isClose = isManualClose(log);
-      const doorEvents = collectForward(
-        asc,
-        i,
-        consumed,
-        isClose ? isDoorClose : isDoorOpen,
-      );
+      const doorEvents = collectForward(asc, i, consumed, isDoorOpen);
       const personAnchor = findNearbyCardSwipe(asc, i, consumed) || log;
       out.push(
         makeMergedRow(
           personAnchor,
           doorEvents.length ? doorEvents : [log],
-          log.event || (isClose ? ACS_MANUAL_CLOSE_LABEL : ACS_MANUAL_OPEN_LABEL),
-          isClose,
+          log.event || ACS_MANUAL_OPEN_LABEL,
         ),
       );
       continue;
     }
 
-    if (isRemoteOp(log)) {
+    if (isPassThroughRemoteOp(log)) {
       out.push(toPublicLog(log));
       consumed.add(i);
       continue;
@@ -187,7 +190,6 @@ const aggregateElevatorLogs = (logs) => {
       consumed.add(i);
       const sessionEnd = eventMs(log) + SESSION_TAIL_MS;
       const opens = [];
-      const closes = [];
 
       for (let j = i + 1; j < asc.length; j++) {
         if (consumed.has(j)) continue;
@@ -195,13 +197,14 @@ const aggregateElevatorLogs = (logs) => {
         if (eventMs(next) > sessionEnd) break;
         if (next.deviceId !== log.deviceId) continue;
         if (isCardSwipe(next)) break;
-        if (isRemoteOp(next) && !isManualDoorOp(next)) break;
-        if (isManualDoorOp(next)) continue;
+        if (isPassThroughRemoteOp(next)) break;
+        if (isManualOpen(next)) continue;
+        if (isSuppressedEvent(next) || isCallRelaySideEffect(next)) {
+          consumed.add(j);
+          continue;
+        }
         if (isDoorOpen(next)) {
           opens.push(next);
-          consumed.add(j);
-        } else if (isDoorClose(next)) {
-          closes.push(next);
           consumed.add(j);
         }
       }
@@ -211,37 +214,23 @@ const aggregateElevatorLogs = (logs) => {
           makeMergedRow(
             log,
             opens,
-            findNearbyManualDoorLabel(asc, i, consumed, false) ||
+            findNearbyManualOpenLabel(asc, i, consumed) ||
               ACS_DOOR_OPEN_LABEL,
-            false,
-          ),
-        );
-      }
-      if (closes.length) {
-        out.push(
-          makeMergedRow(
-            log,
-            closes,
-            findNearbyManualDoorLabel(asc, i, consumed, true) ||
-              ACS_DOOR_CLOSE_LABEL,
-            true,
           ),
         );
       }
       continue;
     }
 
-    if (isDoorOpen(log) || isDoorClose(log)) {
-      const isClose = isDoorClose(log);
-      const manualLabel = findNearbyManualDoorLabel(asc, i, consumed, isClose);
+    if (isDoorOpen(log)) {
+      const manualLabel = findNearbyManualOpenLabel(asc, i, consumed);
       const group = collectOrphanRelayGroup(asc, i, consumed, log.minor);
       const personAnchor = findNearbyCardSwipe(asc, i, consumed) || group[0];
       out.push(
         makeMergedRow(
           personAnchor,
           group,
-          manualLabel || log.event || null,
-          isClose,
+          manualLabel || log.event || ACS_DOOR_OPEN_LABEL,
         ),
       );
       continue;
@@ -255,12 +244,7 @@ const aggregateElevatorLogs = (logs) => {
 };
 
 const toPublicLog = (log) => {
-  const {
-    major: _major,
-    minor: _minor,
-    cardNo: _cardNo,
-    ...rest
-  } = log;
+  const { major: _major, minor: _minor, cardNo: _cardNo, ...rest } = log;
   return rest;
 };
 

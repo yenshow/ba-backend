@@ -3,22 +3,8 @@
  */
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
+const { ALLOWED_EVENT_KEYS } = require("./acsEventLabels");
 const { resolveEventCardNo } = require("./ladderSdkCardCorrelation");
-
-/** major=0x3: 0x400–0x403；major=0x5: 0x01、0x5f、0x60、0x63、0x64 */
-const ALLOWED_EVENT_KEYS = new Set([
-  "3:1024",
-  "3:1025",
-  "3:1026",
-  "3:1027",
-  "3:1028",
-  "3:1029",
-  "5:1",
-  "5:95",
-  "5:96",
-  "5:99",
-  "5:100",
-]);
 
 const isAllowedEvent = (major, minor) =>
   ALLOWED_EVENT_KEYS.has(`${Number(major)}:${Number(minor)}`);
@@ -93,30 +79,16 @@ const persistLadderSdkEvent = async (options) => {
   return { inserted: true, id };
 };
 
-const CALL_EVENT_BY_COMMAND = {
-  visitor_call: { minor: 1028, eventName: "訪客呼梯" },
-};
-
-/**
- * 平台 API 呼梯成功後寫入稽核事件（呼梯設備未必有佈防）
- */
-const recordPlatformCallElevator = async ({
-  deviceId,
-  gatewayIndex,
-  command,
-}) => {
-  const key = String(command || "visitor_call").trim().toLowerCase();
-  const meta = CALL_EVENT_BY_COMMAND[key] ?? CALL_EVENT_BY_COMMAND.visitor_call;
-  return persistLadderSdkEvent({
+/** 平台 API visitor_call 成功後寫入稽核（呼梯設備未必有佈防） */
+const recordPlatformCallElevator = async ({ deviceId, gatewayIndex }) =>
+  persistLadderSdkEvent({
     deviceId,
-    eventTime: new Date().toISOString(),
     major: 3,
-    minor: meta.minor,
-    eventName: meta.eventName,
+    minor: 1028,
+    eventName: "訪客呼梯",
     floor: gatewayIndex != null ? Number(gatewayIndex) : null,
-    payload: { source: "platform_call", command: key },
+    payload: { source: "platform_call", command: "visitor_call" },
   });
-};
 
 module.exports = {
   persistLadderSdkEvent,
