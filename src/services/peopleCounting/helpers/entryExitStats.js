@@ -71,29 +71,9 @@ const ISO_PERSONNEL_TIME_FORMAT = {
   formatTime: (d) => d.toTimeString().slice(0, 8),
 };
 
+/** 從人員列舉工號（單位人員列表篩選用） */
 function normalizeEmployeeNo(value) {
   return value != null ? String(value).trim() : "";
-}
-
-/** 從人員列舉工號（門禁授權名單篩選用） */
-function employeeNosFromPersons(persons) {
-  return new Set(
-    (persons || [])
-      .map((p) => normalizeEmployeeNo(p.employee_no))
-      .filter(Boolean),
-  );
-}
-
-/** 僅保留指定人員工號的事件（logs 須含 employeeId） */
-function filterLogsByEmployeeNos(logs, personsOrSet) {
-  const nos =
-    personsOrSet instanceof Set
-      ? personsOrSet
-      : employeeNosFromPersons(personsOrSet);
-  if (nos.size === 0) return [];
-  return (logs || []).filter((log) =>
-    nos.has(normalizeEmployeeNo(log.employeeId)),
-  );
 }
 
 /** 依人員工號彙整各單位事件（group.list 元素須有 employee_no） */
@@ -101,19 +81,6 @@ function collectUnitLogs(group, logsByEmployeeNo) {
   return group.list.flatMap((p) => {
     const no = normalizeEmployeeNo(p.employee_no);
     return no ? logsByEmployeeNo.get(no) || [] : [];
-  });
-}
-
-function filterRecordsByDoorIds(records, entryDoorIds, exitDoorIds) {
-  const doorSet = new Set(
-    [...(entryDoorIds || []), ...(exitDoorIds || [])]
-      .map((id) => Number(id))
-      .filter((n) => Number.isFinite(n) && n > 0),
-  );
-  if (doorSet.size === 0) return records || [];
-  return (records || []).filter((r) => {
-    const pid = Number(r.physical_id);
-    return Number.isFinite(pid) && doorSet.has(pid);
   });
 }
 
@@ -125,8 +92,5 @@ module.exports = {
   personnelPresenceFields,
   ISO_PERSONNEL_TIME_FORMAT,
   normalizeEmployeeNo,
-  employeeNosFromPersons,
-  filterLogsByEmployeeNos,
   collectUnitLogs,
-  filterRecordsByDoorIds,
 };

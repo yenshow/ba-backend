@@ -102,7 +102,16 @@ async function getDeviceClient(deviceId) {
 const CRLF = Buffer.from("\r\n");
 const CRLFCRLF = Buffer.from("\r\n\r\n");
 
-async function consumeEventStreamIncremental(stream, contentType, context) {
+function subKey(sub) {
+  return `${sub.locationId}:${sub.deviceId}:${sub.channelId}`;
+}
+
+async function consumeEventStreamIncremental(
+  stream,
+  contentType,
+  context,
+  abortSignal,
+) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
   const rawBoundary = boundaryMatch
     ? (boundaryMatch[1] || boundaryMatch[2]).trim()
@@ -217,6 +226,16 @@ async function consumeEventStreamIncremental(stream, contentType, context) {
   };
 
   return new Promise((resolve, reject) => {
+    const abortHandler = () => {
+      try {
+        stream.destroy(new Error("ABORTED"));
+      } catch (_e) {}
+    };
+    if (abortSignal) {
+      if (abortSignal.aborted) abortHandler();
+      else abortSignal.addEventListener("abort", abortHandler, { once: true });
+    }
+
     stream.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       while (buffer.length > 0 && tryConsumeOnePart()) {}
@@ -228,7 +247,8 @@ async function consumeEventStreamIncremental(stream, contentType, context) {
   });
 }
 
-async function runSubscribeForCamera(sub) {
+async function runSubscribeForCamera(sub, abortSignal) {
+  if (abortSignal?.aborted) return;
   const { device, client } = await getDeviceClient(sub.deviceId);
   const deviceIp = device?.config?.host || "";
   const res = await client.requestSubscribeStream(
@@ -236,46 +256,102 @@ async function runSubscribeForCamera(sub) {
   );
   const contentType = res.headers["content-type"] || "";
   const stream = res.data;
-  await consumeEventStreamIncremental(stream, contentType, {
-    locationId: sub.locationId,
-    deviceId: sub.deviceId,
-    deviceIp,
-    channelId: sub.channelId,
-  });
+  await consumeEventStreamIncremental(
+    stream,
+    contentType,
+    {
+      locationId: sub.locationId,
+      deviceId: sub.deviceId,
+      deviceIp,
+      channelId: sub.channelId,
+    },
+    abortSignal,
+  );
 }
 
-async function subscribeLoop(sub) {
+async function subscribeLoop(sub, abortSignal) {
   for (;;) {
+    if (abortSignal?.aborted) return;
     try {
-      await runSubscribeForCamera(sub);
-    } catch (_e) {}
+      await runSubscribeForCamera(sub, abortSignal);
+    } catch (e) {
+      if (abortSignal?.aborted) return;
+      if (e && (e.code === "ABORTED" || String(e.message).includes("ABORTED")))
+        return;
+    }
+    if (abortSignal?.aborted) return;
     await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
   }
 }
 
+/** @type {Map<string, { controller: AbortController, startedAt: number }>} */
+const subLoopControllers = new Map();
+
 let started = false;
 let runningSubs = [];
 
+function startLoopForSub(sub) {
+  const key = subKey(sub);
+  if (subLoopControllers.has(key)) return;
+  const controller = new AbortController();
+  subLoopControllers.set(key, { controller, startedAt: Date.now() });
+  subscribeLoop(sub, controller.signal);
+}
+
+function stopLoopForSub(sub) {
+  const key = subKey(sub);
+  const entry = subLoopControllers.get(key);
+  if (!entry) return;
+  try {
+    entry.controller.abort();
+  } catch (_e) {}
+  subLoopControllers.delete(key);
+}
+
 async function start() {
   if (started) return;
-  const subs = await getCameraSubscriptions();
-  started = true;
-  runningSubs = subs;
-  if (subs.length === 0) {
-    logger.info(
-      "[ISAPI PeopleCounting] 無需訂閱（尚未配置 isapi_camera 地點）",
-    );
-    return;
-  }
-  logger.info("[ISAPI PeopleCounting] 訂閱啟動", { count: subs.length });
-  for (const sub of subs) {
-    subscribeLoop(sub);
-  }
+  await refresh();
 }
 
 function stop() {
   started = false;
+  const subsToStop = [...runningSubs];
   runningSubs = [];
+  for (const sub of subsToStop) {
+    stopLoopForSub(sub);
+  }
+}
+
+/**
+ * 重新計算需訂閱的攝影機，增量啟停訂閱迴圈
+ */
+async function refresh() {
+  if (!started) {
+    started = true;
+  }
+  const subs = await getCameraSubscriptions();
+  const nextKeys = new Set(subs.map(subKey));
+  const prevKeys = new Set(runningSubs.map(subKey));
+
+  const toStart = subs.filter((sub) => !prevKeys.has(subKey(sub)));
+  const toStop = runningSubs.filter((sub) => !nextKeys.has(subKey(sub)));
+
+  for (const sub of toStop) stopLoopForSub(sub);
+  for (const sub of toStart) startLoopForSub(sub);
+
+  runningSubs = subs;
+  if (toStart.length > 0 || toStop.length > 0) {
+    logger.info("[ISAPI PeopleCounting] 訂閱刷新", {
+      count: subs.length,
+      start: toStart.length,
+      stop: toStop.length,
+    });
+  } else if (subs.length === 0 && prevKeys.size === 0) {
+    logger.info(
+      "[ISAPI PeopleCounting] 無需訂閱（尚未配置 isapi_camera 地點）",
+    );
+  }
+  return { started: true, subs: [...runningSubs] };
 }
 
 function getSubscribeStatus() {
@@ -285,6 +361,7 @@ function getSubscribeStatus() {
 module.exports = {
   start,
   stop,
+  refresh,
   getSubscribeStatus,
   getCameraSubscriptions,
 };

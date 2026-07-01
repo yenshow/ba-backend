@@ -27,6 +27,7 @@
     "postgres:download": "node scripts/download-portable-postgres.js",
     "postgres:start": "node scripts/start-portable-postgres.js",
     "postgres:stop": "node scripts/stop-portable-postgres.js",
+    "yscp:resubscribe": "node scripts/yscpResubscribe.js",
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",
     "backup:run": "node scripts/runBackup.js",

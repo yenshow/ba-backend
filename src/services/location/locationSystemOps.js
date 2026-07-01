@@ -481,7 +481,7 @@ async function createSystem(query, locationId, system) {
   );
 
   if (systemType === "vehicle_access") {
-    require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+    shared.refreshSubscribesForSystemType("vehicle_access", locationLogger);
     const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
     vehiclePlateSyncService.syncPlatesForLocation(locationId).catch((err) => {
       locationLogger.warn("vehicle plate sync after createSystem failed", {
@@ -489,6 +489,11 @@ async function createSystem(query, locationId, system) {
         error: err?.message || String(err),
       });
     });
+  } else if (
+    systemType === "people_counting" ||
+    systemType === "elevator"
+  ) {
+    shared.refreshSubscribesForSystemType(systemType, locationLogger);
   }
 
   return result[0].id;
@@ -597,7 +602,7 @@ async function updateSystem(query, systemId, system) {
   );
 
   if (targetSystemType === "vehicle_access") {
-    require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
+    shared.refreshSubscribesForSystemType("vehicle_access", locationLogger);
     if (vaLocationId != null) {
       const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
       vehiclePlateSyncService.syncPlatesForLocation(vaLocationId).catch((err) => {
@@ -607,6 +612,11 @@ async function updateSystem(query, systemId, system) {
         });
       });
     }
+  } else if (
+    targetSystemType === "people_counting" ||
+    targetSystemType === "elevator"
+  ) {
+    shared.refreshSubscribesForSystemType(targetSystemType, locationLogger);
   }
 }
 

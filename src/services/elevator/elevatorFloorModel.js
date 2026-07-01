@@ -67,6 +67,7 @@ const normalizeFloorInput = (raw, index) => {
   if (!raw || typeof raw !== "object") return null;
   const label = String(raw.label ?? "").trim();
   if (!label) return null;
+  const name = String(raw.name ?? "").trim();
   const rank = normalizePositiveInt(raw.rank);
   const panelCol = normalizePositiveInt(raw.panelCol ?? raw.panel_col);
   const panelRow = normalizePositiveInt(raw.panelRow ?? raw.panel_row);
@@ -80,6 +81,7 @@ const normalizeFloorInput = (raw, index) => {
     DEFAULT_OPEN_DURATION;
   return {
     label,
+    name: name || undefined,
     rank: rank ?? index,
     panelCol: panelCol ?? 0,
     panelRow: panelRow ?? 0,
@@ -187,9 +189,16 @@ function validateElevatorLocationConfig(config = {}) {
   const validatedFloors = normalized.floors.map((floor, i) => {
     const label = String(floor.label ?? "").trim();
     if (!label) {
-      throwApiError(C.ELEVATOR_VALIDATION_FAILED, `第 ${i + 1} 層名稱不可為空`);
+      throwApiError(C.ELEVATOR_VALIDATION_FAILED, `第 ${i + 1} 層代號不可為空`);
     }
     if (label.length > DOOR_NAME_MAX_LEN) {
+      throwApiError(
+        C.ELEVATOR_VALIDATION_FAILED,
+        `第 ${i + 1} 層代號不可超過 ${DOOR_NAME_MAX_LEN} 字元`,
+      );
+    }
+    const name = String(floor.name ?? "").trim();
+    if (name.length > DOOR_NAME_MAX_LEN) {
       throwApiError(
         C.ELEVATOR_VALIDATION_FAILED,
         `第 ${i + 1} 層名稱不可超過 ${DOOR_NAME_MAX_LEN} 字元`,
@@ -271,6 +280,7 @@ function validateElevatorLocationConfig(config = {}) {
 
     return {
       label,
+      name: name || undefined,
       rank,
       panelCol,
       panelRow,
@@ -307,6 +317,7 @@ function toStoredConfig(validated) {
     panel: validated.panel,
     floors: validated.floors.map((f) => ({
       label: f.label,
+      ...(f.name ? { name: f.name } : {}),
       rank: f.rank,
       panel_col: f.panelCol,
       panel_row: f.panelRow,
@@ -368,6 +379,12 @@ const getLogicalFloorByIndex = (floors, index) => {
   return { index: i, floor: floors[i - 1] };
 };
 
+const resolveFloorDoorName = (floor) => {
+  const name = String(floor?.name ?? "").trim();
+  const code = String(floor?.label ?? "").trim();
+  return name || code;
+};
+
 const resolveFloorLabel = (floors, logicalIndex) => {
   const slot = getLogicalFloorByIndex(floors, logicalIndex);
   return slot?.floor?.label ?? null;
@@ -385,7 +402,10 @@ const logicalIndicesToLadderGateways = (floors, logicalIndices) =>
 
 const buildPersonFloorAccessView = (floors, logicalIndices) => ({
   authorized_floor_labels: (logicalIndices || [])
-    .map((idx) => resolveFloorLabel(floors, idx))
+    .map((idx) => {
+      const slot = getLogicalFloorByIndex(floors, idx);
+      return slot?.floor ? resolveFloorDoorName(slot.floor) : null;
+    })
     .filter(Boolean),
   authorized_ladder_gateways: logicalIndicesToLadderGateways(
     floors,
@@ -405,9 +425,9 @@ const resolveEventFloorLabel = (floors, gateway) => {
   const gw = Number(gateway);
   if (!Number.isFinite(gw)) return null;
   const byLadder = floors.find((f) => f.ladderGateway === gw);
-  if (byLadder) return byLadder.label;
+  if (byLadder) return resolveFloorDoorName(byLadder);
   const byCall = floors.find((f) => f.callGateway === gw);
-  return byCall?.label ?? null;
+  return byCall ? resolveFloorDoorName(byCall) : null;
 };
 
 const findFloorByDiAddress = (floors, address) => {
@@ -480,7 +500,7 @@ function collectElevatorFloorSyncTasks(locations) {
     for (const floor of validated.floors) {
       if (floor.ladderGateway == null) continue;
       byGateway.set(floor.ladderGateway, {
-        name: floor.label,
+        name: resolveFloorDoorName(floor),
         openDuration: floor.openDuration,
         gateway: floor.ladderGateway,
       });
@@ -529,6 +549,7 @@ module.exports = {
   toStoredConfig,
   getLogicalFloorByIndex,
   resolveFloorLabel,
+  resolveFloorDoorName,
   resolveLadderGateway,
   logicalIndicesToLadderGateways,
   buildPersonFloorAccessView,

@@ -20,7 +20,6 @@ const {
   groupEventsByKey,
   personnelPresenceFields,
   ISO_PERSONNEL_TIME_FORMAT,
-  filterLogsByEmployeeNos,
   collectUnitLogs,
   normalizeEmployeeNo,
 } = require("../helpers/entryExitStats");
@@ -232,8 +231,8 @@ async function getAccessControlSiteLogs(options = {}) {
   });
 }
 
-/** 營運日設備事件 → 限縮為授權名單內人員（與 YSCP personGroup 範圍對齊） */
-async function getTodayAuthorizedLogs(config, persons, options = {}) {
+/** 營運日入口／出口設備上所有進出事件（統計與 logs 同範圍，不限授權名單） */
+async function getTodaySiteLogs(config, options = {}) {
   const entryDeviceIds = Array.isArray(config.entryDeviceIds)
     ? config.entryDeviceIds
     : [];
@@ -249,7 +248,7 @@ async function getTodayAuthorizedLogs(config, persons, options = {}) {
     },
     config.statsResetAt,
   );
-  const logs = await getAccessControlSiteLogs({
+  return getAccessControlSiteLogs({
     entryDeviceIds,
     exitDeviceIds,
     startTime: start.toISOString(),
@@ -257,7 +256,18 @@ async function getTodayAuthorizedLogs(config, persons, options = {}) {
     limit: options.limit ?? ENTRY_EXIT_MAX_RECORDS,
     offset: options.offset ?? 0,
   });
-  return filterLogsByEmployeeNos(logs, persons);
+}
+
+function filterLogsForUnitEmployees(logs, persons) {
+  const nos = new Set(
+    (persons || [])
+      .map((p) => normalizeEmployeeNo(p.employee_no))
+      .filter(Boolean),
+  );
+  if (nos.size === 0) return [];
+  return (logs || []).filter((log) =>
+    nos.has(normalizeEmployeeNo(log.employeeId)),
+  );
 }
 
 function buildPersonnelRows(list, logsByEmployeeNo) {
@@ -285,22 +295,15 @@ function buildPersonnelRows(list, logsByEmployeeNo) {
  * 單一工地完整資料（統計 + 單位列表）
  */
 async function getSiteData(siteId, config) {
+  const siteLogs = await getTodaySiteLogs(config);
+  const siteStats = statsFromAccessControlLogs(siteLogs);
   let units = [];
-  let entryCount = 0;
-  let exitCount = 0;
-  let currentCount = 0;
   try {
     const persons =
       await personnelService.getPersonsWithAccessByLocationId(siteId);
     const grouped = groupPersonsByPersonGroup(persons);
-    const authorizedLogs = await getTodayAuthorizedLogs(config, persons);
-    const siteStats = statsFromAccessControlLogs(authorizedLogs);
-    entryCount = siteStats.entryCount;
-    exitCount = siteStats.exitCount;
-    currentCount = siteStats.currentCount;
-
     const logsByEmployeeNo = groupEventsByKey(
-      authorizedLogs,
+      siteLogs,
       (log) => log.employeeId,
     );
     units = grouped.map((group) => ({
@@ -317,7 +320,12 @@ async function getSiteData(siteId, config) {
       error: err.message,
     });
   }
-  return { entryCount, exitCount, currentCount, units };
+  return {
+    entryCount: siteStats.entryCount,
+    exitCount: siteStats.exitCount,
+    currentCount: siteStats.currentCount,
+    units,
+  };
 }
 
 /**
@@ -345,7 +353,8 @@ async function getUnitPersonnel(unitId, siteId, config) {
   const match = grouped.find((g) => g.id === Number(unitId));
   if (!match) return { personnel: [], entryCount: 0, exitCount: 0 };
 
-  const unitLogs = await getTodayAuthorizedLogs(config, match.list);
+  const siteLogs = await getTodaySiteLogs(config);
+  const unitLogs = filterLogsForUnitEmployees(siteLogs, match.list);
   const { entryCount, exitCount } = statsFromAccessControlLogs(unitLogs);
   const logsByEmployeeNo = groupEventsByKey(unitLogs, (log) => log.employeeId);
   const personnel = buildPersonnelRows(match.list, logsByEmployeeNo);

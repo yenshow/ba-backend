@@ -9,9 +9,23 @@ const { persistLadderSdkEvent } = require("./sdkEventPersistence");
 const deviceService = require("../devices/deviceService");
 
 const RE_CONNECT_DELAY_MS = 10_000;
+/** 主動 refresh 後等待設備釋放佈防資源（SDK 1924） */
+const REFRESH_SETTLE_MS = 2_000;
 
-/** @type {Map<number, { child: import('child_process').ChildProcess, startedAt: number, status: string }>} */
+/** @type {Map<number, { child: import('child_process').ChildProcess, startedAt: number, status: string, generation: number }>} */
 const deviceProcesses = new Map();
+
+/** 遞增後可使該設備既有 onClose 重連排程失效 */
+const deviceGenerations = new Map();
+
+const bumpDeviceGeneration = (deviceId) => {
+  const next = (deviceGenerations.get(deviceId) || 0) + 1;
+  deviceGenerations.set(deviceId, next);
+  return next;
+};
+
+const isDeviceGenerationCurrent = (deviceId, generation) =>
+  (deviceGenerations.get(deviceId) || 0) === generation;
 
 const handleEvent = async (deviceId, device, message) => {
   const eventTime = message.timestamp || new Date().toISOString();
@@ -41,6 +55,7 @@ const handleEvent = async (deviceId, device, message) => {
 };
 
 const stopDevice = (deviceId) => {
+  bumpDeviceGeneration(deviceId);
   const entry = deviceProcesses.get(deviceId);
   if (!entry) return;
   try {
@@ -55,6 +70,8 @@ const startDeviceLoop = async (deviceId) => {
   if (deviceProcesses.has(deviceId)) {
     return;
   }
+
+  const generation = bumpDeviceGeneration(deviceId);
 
   let device;
   let credentials;
@@ -71,9 +88,8 @@ const startDeviceLoop = async (deviceId) => {
   }
 
   const connect = () => {
-    if (deviceProcesses.has(deviceId)) {
-      return;
-    }
+    if (!isDeviceGenerationCurrent(deviceId, generation)) return;
+    if (deviceProcesses.has(deviceId)) return;
 
     const child = spawnArmingProcess(credentials, {
       onReady: () => {
@@ -89,8 +105,12 @@ const startDeviceLoop = async (deviceId) => {
       },
       onClose: (code) => {
         deviceProcesses.delete(deviceId);
+        if (!isDeviceGenerationCurrent(deviceId, generation)) return;
         logger.warn("梯控佈防程序結束，將重連", { deviceId, code });
-        setTimeout(connect, RE_CONNECT_DELAY_MS);
+        setTimeout(() => {
+          if (!isDeviceGenerationCurrent(deviceId, generation)) return;
+          connect();
+        }, RE_CONNECT_DELAY_MS);
       },
     });
 
@@ -98,6 +118,7 @@ const startDeviceLoop = async (deviceId) => {
       child,
       startedAt: Date.now(),
       status: "connecting",
+      generation,
     });
   };
 
@@ -128,14 +149,42 @@ const start = async () => {
   return { started: true, deviceIds: ids };
 };
 
+/** 依 DB 梯控設備清單增刪佈防，不重啟未變更的設備 */
+const reconcile = async () => {
+  const desired = await getLadderDeviceIds();
+  const desiredSet = new Set(desired);
+  const current = [...deviceProcesses.keys()];
+
+  const toStop = current.filter((deviceId) => !desiredSet.has(deviceId));
+  const toStart = desired.filter((deviceId) => !deviceProcesses.has(deviceId));
+
+  if (toStop.length === 0 && toStart.length === 0) {
+    return { deviceIds: desired };
+  }
+
+  for (const deviceId of toStop) stopDevice(deviceId);
+  await Promise.all(toStart.map((deviceId) => startDeviceLoop(deviceId)));
+
+  if (toStart.length > 0 || toStop.length > 0) {
+    logger.info("梯控佈防刷新完成", {
+      count: desired.length,
+      start: toStart.length ? toStart.join(",") : undefined,
+      stop: toStop.length ? toStop.join(",") : undefined,
+    });
+  }
+
+  return { deviceIds: desired };
+};
+
 const stop = () => {
-  for (const deviceId of deviceProcesses.keys()) {
+  for (const deviceId of [...deviceProcesses.keys()]) {
     stopDevice(deviceId);
   }
 };
 
 const refresh = async () => {
   stop();
+  await new Promise((resolve) => setTimeout(resolve, REFRESH_SETTLE_MS));
   return start();
 };
 
@@ -152,6 +201,7 @@ module.exports = {
   start,
   stop,
   refresh,
+  reconcile,
   getStatus,
   startDeviceLoop,
   stopDevice,

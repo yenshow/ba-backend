@@ -20,7 +20,11 @@ const {
   getOfflineArchivePath,
   isPostgresDownloaded,
 } = require("./postgres-common");
-const { log, execWithUtf8OnWindows } = require("./postgres-exec-windows");
+const {
+  log,
+  execWithUtf8OnWindows,
+  prepareWindowsPostgresDataLayout,
+} = require("./postgres-exec-windows");
 const {
   startPortablePostgres,
   verifyPsqlReady,
@@ -170,9 +174,12 @@ function initDatabase() {
   }
 
   log(`🔧 初始化資料庫...`, "yellow");
-  ensureDirSync(DATA_DIR);
+  ensureDirSync(POSTGRES_DIR);
+  ensureDirSync(LOG_DIR);
+  prepareWindowsPostgresDataLayout({ dataDir: DATA_DIR, logDir: LOG_DIR });
 
-  const initdbCmd = `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust`;
+  const initdbCmd =
+    `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust --encoding=UTF8 --locale=C`;
   try {
     execWithUtf8OnWindows(initdbCmd, { stdio: "inherit", encoding: "utf8" });
   } catch (execError) {

@@ -101,7 +101,24 @@ const stopLicensedBackgroundServices = async () => {
   setCachedEffectiveFeatures([]);
 };
 
+/** 電梯地點綁定變更後 reconcile 梯控佈防（僅在已授權啟動時） */
+const reconcileElevatorArmingAfterLocationChange = async () => {
+  if (!elevatorArmed) {
+    return { armed: false, skipped: true };
+  }
+  try {
+    const result = await sdkArmingService.reconcile();
+    return { armed: true, ...result };
+  } catch (error) {
+    logger.warn("梯控佈防刷新失敗", {
+      error: error?.message || String(error),
+    });
+    return { armed: true, error: error?.message || String(error) };
+  }
+};
+
 module.exports = {
   reconcileBackgroundServices,
   stopLicensedBackgroundServices,
+  reconcileElevatorArmingAfterLocationChange,
 };

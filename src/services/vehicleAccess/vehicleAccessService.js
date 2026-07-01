@@ -13,7 +13,6 @@ const {
 } = require("./vehicleAccessConfig");
 const yscpProvider = require("./providers/yscpProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
-const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const vehiclePresenceService = require("./vehiclePresenceService");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
@@ -315,10 +314,6 @@ async function getAllSiteLogs(options = {}) {
   return { logs: filtered.slice(offsetNum, offsetNum + globalLimit) };
 }
 
-async function refreshSubscribeAfterLocationChange() {
-  void isapiSubscribeHub.refreshForFeature("vehicle_access").catch(() => {});
-}
-
 async function getOrganizationGroups(siteId, options = {}) {
   const { dataSource, operationMode } = await getSiteConfig(siteId);
   if (dataSource !== "isapi_camera") {
@@ -352,6 +347,5 @@ module.exports = {
   getSiteConfig,
   getVehicleAccessConfig,
   getOrganizationGroups,
-  refreshSubscribeAfterLocationChange,
   normalizeId,
 };

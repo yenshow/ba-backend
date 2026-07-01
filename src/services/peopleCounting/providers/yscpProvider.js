@@ -14,14 +14,9 @@ const {
   calculateTodayStatsByPhysicalId,
   groupEventsByKey,
   personnelPresenceFields,
-  filterRecordsByDoorIds,
 } = require("../helpers/entryExitStats");
 const { resolvePersonPresenceFromEvents } = require("../../entryExit/stats");
 const { yscpEventLabel } = require("../accessControlLogLabels");
-
-function ensureArray(value) {
-  return Array.isArray(value) ? value : [];
-}
 
 function generatePlaceholders(ids, startIndex = 1) {
   return ids.map((_, i) => `$${startIndex + i}`).join(", ");
@@ -41,42 +36,56 @@ async function handleNonCriticalError(
   }
 }
 
-async function getPersonIdsByGroupIds(groupIds) {
-  if (groupIds.length === 0) return [];
-  return handleNonCriticalError(
-    async () => {
-      const placeholders = generatePlaceholders(groupIds);
-      const sql = `SELECT DISTINCT id FROM platform.person WHERE person_group_id IN (${placeholders}) AND person_type = 0`;
-      const rows = await externalDb.query(sql, groupIds);
-      return rows.map((r) => r.id);
-    },
-    "無法取得群組的人員",
-    [],
-    { groupIds },
-  );
+function normalizeDoorPhysicalIds(entryDoorIds, exitDoorIds) {
+  return [
+    ...new Set(
+      [...(entryDoorIds || []), ...(exitDoorIds || [])]
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
 }
 
-async function getTodayRecordsOnly(personIds, statsResetAt) {
-  if (personIds.length === 0) return [];
+async function getTodayRecordsByPhysicalIds(physicalIds, statsResetAt) {
+  const ids = [
+    ...new Set(
+      (physicalIds || [])
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+  if (ids.length === 0) return [];
   return handleNonCriticalError(
     async () => {
       const { start, end } = resolvePeopleCountingStatsTimeRange(
         {},
         statsResetAt,
       );
-      const placeholders = generatePlaceholders(personIds);
+      const placeholders = generatePlaceholders(ids);
       const sql = `
         SELECT * FROM baseacs.slot_card_records
-        WHERE person_id IN (${placeholders}) AND person_id != -1 AND is_deleted = false
-          AND swip_card_rev_time >= $${personIds.length + 1} AND swip_card_rev_time <= $${personIds.length + 2}
+        WHERE physical_id IN (${placeholders}) AND is_deleted = false
+          AND swip_card_rev_time >= $${ids.length + 1}
+          AND swip_card_rev_time <= $${ids.length + 2}
         ORDER BY swip_card_rev_time ASC`;
-      const params = [...personIds, start.toISOString(), end.toISOString()];
+      const params = [...ids, start.toISOString(), end.toISOString()];
       return await externalDb.query(sql, params);
     },
-    "無法取得今日刷卡記錄",
+    "無法取得門禁刷卡記錄",
     [],
-    { personIds },
+    { physicalIds: ids },
   );
+}
+
+/** 營運日入口／出口門禁上所有進出紀錄（不限人員群組） */
+async function recordsForSiteStatsByDoors(
+  entryDoorIds,
+  exitDoorIds,
+  statsResetAt,
+) {
+  const doorIds = normalizeDoorPhysicalIds(entryDoorIds, exitDoorIds);
+  if (doorIds.length === 0) return [];
+  return getTodayRecordsByPhysicalIds(doorIds, statsResetAt);
 }
 
 async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
@@ -187,45 +196,6 @@ async function getUnitsByGroupIds(groupIds, records, entryDoorIds, exitDoorIds) 
   return units;
 }
 
-async function batchGetSitesData(locations, getPeopleCountingConfig) {
-  const siteDataMap = new Map();
-  const allGroupIds = new Set();
-  const siteGroupMap = new Map();
-  locations.forEach((location) => {
-    const { personGroupIds } = getPeopleCountingConfig(location);
-    if (personGroupIds.length > 0) {
-      const locationId =
-        typeof location.id === "string" ? Number(location.id) : location.id;
-      siteGroupMap.set(locationId, personGroupIds);
-      personGroupIds.forEach((id) => allGroupIds.add(id));
-    }
-  });
-  if (allGroupIds.size === 0) return siteDataMap;
-  const groupPersonMap = await batchGetGroupPersonIds(Array.from(allGroupIds));
-  const allPersonIds = new Set();
-  groupPersonMap.forEach((personIds) =>
-    personIds.forEach((id) => allPersonIds.add(id)),
-  );
-  if (allPersonIds.size === 0) return siteDataMap;
-  const todayRecords = await getTodayRecordsOnly(Array.from(allPersonIds), null);
-  siteGroupMap.forEach((groupIds, siteId) => {
-    const sitePersonIds = new Set();
-    groupIds.forEach((groupId) => {
-      (groupPersonMap.get(groupId) || []).forEach((id) =>
-        sitePersonIds.add(id),
-      );
-    });
-    const siteRecords = todayRecords.filter(
-      (r) => r.person_id !== -1 && sitePersonIds.has(r.person_id),
-    );
-    siteDataMap.set(siteId, {
-      personIds: Array.from(sitePersonIds),
-      records: siteRecords,
-    });
-  });
-  return siteDataMap;
-}
-
 async function batchGetHeadPics(personIds) {
   if (personIds.length === 0) return new Map();
   return handleNonCriticalError(
@@ -272,30 +242,29 @@ function generateRecordId(personId, timestamp) {
   return `${personId}-${new Date(timestamp).getTime()}`;
 }
 
-/** 批次路徑：營運日全量紀錄再依地點 reset 起點與門禁 physical_id 裁切 */
-function sliceSiteRecords(records, statsResetAt, entryDoorIds, exitDoorIds) {
-  const { start } = resolvePeopleCountingStatsTimeRange({}, statsResetAt);
-  const startMs = start.getTime();
-  return filterRecordsByDoorIds(
-    (records || []).filter(
-      (r) => new Date(r.swip_card_rev_time).getTime() >= startMs,
-    ),
-    entryDoorIds,
-    exitDoorIds,
-  );
-}
-
-/** 單站／單位：SQL 已帶 stats_reset_at，再依門禁 physical_id 裁切 */
-async function recordsForSiteStats(
+/** 單站／單位人員列表：依人員 ID 自門禁紀錄篩選（統計主體改以門禁事件為準） */
+async function recordsForPersonIdsAtDoors(
   personIds,
-  statsResetAt,
   entryDoorIds,
   exitDoorIds,
+  statsResetAt,
 ) {
-  return filterRecordsByDoorIds(
-    await getTodayRecordsOnly(personIds, statsResetAt),
+  const ids = [
+    ...new Set(
+      (personIds || [])
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+  if (ids.length === 0) return [];
+  const doorRecords = await recordsForSiteStatsByDoors(
     entryDoorIds,
     exitDoorIds,
+    statsResetAt,
+  );
+  const personIdSet = new Set(ids);
+  return doorRecords.filter(
+    (r) => r.person_id !== -1 && personIdSet.has(r.person_id),
   );
 }
 
@@ -304,30 +273,25 @@ async function recordsForSiteStats(
  */
 async function getSiteData(siteId, config) {
   const { personGroupIds, entryDoorIds, exitDoorIds } = config;
-  if (personGroupIds.length === 0) {
-    return { entryCount: 0, exitCount: 0, currentCount: 0, units: [] };
-  }
-  const personIds = await getPersonIdsByGroupIds(personGroupIds);
-  if (personIds.length === 0) {
-    return { entryCount: 0, exitCount: 0, currentCount: 0, units: [] };
-  }
-  const todayRecords = await recordsForSiteStats(
-    personIds,
-    config.statsResetAt,
+  const todayRecords = await recordsForSiteStatsByDoors(
     entryDoorIds,
     exitDoorIds,
+    config.statsResetAt,
   );
   const stats = calculateTodayStatsByPhysicalId(
     todayRecords,
     entryDoorIds,
     exitDoorIds,
   );
-  const units = await getUnitsByGroupIds(
-    personGroupIds,
-    todayRecords,
-    entryDoorIds,
-    exitDoorIds,
-  );
+  const units =
+    personGroupIds.length > 0
+      ? await getUnitsByGroupIds(
+          personGroupIds,
+          todayRecords,
+          entryDoorIds,
+          exitDoorIds,
+        )
+      : [];
   return {
     entryCount: stats.entryCount,
     exitCount: stats.exitCount,
@@ -344,41 +308,16 @@ async function getSitesData(locations, getPeopleCountingConfig) {
     (loc) => (getPeopleCountingConfig(loc).dataSource || "yscp") === "yscp",
   );
   if (yscpLocations.length === 0) return new Map();
-  const siteDataMap = await batchGetSitesData(
-    yscpLocations,
-    getPeopleCountingConfig,
-  );
   const result = new Map();
-  for (const location of yscpLocations) {
-    const locationId =
-      typeof location.id === "string" ? Number(location.id) : location.id;
-    const cfg = getPeopleCountingConfig(location);
-    const data = siteDataMap.get(locationId);
-    if (!data || cfg.personGroupIds.length === 0) continue;
-    const siteRecords = sliceSiteRecords(
-      data.records,
-      cfg.statsResetAt,
-      cfg.entryDoorIds,
-      cfg.exitDoorIds,
-    );
-    const stats = calculateTodayStatsByPhysicalId(
-      siteRecords,
-      cfg.entryDoorIds,
-      cfg.exitDoorIds,
-    );
-    const units = await getUnitsByGroupIds(
-      cfg.personGroupIds,
-      siteRecords,
-      cfg.entryDoorIds,
-      cfg.exitDoorIds,
-    );
-    result.set(locationId, {
-      entryCount: stats.entryCount,
-      exitCount: stats.exitCount,
-      currentCount: stats.currentCount,
-      units,
-    });
-  }
+  await Promise.all(
+    yscpLocations.map(async (location) => {
+      const locationId =
+        typeof location.id === "string" ? Number(location.id) : location.id;
+      const cfg = getPeopleCountingConfig(location);
+      const data = await getSiteData(locationId, cfg);
+      result.set(locationId, data);
+    }),
+  );
   return result;
 }
 
@@ -388,9 +327,7 @@ async function getSitesData(locations, getPeopleCountingConfig) {
 async function getSiteLogs(siteId, config, options = {}, context = {}) {
   const { entryDoorIds, exitDoorIds } = config;
   const generateRecordIdFn = context.generateRecordId || generateRecordId;
-  const allowedPhysicalIds = [...new Set([...(entryDoorIds || []), ...(exitDoorIds || [])])]
-    .map((v) => Number(v))
-    .filter((v) => Number.isFinite(v) && v > 0);
+  const allowedPhysicalIds = normalizeDoorPhysicalIds(entryDoorIds, exitDoorIds);
   if (allowedPhysicalIds.length === 0) return { logs: [] };
   const records = await getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, {
     limit: options.limit ?? 50,
@@ -458,11 +395,11 @@ async function getUnitPersonnel(unitId, siteId, config) {
   }
   const personIds = persons.map((p) => p.id);
   const headPicMap = await batchGetHeadPics(personIds);
-  const todayRecords = await recordsForSiteStats(
+  const todayRecords = await recordsForPersonIdsAtDoors(
     personIds,
-    config.statsResetAt,
     entryDoorIds,
     exitDoorIds,
+    config.statsResetAt,
   );
   const { entryCount, exitCount } = calculateTodayStatsByPhysicalId(
     todayRecords,

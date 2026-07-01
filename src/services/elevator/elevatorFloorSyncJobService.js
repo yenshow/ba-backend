@@ -97,7 +97,6 @@ async function syncLocationToDevice(
 ) {
   const persons =
     await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
-  const targetCardNos = new Set();
   const warnings = [];
   const deviceName = deviceNameById?.get(Number(deviceId)) ?? null;
 
@@ -196,7 +195,6 @@ async function syncLocationToDevice(
     let personSyncMessage = null;
 
     for (const cardNo of cardNos) {
-      targetCardNos.add(cardNo);
       const payload = buildCardPayload(person, floors, cardNo);
 
       try {
@@ -268,8 +266,26 @@ async function syncLocationToDevice(
     }
   }
 
+  const targetEmployeeNos = new Set(
+    persons.map((p) => String(p.employee_no)),
+  );
+  const platformSyncedByDevice =
+    await personDeviceSyncStateService.getSyncedEmployeeNosByDeviceIds([
+      deviceId,
+    ]);
+  const platformSynced =
+    platformSyncedByDevice.get(Number(deviceId)) ?? new Set();
+  const removedSyncedEmployees = [...platformSynced].filter(
+    (eno) => !targetEmployeeNos.has(String(eno)),
+  );
+  const deletableCardNos = removedSyncedEmployees.length
+    ? await personDeviceSyncStateService.getCardNosForEmployeeNos(
+        removedSyncedEmployees,
+      )
+    : new Set();
+
   for (const cardNo of deviceCardNos) {
-    if (targetCardNos.has(cardNo)) continue;
+    if (!deletableCardNos.has(cardNo)) continue;
     try {
       await sdkCardService.deleteCard(deviceId, cardNo);
     } catch (err) {

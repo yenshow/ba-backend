@@ -68,7 +68,7 @@ async function initSchema() {
       ["user_role", ["admin", "user"]],
       ["user_status", ["active", "inactive"]],
       ["register_type", ["coil", "discrete", "holding", "input"]],
-      ["alert_type", ["offline", "error", "threshold"]],
+      ["alert_type", ["offline", "error", "threshold", "di", "do"]],
       ["alert_severity", ["warning", "error", "critical"]],
       [
         "alert_source",
@@ -91,18 +91,6 @@ async function initSchema() {
     for (const [name, values] of enums)
       await createEnum(targetPool, name, values);
 
-    // 既有資料庫：alert_type ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
-    for (const v of ["di", "do"]) {
-      try {
-        await targetPool.query(`ALTER TYPE alert_type ADD VALUE '${v}'`);
-      } catch (e) {
-        const msg = e && e.message ? String(e.message) : "";
-        if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
-          throw e;
-        }
-      }
-    }
-
     // 建立 users 表（不含 email；討論決策：email 已自系統移除）
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS users (
@@ -111,6 +99,7 @@ async function initSchema() {
 				password_hash VARCHAR(255) NOT NULL,
 				role user_role NOT NULL DEFAULT 'user',
 				status user_status NOT NULL DEFAULT 'active',
+				token_version INTEGER NOT NULL DEFAULT 0,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)
@@ -129,21 +118,6 @@ async function initSchema() {
 
     // 為 users 表建立觸發器
     await createUpdatedAtTrigger(targetPool, "users");
-
-    try {
-      await targetPool.query(`
-        ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0
-      `);
-    } catch (e) {
-      const msg = e && e.message ? String(e.message) : "";
-      if (!/already exists|duplicate column/i.test(msg)) {
-        throw e;
-      }
-    }
-
-    await targetPool.query(
-      `UPDATE users SET status = 'inactive' WHERE status::text = 'suspended'`,
-    );
 
     // 建立索引
     await targetPool.query(`
@@ -212,22 +186,6 @@ async function initSchema() {
 		`);
 
     await createUpdatedAtTrigger(targetPool, "device_models");
-
-    // 既有 DB：補上 category_code 欄位（用於型號分類；供各系統抓取）
-    // 注意：此段必須在建立依 category_code 的索引之前，避免舊環境缺欄位導致 CREATE INDEX 失敗
-    await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'device_models'
-            AND column_name = 'category_code'
-        ) THEN
-          ALTER TABLE device_models ADD COLUMN category_code VARCHAR(50);
-        END IF;
-      END $BODY$;
-    `);
 
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_device_models_name ON device_models(name);
@@ -354,40 +312,6 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 舊環境：泛用攝影機型號（如 Yenshow）補上預設分類，避免列表/表單無 model_category_code
-    const legacyGenericCameraModelNames = [
-      "Yenshow",
-      "yenshow",
-      "攝影機",
-      "Camera",
-      "camera",
-    ];
-    for (const legacyName of legacyGenericCameraModelNames) {
-      const patched = await targetPool.query(
-        `
-          UPDATE device_models
-          SET category_code = 'surveillance_2mp',
-              description = COALESCE(NULLIF(TRIM(description), ''), '攝影機預設型號（由 initSchema 補分類）'),
-              updated_at = CURRENT_TIMESTAMP
-          WHERE type_code = 'camera'
-            AND category_code IS NULL
-            AND lower(trim(name)) = lower($1)
-          RETURNING id
-        `,
-        [legacyName],
-      );
-      if (patched.rowCount > 0) {
-        schemaLogger.info(
-          "device_models：已為舊泛用攝影機型號補上 category_code",
-          {
-            module: "initSchema",
-            name: legacyName,
-            count: patched.rowCount,
-          },
-        );
-      }
-    }
-
     // 建立 devices 表
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS devices (
@@ -414,22 +338,6 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
 			CREATE INDEX IF NOT EXISTS idx_devices_config ON devices USING GIN (config);
 		`);
-
-    // 既有 DB：移除 devices.status（啟用/停用已不再使用）
-    await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'devices'
-            AND column_name = 'status'
-        ) THEN
-          DROP INDEX IF EXISTS idx_devices_status;
-          ALTER TABLE devices DROP COLUMN status;
-        END IF;
-      END $BODY$;
-    `);
 
     schemaLogger.info("devices 表已建立", { module: "initSchema" });
 
@@ -498,26 +406,6 @@ async function initSchema() {
 			)
 		`);
 
-    // 既有資料庫：alert_source ENUM 擴充（須單獨語句；不可包在含其它 DDL 的同一交易中）
-    for (const source of [
-      "power",
-      "drainage",
-      "hvac",
-      "air_circulation",
-      "fire",
-      "emergency_rescue",
-      "smoke_alarm",
-    ]) {
-      try {
-        await targetPool.query(`ALTER TYPE alert_source ADD VALUE '${source}'`);
-      } catch (e) {
-        const msg = e && e.message ? String(e.message) : "";
-        if (!/already exists|duplicate/i.test(msg) && e.code !== "42710") {
-          throw e;
-        }
-      }
-    }
-
     await createUpdatedAtTrigger(targetPool, "location_systems");
 
     await targetPool.query(`
@@ -529,135 +417,6 @@ async function initSchema() {
     schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
       module: "initSchema",
     });
-
-    // Migration: location_systems.system_type 擴充 elevator
-    try {
-      await targetPool.query(`
-        ALTER TABLE location_systems
-        DROP CONSTRAINT IF EXISTS location_systems_system_type_check
-      `);
-      await targetPool.query(`
-        ALTER TABLE location_systems
-        ADD CONSTRAINT location_systems_system_type_check
-        CHECK (system_type IN (
-          'environment', 'lighting', 'hvac', 'air_circulation',
-          'people_counting', 'vehicle_access', 'drainage', 'power',
-          'fire', 'emergency_rescue', 'smoke_alarm', 'elevator'
-        ))
-      `);
-    } catch (e) {
-      const msg = e && e.message ? String(e.message) : "";
-      if (!/already exists|duplicate/i.test(msg)) {
-        schemaLogger.warn("location_systems elevator CHECK migration 略過", {
-          module: "initSchema",
-          error: msg,
-        });
-      }
-    }
-
-    // ========== Migration: location_systems.system_config ==========
-    // device_ids：僅在已是 JSON array 時做正整數去重清洗；不從舊鍵回填
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config =
-        (
-          jsonb_set(
-            COALESCE(system_config, '{}'::jsonb),
-            '{device_ids}',
-            (
-              SELECT COALESCE(
-                jsonb_agg(v ORDER BY ord),
-                '[]'::jsonb
-              )
-              FROM (
-                SELECT DISTINCT ON (val_int) val_int AS val_int, ord
-                FROM (
-                  SELECT
-                    NULLIF(regexp_replace(elem, '[^0-9]', '', 'g'), '')::int AS val_int,
-                    ord
-                  FROM jsonb_array_elements_text(
-                    COALESCE((COALESCE(system_config, '{}'::jsonb)->'device_ids'), '[]'::jsonb)
-                  ) WITH ORDINALITY AS t(elem, ord)
-                ) x
-                WHERE val_int IS NOT NULL AND val_int > 0
-                ORDER BY val_int, ord
-              ) y
-              CROSS JOIN LATERAL to_jsonb(y.val_int) AS v
-            ),
-            true
-          )
-        ),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'device_ids') = 'array'
-    `);
-
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config = COALESCE(system_config, '{}'::jsonb) - 'device_id' - 'deviceId',
-          updated_at = CURRENT_TIMESTAMP
-      WHERE (COALESCE(system_config, '{}'::jsonb) ? 'device_id')
-         OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceId')
-    `);
-
-    // people_counting：JSON 只保留 camera_device_ids（陣列；無或非陣列則 []），移除 camera_device_id 鍵
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config = (
-        jsonb_set(
-          COALESCE(system_config, '{}'::jsonb),
-          '{camera_device_ids}',
-          CASE
-            WHEN jsonb_typeof(COALESCE(system_config, '{}'::jsonb)->'camera_device_ids') = 'array'
-              AND jsonb_array_length(COALESCE(system_config->'camera_device_ids', '[]'::jsonb)) > 0
-              THEN COALESCE(system_config->'camera_device_ids', '[]'::jsonb)
-            ELSE '[]'::jsonb
-          END,
-          true
-        ) - 'camera_device_id'
-      ),
-      updated_at = CURRENT_TIMESTAMP
-      WHERE system_type = 'people_counting'
-        AND (
-          (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_id')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'camera_device_ids')
-        )
-    `);
-    // elevator：移除已廢棄的 direction_detection / directionDetection
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config = COALESCE(system_config, '{}'::jsonb)
-          - 'direction_detection' - 'directionDetection',
-          updated_at = CURRENT_TIMESTAMP
-      WHERE system_type = 'elevator'
-        AND (
-          (COALESCE(system_config, '{}'::jsonb) ? 'direction_detection')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'directionDetection')
-        )
-    `);
-    // elevator：移除舊線性模型鍵（device_ids / floor_start / floor_names 等）
-    await targetPool.query(`
-      UPDATE location_systems
-      SET system_config = COALESCE(system_config, '{}'::jsonb)
-          - 'device_ids' - 'deviceIds' - 'device_id' - 'deviceId'
-          - 'floor_start' - 'floor_names' - 'floor_count',
-          updated_at = CURRENT_TIMESTAMP
-      WHERE system_type = 'elevator'
-        AND (
-          (COALESCE(system_config, '{}'::jsonb) ? 'device_ids')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceIds')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'device_id')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'deviceId')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'floor_start')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'floor_names')
-          OR (COALESCE(system_config, '{}'::jsonb) ? 'floor_count')
-        )
-    `);
-    schemaLogger.info(
-      "location_systems：已套用 system_config（device_ids／camera_device_ids）migration",
-      {
-        module: "initSchema",
-      },
-    );
 
     // 人流統計刷卡記錄快取表（同步自外部 baseacs.slot_card_records，供備份）
     await targetPool.query(`
@@ -765,47 +524,6 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_location_time
       ON vehicle_passageway_logs(location_id, trigger_time DESC);
-    `);
-    await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'data_source'
-        ) THEN
-          ALTER TABLE vehicle_passageway_logs ADD COLUMN data_source VARCHAR(32) NOT NULL DEFAULT 'yscp';
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'device_id'
-        ) THEN
-          ALTER TABLE vehicle_passageway_logs ADD COLUMN device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'anpr_line'
-        ) THEN
-          ALTER TABLE vehicle_passageway_logs ADD COLUMN anpr_line VARCHAR(64);
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'picture_path'
-        ) THEN
-          ALTER TABLE vehicle_passageway_logs ADD COLUMN picture_path TEXT;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'file_count'
-        ) THEN
-          ALTER TABLE vehicle_passageway_logs ADD COLUMN file_count INTEGER NOT NULL DEFAULT 0;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'vehicle_passageway_logs' AND column_name = 'payload'
-        ) THEN
-          ALTER TABLE vehicle_passageway_logs ADD COLUMN payload JSONB;
-        END IF;
-      END $BODY$;
     `);
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_vehicle_passageway_logs_data_source
@@ -1050,26 +768,6 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_enabled ON alert_camera_linkages(enabled);
       CREATE INDEX IF NOT EXISTS idx_alert_camera_linkages_rule_id ON alert_camera_linkages(rule_id);
     `);
-
-    // 既有 DB：移除 camera_device_id（資料併入 camera_device_ids 後 DROP）
-    await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'alert_camera_linkages'
-            AND column_name = 'camera_device_id'
-        ) THEN
-          UPDATE alert_camera_linkages
-          SET camera_device_ids = ARRAY[camera_device_id]::INTEGER[]
-          WHERE camera_device_id IS NOT NULL
-            AND cardinality(camera_device_ids) = 0;
-          DROP INDEX IF EXISTS idx_alert_camera_linkages_camera;
-          ALTER TABLE alert_camera_linkages DROP COLUMN camera_device_id;
-        END IF;
-      END $BODY$;
-    `);
     schemaLogger.info("alert_camera_linkages 表已建立（攝影機連動）", {
       module: "initSchema",
     });
@@ -1187,20 +885,6 @@ async function initSchema() {
     schemaLogger.info("person_groups 表已建立", { module: "initSchema" });
 
     await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_groups'
-            AND column_name = 'description'
-        ) THEN
-          ALTER TABLE person_groups DROP COLUMN description;
-        END IF;
-      END $BODY$;
-    `);
-
-    await targetPool.query(`
       CREATE TABLE IF NOT EXISTS persons (
         id SERIAL PRIMARY KEY,
         employee_no VARCHAR(64) NOT NULL UNIQUE,
@@ -1229,6 +913,12 @@ async function initSchema() {
         person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
         plate_number VARCHAR(32) NOT NULL,
         plate_normalized VARCHAR(32) NOT NULL,
+        list_type VARCHAR(16) NOT NULL DEFAULT 'allowList',
+        effective_begin TIMESTAMPTZ,
+        effective_end TIMESTAMPTZ,
+        isapi_sync_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        isapi_sync_error TEXT,
+        isapi_synced_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (person_id, plate_normalized)
@@ -1240,88 +930,19 @@ async function initSchema() {
       ON person_license_plates(plate_normalized);
     `);
     await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'is_primary'
-        ) THEN
-          ALTER TABLE person_license_plates DROP COLUMN is_primary;
-        END IF;
-      END $BODY$;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_person_license_plates_normalized
+      ON person_license_plates (plate_normalized);
     `);
     schemaLogger.info("person_license_plates 表已建立", {
       module: "initSchema",
     });
 
-    await targetPool.query(`
-      DO $BODY$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'list_type'
-        ) THEN
-          ALTER TABLE person_license_plates
-            ADD COLUMN list_type VARCHAR(16) NOT NULL DEFAULT 'allowList';
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'effective_begin'
-        ) THEN
-          ALTER TABLE person_license_plates ADD COLUMN effective_begin TIMESTAMPTZ;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'effective_end'
-        ) THEN
-          ALTER TABLE person_license_plates ADD COLUMN effective_end TIMESTAMPTZ;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'isapi_sync_status'
-        ) THEN
-          ALTER TABLE person_license_plates
-            ADD COLUMN isapi_sync_status VARCHAR(16) NOT NULL DEFAULT 'pending';
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'isapi_sync_error'
-        ) THEN
-          ALTER TABLE person_license_plates ADD COLUMN isapi_sync_error TEXT;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'person_license_plates'
-            AND column_name = 'isapi_synced_at'
-        ) THEN
-          ALTER TABLE person_license_plates ADD COLUMN isapi_synced_at TIMESTAMPTZ;
-        END IF;
-      END $BODY$;
-    `);
-    await targetPool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_person_license_plates_normalized
-      ON person_license_plates (plate_normalized);
-    `);
-
-    // 人員梯控卡片（主檔；下發至 HCNetSDK 設備，同步狀態欄位比照 person_license_plates）
+    // 人員梯控卡片（主檔；下發至 HCNetSDK 設備）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_ladder_cards (
         id SERIAL PRIMARY KEY,
         person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
-        card_no VARCHAR(64) NOT NULL,
+        card_no VARCHAR(64),
         home_floor SMALLINT NOT NULL DEFAULT 1,
         floors JSONB NOT NULL DEFAULT '[]',
         card_type SMALLINT NOT NULL DEFAULT 1,
@@ -1335,8 +956,7 @@ async function initSchema() {
         sdk_synced_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(person_id),
-        UNIQUE(card_no)
+        UNIQUE(person_id)
       )
     `);
     await createUpdatedAtTrigger(targetPool, "person_ladder_cards");
@@ -1345,28 +965,6 @@ async function initSchema() {
       ON person_ladder_cards(card_no);
     `);
     schemaLogger.info("person_ladder_cards 表已建立", { module: "initSchema" });
-
-    // 多卡號：card_no 改為可空且移除全域唯一（卡號 SSOT 在 persons.config.access_control.cards）
-    try {
-      await targetPool.query(`
-        ALTER TABLE person_ladder_cards DROP CONSTRAINT IF EXISTS person_ladder_cards_card_no_key
-      `);
-    } catch (err) {
-      schemaLogger.warn("person_ladder_cards card_no UNIQUE 移除略過", {
-        module: "initSchema",
-        error: err?.message,
-      });
-    }
-    try {
-      await targetPool.query(`
-        ALTER TABLE person_ladder_cards ALTER COLUMN card_no DROP NOT NULL
-      `);
-    } catch (err) {
-      schemaLogger.warn("person_ladder_cards card_no nullable 略過", {
-        module: "initSchema",
-        error: err?.message,
-      });
-    }
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_location_access (
@@ -1511,13 +1109,6 @@ async function initSchema() {
       ON person_sync_job_warnings(location_id, created_at DESC);
     `);
     schemaLogger.info("person_sync_job_warnings 表已建立（同步 warnings）", {
-      module: "initSchema",
-    });
-
-    // person_sync_jobs：擴充 job_type 支援電梯樓層同步
-    const { patchPersonSyncJobTypes } = require("./schemaPatches");
-    await patchPersonSyncJobTypes(targetPool);
-    schemaLogger.info("person_sync_jobs job_type 已擴充 elevator_sync_location", {
       module: "initSchema",
     });
 

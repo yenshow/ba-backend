@@ -75,7 +75,8 @@ async function getActivePersonsWithLadderFloors() {
 function buildFloorSlots(floors) {
   return floors.map((floor, i) => ({
     index: i + 1,
-    name: floor.label,
+    code: floor.label,
+    name: floor.name ?? "",
     personIds: [],
   }));
 }

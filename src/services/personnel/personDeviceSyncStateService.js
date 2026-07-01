@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const db = require("../../database/db");
+const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 
@@ -164,6 +165,80 @@ async function getStatesForDevice(deviceId, employeeNos) {
   return map;
 }
 
+/**
+ * 取得各設備上「平台曾同步過」的工號（person_device_sync_states 有紀錄）
+ * @returns {Map<number, Set<string>>}
+ */
+async function getSyncedEmployeeNosByDeviceIds(deviceIds) {
+  const ids = [
+    ...new Set(
+      (deviceIds || [])
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const rows = await db.query(
+    `SELECT device_id, employee_no
+     FROM person_device_sync_states
+     WHERE device_id IN (${ids.map(() => "?").join(",")})`,
+    ids,
+  );
+  for (const r of rows || []) {
+    const did = Number(r.device_id);
+    if (!map.has(did)) map.set(did, new Set());
+    map.get(did).add(String(r.employee_no));
+  }
+  return map;
+}
+
+/** 設備上應刪除的工號：不在目標名單，且平台曾推送過 */
+function filterDeletableEmployeeNos(
+  currentEmployeeNos,
+  targetEmployeeNos,
+  platformSyncedEmployeeNos,
+) {
+  const synced = platformSyncedEmployeeNos || new Set();
+  return [...currentEmployeeNos].filter(
+    (no) =>
+      !targetEmployeeNos.has(String(no)) && synced.has(String(no)),
+  );
+}
+
+/** 依工號查人員主檔卡號（梯控刪除設備多餘卡時使用） */
+async function getCardNosForEmployeeNos(employeeNos) {
+  const list = [
+    ...new Set(
+      (employeeNos || []).map((x) => String(x)).filter(Boolean),
+    ),
+  ];
+  const cardNos = new Set();
+  if (!list.length) return cardNos;
+
+  const rows = await db.query(
+    `SELECT config FROM persons WHERE employee_no IN (${list.map(() => "?").join(",")})`,
+    list,
+  );
+  for (const row of rows || []) {
+    let config = row.config;
+    if (typeof config === "string") {
+      try {
+        config = JSON.parse(config);
+      } catch {
+        config = {};
+      }
+    }
+    const ac =
+      config && typeof config === "object" ? config.access_control || {} : {};
+    for (const cardNo of resolveCardNos(ac)) {
+      cardNos.add(String(cardNo));
+    }
+  }
+  return cardNos;
+}
+
 async function upsertStepState(params) {
   const {
     deviceId,
@@ -247,6 +322,9 @@ module.exports = {
   hashFingerprint,
   hashFingerprintTemplate,
   getStatesForDevice,
+  getSyncedEmployeeNosByDeviceIds,
+  filterDeletableEmployeeNos,
+  getCardNosForEmployeeNos,
   upsertStepState,
   upsertFingerprintDetailState,
 };

@@ -6,6 +6,7 @@ const personnelService = require("./personnelService");
 const {
   PERSONNEL_FACE_MAX_BYTES,
   buildPersonnelFilename,
+  listPersonnelImportZipCandidateNames,
   isJpegByMagicBytes,
 } = require("./personnelFileHelpers");
 const C = require("../../utils/apiErrorCodes");
@@ -266,9 +267,9 @@ async function executeBatchImport({
       }
 
       if (zipIndex.size > 0) {
-        const candidateNames = [];
-        ["jpg", "jpeg"].forEach((ext) =>
-          candidateNames.push(`${employeeNo}.${ext}`),
+        const candidateNames = listPersonnelImportZipCandidateNames(
+          fullName,
+          employeeNo,
         );
         const entry =
           candidateNames

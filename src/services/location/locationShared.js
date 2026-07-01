@@ -404,6 +404,7 @@ function formatSystem(system) {
           panel: normalized.panel,
           floors: normalized.floors.map((f) => ({
             label: f.label,
+            ...(f.name ? { name: f.name } : {}),
             rank: f.rank,
             panelCol: f.panelCol,
             panelRow: f.panelRow,
@@ -687,16 +688,39 @@ const {
   invalidateLocationCache: invalidateElevatorLocationCache,
 } = require("../monitoring/elevatorLocationCache");
 
+function warnSubscribeRefresh(logger, label, error) {
+  logger?.warn(`${label}失敗`, {
+    error: error?.message || String(error),
+    module: "locationService",
+  });
+}
+
+const ISAPI_SUBSCRIBE_FEATURE_BY_SYSTEM_TYPE = {
+  people_counting: "people_counting",
+  vehicle_access: "vehicle_access",
+};
+
+function refreshSubscribesForSystemType(systemType, logger) {
+  const run = async () => {
+    const featureKey = ISAPI_SUBSCRIBE_FEATURE_BY_SYSTEM_TYPE[systemType];
+    if (featureKey) {
+      return require("../isapi/isapiSubscribeHub").refreshForFeature(featureKey);
+    }
+    if (systemType === "elevator") {
+      return require("../license/licenseRuntimeService").reconcileElevatorArmingAfterLocationChange();
+    }
+    return undefined;
+  };
+  void run().catch((error) =>
+    warnSubscribeRefresh(logger, `${systemType} 訂閱刷新`, error),
+  );
+}
+
 function refreshAfterLocationOrZoneDelete(logger) {
   invalidateElevatorLocationCache();
-  try {
-    require("../vehicleAccess/vehicleAccessService").refreshSubscribeAfterLocationChange();
-  } catch (error) {
-    logger?.warn("刪除後刷新車輛訂閱失敗", {
-      error: error?.message || String(error),
-      module: "locationService",
-    });
-  }
+  refreshSubscribesForSystemType("people_counting", logger);
+  refreshSubscribesForSystemType("vehicle_access", logger);
+  refreshSubscribesForSystemType("elevator", logger);
 }
 
 module.exports = {
@@ -721,5 +745,6 @@ module.exports = {
   deleteLocationsByIdsWithoutSystems,
   deleteLocationIfNoSystemsRemain,
   deleteEmptyZoneIfNeeded,
+  refreshSubscribesForSystemType,
   refreshAfterLocationOrZoneDelete,
 };

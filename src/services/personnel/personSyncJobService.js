@@ -1,6 +1,6 @@
 /**
  * 人員門禁同步服務（同步執行，無佇列）
- * 依 person_location_access 取得有權限人員，對地點綁定之入口/出口設備同步：新增、更新（姓名與人臉）、刪除。資料有更新即同步到設備。
+ * 依 person_location_access 取得有權限人員，對地點綁定之入口/出口設備同步：新增、更新（姓名與人臉）、刪除（僅平台曾同步過且已不在目標名單者）。資料有更新即同步到設備。
  */
 const path = require("path");
 const fs = require("fs").promises;
@@ -961,8 +961,26 @@ async function syncPersonToDevice(
   }
 }
 
+function buildDevicePersonSyncTargets(
+  currentEmployeeNos,
+  targetList,
+  targetEmployeeNos,
+  platformSyncedEmployeeNos,
+) {
+  return {
+    currentEmployeeNos,
+    toSync: targetList.filter((p) => currentEmployeeNos.has(p.employeeNo)),
+    toAdd: targetList.filter((p) => !currentEmployeeNos.has(p.employeeNo)),
+    toDelete: personDeviceSyncStateService.filterDeletableEmployeeNos(
+      currentEmployeeNos,
+      targetEmployeeNos,
+      platformSyncedEmployeeNos,
+    ),
+  };
+}
+
 /**
- * 將目標人員名單同步至多台門禁設備（新增／更新／刪除多餘）
+ * 將目標人員名單同步至多台門禁設備（新增／更新／刪除平台曾推送且已不在目標名單者）
  */
 async function syncAccessDevicesWithPersons(
   deviceIds,
@@ -985,6 +1003,10 @@ async function syncAccessDevicesWithPersons(
   ];
   if (!normalizedDeviceIds.length) return;
 
+  const platformSyncedByDevice =
+    await personDeviceSyncStateService.getSyncedEmployeeNosByDeviceIds(
+      normalizedDeviceIds,
+    );
   const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
   reporter?.setTotals?.({
     targetPersonsTotal: (targetList || []).length,
@@ -1016,25 +1038,15 @@ async function syncAccessDevicesWithPersons(
   const deviceTargets = new Map();
   for (const deviceId of normalizedDeviceIds) {
     try {
-      const currentEmployeeNos = new Set(
-        await fetchAllEmployeeNosFromDeviceCached(deviceId),
+      const targets = buildDevicePersonSyncTargets(
+        new Set(await fetchAllEmployeeNosFromDeviceCached(deviceId)),
+        targetList,
+        targetEmployeeNos,
+        platformSyncedByDevice.get(Number(deviceId)),
       );
-      const toSync = targetList.filter((p) =>
-        currentEmployeeNos.has(p.employeeNo),
-      );
-      const toAdd = targetList.filter(
-        (p) => !currentEmployeeNos.has(p.employeeNo),
-      );
-      const toDelete = [...currentEmployeeNos].filter(
-        (no) => !targetEmployeeNos.has(no),
-      );
-      deviceTargets.set(deviceId, {
-        currentEmployeeNos,
-        toSync,
-        toAdd,
-        toDelete,
-      });
-      estimatedTotalOps += toAdd.length + toSync.length + toDelete.length;
+      deviceTargets.set(deviceId, targets);
+      estimatedTotalOps +=
+        targets.toAdd.length + targets.toSync.length + targets.toDelete.length;
     } catch (err) {
       // 讀取清單失敗的設備會跳過，totalOps 先不加
       deviceTargets.set(deviceId, {
@@ -1064,41 +1076,34 @@ async function syncAccessDevicesWithPersons(
       reporter.__stateByEmployeeNo = stateMap;
     }
 
-    let currentEmployeeNos;
-    try {
-      const cached = deviceTargets.get(deviceId);
-      currentEmployeeNos = cached?.currentEmployeeNos
-        ? cached.currentEmployeeNos
-        : new Set(await fetchAllEmployeeNosFromDeviceCached(deviceId));
-    } catch (err) {
-      const message = normalizeIsapiErrorMessage(toMessage(err));
-      logger.warn("ISAPI 讀取設備人員清單失敗（跳過該設備）", {
-        deviceId,
-        error: message,
-      });
-      warnings.push({
-        type: "sync",
-        ...(locationId != null ? { locationId } : {}),
-        deviceId,
-        deviceName: deviceNameById.get(Number(deviceId)) || null,
-        message: `讀取設備人員清單失敗：${message}`,
-      });
-      continue;
+    let cached = deviceTargets.get(deviceId);
+    if (!cached?.currentEmployeeNos) {
+      try {
+        cached = buildDevicePersonSyncTargets(
+          new Set(await fetchAllEmployeeNosFromDeviceCached(deviceId)),
+          targetList,
+          targetEmployeeNos,
+          platformSyncedByDevice.get(Number(deviceId)),
+        );
+        deviceTargets.set(deviceId, cached);
+      } catch (err) {
+        const message = normalizeIsapiErrorMessage(toMessage(err));
+        logger.warn("ISAPI 讀取設備人員清單失敗（跳過該設備）", {
+          deviceId,
+          error: message,
+        });
+        warnings.push({
+          type: "sync",
+          ...(locationId != null ? { locationId } : {}),
+          deviceId,
+          deviceName: deviceNameById.get(Number(deviceId)) || null,
+          message: `讀取設備人員清單失敗：${message}`,
+        });
+        continue;
+      }
     }
 
-    const cached = deviceTargets.get(deviceId);
-    const toSync =
-      cached?.toSync?.length != null
-        ? cached.toSync
-        : targetList.filter((p) => currentEmployeeNos.has(p.employeeNo));
-    const toAdd =
-      cached?.toAdd?.length != null
-        ? cached.toAdd
-        : targetList.filter((p) => !currentEmployeeNos.has(p.employeeNo));
-    const toDelete =
-      cached?.toDelete?.length != null
-        ? cached.toDelete
-        : [...currentEmployeeNos].filter((no) => !targetEmployeeNos.has(no));
+    const { toSync, toAdd, toDelete } = cached;
 
     for (const p of toAdd) {
       const startedAt = reporter?.startOp
@@ -1311,7 +1316,7 @@ async function syncAccessDevicesWithPersons(
 }
 
 /**
- * 對單一地點執行同步：目標名單為來源，設備與之對齊（新增/更新姓名與人臉、刪除多餘）
+ * 對單一地點執行同步：目標名單為來源，設備與之對齊（新增/更新姓名與人臉；刪除僅限平台曾同步且已不在名單者）
  * @returns {{ warnings: Array<{ type: string, employeeNo?: string, deviceId?: number, message: string }> }}
  */
 async function syncLocation(locationId, reporter = null) {

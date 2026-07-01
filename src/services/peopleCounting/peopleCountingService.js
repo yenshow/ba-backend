@@ -23,7 +23,6 @@ const {
 const yscpProvider = require("./providers/yscpProvider");
 const accessControlProvider = require("./providers/accessControlProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
-const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const { parseEventType } = require("./helpers/entryExitStats");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
@@ -219,11 +218,6 @@ async function createPeopleCountingLocation(locationData, userId) {
         userId,
       );
 
-      // 地點配置變更後，刷新 ISAPI 佈防訂閱（增量啟停）
-      void isapiSubscribeHub
-        .refreshForFeature("people_counting")
-        .catch(() => {});
-
       return {
         message: `${peopleCountingModuleLabel()}地點建立成功`,
         location: result.location,
@@ -352,11 +346,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         userId,
       );
 
-      // 地點配置變更後，刷新 ISAPI 佈防訂閱（增量啟停）
-      void isapiSubscribeHub
-        .refreshForFeature("people_counting")
-        .catch(() => {});
-
       return {
         message: `${peopleCountingModuleLabel()}地點更新成功`,
         location: result.location,
@@ -378,11 +367,6 @@ async function deletePeopleCountingLocation(id) {
 
       // 使用統一服務刪除地點
       const result = await locationService.deleteLocation(id);
-
-      // 地點配置變更後，刷新 ISAPI 佈防訂閱（增量啟停）
-      void isapiSubscribeHub
-        .refreshForFeature("people_counting")
-        .catch(() => {});
 
       return result;
     },
