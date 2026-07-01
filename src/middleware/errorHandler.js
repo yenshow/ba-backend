@@ -5,6 +5,7 @@
  * 並記錄設備錯誤（如 Modbus 連接失敗）
  */
 
+const multer = require("multer");
 const systemAlert = require("../services/alerts/systemAlertHelper");
 const logger = require("../utils/logger");
 const {
@@ -13,6 +14,8 @@ const {
   resolveErrorCode,
   resolveErrorDetails,
 } = require("../utils/apiErrorFormatter");
+const C = require("../utils/apiErrorCodes");
+const { createApiError } = require("../utils/apiErrorMeta");
 
 const DEVICE_ERROR_COOLDOWN_MS = 30_000;
 const lastDevice503LogAt = new Map();
@@ -86,8 +89,20 @@ async function recordDeviceError(req, errorMessage) {
 }
 
 async function errorHandler(err, req, res, next) {
-  const statusCode = getHttpStatusFromError(err, req);
-  const errorMessage = err.message || "Request failed";
+  let handledErr = err;
+  if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+    const reqPath = String(req.originalUrl || req.path || "");
+    if (reqPath.includes("/upload-face")) {
+      const { formatPersonnelFaceMaxSizeLabel } = require("../services/personnel/personnelFileHelpers");
+      handledErr = createApiError(
+        C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,
+        `大頭照需小於等於 ${formatPersonnelFaceMaxSizeLabel()}（設備限制）`,
+      );
+    }
+  }
+
+  const statusCode = getHttpStatusFromError(handledErr, req);
+  const errorMessage = handledErr.message || "Request failed";
   const clientMessage = getClientFacingErrorMessage(req, statusCode, errorMessage);
 
   if (statusCode === 503) {
@@ -130,9 +145,9 @@ async function errorHandler(err, req, res, next) {
 
   res.status(statusCode).json(
     formatFailurePayload({
-      code: resolveErrorCode(err, statusCode),
+      code: resolveErrorCode(handledErr, statusCode),
       message: clientMessage,
-      details: resolveErrorDetails(err),
+      details: resolveErrorDetails(handledErr),
     }),
   );
 }

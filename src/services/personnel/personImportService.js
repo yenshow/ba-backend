@@ -5,6 +5,7 @@ const AdmZip = require("adm-zip");
 const personnelService = require("./personnelService");
 const {
   PERSONNEL_FACE_MAX_BYTES,
+  formatPersonnelFaceMaxSizeLabel,
   buildPersonnelFilename,
   listPersonnelImportZipCandidateNames,
   isJpegByMagicBytes,
@@ -282,7 +283,7 @@ async function executeBatchImport({
             continue;
           }
           if (buffer.length > PERSONNEL_FACE_MAX_BYTES) {
-            throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"圖片檔案過大（需 ≤ 200KB）");
+            throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,`圖片檔案過大（需 ≤ ${formatPersonnelFaceMaxSizeLabel()}）`);
           }
           if (!isJpegByMagicBytes(buffer.slice(0, 32))) {
             throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"圖片格式不正確：僅允許 JPEG（JPG）");

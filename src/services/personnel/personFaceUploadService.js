@@ -3,6 +3,7 @@ const path = require("path");
 const personnelService = require("./personnelService");
 const {
   PERSONNEL_FACE_MAX_BYTES,
+  formatPersonnelFaceMaxSizeLabel,
   buildPersonnelFilename,
   readFileHeaderBytes,
   isJpegByMagicBytes,
@@ -30,7 +31,7 @@ async function finalizeFaceUpload({
   const st = fs.statSync(tempPath);
   if (st.size > PERSONNEL_FACE_MAX_BYTES) {
     safeUnlink(tempPath);
-    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"大頭照需小於等於 200KB（設備限制）");
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,`大頭照需小於等於 ${formatPersonnelFaceMaxSizeLabel()}（設備限制）`);
   }
 
   const header = readFileHeaderBytes(tempPath, 32);
