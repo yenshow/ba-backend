@@ -8,6 +8,7 @@ const logger = require("../../utils/logger");
 const fs = require("fs");
 const path = require("path");
 const { Info } = require("luxon");
+const { getBackupRootDir } = require("../../utils/baDataPaths");
 
 const runtimeLogger = logger.createLogger("runtimeConfigService");
 
@@ -36,13 +37,7 @@ const BACKUP_KEYS = [
   "BACKUP_SCHEDULER_INTERVAL",
 ];
 
-const buildDefaultBackupRootDir = () => {
-  const programData =
-    process.env.ProgramData ||
-    process.env.PROGRAMDATA ||
-    "C:\\ProgramData";
-  return path.join(programData, "Yenshow", "BA System", "backups");
-};
+const buildDefaultBackupRootDir = () => getBackupRootDir();
 
 const DEFAULTS = {
   ALERT_DAILY_ROLLOVER_TZ: "Asia/Taipei",

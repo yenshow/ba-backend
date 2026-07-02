@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Windows 子程序執行輔助（UTF-8 日誌、PostgreSQL 目錄 ACL）
+ * Windows 子程序執行輔助（UTF-8 日誌、執行期資料目錄 ACL）
  */
 
 const fs = require("fs");
@@ -17,6 +17,7 @@ const colors = {
 const WIN_ACL_BUILTIN = {
   administrators: "*S-1-5-32-544",
   system: "*S-1-5-18",
+  localService: "*S-1-5-19",
 };
 
 function log(message, color = "reset") {
@@ -44,14 +45,14 @@ function runWindowsAclStep(innerCommand, label) {
       .toString()
       .trim();
     throw new Error(
-      `無法設定 PostgreSQL 目錄權限（需以系統管理員執行安裝精靈）: ${label}` +
+      `無法設定執行期資料目錄權限（需以系統管理員執行安裝精靈）: ${label}` +
         (detail ? `\n${detail}` : ""),
     );
   }
 }
 
-/** initdb 在 Windows 會 chmod 資料目錄；Program Files 等路徑須先設定 ACL。 */
-function prepareWindowsPostgresDirAcl(dirPath) {
+/** initdb 在 Windows 須設定資料目錄 ACL（含 PM2 LocalService）。 */
+function prepareWindowsDirAcl(dirPath) {
   if (process.platform !== "win32" || !dirPath) {
     return;
   }
@@ -63,7 +64,7 @@ function prepareWindowsPostgresDirAcl(dirPath) {
   const userPrincipal =
     domain && user ? `${domain}\\${user}` : user || null;
 
-  log(`🔐 設定 PostgreSQL 目錄權限: ${dirPath}`, "yellow");
+  log(`🔐 設定執行期資料目錄權限: ${dirPath}`, "yellow");
 
   runWindowsAclStep(`icacls ${quoted} /inheritance:r`, "icacls /inheritance:r");
   runWindowsAclStep(
@@ -73,6 +74,10 @@ function prepareWindowsPostgresDirAcl(dirPath) {
   runWindowsAclStep(
     `icacls ${quoted} /grant:r ${WIN_ACL_BUILTIN.system}:(OI)(CI)F`,
     "icacls SYSTEM",
+  );
+  runWindowsAclStep(
+    `icacls ${quoted} /grant:r ${WIN_ACL_BUILTIN.localService}:(OI)(CI)M`,
+    "icacls LocalService",
   );
 
   if (userPrincipal) {
@@ -87,15 +92,15 @@ function prepareWindowsPostgresDataLayout({ dataDir, logDir }) {
   if (process.platform !== "win32") {
     return;
   }
-  prepareWindowsPostgresDirAcl(dataDir);
+  prepareWindowsDirAcl(dataDir);
   if (logDir && logDir !== dataDir) {
-    prepareWindowsPostgresDirAcl(logDir);
+    prepareWindowsDirAcl(logDir);
   }
 }
 
 module.exports = {
   log,
   execWithUtf8OnWindows,
-  prepareWindowsPostgresDirAcl,
+  prepareWindowsDirAcl,
   prepareWindowsPostgresDataLayout,
 };

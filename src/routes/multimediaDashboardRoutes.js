@@ -9,6 +9,7 @@ const {
 } = require("../middleware/authMiddleware");
 const multimediaDashboardService = require("../services/multimedia/multimediaDashboardService");
 const C = require("../utils/apiErrorCodes");
+const { getUploadsDir } = require("../utils/baDataPaths");
 
 const router = express.Router();
 
@@ -48,10 +49,7 @@ router.get(
 
 // ========== Upload (media) ==========
 
-const uploadsDir = path.join(process.cwd(), "uploads", "multimedia");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+const uploadsDir = getUploadsDir("multimedia");
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),

@@ -2,8 +2,6 @@
  * 門禁 ISAPI 佈防訂閱服務
  * 後端主動向門禁設備 POST subscribeEvent，建立長連線接收事件，寫入 isapi_access_events 並推送 WebSocket。
  */
-const path = require("path");
-const fs = require("fs");
 const db = require("../../database/db");
 const accessControlService = require("./accessControlService");
 const {
@@ -14,6 +12,7 @@ const {
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrorMeta");
+const { getUploadsDir } = require("../../utils/baDataPaths");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件（見 isapiEventPersistence） */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -23,21 +22,9 @@ const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </SubscribeEvent>`;
 
 const RE_CONNECT_DELAY_MS = 10000;
-const UPLOADS_ISAPI_DIR = path.join(process.cwd(), "uploads", "access-events");
 
-/**
- * 目前各設備的訂閱迴圈控制器（用於 refresh/stop 中止串流並停止重連）
- * key: deviceId(number)
- * value: { controller: AbortController, startedAt: number }
- */
+/** 各設備訂閱迴圈控制器（refresh/stop 時中止串流） */
 const deviceLoopControllers = new Map();
-
-/** 確保 uploads/access-events 存在 */
-function ensureUploadsDir() {
-  if (!fs.existsSync(UPLOADS_ISAPI_DIR)) {
-    fs.mkdirSync(UPLOADS_ISAPI_DIR, { recursive: true });
-  }
-}
 
 /**
  * 取得需訂閱的門禁設備 ID 列表（people_counting 地點的 entry_device_ids、exit_device_ids 去重）
@@ -198,7 +185,11 @@ async function consumeEventStreamIncremental(
       /image/i.test(ct) ||
       (/\.(jpg|jpeg|png)$/i.test(name) && lastWrittenEventId != null)
     ) {
-      attachPictureToEvent(lastWrittenEventId, body, UPLOADS_ISAPI_DIR).catch(
+      attachPictureToEvent(
+        lastWrittenEventId,
+        body,
+        getUploadsDir("access-events"),
+      ).catch(
         () => {},
       );
       lastWrittenEventId = null;
@@ -371,7 +362,6 @@ function stop() {
  */
 async function refresh() {
   if (!started) {
-    ensureUploadsDir();
     started = true;
   }
   const deviceIds = await getDeviceIdsToSubscribe();

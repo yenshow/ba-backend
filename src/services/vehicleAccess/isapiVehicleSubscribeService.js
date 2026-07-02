@@ -10,7 +10,6 @@ const {
   persistAnprEvent,
   attachLicensePlatePicture,
   runFanOutPictureBackfillOnce,
-  ensureUploadsDir,
 } = require("./isapiVehiclePersistence");
 const { ensureIntArray } = require("../location/locationShared");
 
@@ -258,7 +257,6 @@ function stopLoopForDevice(deviceId) {
 
 async function start() {
   if (started) return;
-  ensureUploadsDir();
   started = true;
   try {
     const count = await runFanOutPictureBackfillOnce();
@@ -283,7 +281,6 @@ function stop() {
 
 async function refresh() {
   if (!started) return { started: false, deviceIds: [] };
-  ensureUploadsDir();
   const deviceIds = await getDeviceIdsToSubscribe();
   const nextSet = new Set(deviceIds);
   const prevSet = new Set(subscribedDeviceIds);

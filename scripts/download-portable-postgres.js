@@ -25,6 +25,7 @@ const {
   execWithUtf8OnWindows,
   prepareWindowsPostgresDataLayout,
 } = require("./postgres-exec-windows");
+const { ensureRuntimeDataLayout } = require("../src/utils/baDataPaths");
 const {
   startPortablePostgres,
   verifyPsqlReady,
@@ -333,6 +334,8 @@ function setupDatabase() {
 
 async function main() {
   log(`🚀 開始設定可攜式 PostgreSQL（離線）...`, "green");
+
+  ensureRuntimeDataLayout();
 
   ensureDirSync(POSTGRES_DIR);
 

@@ -7,18 +7,21 @@
  *   1) 產生 mediamtx.generated.yml（供下次啟動）
  *   2) 立即透過 Control API 更新單一路徑（只在 CRUD 時發生，頻率低）
  */
-const fs = require("fs");
 const path = require("path");
+const fs = require("fs");
 const db = require("../../database/db");
 const mediaMTXService = require("./mediaMTXService");
 const logger = require("../../utils/logger").createLogger("MediaMTX Sync");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const {
+  getMediamtxDir,
+  getMediamtxGeneratedConfigPath,
+} = require("../../utils/baDataPaths");
 
-const rootDir = path.resolve(__dirname, "../../..");
-const mediamtxDir = path.join(rootDir, "mediamtx");
+const mediamtxDir = getMediamtxDir();
 const baseConfigPath = path.join(mediamtxDir, "mediamtx.yml");
-const generatedConfigPath = path.join(mediamtxDir, "mediamtx.generated.yml");
+const generatedConfigPath = getMediamtxGeneratedConfigPath();
 
 const toRtspUrl = (config) => {
   if (!config) return "";

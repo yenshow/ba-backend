@@ -23,6 +23,7 @@ const {
 } = require("../../utils/accessControlFingerprintsUtils");
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const { assertSafeOutboundUrl, isExternalHttpUrl } = require("../../utils/safeUrl");
+const { resolveUploadFilePath } = require("../../utils/baDataPaths");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -730,13 +731,10 @@ async function updatePerson(id, data) {
     if (shouldDeletePrev) {
       const filename = path.basename(prevStr);
       if (filename && !filename.includes("..")) {
-        const filePath = path.join(
-          process.cwd(),
-          "uploads",
-          "personnel",
-          filename,
-        );
-        fs.unlink(filePath).catch(() => null);
+        const filePath = resolveUploadFilePath(prevStr);
+        if (filePath) {
+          fs.unlink(filePath).catch(() => null);
+        }
       }
     }
   }

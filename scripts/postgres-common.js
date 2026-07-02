@@ -18,11 +18,17 @@ const dotenv = require("dotenv");
 // 載入 .env 以讀取 DB_PORT 等配置
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
-const PROJECT_DIR = path.resolve(__dirname, "..");
+const {
+  getProjectDir,
+  getPostgresDataDir,
+  getPostgresLogDir,
+} = require("../src/utils/baDataPaths");
+
+const PROJECT_DIR = getProjectDir();
 const POSTGRES_DIR = path.join(PROJECT_DIR, "postgres");
 const BIN_DIR = path.join(POSTGRES_DIR, "bin");
-const DATA_DIR = path.join(POSTGRES_DIR, "data");
-const LOG_DIR = path.join(POSTGRES_DIR, "logs");
+const DATA_DIR = getPostgresDataDir();
+const LOG_DIR = getPostgresLogDir();
 
 const binExtension = process.platform === "win32" ? ".exe" : "";
 

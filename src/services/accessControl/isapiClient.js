@@ -6,6 +6,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const isapiRawHttp = require("./isapiRawHttp");
 
 /**
  * 解析 WWW-Authenticate: Digest 標頭
@@ -226,58 +227,51 @@ function createIsapiClient(deviceConfig) {
 
   /**
    * 訂閱事件長連線：POST subscribeEvent，回傳 response（含 res.data 為 stream）。
-   * 必須使用預先 Digest（無法在 stream 讀取後重試 401）。
+   * 使用 raw TCP 解析回應標頭，避免部分設備觸發 Invalid header token。
    * @param {string} xmlBody - SubscribeEvent XML 字串
-   * @returns {Promise<import('axios').AxiosResponse>} - res.data 為 Node stream
+   * @returns {Promise<{ status: number, headers: object, data: import('stream').Readable }>}
    */
   async function requestSubscribeStream(xmlBody) {
     const path = "/ISAPI/Event/notification/subscribeEvent";
-    const url = `${baseURL}${path}`;
-    const method = "POST";
-    const uri = path;
-
-    const probeRes = await axios({
-      method: "GET",
-      url: baseURL + "/ISAPI/System/deviceInfo",
-      validateStatus: () => true,
-      timeout: 10000,
-    });
-    if (probeRes.status !== 401 || !probeRes.headers["www-authenticate"]) {
-      throwApiError(
-        C.ACCESS_CONTROL_ISAPI_DIGEST_CHALLENGE_EXPECTED,
-        "預期設備回傳 401 Digest 挑戰",
-      );
-    }
-    const authHeader = probeRes.headers["www-authenticate"];
-    if (!authHeader.toLowerCase().startsWith("digest ")) {
-      throwApiError(
-        C.ACCESS_CONTROL_ISAPI_AUTH_UNSUPPORTED,
-        `不支援的認證方式: ${authHeader.split(" ")[0]}`,
-      );
-    }
+    const authHeader = await isapiRawHttp.fetchDigestChallenge({ host, port });
     const challenge = parseDigestChallenge(authHeader);
     const digestAuth = buildAuthHeader(
       challenge,
-      method,
-      uri,
+      "POST",
+      path,
       username,
       password,
     );
 
-    const res = await axios({
-      method,
-      url,
+    const res = await isapiRawHttp.requestSubscribePost({
+      host,
+      port,
+      path,
       headers: {
         "Content-Type": "application/xml",
         Authorization: digestAuth,
+        "Content-Length": String(Buffer.byteLength(xmlBody)),
       },
-      data: xmlBody,
-      responseType: "stream",
-      validateStatus: (status) => status >= 200 && status < 400,
-      maxRedirects: 0,
-      timeout: 0,
+      body: xmlBody,
     });
-    return res;
+
+    if (res.status >= 400) {
+      const buf = await isapiRawHttp.readStreamToBuffer(res.data);
+      const preview =
+        typeof buf === "string"
+          ? buf.slice(0, 500)
+          : buf.toString("utf8").slice(0, 500);
+      throwApiError(C.ACCESS_CONTROL_ISAPI_INVALID_RESPONSE, preview || `HTTP ${res.status}`, {
+        statusCode: res.status,
+        details: preview ? { status: res.status, body: preview } : { status: res.status },
+      });
+    }
+
+    return {
+      status: res.status,
+      headers: res.headers,
+      data: res.data,
+    };
   }
 
   return {
@@ -291,4 +285,5 @@ module.exports = {
   createIsapiClient,
   parseDigestChallenge,
   buildDigestResponse,
+  buildAuthHeader,
 };

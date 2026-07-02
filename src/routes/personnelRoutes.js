@@ -16,8 +16,8 @@ const virtualCardService = require("../services/personnel/virtualCardService");
 const {
   PERSONNEL_FACE_MAX_BYTES,
   PERSONNEL_FACE_ALLOWED_MIME,
-  getPersonnelUploadsDir,
 } = require("../services/personnel/personnelFileHelpers");
+const { getUploadsDir } = require("../utils/baDataPaths");
 const {
   authenticate,
   requirePermission,
@@ -40,12 +40,7 @@ const requirePersonWrite = requireAnyPermission([
 router.use(authenticate, requirePermission("system.personnel"));
 const isapiEventLogger = logger.createLogger("ISAPI Event");
 
-const uploadsBase = path.join(process.cwd(), "uploads");
-["personnel", "access-events"].forEach((dir) => {
-  const full = path.join(uploadsBase, dir);
-  if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
-});
-const personnelUploadsDir = getPersonnelUploadsDir();
+const personnelUploadsDir = getUploadsDir("personnel");
 
 const personnelUpload = multer({
   storage: multer.diskStorage({

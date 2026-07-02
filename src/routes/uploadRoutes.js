@@ -1,32 +1,20 @@
 const express = require("express");
-const path = require("path");
 const fs = require("fs");
 const asyncHandler = require("../utils/asyncHandler");
 const { authenticateUploadRead } = require("../middleware/authMiddleware");
 const C = require("../utils/apiErrorCodes");
+const {
+  decodeUploadRequestPath,
+  resolveUploadRelativePath,
+} = require("../utils/baDataPaths");
 
 const router = express.Router();
-const uploadsRoot = path.resolve(process.cwd(), "uploads");
-
-const resolveUploadFilePath = (requestPath) => {
-  const raw = String(requestPath || "").replace(/^\/+/, "");
-  const decoded = decodeURIComponent(raw);
-  const normalized = path.normalize(decoded);
-  if (normalized.startsWith("..") || path.isAbsolute(normalized)) {
-    return null;
-  }
-  const absolute = path.resolve(uploadsRoot, normalized);
-  if (!absolute.startsWith(uploadsRoot + path.sep) && absolute !== uploadsRoot) {
-    return null;
-  }
-  return absolute;
-};
 
 router.get(
   /.*/,
   authenticateUploadRead,
   asyncHandler(async (req, res) => {
-    const relativePath = String(req.path || "").replace(/^\/+/, "").trim();
+    const relativePath = decodeUploadRequestPath(req.path);
     if (!relativePath) {
       return res.sendFailure(
         { code: C.NOT_FOUND, message: "找不到檔案", details: null },
@@ -34,7 +22,7 @@ router.get(
       );
     }
 
-    const filePath = resolveUploadFilePath(relativePath);
+    const filePath = resolveUploadRelativePath(relativePath);
     if (!filePath) {
       return res.sendFailure(
         { code: C.FORBIDDEN, message: "不允許的檔案路徑", details: null },

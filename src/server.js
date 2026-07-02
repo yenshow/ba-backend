@@ -4,6 +4,9 @@ const cors = require("cors");
 const morgan = require("morgan");
 const os = require("os");
 const config = require("./config");
+const { ensureRuntimeDataLayout } = require("./utils/baDataPaths");
+
+ensureRuntimeDataLayout();
 
 // 向後兼容：使用新的配置結構
 const serverConfig = {

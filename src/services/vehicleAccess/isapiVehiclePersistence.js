@@ -13,18 +13,7 @@ const {
   isEventAfterEffectiveSince,
 } = require("./vehicleAccessConfig");
 const vehiclePresenceService = require("./vehiclePresenceService");
-
-const UPLOADS_VEHICLE_DIR = path.join(
-  process.cwd(),
-  "uploads",
-  "vehicle-events",
-);
-
-function ensureUploadsDir() {
-  if (!fs.existsSync(UPLOADS_VEHICLE_DIR)) {
-    fs.mkdirSync(UPLOADS_VEHICLE_DIR, { recursive: true });
-  }
-}
+const { getUploadsDir, formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
 
 async function resolveDeviceDisplayName(deviceId) {
   if (!deviceId) return null;
@@ -188,7 +177,6 @@ async function attachLicensePlatePicture(logIds, pictureBuffer) {
   if (ids.length === 0 || !Buffer.isBuffer(pictureBuffer) || pictureBuffer.length === 0) {
     return;
   }
-  ensureUploadsDir();
   const primaryId = ids[0];
   const rows = await db.query(
     `SELECT device_id, trigger_time FROM vehicle_passageway_logs WHERE id = ?`,
@@ -203,13 +191,9 @@ async function attachLicensePlatePicture(logIds, pictureBuffer) {
   const host = devRows?.[0]?.config?.host
     ? String(devRows[0].config.host).replace(/[^0-9a-fA-F.:]/g, "_")
     : "unknown";
-  const rawTime = String(row.trigger_time || "")
-    .replace(/:/g, "-")
-    .replace(/\+.*$/, "")
-    .replace(/Z$/, "")
-    .slice(0, 19);
+  const rawTime = formatUploadTimestampForFilename(row.trigger_time, 19);
   const basename = `${host}_${rawTime}_${primaryId}.jpg`;
-  const filePath = path.join(UPLOADS_VEHICLE_DIR, basename);
+  const filePath = path.join(getUploadsDir("vehicle-events"), basename);
   fs.writeFileSync(filePath, pictureBuffer);
   const picturePath = `/uploads/vehicle-events/${basename}`;
   const placeholders = ids.map(() => "?").join(", ");
@@ -252,6 +236,4 @@ module.exports = {
   attachLicensePlatePicture,
   runFanOutPictureBackfillOnce,
   invalidateLocationIngestCache,
-  UPLOADS_VEHICLE_DIR,
-  ensureUploadsDir,
 };

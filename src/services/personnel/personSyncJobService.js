@@ -19,6 +19,7 @@ const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const { assertSafeOutboundUrl } = require("../../utils/safeUrl");
+const { resolveUploadFilePath } = require("../../utils/baDataPaths");
 
 const SYNC_DELAY_MS = 300;
 
@@ -340,7 +341,8 @@ async function resolveFaceUrlToBuffer(faceUrl) {
       if (base64) return Buffer.from(base64, "base64");
     }
     if (trimmed.startsWith("/uploads/")) {
-      const fullPath = path.join(process.cwd(), trimmed.replace(/^\//, ""));
+      const fullPath = resolveUploadFilePath(trimmed);
+      if (!fullPath) return null;
       return await fs.readFile(fullPath);
     }
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {

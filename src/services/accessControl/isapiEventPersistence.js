@@ -6,6 +6,7 @@ const path = require("path");
 const fs = require("fs");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
+const { formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
 
 const SUB_TYPES_PROCESS = new Set([1, 9, 38, 39, 75, 76, 2077, 2078, 2079]); // 人臉辨識成功/失敗、酒精檢測正常/飲酒/醉酒
 
@@ -69,11 +70,7 @@ async function attachPictureToEvent(eventId, pictureBuffer, uploadsDir) {
   const deviceIp = row.device_ip || "unknown";
   const eventTime = row.event_time || new Date().toISOString();
   const safeIp = String(deviceIp).replace(/[^0-9a-fA-F.:]/g, "_");
-  const rawTime = String(eventTime)
-    .replace(/:/g, "-")
-    .replace(/\+.*$/, "")
-    .replace(/Z$/, "")
-    .slice(0, 16);
+  const rawTime = formatUploadTimestampForFilename(eventTime, 16);
   const basename = `${safeIp}_${rawTime}.jpg`;
   const filePath = path.join(uploadsDir, basename);
   fs.writeFileSync(filePath, pictureBuffer);

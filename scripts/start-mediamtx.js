@@ -6,11 +6,14 @@
 const path = require("path");
 const { spawn } = require("child_process");
 const fs = require("fs");
+const {
+  getMediamtxDir,
+  getMediamtxGeneratedConfigPath,
+} = require("../src/utils/baDataPaths");
 
 const rootDir = path.resolve(__dirname, "..");
-const mediamtxDir = path.join(rootDir, "mediamtx");
-const baseConfigFile = "mediamtx.yml";
-const generatedConfigFile = "mediamtx.generated.yml";
+const mediamtxDir = getMediamtxDir();
+const generatedConfigPath = getMediamtxGeneratedConfigPath();
 
 const isWindows = process.platform === "win32";
 const exeName = isWindows ? "mediamtx.exe" : "mediamtx";
@@ -43,7 +46,7 @@ try {
   process.exit(1);
 }
 
-const child = spawn(binPath, [generatedConfigFile], {
+const child = spawn(binPath, [generatedConfigPath], {
   cwd: mediamtxDir,
   stdio: "inherit",
   windowsHide: true,

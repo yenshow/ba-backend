@@ -71,10 +71,6 @@ function safeUnlink(filePath) {
   } catch (_e) {}
 }
 
-function getPersonnelUploadsDir() {
-  return path.join(process.cwd(), "uploads", "personnel");
-}
-
 module.exports = {
   PERSONNEL_FACE_MAX_BYTES,
   formatPersonnelFaceMaxSizeLabel,
@@ -85,5 +81,4 @@ module.exports = {
   readFileHeaderBytes,
   isJpegByMagicBytes,
   safeUnlink,
-  getPersonnelUploadsDir,
 };

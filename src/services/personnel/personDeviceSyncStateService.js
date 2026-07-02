@@ -5,6 +5,7 @@ const db = require("../../database/db");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
+const { resolveUploadFilePath } = require("../../utils/baDataPaths");
 
 const STEP_COLUMNS = {
   userInfo: { hash: "user_info_hash", status: "user_info_status", at: "user_info_synced_at" },
@@ -133,7 +134,10 @@ function hashFace({ faceBuffer, faceUrl }) {
   // - 不在此讀完整內容（避免前端/查詢端點爆 IO）；用 mtime/size 當作保守內容指紋
   if (u.startsWith("/uploads/")) {
     try {
-      const fullPath = path.join(process.cwd(), u.replace(/^\//, ""));
+      const fullPath = resolveUploadFilePath(u);
+      if (!fullPath) {
+        return sha256Hex(`faceUrl:${u}`);
+      }
       const st = fs.statSync(fullPath);
       const size = Number(st.size) || 0;
       const mtimeMs = Number(st.mtimeMs) || 0;

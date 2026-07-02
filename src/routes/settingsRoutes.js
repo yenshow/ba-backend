@@ -16,6 +16,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const logger = require("../utils/logger");
 const C = require("../utils/apiErrorCodes");
+const { getUploadsDir, resolveUploadFilePath } = require("../utils/baDataPaths");
 
 const routeLogger = logger.createLogger("settingsRoutes");
 
@@ -34,10 +35,7 @@ const requireSettingWrite = (req, res, next) => {
 };
 
 // 確保上傳目錄存在
-const uploadsDir = path.join(process.cwd(), "uploads", "settings");
-if (!fs.existsSync(uploadsDir)) {
-	fs.mkdirSync(uploadsDir, { recursive: true });
-}
+const uploadsDir = getUploadsDir("settings");
 
 // 配置 multer 儲存設定
 const storage = multer.diskStorage({
@@ -180,8 +178,8 @@ router.post("/upload", authenticate, requireSettingWrite, upload.single("file"),
 	// 先刪除該 key 的舊有上傳檔案，避免孤兒檔案累積
 	const existingSetting = await settingsService.getSettingByKey(key);
 	if (existingSetting?.value?.startsWith?.("/uploads/settings/")) {
-		const oldFilePath = path.join(process.cwd(), existingSetting.value);
-		if (fs.existsSync(oldFilePath)) {
+		const oldFilePath = resolveUploadFilePath(existingSetting.value);
+		if (oldFilePath && fs.existsSync(oldFilePath)) {
 			try {
 				fs.unlinkSync(oldFilePath);
 			} catch (err) {
@@ -225,8 +223,8 @@ router.delete("/:key", authenticate, requireSettingWrite, asyncHandler(async (re
 	if (setting && setting.value) {
 		// 檢查是否為上傳的檔案 URL
 		if (setting.value.startsWith("/uploads/settings/")) {
-			const filePath = path.join(process.cwd(), setting.value);
-			if (fs.existsSync(filePath)) {
+			const filePath = resolveUploadFilePath(setting.value);
+			if (filePath && fs.existsSync(filePath)) {
 				try {
 					fs.unlinkSync(filePath);
 				} catch (error) {
