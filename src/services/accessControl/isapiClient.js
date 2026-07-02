@@ -8,6 +8,9 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrorMeta");
 const isapiRawHttp = require("./isapiRawHttp");
 
+/** 即時布防：僅推送連線建立後的即時事件（subscribeEvent?deployID=1） */
+const ISAPI_DEPLOY_ID_REALTIME = 1;
+
 /**
  * 解析 WWW-Authenticate: Digest 標頭
  * @param {string} header - WWW-Authenticate 標頭值
@@ -226,13 +229,15 @@ function createIsapiClient(deviceConfig) {
   }
 
   /**
-   * 訂閱事件長連線：POST subscribeEvent，回傳 response（含 res.data 為 stream）。
-   * 使用 raw TCP 解析回應標頭，避免部分設備觸發 Invalid header token。
+   * 訂閱事件長連線：POST subscribeEvent?deployID=1（即時布防，預設不補傳快取事件）。
    * @param {string} xmlBody - SubscribeEvent XML 字串
+   * @param {object} [options]
+   * @param {0|1} [options.deployID=1]
    * @returns {Promise<{ status: number, headers: object, data: import('stream').Readable }>}
    */
-  async function requestSubscribeStream(xmlBody) {
-    const path = "/ISAPI/Event/notification/subscribeEvent";
+  async function requestSubscribeStream(xmlBody, options = {}) {
+    const { deployID = ISAPI_DEPLOY_ID_REALTIME } = options;
+    const path = `/ISAPI/Event/notification/subscribeEvent?deployID=${deployID}`;
     const authHeader = await isapiRawHttp.fetchDigestChallenge({ host, port });
     const challenge = parseDigestChallenge(authHeader);
     const digestAuth = buildAuthHeader(

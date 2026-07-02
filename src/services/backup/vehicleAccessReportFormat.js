@@ -146,6 +146,7 @@ function buildDetailSection(rows) {
         車道名稱: (r.lane_name ?? "").trim() || "－",
         過車時間: formatDateTimeZhTW(r.trigger_time),
         放行結果: allowLabel,
+        附圖路徑: r.backup_picture_path ?? r.picture_path ?? "",
       });
     }
   }
@@ -165,6 +166,7 @@ const SECTION_HEADERS = {
     "車道名稱",
     "過車時間",
     "放行結果",
+    "附圖路徑",
   ],
 };
 

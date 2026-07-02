@@ -1,5 +1,5 @@
 /**
- * ISAPI subscribeEvent 探測（POST /ISAPI/Event/notification/subscribeEvent）
+ * ISAPI subscribeEvent 探測（POST subscribeEvent?deployID=1）
  *
  * Runbook：docs/10-setting/troubleshooting-isapi-events.md
  *
@@ -9,11 +9,7 @@
 
 /* eslint-disable no-console */
 
-const isapiRawHttp = require("../src/services/accessControl/isapiRawHttp");
-const {
-  parseDigestChallenge,
-  buildAuthHeader,
-} = require("../src/services/accessControl/isapiClient");
+const { createIsapiClient } = require("../src/services/accessControl/isapiClient");
 
 // ── 現場參數 ─────────────────────────────────────────────────────
 const SCRIPT_CONFIG = {
@@ -30,15 +26,10 @@ const SCRIPT_CONFIG = {
   maxParts: 20,
   exitAfterMs: 60_000,
   showKeepAlive: false,
-  /** 依 dateTime 略過訂閱連線前的歷史事件（設備 XML 無標準參數） */
-  onlyEventsAfterSubscribe: true,
-  subscribeClockSkewMs: 3000,
-  requestTimeoutMs: 10_000,
 };
 // ─────────────────────────────────────────────────────────────────
 
 const CRLFCRLF = Buffer.from("\r\n\r\n");
-const SUBSCRIBE_PATH = "/ISAPI/Event/notification/subscribeEvent";
 
 const SUBSCRIBE_XML_ALL = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
@@ -105,44 +96,6 @@ const buildSubscribeXml = () => {
   });
 };
 
-const requestSubscribeStream = async (xmlBody) => {
-  const { host, port, username, password, requestTimeoutMs } = SCRIPT_CONFIG;
-  const authHeader = await isapiRawHttp.fetchDigestChallenge({
-    host,
-    port: ensureInt(port) ?? 80,
-    requestTimeoutMs,
-  });
-  const digestAuth = buildAuthHeader(
-    parseDigestChallenge(authHeader),
-    "POST",
-    SUBSCRIBE_PATH,
-    username,
-    password,
-  );
-
-  const res = await isapiRawHttp.requestSubscribePost({
-    host,
-    port: ensureInt(port) ?? 80,
-    path: SUBSCRIBE_PATH,
-    headers: {
-      "Content-Type": "application/xml",
-      Authorization: digestAuth,
-      "Content-Length": String(Buffer.byteLength(xmlBody)),
-    },
-    body: xmlBody,
-    requestTimeoutMs,
-  });
-
-  if (res.status >= 400) {
-    const buf = await isapiRawHttp.readStreamToBuffer(res.data);
-    throw new Error(
-      `訂閱失敗 HTTP ${res.status}\n${toPreviewText(buf, 1200)}`,
-    );
-  }
-
-  return res;
-};
-
 const parseContentType = (headerStr) =>
   (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
 
@@ -186,59 +139,27 @@ const parseJsonPart = (buf) => {
   }
 };
 
-const isSkippableEvent = (payloadText, subscribeEpochMs) => {
-  if (!payloadText) return { skip: false };
+const isKeepAliveEvent = (payloadText) => {
+  if (!payloadText) return false;
 
   if (payloadText[0] === "{") {
     const obj = parseJsonPart(Buffer.from(payloadText, "utf8"));
-    if (!obj) return { skip: false };
+    if (!obj) return false;
     const eventType = String(obj.eventType || "").toLowerCase();
-    if (eventType === "heartbeat" || eventType === "heart beat") {
-      return { skip: true, reason: "keepAlive" };
-    }
-    if (String(obj.eventState || "").toLowerCase() === "inactive") {
-      return { skip: true, reason: "keepAlive" };
-    }
-    if (!obj.eventType && (obj.ipAddress || obj.portNo || obj.macAddress)) {
-      return { skip: true, reason: "keepAlive" };
-    }
-    if (subscribeEpochMs != null) {
-      const raw =
-        obj.dateTime ??
-        obj.DateTime ??
-        obj.time ??
-        obj.receiveTime ??
-        obj.eventNotificationAlert?.dateTime;
-      if (raw) {
-        const eventMs = Date.parse(String(raw));
-        if (Number.isFinite(eventMs) && eventMs < subscribeEpochMs) {
-          return { skip: true, reason: "historical" };
-        }
-      }
-    }
-    return { skip: false };
+    if (eventType === "heartbeat" || eventType === "heart beat") return true;
+    if (String(obj.eventState || "").toLowerCase() === "inactive") return true;
+    return !obj.eventType && Boolean(obj.ipAddress || obj.portNo || obj.macAddress);
   }
 
   if (payloadText[0] === "<") {
     const t = payloadText.toLowerCase();
-    if (
+    return (
       t.includes("<eventtype>heartbeat</eventtype>") ||
       (t.includes("eventstate") && t.includes("inactive"))
-    ) {
-      return { skip: true, reason: "keepAlive" };
-    }
-    if (subscribeEpochMs != null) {
-      const m = payloadText.match(/<dateTime>([^<]+)<\/dateTime>/i);
-      if (m) {
-        const eventMs = Date.parse(m[1]);
-        if (Number.isFinite(eventMs) && eventMs < subscribeEpochMs) {
-          return { skip: true, reason: "historical" };
-        }
-      }
-    }
+    );
   }
 
-  return { skip: false };
+  return false;
 };
 
 const consumeMultipartStream = async ({
@@ -336,8 +257,6 @@ const main = async () => {
     maxParts,
     exitAfterMs,
     showKeepAlive,
-    onlyEventsAfterSubscribe,
-    subscribeClockSkewMs,
   } = SCRIPT_CONFIG;
   const port = ensureInt(SCRIPT_CONFIG.port) ?? 80;
 
@@ -349,30 +268,24 @@ const main = async () => {
   const stats = {
     skippedKeepAlive: 0,
     skippedBinary: 0,
-    skippedHistorical: 0,
     printed: 0,
   };
 
   console.log("[ISAPI Probe] start", {
-    url: `http://${host}:${port}${SUBSCRIBE_PATH}`,
+    host,
+    port,
     subscribeMode,
     filterKeepAlive: !showKeepAlive,
-    onlyEventsAfterSubscribe,
   });
   console.log("[ISAPI Probe] XML:\n", xmlBody);
 
-  const res = await requestSubscribeStream(xmlBody);
+  const client = createIsapiClient({ host, port, username, password });
+  const res = await client.requestSubscribeStream(xmlBody);
   const ct = res.headers["content-type"] || "";
-  const subscribeEpochMs = onlyEventsAfterSubscribe
-    ? Date.now() - (ensureInt(subscribeClockSkewMs) ?? 3000)
-    : null;
 
   console.log("[ISAPI Probe] connected", {
     status: res.status,
     contentType: ct,
-    subscribeAfter: subscribeEpochMs
-      ? new Date(subscribeEpochMs).toISOString()
-      : undefined,
   });
 
   const timer = setTimeout(() => res.data.destroy(), exitAfterMs ?? 60_000);
@@ -396,19 +309,9 @@ const main = async () => {
           return;
         }
 
-        if (!showKeepAlive || onlyEventsAfterSubscribe) {
-          const { skip, reason } = isSkippableEvent(
-            payloadText,
-            onlyEventsAfterSubscribe ? subscribeEpochMs : null,
-          );
-          if (skip && reason === "keepAlive" && !showKeepAlive) {
-            stats.skippedKeepAlive += 1;
-            return;
-          }
-          if (skip && reason === "historical") {
-            stats.skippedHistorical += 1;
-            return;
-          }
+        if (!showKeepAlive && isKeepAliveEvent(payloadText)) {
+          stats.skippedKeepAlive += 1;
+          return;
         }
 
         const looksText =

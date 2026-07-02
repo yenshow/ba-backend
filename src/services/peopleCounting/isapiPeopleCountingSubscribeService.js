@@ -1,6 +1,6 @@
 /**
  * ISAPI 攝影機 PeopleCounting 訂閱服務
- * - 後端主動 POST /ISAPI/Event/notification/subscribeEvent 建立長連線
+ * - 後端主動 POST subscribeEvent 建立長連線
  * - 解析 XML EventNotificationAlert（PeopleCounting）
  * - 寫入 isapi_people_counting_events 並推送 WS（前端採防抖重拉）
  *

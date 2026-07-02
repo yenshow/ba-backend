@@ -27,6 +27,9 @@ const {
   normalizeDeviceTypeCode,
   getDeviceTypeName,
 } = require("../../constants/deviceTypes");
+const {
+  removeDeviceReferences,
+} = require("../location/deviceReferenceCleanup");
 
 const deviceLogger = logger.createLogger("deviceService");
 
@@ -877,6 +880,18 @@ async function deleteDevice(id, userId = null) {
     }
 
     const isCamera = String(devices[0]?.type_code || "").toLowerCase() === "camera";
+
+    // 先自地點設定／警報聯動移除引用，並刷新 ISAPI／梯控訂閱（避免訂閱已刪設備 ID）
+    try {
+      await removeDeviceReferences(id);
+    } catch (cleanupError) {
+      deviceLogger.warn("移除已刪設備之地點引用失敗", {
+        deviceId: id,
+        error: cleanupError?.message || String(cleanupError),
+        module: "deviceService",
+      });
+    }
+
     await db.query("DELETE FROM devices WHERE id = ?", [id]);
 
     // 攝影機：刪除後更新 generated 檔（runtime 不主動 removePath，避免 reload）

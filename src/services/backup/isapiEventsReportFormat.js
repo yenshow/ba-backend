@@ -18,7 +18,7 @@ function rowsToFlatCsv(rows, headers, rowMapper) {
 function transformIsapiAccessEventsToReportFormat(rows) {
   return rowsToFlatCsv(
     rows,
-    ["設備IP", "事件時間", "事件類型", "附圖數", "payload摘要"],
+    ["設備IP", "事件時間", "事件類型", "附圖數", "附圖路徑", "payload摘要"],
     (r) => {
       let summary = "";
       try {
@@ -33,6 +33,7 @@ function transformIsapiAccessEventsToReportFormat(rows) {
         事件時間: formatDateTimeZhTW(r.event_time),
         事件類型: r.event_type ?? "",
         附圖數: r.file_count ?? 0,
+        附圖路徑: r.backup_picture_path ?? r.picture_path ?? "",
         payload摘要: summary,
       };
     },

@@ -57,6 +57,7 @@ const db = require("./database/db");
 const yscpRuntimeService = require("./services/yscp/yscpRuntimeService");
 const websocketService = require("./services/websocket/websocketService");
 const syncDefinitions = require("./access/syncDefinitions");
+const { applySchemaPatches } = require("./database/schemaPatches");
 
 // 背景監控與 License Runtime
 const licenseRuntimeService = require("./services/license/licenseRuntimeService");
@@ -256,6 +257,9 @@ async function startServer() {
     }
 
     if (dbConnected) {
+      await applySchemaPatches(db.pool).catch((err) =>
+        serverLogger.warn("schema patches 失敗", { error: err.message }),
+      );
       await syncDefinitions(db.pool).catch((err) =>
         serverLogger.warn("權限定義同步失敗", { error: err.message }),
       );

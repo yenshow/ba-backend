@@ -1,7 +1,5 @@
 /**
  * 備份系統配置
- * - 優先：runtime（system_settings）BACKUP_ROOT_DIR（可由 /core/env 修改，立即生效）
- * - fallback：{installRoot}/backups（見 baDataPaths）
  */
 
 const path = require("path");
@@ -26,6 +24,7 @@ function getBackupConfig() {
       environmentReadings: path.join(root, "environment_readings"),
       peopleCounting: path.join(root, "people_counting"),
       vehicleAccess: path.join(root, "vehicle_access"),
+      elevator: path.join(root, "elevator"),
     },
     retention: runtime.retention,
     scheduler: runtime.scheduler,

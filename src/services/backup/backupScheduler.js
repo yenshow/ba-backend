@@ -1,7 +1,8 @@
 /**
- * 備份排程：歸檔過期 DB 列為 CSV，驗證通過後刪除；清理過期歸檔檔
+ * 備份排程：雙層保留、按日 CSV、每日定時觸發
  */
 
+const { DateTime } = require("luxon");
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const backupService = require("./backupService");
 const { getBackupConfig } = require("./backupConfig");
@@ -10,6 +11,9 @@ const peopleCountingSyncService = require("../peopleCounting/peopleCountingSyncS
 const vehicleAccessSyncService = require("../vehicleAccess/vehicleAccessSyncService");
 const environmentReadingsService = require("../environment/environmentReadingsService");
 const environmentAggregationService = require("../environment/environmentAggregationService");
+const runtimeConfigService = require("../platform/runtimeConfigService");
+const effectiveFeaturesCache = require("../license/effectiveFeaturesCache");
+const db = require("../../database/db");
 const { transformAlertsToReportFormat } = require("./alertsReportFormat");
 const {
   transformPeopleCountingToReportFormat,
@@ -24,6 +28,9 @@ const {
   transformIsapiAccessEventsToReportFormat,
   transformIsapiPeopleCountingToReportFormat,
 } = require("./isapiEventsReportFormat");
+const {
+  transformLadderSdkEventsToReportFormat,
+} = require("./ladderSdkEventsReportFormat");
 const logger = require("../../utils/logger");
 const {
   peopleCounting: yscpPeopleFeature,
@@ -33,13 +40,7 @@ const {
 const backupLogger = logger.createLogger("backupScheduler");
 
 let isBackupRunning = false;
-
-function cutoffBeforeDate() {
-  const cutoffDays = getBackupConfig().retention.databaseDays;
-  const before = new Date();
-  before.setDate(before.getDate() - cutoffDays);
-  return before;
-}
+let backupTimer = null;
 
 async function runOptionalSync(label, syncFns) {
   for (const fn of syncFns) {
@@ -76,28 +77,36 @@ function sumCounts(...results) {
   );
 }
 
-async function backupIsapiEventTable(label, beforeDate, options) {
-  const {
-    tableName,
-    fetchRows,
-    csvTransform,
-    category = "peopleCounting",
-  } = options;
-  return runBackupJob(label, async () =>
-    backupService.backupTable({
-      tableName,
-      data: await fetchRows(beforeDate),
-      deleteQuery: `DELETE FROM ${tableName} WHERE event_time < $1`,
-      deleteParams: [beforeDate],
-      category,
-      deleteAfterBackup: true,
-      csvTransform,
-    }),
+const buildDeleteSql = (table, dateCol, extraWhere = "") => ({
+  buildDeleteDaySql: (start, end, deleteBefore) => ({
+    sql: `DELETE FROM ${table} WHERE ${dateCol} >= $1 AND ${dateCol} < $2 AND ${dateCol} < $3 ${extraWhere}`,
+    params: [start, end, deleteBefore],
+  }),
+});
+
+async function selectVehiclePictures(start, end, dataSource) {
+  const rows = await db.query(
+    `SELECT picture_path FROM vehicle_passageway_logs
+     WHERE trigger_time >= $1 AND trigger_time < $2
+       AND data_source = $3 AND picture_path IS NOT NULL`,
+    [start, end, dataSource],
   );
+  return (rows || []).map((r) => r.picture_path).filter(Boolean);
+}
+
+async function selectAccessPictures(start, end) {
+  const rows = await db.query(
+    `SELECT picture_path FROM isapi_access_events
+     WHERE event_time >= $1 AND event_time < $2 AND picture_path IS NOT NULL`,
+    [start, end],
+  );
+  return (rows || []).map((r) => r.picture_path).filter(Boolean);
 }
 
 async function runBackup() {
-  const beforeDate = cutoffBeforeDate();
+  const { archiveBeforeDate, deleteBeforeDate } =
+    backupService.getRetentionContext();
+  const onlineDays = getBackupConfig().retention.onlineRetentionDays;
 
   try {
     try {
@@ -109,24 +118,34 @@ async function runBackup() {
       });
     }
 
-    const envResult = await backupService.backupTable({
+    const envDelete = buildDeleteSql("environment_readings", "recorded_at");
+    const envResult = await backupService.backupTableDual({
       tableName: "environment_readings",
-      data: await environmentReadingsService.getReadingsForBackup(beforeDate),
-      deleteQuery: "DELETE FROM environment_readings WHERE recorded_at < $1",
-      deleteParams: [beforeDate],
+      rows: await environmentReadingsService.getReadingsForBackup(
+        archiveBeforeDate,
+      ),
+      dateField: "recorded_at",
       category: "environmentReadings",
-      deleteAfterBackup: true,
       csvTransform: transformEnvironmentReadingsToReportFormat,
+      selectColdTimestampsSql: `SELECT recorded_at FROM environment_readings WHERE recorded_at < $1`,
+      selectColdParams: [deleteBeforeDate],
+      ...envDelete,
     });
 
-    const alertResult = await backupService.backupTable({
+    const alertDelete = buildDeleteSql(
+      "alerts",
+      "updated_at",
+      "AND status = 'resolved'",
+    );
+    const alertResult = await backupService.backupTableDual({
       tableName: "alerts",
-      data: await alertService.getResolvedAlertsForBackup(beforeDate),
-      deleteQuery: `DELETE FROM alerts WHERE status = 'resolved' AND updated_at < $1`,
-      deleteParams: [beforeDate],
+      rows: await alertService.getResolvedAlertsForBackup(archiveBeforeDate),
+      dateField: "updated_at",
       category: "alerts",
-      deleteAfterBackup: true,
       csvTransform: transformAlertsToReportFormat,
+      selectColdTimestampsSql: `SELECT updated_at FROM alerts WHERE status = 'resolved' AND updated_at < $1`,
+      selectColdParams: [deleteBeforeDate],
+      ...alertDelete,
     });
 
     const peopleModuleLabel =
@@ -136,14 +155,11 @@ async function runBackup() {
     if (yscpPeopleFeature.isEnabled()) {
       await runOptionalSync(`${peopleModuleLabel}（YSCP）`, [
         () => peopleCountingSyncService.syncYesterday(),
-        () =>
-          peopleCountingSyncService.syncDayAgo(
-            getBackupConfig().retention.databaseDays + 1,
-          ),
+        () => peopleCountingSyncService.syncDayAgo(onlineDays + 1),
       ]);
       peopleYscpResult = await runBackupJob(`${peopleModuleLabel}（YSCP）`, async () => {
         const peopleRows =
-          await backupService.getPeopleCountingForBackup(beforeDate);
+          await backupService.getPeopleCountingForBackup(archiveBeforeDate);
         const physicalIds = [
           ...new Set(peopleRows.map((r) => r.physical_id).filter(Boolean)),
         ];
@@ -151,91 +167,139 @@ async function runBackup() {
           peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds),
           peopleCountingSyncService.getPhysicalIdToDirectionMap(),
         ]);
-        return backupService.backupTable({
+        const peopleDelete = buildDeleteSql(
+          "people_counting_logs",
+          "swip_card_rev_time",
+        );
+        return backupService.backupTableDual({
           tableName: "people_counting_logs",
-          data: peopleRows,
-          deleteQuery:
-            "DELETE FROM people_counting_logs WHERE swip_card_rev_time < $1",
-          deleteParams: [beforeDate],
+          rows: peopleRows,
+          dateField: "swip_card_rev_time",
           category: "peopleCounting",
-          deleteAfterBackup: true,
           csvTransform: (rows) =>
             transformPeopleCountingToReportFormat(
               rows,
               doorNameMap,
               directionMap,
             ),
+          selectColdTimestampsSql: `SELECT swip_card_rev_time FROM people_counting_logs WHERE swip_card_rev_time < $1`,
+          selectColdParams: [deleteBeforeDate],
+          ...peopleDelete,
         });
       });
     }
 
-    const peopleAccessIsapiResult = await backupIsapiEventTable(
+    const accessDelete = buildDeleteSql("isapi_access_events", "event_time");
+    const peopleAccessIsapiResult = await runBackupJob(
       `${peopleModuleLabel}門禁（ISAPI）`,
-      beforeDate,
-      {
-        tableName: "isapi_access_events",
-        fetchRows: backupService.getIsapiAccessEventsForBackup,
-        csvTransform: transformIsapiAccessEventsToReportFormat,
-      },
+      async () =>
+        backupService.backupTableDual({
+          tableName: "isapi_access_events",
+          rows: await backupService.getIsapiAccessEventsForBackup(
+            archiveBeforeDate,
+          ),
+          dateField: "event_time",
+          category: "peopleCounting",
+          csvTransform: transformIsapiAccessEventsToReportFormat,
+          attachmentSubdir: "access-events",
+          selectColdTimestampsSql: `SELECT event_time FROM isapi_access_events WHERE event_time < $1`,
+          selectColdParams: [deleteBeforeDate],
+          selectPicturesForDay: (start, end) => selectAccessPictures(start, end),
+          ...accessDelete,
+        }),
     );
 
-    const peopleCameraIsapiResult = await backupIsapiEventTable(
+    const cameraDelete = buildDeleteSql(
+      "isapi_people_counting_events",
+      "event_time",
+    );
+    const peopleCameraIsapiResult = await runBackupJob(
       `${peopleModuleLabel}攝影機（ISAPI）`,
-      beforeDate,
-      {
-        tableName: "isapi_people_counting_events",
-        fetchRows: backupService.getIsapiPeopleCountingEventsForBackup,
-        csvTransform: transformIsapiPeopleCountingToReportFormat,
-      },
+      async () =>
+        backupService.backupTableDual({
+          tableName: "isapi_people_counting_events",
+          rows: await backupService.getIsapiPeopleCountingEventsForBackup(
+            archiveBeforeDate,
+          ),
+          dateField: "event_time",
+          category: "peopleCounting",
+          csvTransform: transformIsapiPeopleCountingToReportFormat,
+          selectColdTimestampsSql: `SELECT event_time FROM isapi_people_counting_events WHERE event_time < $1`,
+          selectColdParams: [deleteBeforeDate],
+          ...cameraDelete,
+        }),
     );
 
     let vehicleYscpResult = { skipped: true };
     if (yscpVehicleFeature.isEnabled()) {
       await runOptionalSync("車輛進出（YSCP）", [
         () => vehicleAccessSyncService.syncYesterday(),
-        () =>
-          vehicleAccessSyncService.syncDayAgo(
-            getBackupConfig().retention.databaseDays + 1,
-          ),
+        () => vehicleAccessSyncService.syncDayAgo(onlineDays + 1),
       ]);
+      const vehicleYscpDelete = buildDeleteSql(
+        "vehicle_passageway_logs",
+        "trigger_time",
+        "AND COALESCE(data_source, 'yscp') = 'yscp'",
+      );
       vehicleYscpResult = await runBackupJob("車輛進出（YSCP）", async () =>
-        backupService.backupTable({
+        backupService.backupTableDual({
           tableName: "vehicle_passageway_logs",
-          data: await backupService.getVehiclePassagewayForBackup(
-            beforeDate,
+          rows: await backupService.getVehiclePassagewayForBackup(
+            archiveBeforeDate,
             "yscp",
           ),
-          deleteQuery: `DELETE FROM vehicle_passageway_logs
-            WHERE trigger_time < $1 AND COALESCE(data_source, 'yscp') = 'yscp'`,
-          deleteParams: [beforeDate],
+          dateField: "trigger_time",
           category: "vehicleAccess",
-          deleteAfterBackup: true,
           csvTransform: transformVehicleAccessToReportFormat,
+          selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND COALESCE(data_source, 'yscp') = 'yscp'`,
+          selectColdParams: [deleteBeforeDate],
+          ...vehicleYscpDelete,
         }),
       );
     }
 
-    const vehicleIsapiResult = await runBackupJob(
-      "車輛進出（ISAPI）",
-      async () =>
-        backupService.backupTable({
-          tableName: "vehicle_passageway_logs_isapi",
-          data: await backupService.getVehiclePassagewayForBackup(
-            beforeDate,
-            "isapi_camera",
-          ),
-          deleteQuery: `DELETE FROM vehicle_passageway_logs
-            WHERE trigger_time < $1 AND data_source = 'isapi_camera'`,
-          deleteParams: [beforeDate],
-          category: "vehicleAccess",
-          deleteAfterBackup: true,
-          csvTransform: transformVehicleAccessToReportFormat,
-        }),
+    const vehicleIsapiDelete = buildDeleteSql(
+      "vehicle_passageway_logs",
+      "trigger_time",
+      "AND data_source = 'isapi_camera'",
+    );
+    const vehicleIsapiResult = await runBackupJob("車輛進出（ISAPI）", async () =>
+      backupService.backupTableDual({
+        tableName: "vehicle_passageway_logs_isapi",
+        rows: await backupService.getVehiclePassagewayForBackup(
+          archiveBeforeDate,
+          "isapi_camera",
+        ),
+        dateField: "trigger_time",
+        category: "vehicleAccess",
+        csvTransform: transformVehicleAccessToReportFormat,
+        attachmentSubdir: "vehicle-events",
+        selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND data_source = 'isapi_camera'`,
+        selectColdParams: [deleteBeforeDate],
+        selectPicturesForDay: (start, end) =>
+          selectVehiclePictures(start, end, "isapi_camera"),
+        ...vehicleIsapiDelete,
+      }),
     );
 
-    const deletedFiles = await backupService.purgeOldArchiveFiles(
-      getBackupConfig().retention.backupFileDays,
-    );
+    let ladderResult = { skipped: true };
+    if (effectiveFeaturesCache.hasCachedLicensedFeature("elevator")) {
+      const ladderDelete = buildDeleteSql("ladder_sdk_events", "event_time");
+      ladderResult = await runBackupJob("梯控（SDK）", async () =>
+        backupService.backupTableDual({
+          tableName: "ladder_sdk_events",
+          rows: await backupService.getLadderSdkEventsForBackup(
+            archiveBeforeDate,
+          ),
+          dateField: "event_time",
+          category: "elevator",
+          csvTransform: transformLadderSdkEventsToReportFormat,
+          selectColdTimestampsSql: `SELECT event_time FROM ladder_sdk_events WHERE event_time < $1`,
+          selectColdParams: [deleteBeforeDate],
+          ...ladderDelete,
+        }),
+      );
+    }
 
     const { backed, deleted } = sumCounts(
       envResult,
@@ -245,6 +309,7 @@ async function runBackup() {
       peopleCameraIsapiResult,
       vehicleYscpResult,
       vehicleIsapiResult,
+      ladderResult,
     );
 
     const results = {
@@ -255,14 +320,13 @@ async function runBackup() {
       isapi_people_counting_events: peopleCameraIsapiResult,
       vehicle_passageway_logs: vehicleYscpResult,
       vehicle_passageway_logs_isapi: vehicleIsapiResult,
-      deletedFiles,
+      ladder_sdk_events: ladderResult,
     };
 
-    const noopBackup = backed === 0 && deleted === 0 && deletedFiles === 0;
+    const noopBackup = backed === 0 && deleted === 0;
     const backupMeta = {
       totalBacked: backed,
       totalDeleted: deleted,
-      deletedFiles,
       module: "backupScheduler",
     };
     if (noopBackup) {
@@ -297,32 +361,58 @@ async function runBackupOnce() {
   }
 }
 
-function scheduleBackupRun(onError) {
-  runBackupOnce().catch(onError);
+function scheduleNextBackup(onError) {
+  if (backupTimer) {
+    clearTimeout(backupTimer);
+    backupTimer = null;
+  }
+
+  const alerts = runtimeConfigService.getAlerts();
+  const { scheduler } = getBackupConfig();
+  const tz = alerts.dailyRolloverTimezone;
+  const h = scheduler.dailyLocalHour;
+  const m = scheduler.dailyLocalMinute;
+
+  const now = DateTime.now().setZone(tz);
+  let next = now.set({ hour: h, minute: m, second: 0, millisecond: 0 });
+  if (next <= now) {
+    next = next.plus({ days: 1 });
+  }
+  const ms = Math.max(1000, Math.ceil(next.diff(now).as("milliseconds")));
+
+  backupTimer = setTimeout(() => {
+    backupTimer = null;
+    runBackupOnce().catch(onError);
+    scheduleNextBackup(onError);
+  }, ms);
 }
 
 function startScheduler() {
-  const { scheduler, retention } = getBackupConfig();
-  const interval = scheduler.interval;
+  const { retention, scheduler } = getBackupConfig();
+  const alerts = runtimeConfigService.getAlerts();
   const onError = (err) =>
     backupLogger.error("備份任務失敗", {
       error: err?.message || String(err),
       module: "backupScheduler",
     });
 
-  const timer = setInterval(() => scheduleBackupRun(onError), interval);
-  setImmediate(() => scheduleBackupRun(onError));
+  scheduleNextBackup(onError);
+  setImmediate(() => runBackupOnce().catch(onError));
 
   backupLogger.info("備份排程已啟動", {
-    intervalHours: interval / 1000 / 60 / 60,
-    databaseCutoffDays: retention.databaseDays,
-    archiveFileRetentionDays: retention.backupFileDays,
+    dailyLocalTime: `${String(scheduler.dailyLocalHour).padStart(2, "0")}:${String(scheduler.dailyLocalMinute).padStart(2, "0")}`,
+    timezone: alerts.dailyRolloverTimezone,
+    archiveAfterDays: retention.archiveAfterDays,
+    onlineRetentionDays: retention.onlineRetentionDays,
     module: "backupScheduler",
   });
 
   return {
     stop: () => {
-      clearInterval(timer);
+      if (backupTimer) {
+        clearTimeout(backupTimer);
+        backupTimer = null;
+      }
       backupLogger.info("備份排程已停止", { module: "backupScheduler" });
     },
     runNow: () => runBackupOnce(),

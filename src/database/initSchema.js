@@ -83,6 +83,7 @@ async function initSchema() {
           "air_circulation",
           "fire",
           "emergency_rescue",
+          "smoke_alarm",
           "security",
         ],
       ],
@@ -90,6 +91,9 @@ async function initSchema() {
     ];
     for (const [name, values] of enums)
       await createEnum(targetPool, name, values);
+
+    const { ensureAlertSourceEnumValues } = require("./schemaPatches");
+    await ensureAlertSourceEnumValues(targetPool);
 
     // 建立 users 表（不含 email；討論決策：email 已自系統移除）
     await targetPool.query(`

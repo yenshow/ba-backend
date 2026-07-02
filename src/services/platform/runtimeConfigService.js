@@ -1,5 +1,6 @@
 /**
- * 營運設定（system_settings）：警報日界線、備份排程。
+ * 營運設定（system_settings）：備份排程。
+ * 警報日界線固定 Asia/Taipei 00:00（不可經 Web 調整）。
  * Bootstrap（伺服器/JWT/主庫/MediaMTX/YSCP/功能開關）由 .env 管理（安裝精靈）。
  */
 
@@ -7,46 +8,41 @@ const settingsService = require("./settingsService");
 const logger = require("../../utils/logger");
 const fs = require("fs");
 const path = require("path");
-const { Info } = require("luxon");
 const { getBackupRootDir } = require("../../utils/baDataPaths");
 
 const runtimeLogger = logger.createLogger("runtimeConfigService");
 
+/** 警報日界線／營運日（寫死，不經 system_settings） */
+const FIXED_ALERT_ROLLOVER_TZ = "Asia/Taipei";
+const FIXED_ALERT_ROLLOVER_LOCAL_HOUR = 0;
+const FIXED_ALERT_ROLLOVER_LOCAL_MINUTE = 0;
+
 const RUNTIME_KEYS = [
-  "ALERT_DAILY_ROLLOVER_TZ",
-  "ALERT_DAILY_ROLLOVER_LOCAL_HOUR",
-  "ALERT_DAILY_ROLLOVER_LOCAL_MINUTE",
   "BACKUP_ROOT_DIR",
-  "BACKUP_DATABASE_CUTOFF_DAYS",
-  "BACKUP_ARCHIVE_FILE_RETENTION_DAYS",
-  "BACKUP_SCHEDULER_INTERVAL",
+  "BACKUP_ARCHIVE_AFTER_DAYS",
+  "BACKUP_ONLINE_RETENTION_DAYS",
+  "BACKUP_DAILY_LOCAL_HOUR",
+  "BACKUP_DAILY_LOCAL_MINUTE",
 ];
 
 const RUNTIME_KEY_SET = new Set(RUNTIME_KEYS);
 
-const ALERT_KEYS = [
-  "ALERT_DAILY_ROLLOVER_TZ",
-  "ALERT_DAILY_ROLLOVER_LOCAL_HOUR",
-  "ALERT_DAILY_ROLLOVER_LOCAL_MINUTE",
-];
-
 const BACKUP_KEYS = [
   "BACKUP_ROOT_DIR",
-  "BACKUP_DATABASE_CUTOFF_DAYS",
-  "BACKUP_ARCHIVE_FILE_RETENTION_DAYS",
-  "BACKUP_SCHEDULER_INTERVAL",
+  "BACKUP_ARCHIVE_AFTER_DAYS",
+  "BACKUP_ONLINE_RETENTION_DAYS",
+  "BACKUP_DAILY_LOCAL_HOUR",
+  "BACKUP_DAILY_LOCAL_MINUTE",
 ];
 
 const buildDefaultBackupRootDir = () => getBackupRootDir();
 
 const DEFAULTS = {
-  ALERT_DAILY_ROLLOVER_TZ: "Asia/Taipei",
-  ALERT_DAILY_ROLLOVER_LOCAL_HOUR: "0",
-  ALERT_DAILY_ROLLOVER_LOCAL_MINUTE: "5",
   BACKUP_ROOT_DIR: buildDefaultBackupRootDir(),
-  BACKUP_DATABASE_CUTOFF_DAYS: "30",
-  BACKUP_ARCHIVE_FILE_RETENTION_DAYS: "365",
-  BACKUP_SCHEDULER_INTERVAL: String(24 * 60 * 60 * 1000),
+  BACKUP_ARCHIVE_AFTER_DAYS: "7",
+  BACKUP_ONLINE_RETENTION_DAYS: "365",
+  BACKUP_DAILY_LOCAL_HOUR: "0",
+  BACKUP_DAILY_LOCAL_MINUTE: "0",
 };
 
 /** @type {Record<string, string>} */
@@ -60,9 +56,10 @@ const toNumber = (value, fallback) => {
 };
 
 const buildCacheFromMap = (map) => {
+  const merged = { ...DEFAULTS, ...map };
   const next = { ...DEFAULTS };
   for (const key of RUNTIME_KEYS) {
-    const v = map[key];
+    const v = merged[key];
     if (v !== undefined && v !== null && String(v).trim() !== "") {
       next[key] = String(v).trim();
     }
@@ -73,34 +70,38 @@ const buildCacheFromMap = (map) => {
 const getAlerts = () => ({
   linkageRevertOnResolve: true,
   dailyRolloverEnabled: true,
-  dailyRolloverTimezone:
-    cache.ALERT_DAILY_ROLLOVER_TZ || DEFAULTS.ALERT_DAILY_ROLLOVER_TZ,
-  dailyRolloverLocalHour: Math.min(
-    23,
-    Math.max(0, toNumber(cache.ALERT_DAILY_ROLLOVER_LOCAL_HOUR, 0)),
-  ),
-  dailyRolloverLocalMinute: Math.min(
-    59,
-    Math.max(0, toNumber(cache.ALERT_DAILY_ROLLOVER_LOCAL_MINUTE, 5)),
-  ),
+  dailyRolloverTimezone: FIXED_ALERT_ROLLOVER_TZ,
+  dailyRolloverLocalHour: FIXED_ALERT_ROLLOVER_LOCAL_HOUR,
+  dailyRolloverLocalMinute: FIXED_ALERT_ROLLOVER_LOCAL_MINUTE,
 });
 
-const getBackup = () => ({
-  rootDir: cache.BACKUP_ROOT_DIR || DEFAULTS.BACKUP_ROOT_DIR,
-  retention: {
-    databaseDays: Math.max(1, toNumber(cache.BACKUP_DATABASE_CUTOFF_DAYS, 30)),
-    backupFileDays: Math.max(
-      1,
-      toNumber(cache.BACKUP_ARCHIVE_FILE_RETENTION_DAYS, 365),
-    ),
-  },
-  scheduler: {
-    interval: Math.max(
-      1,
-      toNumber(cache.BACKUP_SCHEDULER_INTERVAL, 24 * 60 * 60 * 1000),
-    ),
-  },
-});
+const getBackup = () => {
+  const archiveAfterDays = Math.max(
+    1,
+    toNumber(cache.BACKUP_ARCHIVE_AFTER_DAYS, 7),
+  );
+  const onlineRetentionDays = Math.max(
+    archiveAfterDays + 1,
+    toNumber(cache.BACKUP_ONLINE_RETENTION_DAYS, 365),
+  );
+  return {
+    rootDir: cache.BACKUP_ROOT_DIR || DEFAULTS.BACKUP_ROOT_DIR,
+    retention: {
+      archiveAfterDays,
+      onlineRetentionDays,
+    },
+    scheduler: {
+      dailyLocalHour: Math.min(
+        23,
+        Math.max(0, toNumber(cache.BACKUP_DAILY_LOCAL_HOUR, 0)),
+      ),
+      dailyLocalMinute: Math.min(
+        59,
+        Math.max(0, toNumber(cache.BACKUP_DAILY_LOCAL_MINUTE, 0)),
+      ),
+    },
+  };
+};
 
 const getValues = () => {
   const values = {};
@@ -112,7 +113,7 @@ const getValues = () => {
 
 async function loadFromDatabase() {
   const map = await settingsService.getSettingsByKeys(RUNTIME_KEYS);
-  buildCacheFromMap({ ...DEFAULTS, ...map });
+  buildCacheFromMap(map);
 }
 
 async function init() {
@@ -128,16 +129,35 @@ function validateValues(merged) {
     return Number.isFinite(n) && Number.isInteger(n) && n >= 1;
   };
 
-  for (const k of [
-    "BACKUP_DATABASE_CUTOFF_DAYS",
-    "BACKUP_ARCHIVE_FILE_RETENTION_DAYS",
-  ]) {
+  for (const k of ["BACKUP_ARCHIVE_AFTER_DAYS", "BACKUP_ONLINE_RETENTION_DAYS"]) {
     const raw = merged[k]?.trim() ?? "";
     if (raw && !positiveInt(raw)) return `${k} 須為大於 0 的整數`;
   }
-  const intervalRaw = merged.BACKUP_SCHEDULER_INTERVAL?.trim() ?? "";
-  if (intervalRaw && !positiveInt(intervalRaw)) {
-    return "BACKUP_SCHEDULER_INTERVAL 須為大於 0 的整數（毫秒）";
+
+  const archiveDays = toNumber(
+    merged.BACKUP_ARCHIVE_AFTER_DAYS?.trim() || DEFAULTS.BACKUP_ARCHIVE_AFTER_DAYS,
+    7,
+  );
+  const onlineDays = toNumber(
+    merged.BACKUP_ONLINE_RETENTION_DAYS?.trim() ||
+      DEFAULTS.BACKUP_ONLINE_RETENTION_DAYS,
+    365,
+  );
+  if (onlineDays < archiveDays + 1) {
+    return "線上資料保留天數須大於「逾此天數寫入備份檔」";
+  }
+
+  for (const k of ["BACKUP_DAILY_LOCAL_HOUR", "BACKUP_DAILY_LOCAL_MINUTE"]) {
+    const raw = merged[k]?.trim() ?? "";
+    if (!raw) continue;
+    const n = Number(raw);
+    if (!Number.isInteger(n)) return `${k} 須為整數`;
+    if (k.endsWith("HOUR") && (n < 0 || n > 23)) {
+      return "BACKUP_DAILY_LOCAL_HOUR 須為 0–23";
+    }
+    if (k.endsWith("MINUTE") && (n < 0 || n > 59)) {
+      return "BACKUP_DAILY_LOCAL_MINUTE 須為 0–59";
+    }
   }
 
   const rootDir = merged.BACKUP_ROOT_DIR?.trim() ?? "";
@@ -149,25 +169,6 @@ function validateValues(merged) {
       fs.mkdirSync(rootDir, { recursive: true });
     } catch (e) {
       return `BACKUP_ROOT_DIR 無法建立或不可寫入：${e?.message || String(e)}`;
-    }
-  }
-  const tz = merged.ALERT_DAILY_ROLLOVER_TZ?.trim() ?? "";
-  if (tz && !Info.isValidIANAZone(tz)) {
-    return "ALERT_DAILY_ROLLOVER_TZ 須為有效 IANA 時區（例：Asia/Taipei）";
-  }
-
-  const h = merged.ALERT_DAILY_ROLLOVER_LOCAL_HOUR?.trim() ?? "";
-  if (h) {
-    const n = Number(h);
-    if (!Number.isInteger(n) || n < 0 || n > 23) {
-      return "ALERT_DAILY_ROLLOVER_LOCAL_HOUR 須為 0–23";
-    }
-  }
-  const m = merged.ALERT_DAILY_ROLLOVER_LOCAL_MINUTE?.trim() ?? "";
-  if (m) {
-    const n = Number(m);
-    if (!Number.isInteger(n) || n < 0 || n > 59) {
-      return "ALERT_DAILY_ROLLOVER_LOCAL_MINUTE 須為 0–59";
     }
   }
   return null;
@@ -219,7 +220,6 @@ const hasAny = (keys, set) => keys.some((k) => set.has(k));
 
 async function applySideEffects(changedKeys) {
   const set = new Set(changedKeys);
-  if (hasAny(ALERT_KEYS, set)) await applyHooks.onAlertsChange();
   if (hasAny(BACKUP_KEYS, set)) await applyHooks.onBackupChange();
 }
 

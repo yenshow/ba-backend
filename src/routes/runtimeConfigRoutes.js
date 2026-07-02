@@ -14,12 +14,6 @@ const router = express.Router();
 const FORM_SCHEMA = {
   sections: [
     {
-      title: "警報日界線（亦為人流／車輛進出營運日）",
-      fields: [
-        { key: "ALERT_DAILY_ROLLOVER_TZ", label: "時區", kind: "text" },
-      ],
-    },
-    {
       title: "備份排程",
       fields: [
         {
@@ -28,13 +22,13 @@ const FORM_SCHEMA = {
           kind: "text",
         },
         {
-          key: "BACKUP_DATABASE_CUTOFF_DAYS",
-          label: "線上資料保留天數",
+          key: "BACKUP_ARCHIVE_AFTER_DAYS",
+          label: "逾此天數寫入備份檔",
           kind: "number",
         },
         {
-          key: "BACKUP_ARCHIVE_FILE_RETENTION_DAYS",
-          label: "備份檔保留天數",
+          key: "BACKUP_ONLINE_RETENTION_DAYS",
+          label: "線上資料保留天數",
           kind: "number",
         },
       ],

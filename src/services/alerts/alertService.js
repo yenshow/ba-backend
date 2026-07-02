@@ -347,17 +347,39 @@ async function createAlertEvent(
   }
 }
 
-// 警報系統來源
+// 警報系統來源（須與 initSchema `alert_source` enum 對齊）
 const ALERT_SOURCES = {
   DEVICE: "device",
   ENVIRONMENT: "environment",
+  LIGHTING: "lighting",
+  PEOPLE_COUNTING: "people_counting",
   DRAINAGE: "drainage",
   POWER: "power",
+  HVAC: "hvac",
   AIR_CIRCULATION: "air_circulation",
   FIRE: "fire",
   EMERGENCY_RESCUE: "emergency_rescue",
   SMOKE_ALARM: "smoke_alarm",
+  SECURITY: "security",
 };
+
+/** 關聯 location_systems 的 alert source（供列表 JOIN 用） */
+const LOCATION_ALERT_SOURCES = [
+  ALERT_SOURCES.ENVIRONMENT,
+  ALERT_SOURCES.LIGHTING,
+  ALERT_SOURCES.PEOPLE_COUNTING,
+  ALERT_SOURCES.DRAINAGE,
+  ALERT_SOURCES.POWER,
+  ALERT_SOURCES.HVAC,
+  ALERT_SOURCES.AIR_CIRCULATION,
+  ALERT_SOURCES.FIRE,
+  ALERT_SOURCES.EMERGENCY_RESCUE,
+  ALERT_SOURCES.SMOKE_ALARM,
+];
+
+const LOCATION_ALERT_SOURCES_SQL = LOCATION_ALERT_SOURCES.map(
+  (source) => `'${source}'`,
+).join(", ");
 
 // 警報狀態（移除 pending，只保留 active, resolved, ignored
 const ALERT_STATUS = {
@@ -465,28 +487,28 @@ function buildAlertSelectQuery() {
       iu.username as ignored_by_username,
       CASE 
         WHEN a.source = 'device' THEN d.type_code
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN d_system.type_code
+        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
         ELSE NULL
       END as device_type_code,
       CASE 
         WHEN a.source = 'device' THEN d.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN l.name
+        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
         ELSE NULL
       END as source_name,
       CASE WHEN a.source = 'device' THEN d.name END as device_name,
       CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN z.name 
+        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
         ELSE NULL 
       END as zone_name,
       CASE 
         WHEN a.source = 'device' THEN d.config
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN d_system.config
+        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
         ELSE NULL
       END as device_config
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
     LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') AND a.source_id = ls.id
+    LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     LEFT JOIN devices d_system
@@ -1505,6 +1527,7 @@ async function resolveAllActiveForDailyRollover() {
     ALERT_STATUS.ACTIVE,
   ]);
   let resolvedCount = 0;
+  let ignoredResolvedCount = 0;
 
   if ((snapshot?.length ?? 0) > 0) {
     try {
@@ -1514,48 +1537,78 @@ async function resolveAllActiveForDailyRollover() {
         `[alertService] 日界線連動復歸部分失敗: ${linkErr?.message || linkErr}`,
       );
     }
-    const payloadJson = JSON.stringify({ reason: "daily_rollover" });
-    try {
-      resolvedCount = await db.transaction(async (tq) => {
-        const rows = await tq(
-          `
-          WITH closing AS (
-            UPDATE alerts
-            SET status = 'resolved'::alert_status, updated_at = CURRENT_TIMESTAMP
-            WHERE status = 'active'::alert_status
-            RETURNING id
-          ),
-          ins AS (
-            INSERT INTO alert_events (alert_id, event_type, old_status, new_status, payload, actor_user_id)
-            SELECT id, 'resolved', 'active'::alert_status, 'resolved'::alert_status, ?::jsonb, NULL
-            FROM closing
-            RETURNING alert_id
-          )
-          SELECT count(*)::int AS resolved_count FROM ins
-          `,
-          [payloadJson],
-        );
-        return rows[0]?.resolved_count ?? 0;
-      });
-    } catch (err) {
-      alertLogger.error("日界線批次結案失敗", {
-        error: err?.message || String(err),
-        module: "alertService",
-      });
-      throw err;
-    }
-    if (resolvedCount > 0) {
-      alertLogger.debug(`[alertService] 日界線結案完成: ${resolvedCount} 筆`);
-    }
   }
 
+  const activePayloadJson = JSON.stringify({ reason: "daily_rollover" });
+  const ignoredPayloadJson = JSON.stringify({ reason: "daily_rollover_ignored" });
+  try {
+    const counts = await db.transaction(async (tq) => {
+      const rows = await tq(
+        `
+        WITH targets AS (
+          SELECT id, status::text AS old_status
+          FROM alerts
+          WHERE status IN ('active'::alert_status, 'ignored'::alert_status)
+        ),
+        closing AS (
+          UPDATE alerts a
+          SET status = 'resolved'::alert_status,
+              updated_at = CURRENT_TIMESTAMP
+          FROM targets t
+          WHERE a.id = t.id
+          RETURNING a.id, t.old_status
+        ),
+        ins AS (
+          INSERT INTO alert_events (alert_id, event_type, old_status, new_status, payload, actor_user_id)
+          SELECT
+            id,
+            'resolved',
+            old_status::alert_status,
+            'resolved'::alert_status,
+            CASE
+              WHEN old_status = 'active' THEN ?::jsonb
+              ELSE ?::jsonb
+            END,
+            NULL
+          FROM closing
+          RETURNING alert_id, old_status
+        )
+        SELECT
+          count(*) FILTER (WHERE old_status = 'active')::int AS active_count,
+          count(*) FILTER (WHERE old_status = 'ignored')::int AS ignored_count
+        FROM ins
+        `,
+        [activePayloadJson, ignoredPayloadJson],
+      );
+      return rows[0] || { active_count: 0, ignored_count: 0 };
+    });
+    resolvedCount = counts.active_count ?? 0;
+    ignoredResolvedCount = counts.ignored_count ?? 0;
+  } catch (err) {
+    alertLogger.error("日界線批次結案失敗", {
+      error: err?.message || String(err),
+      module: "alertService",
+    });
+    throw err;
+  }
+
+  if (resolvedCount > 0) {
+    alertLogger.debug(`[alertService] 日界線結案完成: ${resolvedCount} 筆 active`);
+  }
+  if (ignoredResolvedCount > 0) {
+    alertLogger.debug(
+      `[alertService] 日界線 ignored 結案完成: ${ignoredResolvedCount} 筆`,
+    );
+  }
+
+  const totalResolved = resolvedCount + ignoredResolvedCount;
   websocketService.emitAlertDailyRollover({
-    resolvedCount,
+    resolvedCount: totalResolved,
     occurredAt,
     timezone: tz,
   });
   emitUnresolvedAlertCount();
-  return { resolvedCount };
+  return { resolvedCount: totalResolved, ignoredResolvedCount };
 }
 
 /**
@@ -1573,32 +1626,32 @@ async function getAlertById(id) {
         -- 設備類型資訊（type_code 固定映射；不查 deviceTypes 表）
         CASE 
           WHEN a.source = 'device' THEN d.type_code
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN d_system.type_code
+          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
           ELSE NULL
         END as device_type_code,
         -- 來源名稱（統一欄位，適用於所有來源類型）
         CASE 
           WHEN a.source = 'device' THEN d.name
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN l.name
+          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
           ELSE NULL
         END as source_name,
         -- 相容欄位：device_name（當 source = 'device'）
         CASE WHEN a.source = 'device' THEN d.name END as device_name,
         -- 區域名稱（統一使用 zones 表）
         CASE 
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN z.name 
+          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
           ELSE NULL 
         END as zone_name,
         CASE 
           WHEN a.source = 'device' THEN d.config
-          WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') THEN d_system.config
+          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
           ELSE NULL
         END as device_config
       FROM alerts a
       LEFT JOIN users iu ON a.ignored_by = iu.id
       LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
       -- 使用新架構：location_systems 關聯到 locations 和 zones
-      LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'emergency_rescue', 'smoke_alarm') AND a.source_id = ls.id
+      LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
       LEFT JOIN zones z ON l.zone_id = z.id
       LEFT JOIN devices d_system
@@ -1623,57 +1676,56 @@ async function getAlertById(id) {
   }
 }
 
+const ALERT_BACKUP_SELECT = `
+  SELECT 
+    a.id,
+    a.source,
+    a.source_id,
+    a.alert_type,
+    a.severity,
+    a.message,
+    a.status,
+    a.ignored_at,
+    a.created_at,
+    a.updated_at,
+    iu.username as ignored_by_username,
+    CASE 
+      WHEN a.source = 'device' THEN d.type_code
+      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
+      ELSE NULL
+    END as device_type_code,
+    CASE 
+      WHEN a.source = 'device' THEN d.name
+      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
+      ELSE NULL
+    END as source_name,
+    CASE 
+      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
+      ELSE NULL 
+    END as zone_name,
+    CASE 
+      WHEN a.source = 'device' THEN d.config
+      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
+      ELSE NULL
+    END as device_config
+  FROM alerts a
+  LEFT JOIN users iu ON a.ignored_by = iu.id
+  LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
+  LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
+  LEFT JOIN locations l ON ls.location_id = l.id
+  LEFT JOIN zones z ON l.zone_id = z.id
+  LEFT JOIN devices d_system
+    ON (ls.system_config->'device_ids'->>0) IS NOT NULL
+   AND (ls.system_config->'device_ids'->>0)::integer = d_system.id`;
+
 /**
  * 取得已解決的過期警報（含關聯資訊）供備份使用
- * 與 getAlertById 使用相同的 JOIN 結構，用於 CSV 報表格式與前端一致
  * @param {Date} beforeDate - 備份此日期之前的已解決警報
- * @returns {Promise<Array>}  enriched 警報列表
  */
 async function getResolvedAlertsForBackup(beforeDate) {
-  const query = `
-    SELECT 
-      a.id,
-      a.source,
-      a.source_id,
-      a.alert_type,
-      a.severity,
-      a.message,
-      a.status,
-      a.ignored_at,
-      a.created_at,
-      a.updated_at,
-      iu.username as ignored_by_username,
-      CASE 
-        WHEN a.source = 'device' THEN d.type_code
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'smoke_alarm') THEN d_system.type_code
-        ELSE NULL
-      END as device_type_code,
-      CASE 
-        WHEN a.source = 'device' THEN d.name
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'smoke_alarm') THEN l.name
-        ELSE NULL
-      END as source_name,
-      CASE 
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'smoke_alarm') THEN z.name 
-        ELSE NULL 
-      END as zone_name,
-      CASE 
-        WHEN a.source = 'device' THEN d.config
-        WHEN a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'smoke_alarm') THEN d_system.config
-        ELSE NULL
-      END as device_config
-    FROM alerts a
-    LEFT JOIN users iu ON a.ignored_by = iu.id
-    LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-    LEFT JOIN location_systems ls ON a.source IN ('environment', 'lighting', 'people_counting', 'drainage', 'power', 'hvac', 'air_circulation', 'fire', 'smoke_alarm') AND a.source_id = ls.id
-    LEFT JOIN locations l ON ls.location_id = l.id
-    LEFT JOIN zones z ON l.zone_id = z.id
-    LEFT JOIN devices d_system
-      ON (ls.system_config->'device_ids'->>0) IS NOT NULL
-     AND (ls.system_config->'device_ids'->>0)::integer = d_system.id
+  const query = `${ALERT_BACKUP_SELECT}
     WHERE a.status = 'resolved' AND a.updated_at < ?
-    ORDER BY a.updated_at ASC
-  `;
+    ORDER BY a.updated_at ASC`;
   const result = await db.query(query, [beforeDate]);
   return (result || []).map((row) =>
     enrichAlert({
