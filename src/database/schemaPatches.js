@@ -51,9 +51,168 @@ async function ensureAlertSourceEnumValues(pool) {
   }
 }
 
+async function createUpdatedAtTrigger(pool, tableName) {
+  await pool.query(`
+    DROP TRIGGER IF EXISTS update_${tableName}_updated_at ON ${tableName};
+    CREATE TRIGGER update_${tableName}_updated_at
+      BEFORE UPDATE ON ${tableName} FOR EACH ROW
+      EXECUTE FUNCTION update_updated_at_column();
+  `);
+}
+
+async function ensureExternalIntegrationTables(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS external_sync_configs (
+      id SERIAL PRIMARY KEY,
+      event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN ('access_control')),
+      push_time TIME NOT NULL,
+      db_type VARCHAR(16) NOT NULL CHECK (db_type IN ('postgres','sqlserver','mysql')),
+      host TEXT NOT NULL,
+      port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
+      database_name TEXT NOT NULL,
+      username TEXT NOT NULL,
+      password_enc TEXT NOT NULL,
+      target_table TEXT NOT NULL,
+      cursor_ts TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(event_type)
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "external_sync_configs");
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_sync_configs_push_time
+    ON external_sync_configs(push_time);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS external_sync_field_mappings (
+      id SERIAL PRIMARY KEY,
+      config_id INTEGER NOT NULL REFERENCES external_sync_configs(id) ON DELETE CASCADE,
+      field_key VARCHAR(64) NOT NULL,
+      target_column TEXT NOT NULL,
+      format TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(config_id, field_key)
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "external_sync_field_mappings");
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_sync_field_mappings_config
+    ON external_sync_field_mappings(config_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS external_sync_run_logs (
+      id BIGSERIAL PRIMARY KEY,
+      config_id INTEGER NOT NULL REFERENCES external_sync_configs(id) ON DELETE CASCADE,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at TIMESTAMPTZ,
+      success BOOLEAN NOT NULL DEFAULT FALSE,
+      row_count INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_sync_run_logs_config_time
+    ON external_sync_run_logs(config_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_external_sync_run_logs_success
+    ON external_sync_run_logs(success, started_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS record_export_rules (
+      id SERIAL PRIMARY KEY,
+      event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN ('access_control')),
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      name TEXT NOT NULL,
+      description TEXT,
+      filename_prefix TEXT NOT NULL,
+      date_format TEXT NOT NULL,
+      time_format TEXT NOT NULL,
+      output_format VARCHAR(8) NOT NULL CHECK (output_format IN ('csv','txt')),
+      export_time TIME NOT NULL,
+      storage_type VARCHAR(8) NOT NULL CHECK (storage_type IN ('local','sftp')),
+      local_dir TEXT,
+      sftp_host TEXT,
+      sftp_port INTEGER CHECK (sftp_port IS NULL OR (sftp_port >= 1 AND sftp_port <= 65535)),
+      sftp_username TEXT,
+      sftp_password_enc TEXT,
+      sftp_remote_dir TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "record_export_rules");
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_record_export_rules_event_enabled
+    ON record_export_rules(event_type, enabled);
+    CREATE INDEX IF NOT EXISTS idx_record_export_rules_export_time
+    ON record_export_rules(export_time);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS record_export_rule_groups (
+      id SERIAL PRIMARY KEY,
+      rule_id INTEGER NOT NULL REFERENCES record_export_rules(id) ON DELETE CASCADE,
+      group_id INTEGER NOT NULL REFERENCES person_groups(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(rule_id, group_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_record_export_rule_groups_rule
+    ON record_export_rule_groups(rule_id);
+    CREATE INDEX IF NOT EXISTS idx_record_export_rule_groups_group
+    ON record_export_rule_groups(group_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS record_export_field_mappings (
+      id SERIAL PRIMARY KEY,
+      rule_id INTEGER NOT NULL REFERENCES record_export_rules(id) ON DELETE CASCADE,
+      field_key VARCHAR(64) NOT NULL,
+      header_label TEXT,
+      format TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(rule_id, field_key)
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "record_export_field_mappings");
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_record_export_field_mappings_rule
+    ON record_export_field_mappings(rule_id, sort_order);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS record_export_run_logs (
+      id BIGSERIAL PRIMARY KEY,
+      rule_id INTEGER NOT NULL REFERENCES record_export_rules(id) ON DELETE CASCADE,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at TIMESTAMPTZ,
+      success BOOLEAN NOT NULL DEFAULT FALSE,
+      row_count INTEGER NOT NULL DEFAULT 0,
+      file_paths TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      error_message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_record_export_run_logs_rule_time
+    ON record_export_run_logs(rule_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_record_export_run_logs_success
+    ON record_export_run_logs(success, started_at DESC);
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
+  await ensureExternalIntegrationTables(pool);
   logger.info("schema patches 已套用", { module: "schemaPatches" });
 }
 
@@ -61,5 +220,6 @@ module.exports = {
   ALERT_SOURCE_ENUM_VALUES,
   ensureEnumValue,
   ensureAlertSourceEnumValues,
+  ensureExternalIntegrationTables,
   applySchemaPatches,
 };

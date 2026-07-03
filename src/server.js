@@ -41,6 +41,8 @@ const personnelRoutes = require("./routes/personnelRoutes");
 const yscpEventRoutes = require("./routes/yscpEventRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const runtimeConfigRoutes = require("./routes/runtimeConfigRoutes");
+const externalSyncRoutes = require("./routes/externalSyncRoutes");
+const recordExportRoutes = require("./routes/recordExportRoutes");
 const entryExitRoutes = require("./routes/entryExitRoutes");
 const monitoringRoutes = require("./routes/monitoringRoutes");
 const { bootstrapRuntimeInfrastructure } = require("./services/platform/runtimeConfigApply");
@@ -64,6 +66,7 @@ const licenseRuntimeService = require("./services/license/licenseRuntimeService"
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
+const externalIntegrationSchedulers = require("./services/externalIntegration/externalIntegrationSchedulers");
 const {
   startAlertDailyRolloverScheduler,
 } = require("./services/alerts/alertRolloverScheduler");
@@ -166,6 +169,8 @@ app.use("/api/personnel", personnelRoutes); // 人員主檔、門禁權限（僅
 app.use("/api/yscp", yscpEventRoutes);
 app.use("/api/settings", settingsRoutes); // 系統設定 API
 app.use("/api/runtime-config", runtimeConfigRoutes);
+app.use("/api/external-sync", externalSyncRoutes);
+app.use("/api/record-export", recordExportRoutes);
 app.use("/api/entry-exit", entryExitRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use(
@@ -279,6 +284,9 @@ async function startServer() {
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
 
+    global.__externalSyncHandle = externalIntegrationSchedulers.startExternalSync();
+    global.__recordExportHandle = externalIntegrationSchedulers.startRecordExport();
+
     global.__httpServer = httpServer;
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
@@ -329,6 +337,16 @@ async function gracefulShutdown(signal) {
     if (global.__backupSchedulerHandle?.stop) {
       global.__backupSchedulerHandle.stop();
       global.__backupSchedulerHandle = null;
+    }
+
+    if (global.__externalSyncHandle?.stop) {
+      global.__externalSyncHandle.stop();
+      global.__externalSyncHandle = null;
+    }
+
+    if (global.__recordExportHandle?.stop) {
+      global.__recordExportHandle.stop();
+      global.__recordExportHandle = null;
     }
 
     if (global.__httpServer) {
