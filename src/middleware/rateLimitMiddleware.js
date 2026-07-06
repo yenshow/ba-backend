@@ -10,6 +10,10 @@ const loginFailureBuckets = new Map();
 const WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILED = 10;
 const API_MAX = 300;
+const RATE_LIMIT_LOG_COOLDOWN_MS = 30_000;
+
+/** @type {Map<string, number>} */
+const lastRateLimitLogAt = new Map();
 
 /** 已登入電梯 live（mount／visibility 偶發 GET）不計入全站限流 */
 const isAuthenticatedElevatorLiveGet = (req) => {
@@ -34,8 +38,38 @@ const getClientIpKey = (req) =>
 
 const getRequestPath = (req) => String(req.originalUrl || req.url || "");
 
-const respondRateLimited = (req, res, message, meta) => {
+const getLoginUsernameFromRequest = (req) => {
+  const username = String(req.body?.username ?? "").trim();
+  return username || undefined;
+};
+
+const shouldCooldownLog = (key) => {
+  const now = Date.now();
+  const lastAt = lastRateLimitLogAt.get(key);
+  if (lastAt !== undefined && now - lastAt < RATE_LIMIT_LOG_COOLDOWN_MS) {
+    return true;
+  }
+  lastRateLimitLogAt.set(key, now);
+  if (lastRateLimitLogAt.size > 2000) {
+    for (const [k, ts] of lastRateLimitLogAt.entries()) {
+      if (now - ts > RATE_LIMIT_LOG_COOLDOWN_MS) {
+        lastRateLimitLogAt.delete(k);
+      }
+    }
+  }
+  return false;
+};
+
+const logRateLimitIfAllowed = (message, meta) => {
+  const ip = meta?.ip ?? "unknown";
+  const path = meta?.path ?? "";
+  const key = `${message}|${ip}|${path}`;
+  if (shouldCooldownLog(key)) return;
   logger.warn(message, meta);
+};
+
+const respondRateLimited = (req, res, message, meta) => {
+  logRateLimitIfAllowed(message, meta);
   return rateLimitHandler(req, res);
 };
 
@@ -80,10 +114,10 @@ const loginRateLimitPrecheck = (req, res, next) => {
   const bucket = loginFailureBuckets.get(ip);
   const now = Date.now();
   if (bucket && now < bucket.resetAt && bucket.count >= LOGIN_MAX_FAILED) {
-    return respondRateLimited(req, res, "登入失敗次數達上限，暫時封鎖", {
-      ip,
-      count: bucket.count,
-    });
+    const meta = { ip, count: bucket.count };
+    const username = getLoginUsernameFromRequest(req);
+    if (username) meta.username = username;
+    return respondRateLimited(req, res, "登入失敗次數達上限，暫時封鎖", meta);
   }
   return next();
 };
@@ -92,7 +126,10 @@ const loginRateLimitPrecheck = (req, res, next) => {
 const recordFailedLoginAttempt = (req) => {
   const ip = getClientIpKey(req);
   const bucket = bumpBucket(loginFailureBuckets, ip, WINDOW_MS);
-  logger.warn("登入失敗", { ip, count: bucket.count });
+  const meta = { ip, count: bucket.count };
+  const username = getLoginUsernameFromRequest(req);
+  if (username) meta.username = username;
+  logger.warn("登入失敗", meta);
 };
 
 const apiRateLimiter = createRateLimiter({

@@ -3,7 +3,6 @@
  */
 const { isAppError } = require("./AppError");
 const { codeForHttpStatus } = require("./meta");
-const logger = require("../logger");
 
 function formatFailurePayload(payload) {
   const { code, message, details = null } = payload;
@@ -18,17 +17,11 @@ function formatFailurePayload(payload) {
   };
 }
 
-function getHttpStatusFromError(err, req = null) {
+function getHttpStatusFromError(err) {
   const sc = err?.statusCode;
   if (Number.isFinite(sc) && sc >= 400 && sc <= 599) {
     return sc;
   }
-
-  logger.warn("錯誤缺少 statusCode，回傳 500", {
-    error: err?.message,
-    path: req?.path,
-    method: req?.method,
-  });
   return 500;
 }
 

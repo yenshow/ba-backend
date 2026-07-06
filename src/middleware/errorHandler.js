@@ -127,7 +127,7 @@ async function errorHandler(err, req, res, next) {
     await recordDeviceError(req, errorMessage);
   } else if (statusCode >= 500) {
     logger.error("伺服器錯誤", {
-      error: err,
+      error: handledErr,
       path: req.path,
       method: req.method,
       statusCode,
