@@ -8,7 +8,7 @@ const logger = require("../../utils/logger");
 
 const monitorLogger = logger.createLogger("backgroundMonitor");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * Mode A（自適應監控）：

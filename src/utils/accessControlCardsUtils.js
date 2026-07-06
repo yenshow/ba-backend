@@ -2,7 +2,7 @@
  * 人員門禁卡號（config.access_control.cards）解析與驗證
  */
 const C = require("./apiErrorCodes");
-const { throwApiError } = require("./apiErrorMeta");
+const { throwApiError } = require("./apiErrors");
 
 const MAX_CARDS = 5;
 const VIRTUAL_CARD_PREFIX = "9";

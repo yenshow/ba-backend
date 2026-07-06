@@ -1,6 +1,6 @@
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const ITEM_TYPES = new Set(["issues", "tail"]);
 const JOB_TYPES = new Set(["sync_location", "sync_all_locations", "elevator_sync_location"]);

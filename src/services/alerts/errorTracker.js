@@ -4,7 +4,7 @@ const logger = require("../../utils/logger");
 
 const trackerLogger = logger.createLogger("errorTracker");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * 統一錯誤追蹤服務（重構版）

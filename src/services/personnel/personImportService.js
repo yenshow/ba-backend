@@ -11,7 +11,7 @@ const {
   isJpegByMagicBytes,
 } = require("./personnelFileHelpers");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const IMPORT_HEADERS = [
   "工號",

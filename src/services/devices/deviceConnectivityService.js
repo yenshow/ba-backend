@@ -5,7 +5,7 @@ const { createIsapiClient } = require("../accessControl/isapiClient");
 const net = require("net");
 const { URL } = require("url");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 const {
   parseConfig,
   isHcnetSdkController,

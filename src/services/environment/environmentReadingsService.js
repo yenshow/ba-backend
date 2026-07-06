@@ -8,7 +8,7 @@ const {
   computeDerivedMetrics,
 } = require("./environmentDerivedMetrics");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 async function getReadingsForBackup(beforeDate) {
   const rows = await db.query(

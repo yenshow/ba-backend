@@ -11,7 +11,7 @@ const {
 } = require("./isapiEventPersistence");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 const { getUploadsDir } = require("../../utils/baDataPaths");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件（見 isapiEventPersistence） */

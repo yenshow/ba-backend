@@ -10,7 +10,7 @@ const VehicleCustomListHandler = require("./handlers/vehicleCustomListHandler");
 const VehicleAndListRelationHandler = require("./handlers/vehicleAndListRelationHandler");
 const systemMapping = require("./systemMapping");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * 處理器工廠

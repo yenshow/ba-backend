@@ -5,7 +5,7 @@ const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("../accessControl/isapiClient");
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError, throwApiError } = require("../../utils/apiErrorMeta");
+const { createApiError, throwApiError } = require("../../utils/apiErrors");
 const { parseConfig } = require("./vehicleAccessValidation");
 const { ensureIntArray } = require("../location/locationShared");
 const {

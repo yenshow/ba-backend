@@ -2,7 +2,7 @@
  * 人流統計地點設定驗證（people_counting system_config / API payload）
  */
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
 const { ensureIntArray } = require("../location/locationShared");
 

@@ -4,7 +4,7 @@
 const crypto = require("crypto");
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const {
   VIRTUAL_CARD_LENGTH,
   VIRTUAL_CARD_PREFIX,

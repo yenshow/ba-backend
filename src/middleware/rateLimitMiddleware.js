@@ -1,5 +1,6 @@
 const C = require("../utils/apiErrorCodes");
 const { sendFailure } = require("./responseHandler");
+const logger = require("../utils/logger").createLogger("RateLimit");
 
 /** @type {Map<string, { count: number, resetAt: number }>} */
 const apiBuckets = new Map();
@@ -31,6 +32,13 @@ const rateLimitHandler = (req, res) =>
 const getClientIpKey = (req) =>
   String(req.ip || req.socket?.remoteAddress || "unknown");
 
+const getRequestPath = (req) => String(req.originalUrl || req.url || "");
+
+const respondRateLimited = (req, res, message, meta) => {
+  logger.warn(message, meta);
+  return rateLimitHandler(req, res);
+};
+
 /** @param {Map<string, { count: number, resetAt: number }>} store */
 const bumpBucket = (store, key, windowMs) => {
   const now = Date.now();
@@ -53,9 +61,14 @@ function createRateLimiter(options) {
     if (typeof skip === "function" && skip(req)) {
       return next();
     }
-    const bucket = bumpBucket(apiBuckets, getClientIpKey(req), windowMs);
+    const ip = getClientIpKey(req);
+    const bucket = bumpBucket(apiBuckets, ip, windowMs);
     if (bucket.count > max) {
-      return rateLimitHandler(req, res);
+      return respondRateLimited(req, res, "API 限流觸發", {
+        ip,
+        path: getRequestPath(req),
+        count: bucket.count,
+      });
     }
     return next();
   };
@@ -63,25 +76,30 @@ function createRateLimiter(options) {
 
 /** 登入前檢查：僅累計認證失敗；成功登入不計入 */
 const loginRateLimitPrecheck = (req, res, next) => {
-  const key = getClientIpKey(req);
-  const bucket = loginFailureBuckets.get(key);
+  const ip = getClientIpKey(req);
+  const bucket = loginFailureBuckets.get(ip);
   const now = Date.now();
   if (bucket && now < bucket.resetAt && bucket.count >= LOGIN_MAX_FAILED) {
-    return rateLimitHandler(req, res);
+    return respondRateLimited(req, res, "登入失敗次數達上限，暫時封鎖", {
+      ip,
+      count: bucket.count,
+    });
   }
   return next();
 };
 
 /** 密碼錯誤等 USER_AUTH_FAILED 時由 userRoutes 呼叫 */
 const recordFailedLoginAttempt = (req) => {
-  bumpBucket(loginFailureBuckets, getClientIpKey(req), WINDOW_MS);
+  const ip = getClientIpKey(req);
+  const bucket = bumpBucket(loginFailureBuckets, ip, WINDOW_MS);
+  logger.warn("登入失敗", { ip, count: bucket.count });
 };
 
 const apiRateLimiter = createRateLimiter({
   windowMs: WINDOW_MS,
   max: API_MAX,
   skip: (req) => {
-    const url = String(req.originalUrl || req.url || "");
+    const url = getRequestPath(req);
     if (req.method === "GET" && url.startsWith("/api/uploads")) return true;
     return isAuthenticatedElevatorLiveGet(req);
   },

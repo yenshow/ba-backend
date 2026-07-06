@@ -2,7 +2,7 @@ const db = require("../../database/db");
 const { parseConfig, stringifyConfig } = require("../../utils/deviceHelpers");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
+const { throwApiError, causeDetails } = require("../../utils/apiErrors");
 const {
   rethrowIfApiError,
   failDeviceModelList,

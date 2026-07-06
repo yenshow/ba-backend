@@ -2,7 +2,7 @@
  * 地點／區域服務錯誤輔助
  */
 const C = require("./apiErrorCodes");
-const { throwApiError, rethrowIfApiError } = require("./apiErrorMeta");
+const { throwApiError, rethrowIfApiError } = require("./apiErrors");
 
 function failOp(code, message, details) {
   throwApiError(code, message, { details: details ?? null });

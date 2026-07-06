@@ -3,7 +3,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const { validateRequired, validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 const recordExportService = require("../services/externalIntegration/recordExportService");
 const { ACCESS_CONTROL_FIELD_CATALOG } = require("../services/externalIntegration/accessControlFields");
 

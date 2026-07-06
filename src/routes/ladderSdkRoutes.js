@@ -16,7 +16,7 @@ const permissionService = require("../access/permissionService");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 
 const router = express.Router();
 router.use(authenticate);

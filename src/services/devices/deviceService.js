@@ -14,7 +14,7 @@ const licenseQuotaService = require("../license/licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError, throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
+const { createApiError, throwApiError, causeDetails } = require("../../utils/apiErrors");
 const {
   rethrowIfApiError,
   failDeviceList,

@@ -3,7 +3,7 @@
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const {
   buildIsapiValidPayloadFromPlatformValidity,
 } = require("../accessControl/accessControlValidityUtils");

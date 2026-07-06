@@ -1,7 +1,7 @@
 /**
  * 環境讀數彙總服務
  * 由 raw 計算時／日／月平均，寫入 environment_readings_aggregated
- * 設計：docs/40-systems/environment-data-design.md
+ * 設計：docs/40-systems/environment.md
  */
 
 const db = require("../../database/db");

@@ -1,6 +1,6 @@
 const licenseService = require("../services/license/licenseService");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 
 function requireFeature(featureKey) {
   if (!featureKey || typeof featureKey !== "string") {

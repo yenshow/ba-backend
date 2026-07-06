@@ -1,7 +1,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { rethrowIfApiError, throwApiError, causeDetails } = require("../../utils/apiErrorMeta");
+const { rethrowIfApiError, throwApiError, causeDetails } = require("../../utils/apiErrors");
 const {
   failLocationZoneList,
   failLocationZoneGet,

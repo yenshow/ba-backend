@@ -6,7 +6,7 @@ const axios = require("axios");
 const config = require("../../config");
 const logger = require("../../utils/logger").createLogger("MediaMTX");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const API_BASE = (config.mediaMTX?.apiBaseUrl ?? "http://127.0.0.1:9997").replace(/\/$/, "");
 const TIMEOUT_MS = config.mediaMTX?.timeoutMs ?? 10000;

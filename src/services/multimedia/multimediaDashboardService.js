@@ -8,7 +8,7 @@ const {
   computeDerivedMetrics,
 } = require("../environment/environmentDerivedMetrics");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const SETTINGS_KEY = "multimedia_dashboard_settings_v1";
 

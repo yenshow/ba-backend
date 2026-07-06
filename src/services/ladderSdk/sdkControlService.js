@@ -8,7 +8,7 @@ const { isElevatorBoundDeviceId } = require("../location/controllerBindingUtils"
 const elevatorService = require("../elevator/elevatorService");
 const elevatorRuntimeService = require("../elevator/elevatorRuntimeService");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 
 /** dwStaic 對照（HCNetSDK NET_DVR_ControlGateway） */
 const GATEWAY_COMMANDS = {

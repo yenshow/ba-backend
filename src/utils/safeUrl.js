@@ -2,7 +2,7 @@ const dns = require("dns").promises;
 const net = require("net");
 const { URL } = require("url");
 const C = require("./apiErrorCodes");
-const { throwApiError } = require("./apiErrorMeta");
+const { throwApiError } = require("./apiErrors");
 
 const DEFAULT_HTTPS_PORT = 443;
 

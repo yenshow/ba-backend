@@ -4,7 +4,7 @@ const db = require("../../database/db");
 const config = require("../../config");
 const permissionService = require("../../access/permissionService");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /** 安裝腳本建立之平台超級管理員（bootstrap）；與一般 role=admin 管理員區分 */
 const PLATFORM_ADMIN_USERNAME = "admin";

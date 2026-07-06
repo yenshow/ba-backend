@@ -3,8 +3,10 @@
  * 提供統一的 API 響應格式，確保所有響應遵循相同結構
  */
 
-const { formatFailurePayload } = require("../utils/apiErrorFormatter");
-const { httpStatusForCode } = require("../utils/apiErrorMeta");
+const {
+	formatFailurePayload,
+	httpStatusForCode,
+} = require("../utils/apiErrors");
 
 /**
  * 送出標準錯誤回應

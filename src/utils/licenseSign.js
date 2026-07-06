@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const C = require("./apiErrorCodes");
-const { throwApiError } = require("./apiErrorMeta");
+const { throwApiError } = require("./apiErrors");
 
 const toSortedPayload = (payload) => {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {

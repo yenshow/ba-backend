@@ -4,7 +4,7 @@ const path = require("path");
 const db = require("../../database/db");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const { resolveUploadFilePath } = require("../../utils/baDataPaths");
 
 const STEP_COLUMNS = {

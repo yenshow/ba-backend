@@ -3,8 +3,7 @@ const locationService = require("../location/locationService");
 const environmentAggregationService = require("./environmentAggregationService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
-const { rethrowIfApiError, causeDetails } = require("../../utils/apiErrorMeta");
+const { throwApiError, rethrowIfApiError, causeDetails } = require("../../utils/apiErrors");
 
 const envServiceLogger = logger.createLogger("environmentService");
 

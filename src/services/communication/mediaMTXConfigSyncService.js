@@ -13,7 +13,7 @@ const db = require("../../database/db");
 const mediaMTXService = require("./mediaMTXService");
 const logger = require("../../utils/logger").createLogger("MediaMTX Sync");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const {
   getMediamtxDir,
   getMediamtxGeneratedConfigPath,

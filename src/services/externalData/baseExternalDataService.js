@@ -1,6 +1,6 @@
 const externalDb = require("../../database/externalDb");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * 通用外部資料服務基類

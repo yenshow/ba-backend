@@ -2,7 +2,7 @@
  * 設備／型號／Modbus 相關錯誤輔助（與 apiErrorCodes 搭配）
  */
 const C = require("./apiErrorCodes");
-const { throwApiError, rethrowIfApiError } = require("./apiErrorMeta");
+const { throwApiError, rethrowIfApiError } = require("./apiErrors");
 
 function failOp(code, message, details) {
   throwApiError(code, message, { details: details ?? null });
@@ -30,6 +30,4 @@ module.exports = {
     failOp(C.DEVICE_MODEL_UPDATE_FAILED, message, details),
   failDeviceModelDelete: (message, details) =>
     failOp(C.DEVICE_MODEL_DELETE_FAILED, message, details),
-  failDeviceTypeList: (message, details) =>
-    failOp(C.DEVICE_TYPE_LIST_FAILED, message, details),
 };

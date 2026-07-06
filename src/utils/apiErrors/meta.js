@@ -2,7 +2,7 @@
  * 錯誤碼 ↔ HTTP status 對照與工廠方法
  */
 const AppError = require("./AppError");
-const C = require("./apiErrorCodes");
+const C = require("../apiErrorCodes");
 
 /** @type {Record<string, number>} */
 const STATUS_BY_CODE = {
@@ -111,8 +111,6 @@ const STATUS_BY_CODE = {
   [C.DEVICE_MODEL_CREATE_FAILED]: 500,
   [C.DEVICE_MODEL_UPDATE_FAILED]: 500,
   [C.DEVICE_MODEL_DELETE_FAILED]: 500,
-
-  [C.DEVICE_TYPE_LIST_FAILED]: 500,
 
   [C.DEVICE_CONNECTIVITY_RTSP_URL_INVALID]: 400,
   [C.DEVICE_CONNECTIVITY_RTSP_TIMEOUT]: 503,

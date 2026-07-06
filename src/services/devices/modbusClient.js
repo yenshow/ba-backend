@@ -3,7 +3,7 @@ const EventEmitter = require("events");
 const config = require("../../config");
 const modbusGlobalLimiter = require("./modbusGlobalLimiter");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 
 class ModbusClient extends EventEmitter {
   constructor(modbusConfig) {

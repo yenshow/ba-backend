@@ -2,7 +2,7 @@ const BaseExternalDataService = require("../baseExternalDataService");
 const { applyDefaultTimeFilters } = require("../../../utils/dateRangeUtils");
 const externalDb = require("../../../database/externalDb");
 const C = require("../../../utils/apiErrorCodes");
-const { throwApiError } = require("../../../utils/apiErrorMeta");
+const { throwApiError } = require("../../../utils/apiErrors");
 
 /**
  * 出入口過車日誌專用處理器（vehiclebiz.passageway_log_data）

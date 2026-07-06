@@ -1,6 +1,6 @@
 const modbusClient = require("./modbusClient");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * 批次 Modbus 讀取服務

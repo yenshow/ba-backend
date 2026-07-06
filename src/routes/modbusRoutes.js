@@ -16,7 +16,7 @@ const {
 } = require("../middleware/validation");
 const logger = require("../utils/logger");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 
 const router = express.Router();
 

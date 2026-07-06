@@ -6,7 +6,7 @@ const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("./isapiClient");
 const FormData = require("form-data");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 
 const ISAPI_PATHS = {
   userInfoSearch: "/ISAPI/AccessControl/UserInfo/Search?format=json",

@@ -19,7 +19,7 @@ const {
   throwApiError,
   rethrowIfApiError,
   causeDetails,
-} = require("../../utils/apiErrorMeta");
+} = require("../../utils/apiErrors");
 const yscpProvider = require("./providers/yscpProvider");
 const accessControlProvider = require("./providers/accessControlProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");

@@ -2,7 +2,7 @@
  * 人員門禁指紋（config.access_control.fingerprints）解析與驗證
  */
 const C = require("./apiErrorCodes");
-const { throwApiError } = require("./apiErrorMeta");
+const { throwApiError } = require("./apiErrors");
 
 const MAX_FINGERPRINTS = 5;
 

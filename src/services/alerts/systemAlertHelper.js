@@ -12,7 +12,7 @@ const { getDeviceTypeName } = require("../../constants/deviceTypes");
 
 const helperLogger = logger.createLogger("systemAlertHelper");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const getErrorTracker = () => require("./errorTracker");
 

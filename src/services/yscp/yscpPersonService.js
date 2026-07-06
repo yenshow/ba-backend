@@ -5,7 +5,7 @@ const yscpArtemisClient = require("./yscpArtemisClient");
 
 const serviceLogger = logger.createLogger("YSCP Person Service");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * YSCP 人員服務

@@ -4,7 +4,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger").createLogger("ElevatorFloorSync");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const personLadderCardService = require("../personnel/personLadderCardService");
 const personDeviceSyncStateService = require("../personnel/personDeviceSyncStateService");
 const sdkCardService = require("../ladderSdk/sdkCardService");

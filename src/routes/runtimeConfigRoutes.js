@@ -3,7 +3,7 @@ const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateRequired } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 const runtimeConfigService = require("../services/platform/runtimeConfigService");
 const logger = require("../utils/logger");
 

@@ -10,7 +10,7 @@ const {
   safeUnlink,
 } = require("./personnelFileHelpers");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * 將暫存 JPEG 移至正式檔名並更新 personnel.face_url（DB 成功後刪舊檔）。

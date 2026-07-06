@@ -9,7 +9,7 @@ const {
   throwApiError,
   rethrowIfApiError,
   causeDetails,
-} = require("../../utils/apiErrorMeta");
+} = require("../../utils/apiErrors");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const {
   getElevatorConfigFromLocation,

@@ -14,7 +14,7 @@ const {
   validateIntegers,
 } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 const {
   peopleCounting: yscpPeopleFeature,
   vehicleAccess: yscpVehicleFeature,

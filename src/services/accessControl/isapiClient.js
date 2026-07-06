@@ -5,7 +5,7 @@
 const axios = require("axios");
 const crypto = require("crypto");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const isapiRawHttp = require("./isapiRawHttp");
 
 /** 即時布防：僅推送連線建立後的即時事件（subscribeEvent?deployID=1） */

@@ -12,7 +12,7 @@ const {
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
-const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
+const { createApiError, throwApiError } = require("../utils/apiErrors");
 
 const router = express.Router();
 router.use(authenticate, requirePermission("system.personnel"));

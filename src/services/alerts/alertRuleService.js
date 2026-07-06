@@ -6,7 +6,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const ruleLogger = logger.createLogger("alertRuleService");
 

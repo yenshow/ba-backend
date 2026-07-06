@@ -378,13 +378,14 @@ process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 // 處理未捕獲的異常
 process.on("uncaughtException", (error) => {
-  logger.error("未捕獲的異常", { error: error.message, stack: error.stack });
+  logger.error("未捕獲的異常", { error });
   gracefulShutdown("uncaughtException");
 });
 
 // 處理未處理的 Promise 拒絕
-process.on("unhandledRejection", (reason, promise) => {
-  logger.error("未處理的 Promise 拒絕", { reason, promise });
+process.on("unhandledRejection", (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  logger.error("未處理的 Promise 拒絕", { error });
   // 不立即退出，記錄錯誤即可
 });
 

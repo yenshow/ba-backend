@@ -10,7 +10,7 @@ const logger = require("../../utils/logger");
 const websocketService = require("../websocket/websocketService");
 const monitoringSnapshotCache = require("./monitoringSnapshotCache");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 /**
  * 監控快照 API：`raw` 形狀依設備類型而定。

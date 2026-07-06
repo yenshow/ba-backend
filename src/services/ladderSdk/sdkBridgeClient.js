@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("../../config");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 const logger = require("../../utils/logger").createLogger("Ladder SDK Bridge");
 
 const BRIDGE_EXE_NAME = "HcNetSdkBridge.exe";

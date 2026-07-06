@@ -9,13 +9,13 @@ const multer = require("multer");
 const systemAlert = require("../services/alerts/systemAlertHelper");
 const logger = require("../utils/logger");
 const {
-  formatFailurePayload,
-  getHttpStatusFromError,
-  resolveErrorCode,
-  resolveErrorDetails,
-} = require("../utils/apiErrorFormatter");
+	formatFailurePayload,
+	getHttpStatusFromError,
+	resolveErrorCode,
+	resolveErrorDetails,
+	createApiError,
+} = require("../utils/apiErrors");
 const C = require("../utils/apiErrorCodes");
-const { createApiError } = require("../utils/apiErrorMeta");
 
 const DEVICE_ERROR_COOLDOWN_MS = 30_000;
 const lastDevice503LogAt = new Map();
@@ -84,7 +84,7 @@ async function recordDeviceError(req, errorMessage) {
       }
     }
   } catch (trackError) {
-    logger.warn("記錄設備錯誤失敗", { error: trackError.message });
+    logger.warn("記錄設備錯誤失敗", { error: trackError });
   }
 }
 
@@ -106,36 +106,34 @@ async function errorHandler(err, req, res, next) {
   const clientMessage = getClientFacingErrorMessage(req, statusCode, errorMessage);
 
   if (statusCode === 503) {
-    const isModbusRequest = req.path && req.path.startsWith("/api/modbus");
-    if (isModbusRequest) {
-      const cooldownKey = getDeviceErrorKey(req, errorMessage);
-      if (!shouldCooldown(lastDevice503LogAt, cooldownKey)) {
-        logger.warn(`[503] ${errorMessage}`, {
-          path: req.path,
-          method: req.method,
-          host: req.query?.host,
-          port: req.query?.port,
-          unitId: req.query?.unitId,
-        });
-      }
-    } else {
+    const isModbusRequest = req.path?.startsWith("/api/modbus");
+    const cooldownKey = isModbusRequest
+      ? getDeviceErrorKey(req, errorMessage)
+      : null;
+    if (!isModbusRequest || !shouldCooldown(lastDevice503LogAt, cooldownKey)) {
       logger.warn(`[503] ${errorMessage}`, {
         path: req.path,
         method: req.method,
+        ...(isModbusRequest
+          ? {
+              host: req.query?.host,
+              port: req.query?.port,
+              unitId: req.query?.unitId,
+            }
+          : {}),
       });
     }
 
     await recordDeviceError(req, errorMessage);
   } else if (statusCode >= 500) {
     logger.error("伺服器錯誤", {
-      error: err.message,
-      stack: err.stack,
+      error: err,
       path: req.path,
       method: req.method,
       statusCode,
     });
-  } else {
-    logger.warn("請求錯誤", {
+  } else if (statusCode >= 400) {
+    logger.debug("請求錯誤", {
       error: errorMessage,
       path: req.path,
       method: req.method,

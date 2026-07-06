@@ -1,7 +1,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError, rethrowIfApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError, rethrowIfApiError } = require("../../utils/apiErrors");
 
 const settingsLogger = logger.createLogger("settingsService");
 

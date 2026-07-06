@@ -11,7 +11,7 @@ const locationMemberService = require("./locationMemberService");
 const logger = require("../../utils/logger").createLogger("PersonnelService");
 const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const { formatMissingPersonIdLabels } = require("../../utils/personDisplayUtils");
 const {
   normalizeAndValidateCardsInput,

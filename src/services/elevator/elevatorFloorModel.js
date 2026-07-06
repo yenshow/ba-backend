@@ -3,7 +3,7 @@
  * - 平台先定義 floors[]，再綁定梯控／呼梯／DI 點位
  */
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 
 const MAX_FLOOR_COUNT = 128;
 const MIN_OPEN_DURATION = 1;

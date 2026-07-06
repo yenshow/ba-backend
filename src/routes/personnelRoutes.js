@@ -27,7 +27,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const logger = require("../utils/logger");
 const C = require("../utils/apiErrorCodes");
-const { createApiError, throwApiError } = require("../utils/apiErrorMeta");
+const { createApiError, throwApiError } = require("../utils/apiErrors");
 
 const router = express.Router();
 

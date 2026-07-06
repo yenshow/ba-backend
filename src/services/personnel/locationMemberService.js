@@ -3,7 +3,7 @@
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const { formatMissingPersonIdLabels } = require("../../utils/personDisplayUtils");
 const logger = require("../../utils/logger").createLogger("LocationMemberService");
 

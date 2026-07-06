@@ -17,7 +17,7 @@ const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
-const { throwApiError } = require("../utils/apiErrorMeta");
+const { throwApiError } = require("../utils/apiErrors");
 
 const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold", "di", "do"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];

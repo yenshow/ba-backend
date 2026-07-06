@@ -5,7 +5,7 @@
 
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlert = require("../alerts/systemAlertHelper");
 const websocketService = require("../websocket/websocketService");
@@ -22,7 +22,7 @@ const logger = require("../../utils/logger");
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
 
-// 每 5 分鐘才寫入一筆 raw 至 DB（設計：docs/40-systems/environment-data-design.md）
+// 每 5 分鐘才寫入一筆 raw 至 DB（見 docs/40-systems/environment.md）
 const RAW_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const lastRawWriteByLocation = new Map(); // key: location_id, value: timestamp
 

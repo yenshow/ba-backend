@@ -4,7 +4,7 @@
  */
 const deviceService = require("../devices/deviceService");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 const { resolveHcnetSdkPort } = require("../../utils/deviceHelpers");
 
 const resolveSdkCredentials = (device) => {

@@ -6,7 +6,7 @@ const mediaMTXService = require("../communication/mediaMTXService");
 const logger = require("../../utils/logger").createLogger("Device Stream");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 
 // 同一台攝影機同時被多視窗/多分割要求 start 時，合併成單次啟動，避免並發 addPath 造成連續 reload
 const startInFlightByDeviceId = new Map();

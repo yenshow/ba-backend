@@ -3,7 +3,7 @@ const mysql = require("mysql2/promise");
 const mssql = require("mssql");
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const {
   ACCESS_CONTROL_FIELD_CATALOG,

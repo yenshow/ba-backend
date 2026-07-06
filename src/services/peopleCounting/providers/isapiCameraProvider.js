@@ -19,7 +19,7 @@ const {
 } = require("../../entryExit/resolveTimeOptions");
 const { resolvePeopleCountingStatsTimeRange, isStatsResetActive } = require("../peopleCountingConfig");
 const C = require("../../../utils/apiErrorCodes");
-const { throwApiError } = require("../../../utils/apiErrorMeta");
+const { throwApiError } = require("../../../utils/apiErrors");
 const { ensureIntArray } = require("../../location/locationShared");
 
 function ensureInt(v) {

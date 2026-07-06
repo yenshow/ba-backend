@@ -194,7 +194,7 @@ async function updateBatch(partial) {
 
   const err = validateValues(next);
   if (err) {
-    const { throwApiError } = require("../../utils/apiErrorMeta");
+    const { throwApiError } = require("../../utils/apiErrors");
     const C = require("../../utils/apiErrorCodes");
     throwApiError(C.VALIDATION_CUSTOM, err, { statusCode: 400 });
   }

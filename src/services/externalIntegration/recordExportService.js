@@ -4,7 +4,7 @@ const { DateTime } = require("luxon");
 const SftpClient = require("ssh2-sftp-client");
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrorMeta");
+const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const {
   getAccessControlFieldByKey,

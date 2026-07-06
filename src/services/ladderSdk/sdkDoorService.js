@@ -7,7 +7,7 @@ const {
   collectElevatorFloorSyncTasks,
 } = require("../elevator/elevatorFloorModel");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError } = require("../../utils/apiErrorMeta");
+const { createApiError } = require("../../utils/apiErrors");
 
 const syncFloorNames = async (deviceId, floors, doorIndexes) => {
   const failures = [];

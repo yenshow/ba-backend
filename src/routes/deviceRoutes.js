@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const deviceService = require("../services/devices/deviceService");
-const deviceTypeService = require("../services/devices/deviceTypeService");
+const { FIXED_DEVICE_TYPES } = require("../constants/deviceTypes");
 const deviceModelService = require("../services/devices/deviceModelService");
 const deviceStreamService = require("../services/devices/deviceStreamService");
 const deviceConnectivityService = require("../services/devices/deviceConnectivityService");
@@ -21,15 +21,10 @@ router.use(authenticate);
 // ========== 設備類型 API ==========
 // 注意：必須放在 /:id 之前，避免路由衝突
 
-// 取得所有設備類型
-router.get(
-  "/types",
-  disableHttpCache,
-  asyncHandler(async (req, res) => {
-    const result = await deviceTypeService.getAllDeviceTypes();
-    res.sendSuccess(result);
-  }),
-);
+// 取得所有設備類型（固定清單，見 constants/deviceTypes.js）
+router.get("/types", disableHttpCache, (req, res) => {
+  res.sendSuccess({ device_types: FIXED_DEVICE_TYPES });
+});
 
 // 設備類型固定：只提供列表（GET /types）
 
