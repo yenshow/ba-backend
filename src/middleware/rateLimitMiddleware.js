@@ -10,7 +10,7 @@ const loginFailureBuckets = new Map();
 
 const WINDOW_MS = config.rateLimit?.windowMs ?? 15 * 60 * 1000;
 const LOGIN_MAX_FAILED = 10;
-const API_MAX = config.rateLimit?.max ?? 300;
+const API_MAX = config.rateLimit?.max ?? 1000;
 const RATE_LIMIT_LOG_COOLDOWN_MS = 30_000;
 
 /** @type {Map<string, number>} */
@@ -78,6 +78,12 @@ const logRateLimitIfAllowed = (message, meta) => {
 
 const respondRateLimited = (req, res, message, meta) => {
   logRateLimitIfAllowed(message, meta);
+  const ip = getClientIpKey(req);
+  const bucket = apiBuckets.get(ip);
+  if (bucket) {
+    const retryAfterSec = Math.max(1, Math.ceil((bucket.resetAt - Date.now()) / 1000));
+    res.setHeader("Retry-After", String(retryAfterSec));
+  }
   return rateLimitHandler(req, res);
 };
 

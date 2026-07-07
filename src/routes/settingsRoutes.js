@@ -99,8 +99,9 @@ router.get("/", authenticate, asyncHandler(async (req, res) => {
  */
 router.get("/:key", authenticate, asyncHandler(async (req, res) => {
 	const { key } = req.params;
+	const isOptionalHomeKey = isHomeAppearanceSettingKey(String(key));
 	const setting = await settingsService.getSettingByKey(key, {
-		throwIfNotFound: true,
+		throwIfNotFound: !isOptionalHomeKey,
 	});
 	res.sendSuccess({ setting });
 }));
