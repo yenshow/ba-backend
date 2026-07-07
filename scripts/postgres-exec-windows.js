@@ -51,7 +51,7 @@ function runWindowsAclStep(innerCommand, label) {
   }
 }
 
-/** initdb 在 Windows 須設定資料目錄 ACL（含 PM2 LocalService）。 */
+/** initdb 前：設定目錄 ACL（空目錄，不含 /T）。 */
 function prepareWindowsDirAcl(dirPath) {
   if (process.platform !== "win32" || !dirPath) {
     return;
@@ -88,13 +88,27 @@ function prepareWindowsDirAcl(dirPath) {
   }
 }
 
+/** 套用至目錄與既有子檔（PM2 Local Service 須能讀取 PG_VERSION 等檔案）。 */
+function applyWindowsDirAclRecursive(dirPath) {
+  if (process.platform !== "win32" || !dirPath || !fs.existsSync(dirPath)) {
+    return;
+  }
+
+  prepareWindowsDirAcl(dirPath);
+  const quoted = quoteCmdPath(dirPath);
+  runWindowsAclStep(
+    `icacls ${quoted} /grant ${WIN_ACL_BUILTIN.localService}:(OI)(CI)M /T`,
+    "icacls LocalService /T",
+  );
+}
+
 function prepareWindowsPostgresDataLayout({ dataDir, logDir }) {
   if (process.platform !== "win32") {
     return;
   }
-  prepareWindowsDirAcl(dataDir);
+  applyWindowsDirAclRecursive(dataDir);
   if (logDir && logDir !== dataDir) {
-    prepareWindowsDirAcl(logDir);
+    applyWindowsDirAclRecursive(logDir);
   }
 }
 

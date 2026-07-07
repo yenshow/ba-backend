@@ -182,46 +182,8 @@ Bridge 佈防輸出**全部** ACS 事件；後端 `sdkEventPersistence` 寫入 D
 
 在 `ba-backend` 目錄執行。改碼後先 `npm run sdk:build`（若 exe 被佈防程序占用，需先停後端）。
 
-**參數設定**：直接編輯 `scripts/testLadderSdk.js` 頂部 `CONFIG`（設備 IP、密碼、doorLimit 等），無需設定環境變數。
-
-```powershell
-cd ba-backend
-npm run sdk:build
-
-# 編輯 scripts/testLadderSdk.js → CONFIG.device.password、CONFIG.doorLimit 等
-
-# 卡片
-npm run test:sdk-ladder-card-get
-npm run test:sdk-ladder-card          # create
-npm run test:sdk-ladder-card-update
-npm run test:sdk-ladder-card-delete
-
-# 樓層名稱
-npm run test:sdk-ladder-door-list     # CONFIG.doorLimit，預設 10
-npm run test:sdk-ladder-door-get      # CONFIG.doorIndex
-npm run test:sdk-ladder-door-set      # CONFIG.doorIndex、CONFIG.doorName
-
-# 呼梯
-npm run test:sdk-ladder-control
-
-# 佈防（Ctrl+C 結束；輸出全部 ACS 事件；會先結束既有 HcNetSdkBridge 程序）
-npm run test:sdk-ladder-events
-```
-
-腳本：`scripts/testLadderSdk.js`（卡片／門／呼梯）；佈防走 `sdk/scripts/run-bridge.ps1 -Arming`。
-
-| CONFIG 欄位 | 預設 | 用途 |
-| ----------- | ---- | ---- |
-| `device.host` / `port` / `username` / `password` | 見腳本 | 梯控設備連線 |
-| `cardNo` | `1234567890` | 卡號 |
-| `cardFloors` | `[1,2,3]` | 授權樓層 |
-| `cardHomeFloor` | `3` | 歸屬樓層 |
-| `cardFloorMode` | `byte` | 樓層編碼 |
-| `gatewayIndex` | `1` | 呼梯樓層 |
-| `controlCommand` | `1` | 呼梯指令 0~6 |
-| `doorIndex` | `1` | 門／樓層編號 |
-| `doorName` | `Floor 01` | 樓層名稱 |
-| `doorLimit` | `10` | door.list 上限（0=全部） |
+- **卡片／門／呼梯**：啟動後端後以 `/api/ladder-sdk/*` HTTP API 測試（見下方「HTTP API」；設備連線取自 `devices` 表）。
+- **佈防事件**：`powershell -ExecutionPolicy Bypass -File sdk/scripts/run-bridge.ps1 -Arming`（Ctrl+C 結束；會先結束既有 HcNetSdkBridge 程序）。
 
 ---
 

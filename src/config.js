@@ -53,6 +53,26 @@ const getEnv = (key, defaultValue) => {
   return process.env[key] || defaultValue;
 };
 
+/** 將 24h、7d、30m 等字串轉為毫秒 */
+const parseDurationToMs = (value, fallbackMs) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/i);
+  if (!match) return fallbackMs;
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+  };
+  return amount * multipliers[unit];
+};
+
 /**
  * 伺服器配置
  */
@@ -87,9 +107,21 @@ const database = {
 /**
  * JWT 配置
  */
+const JWT_REFRESH_THRESHOLD = "24h";
+
 const jwt = {
   secret: getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
   expiresIn: getEnv("JWT_EXPIRES_IN", "7d"),
+  refreshThreshold: JWT_REFRESH_THRESHOLD,
+  refreshThresholdMs: parseDurationToMs(JWT_REFRESH_THRESHOLD, 24 * 60 * 60 * 1000),
+};
+
+/**
+ * API 全站限流（每 IP 滑動窗口）
+ */
+const rateLimit = {
+  windowMs: 15 * 60 * 1000,
+  max: 300,
 };
 
 /**
@@ -238,6 +270,7 @@ module.exports = {
   modbus,
   database,
   jwt,
+  rateLimit,
   features,
   yscp,
   externalDatabase,

@@ -41,6 +41,15 @@ router.post(
   }),
 );
 
+router.post(
+  "/refresh",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const result = await userService.refreshUserSession(req.user);
+    res.sendSuccess(result);
+  }),
+);
+
 router.get(
   "/me",
   authenticate,

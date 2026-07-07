@@ -2,7 +2,7 @@
 /**
  * PM2-friendly portable PostgreSQL supervisor.
  *
- * Why: `start-portable-postgres.js` only starts postgres then exits.
+ * Why: one-shot start scripts exit; PM2 needs a long-lived supervisor.
  * PM2 expects a long-running process to supervise across reboots.
  *
  * Behavior:

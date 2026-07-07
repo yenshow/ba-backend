@@ -1,15 +1,16 @@
 const C = require("../utils/apiErrorCodes");
 const { sendFailure } = require("./responseHandler");
 const logger = require("../utils/logger").createLogger("RateLimit");
+const config = require("../config");
 
 /** @type {Map<string, { count: number, resetAt: number }>} */
 const apiBuckets = new Map();
 /** @type {Map<string, { count: number, resetAt: number }>} */
 const loginFailureBuckets = new Map();
 
-const WINDOW_MS = 15 * 60 * 1000;
+const WINDOW_MS = config.rateLimit?.windowMs ?? 15 * 60 * 1000;
 const LOGIN_MAX_FAILED = 10;
-const API_MAX = 300;
+const API_MAX = config.rateLimit?.max ?? 300;
 const RATE_LIMIT_LOG_COOLDOWN_MS = 30_000;
 
 /** @type {Map<string, number>} */
@@ -21,6 +22,13 @@ const isAuthenticatedElevatorLiveGet = (req) => {
   const path = String(req.originalUrl || req.url || "").split("?")[0];
   return /^\/api\/elevator\/sites\/\d+\/live$/.test(path);
 };
+
+/** 中控室 token 滑動續期不計入全站限流 */
+const isSessionRefreshPost = (req) =>
+  req.method === "POST" &&
+  String(req.originalUrl || req.url || "")
+    .split("?")[0]
+    .endsWith("/users/refresh");
 
 const rateLimitHandler = (req, res) =>
   sendFailure(
@@ -138,6 +146,7 @@ const apiRateLimiter = createRateLimiter({
   skip: (req) => {
     const url = getRequestPath(req);
     if (req.method === "GET" && url.startsWith("/api/uploads")) return true;
+    if (isSessionRefreshPost(req)) return true;
     return isAuthenticatedElevatorLiveGet(req);
   },
 });

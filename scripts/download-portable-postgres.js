@@ -23,15 +23,16 @@ const {
 const {
   log,
   execWithUtf8OnWindows,
+  prepareWindowsDirAcl,
   prepareWindowsPostgresDataLayout,
 } = require("./postgres-exec-windows");
-const { ensureRuntimeDataLayout } = require("../src/utils/baDataPaths");
 const {
   startPortablePostgres,
   verifyPsqlReady,
   PSQL_HOST,
   PSQL_COMMON_ARGS,
 } = require("./start-portable-postgres-lib");
+const { ensureRuntimeDataLayout } = require("../src/utils/baDataPaths");
 
 function ensureDirSync(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -177,7 +178,12 @@ function initDatabase() {
   log(`🔧 初始化資料庫...`, "yellow");
   ensureDirSync(POSTGRES_DIR);
   ensureDirSync(LOG_DIR);
-  prepareWindowsPostgresDataLayout({ dataDir: DATA_DIR, logDir: LOG_DIR });
+  if (process.platform === "win32") {
+    prepareWindowsDirAcl(DATA_DIR);
+    if (LOG_DIR !== DATA_DIR) {
+      prepareWindowsDirAcl(LOG_DIR);
+    }
+  }
 
   const initdbCmd =
     `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust --encoding=UTF8 --locale=C`;
@@ -328,11 +334,27 @@ function setupDatabase() {
   console.log(`  Password: postgres`);
   console.log("");
   console.log("使用方式:");
-  console.log(`  本機開發: npm run postgres:start / postgres:stop`);
-  console.log(`  安裝環境: PM2 ba-postgres（ecosystem.config.cjs）`);
+  console.log(`  本機／安裝: PM2 ba-postgres（ecosystem.config.cjs）`);
+}
+
+function repairWindowsPostgresRuntimeAcl() {
+  if (process.platform !== "win32" || !fs.existsSync(DATA_DIR)) {
+    return;
+  }
+
+  log("🔐 套用 postgres 執行期目錄 ACL（PM2 Local Service）...", "yellow");
+  prepareWindowsPostgresDataLayout({ dataDir: DATA_DIR, logDir: LOG_DIR });
+  log("✅ postgres 執行期目錄 ACL 已套用", "green");
 }
 
 async function main() {
+  const repairAclOnly = process.argv.includes("--repair-acl");
+
+  if (repairAclOnly) {
+    repairWindowsPostgresRuntimeAcl();
+    return;
+  }
+
   log(`🚀 開始設定可攜式 PostgreSQL（離線）...`, "green");
 
   ensureRuntimeDataLayout();
@@ -347,6 +369,7 @@ async function main() {
   }
 
   initDatabase();
+  repairWindowsPostgresRuntimeAcl();
   startPortablePostgres();
   setupDatabase();
 }
@@ -360,4 +383,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main };
+module.exports = { main, repairWindowsPostgresRuntimeAcl };

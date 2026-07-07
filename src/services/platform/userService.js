@@ -198,6 +198,50 @@ async function loginUser(credentials) {
   return { user: userInfo, token };
 }
 
+/**
+ * 滑動續期：token 仍有效且剩餘壽命低於 24h 時重簽 JWT
+ * @param {object} decoded - 已驗證的 JWT payload（含 id、exp、tokenVersion）
+ */
+async function refreshUserSession(decoded) {
+  const rows = await db.query("SELECT * FROM users WHERE id = ?", [decoded.id]);
+  if (rows.length === 0) {
+    throwApiError(C.AUTH_TOKEN_INVALID, "無效的 Token", { statusCode: 401 });
+  }
+
+  const dbUser = rows[0];
+  if (dbUser.status !== "active") {
+    throwApiError(C.AUTH_TOKEN_INVALID, "無效的 Token", { statusCode: 401 });
+  }
+
+  const versionCheck = await verifyTokenVersion(decoded);
+  if (!versionCheck.ok) {
+    throwApiError(versionCheck.code, versionCheck.message, { statusCode: 401 });
+  }
+
+  const { codes: permissions } =
+    await permissionService.getEffectivePermissionsForUser(
+      dbUser.id,
+      dbUser.role,
+    );
+  const userInfo = {
+    id: dbUser.id,
+    username: dbUser.username,
+    role: dbUser.role,
+    status: dbUser.status,
+    permissions,
+  };
+
+  const thresholdMs = config.jwt.refreshThresholdMs;
+  const remainingMs = decoded?.exp ? decoded.exp * 1000 - Date.now() : null;
+
+  if (remainingMs !== null && remainingMs > thresholdMs) {
+    return { refreshed: false, user: userInfo };
+  }
+
+  const token = generateToken(dbUser);
+  return { refreshed: true, user: userInfo, token };
+}
+
 async function getUsers(filters = {}) {
   const { role, status, limit, offset, orderBy, order, currentUser } = filters;
 
@@ -462,6 +506,7 @@ module.exports = {
   createBootstrapAdminUser,
   createManagedUser,
   loginUser,
+  refreshUserSession,
   getUsers,
   getUserById,
   updateUser,
