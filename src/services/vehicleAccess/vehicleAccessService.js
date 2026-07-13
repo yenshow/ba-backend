@@ -202,7 +202,7 @@ async function resetSiteStats(siteId, userId = null) {
   if (operationMode !== "parking") {
     throwApiError(
       C.VEHICLE_ACCESS_VALIDATION_FAILED,
-      "僅停車場模式可重製統計",
+      "僅停車場模式可重置統計",
     );
   }
 
