@@ -21,6 +21,9 @@ const TASK_IDS = {
 /** 環境 Modbus 輪詢固定間隔（不再使用 backgroundMonitor 自適應放慢） */
 const ENVIRONMENT_POLL_INTERVAL_MS = 15_000;
 
+/** DI/DO 泛用讀取／警報／edge 固定間隔 */
+const DI_DO_POLL_INTERVAL_MS = 1000;
+
 const monitoringTaskRegistry = [
   {
     taskId: TASK_IDS.deviceConnectivity,
@@ -63,9 +66,9 @@ const monitoringTaskRegistry = [
     requiresAnyFeature: DI_DO_ALERT_FEATURE_KEYS,
     taskFunction: checkDiDoAlerts,
     options: {
-      baseIntervalMs: 5000,
-      minIntervalMs: 5000,
-      maxIntervalMs: 5000,
+      baseIntervalMs: DI_DO_POLL_INTERVAL_MS,
+      minIntervalMs: DI_DO_POLL_INTERVAL_MS,
+      maxIntervalMs: DI_DO_POLL_INTERVAL_MS,
     },
   },
   {
@@ -106,4 +109,5 @@ module.exports = {
   getLicensedMonitoringTasks,
   TASK_IDS,
   ENVIRONMENT_POLL_INTERVAL_MS,
+  DI_DO_POLL_INTERVAL_MS,
 };

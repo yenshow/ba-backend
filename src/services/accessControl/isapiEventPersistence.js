@@ -7,6 +7,8 @@ const fs = require("fs");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const { formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryAccessEvent } = require("../operationalEvents/operationalEventCopy");
 
 const SUB_TYPES_PROCESS = new Set([1, 9, 38, 39, 75, 76, 2077, 2078, 2079]); // 人臉辨識成功/失敗、酒精檢測正常/飲酒/醉酒
 
@@ -46,6 +48,28 @@ async function persistIsapiEvent(options) {
   );
   const id = rows?.[0]?.id ?? null;
   websocketService.emitIsapiAccessEvent();
+  if (id != null) {
+    const ac = payload || {};
+    const personName =
+      ac.name || ac.employeeNoString || ac.cardNo || deviceIp || "";
+    void operationalEventService.recordEvent({
+      source: "people_counting",
+      event_kind: "access",
+      occurred_at: eventTime || new Date().toISOString(),
+      summary: summaryAccessEvent({
+        eventType,
+        personName,
+      }),
+      ref_table: "isapi_access_events",
+      ref_id: id,
+      payload: {
+        deviceIp,
+        eventType,
+        majorEventType: ac.majorEventType,
+        subEventType: ac.subEventType,
+      },
+    });
+  }
   return { inserted: true, id };
 }
 

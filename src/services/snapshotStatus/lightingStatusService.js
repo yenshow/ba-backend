@@ -92,7 +92,7 @@ async function fetchLightingSystems(zoneIds = []) {
   return hasZoneFilter ? db.query(sql, [zoneIds]) : db.query(sql);
 }
 
-async function buildLightingSnapshotItem(row, options = {}) {
+async function buildLightingSnapshotItem(row) {
   const systemId = Number(row.system_id);
   const deviceId = row.device_id ? Number(row.device_id) : null;
   const baseItem = {

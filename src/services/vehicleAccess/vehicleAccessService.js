@@ -141,6 +141,35 @@ async function getSiteStats(siteId, options = {}) {
   return provider.getSiteStats(siteId, cfg, options);
 }
 
+async function loadSessionReleasedRows(siteId, since) {
+  if (!since) return [];
+  const rows = await db.query(
+    `SELECT license_plate, allow_result, lane_type, trigger_time
+     FROM vehicle_passageway_logs
+     WHERE location_id = ? AND data_source = 'isapi_camera'
+       AND trigger_time > ?
+       AND allow_result = 1 AND lane_type IN (1, 2)
+     ORDER BY trigger_time ASC`,
+    [siteId, since],
+  );
+  return rows || [];
+}
+
+/**
+ * 停車場：以 session 放行 logs 對齊 vehicle_presence（清孤兒在場）
+ */
+async function alignParkingPresenceWithConfig(siteId, siteCfg) {
+  if (
+    siteCfg.operationMode !== "parking" ||
+    siteCfg.dataSource !== "isapi_camera"
+  ) {
+    return null;
+  }
+  const since = getEffectiveSince(siteCfg, siteCfg.createdAt);
+  const rows = await loadSessionReleasedRows(siteId, since);
+  return vehiclePresenceService.syncPresenceFromReleasedRows(siteId, rows);
+}
+
 async function getSiteSessionStats(siteId) {
   const { dataSource, operationMode, createdAt, ...cfg } =
     await getSiteConfig(siteId);
@@ -160,16 +189,8 @@ async function getSiteSessionStats(siteId) {
   if (!since) {
     return { entryCount: 0, exitCount: 0, since: null };
   }
-  const rows = await db.query(
-    `SELECT license_plate, allow_result, lane_type, trigger_time
-     FROM vehicle_passageway_logs
-     WHERE location_id = ? AND data_source = 'isapi_camera'
-       AND trigger_time > ?
-       AND allow_result = 1 AND lane_type IN (1, 2)
-     ORDER BY trigger_time ASC`,
-    [siteId, since],
-  );
-  const stats = computeTransitionStats(rows || [], {
+  const rows = await loadSessionReleasedRows(siteId, since);
+  const stats = computeTransitionStats(rows, {
     getKey: (r) => normalizePlate(r.license_plate),
     getDirection: normalizeVehicleDirection,
     getTime: (r) => r.trigger_time,
@@ -183,16 +204,22 @@ async function getSiteSessionStats(siteId) {
 }
 
 async function getSitePresence(siteId) {
-  const { operationMode, parkingCapacity } = await getSiteConfig(siteId);
+  const siteCfg = await getSiteConfig(siteId);
+  await alignParkingPresenceWithConfig(siteId, siteCfg);
   const currentCount = await vehiclePresenceService.getPresenceCount(siteId);
   return {
     currentCount,
-    capacity: operationMode === "parking" ? parkingCapacity : null,
+    capacity:
+      siteCfg.operationMode === "parking" ? siteCfg.parkingCapacity : null,
   };
 }
 
 async function getSitePresencePlates(siteId) {
-  await getSiteConfig(siteId);
+  const siteCfg = await getSiteConfig(siteId);
+  const aligned = await alignParkingPresenceWithConfig(siteId, siteCfg);
+  if (aligned?.presentPlates) {
+    return { plates: aligned.presentPlates };
+  }
   const plates = await vehiclePresenceService.getPresentPlates(siteId);
   return { plates };
 }

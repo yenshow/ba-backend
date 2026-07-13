@@ -88,6 +88,9 @@ const outputValueToBool = (v) => normalizeDoOutputValue(v) === "on";
 const invertOutputValue = (v) =>
   normalizeDoOutputValue(v) === "on" ? "off" : "on";
 
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryLinkageWrite } = require("../operationalEvents/operationalEventCopy");
+
 async function writeDo({
   linkageId,
   alertId = null,
@@ -134,6 +137,31 @@ async function writeDo({
       errorMessage: ok ? null : "writeCoil 回傳失敗",
       createdBy,
     });
+    if (ok && alertId != null) {
+      void operationalEventService.recordEvent({
+        source: "alert_linkage",
+        event_kind: "linkage_write",
+        device_id: doDeviceId,
+        address: doAddress,
+        bit_key: `do:${doAddress}`,
+        new_value: Boolean(doValue),
+        summary: summaryLinkageWrite({
+          address: doAddress,
+          value: Boolean(doValue),
+          executionType,
+        }),
+        alert_id: alertId,
+        actor_user_id: createdBy,
+        ref_table: "alert_linkage_executions",
+        payload: {
+          linkageId,
+          executionType,
+          doDeviceId,
+          doAddress,
+          doValue: Boolean(doValue),
+        },
+      });
+    }
     return { success: Boolean(ok) };
   } catch (err) {
     const msg = err?.message || String(err);

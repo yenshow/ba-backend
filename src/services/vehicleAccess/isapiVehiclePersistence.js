@@ -14,6 +14,8 @@ const {
 } = require("./vehicleAccessConfig");
 const vehiclePresenceService = require("./vehiclePresenceService");
 const { getUploadsDir, formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryVehicle } = require("../operationalEvents/operationalEventCopy");
 
 async function resolveDeviceDisplayName(deviceId) {
   if (!deviceId) return null;
@@ -133,6 +135,24 @@ async function persistAnprEvent(options) {
     const id = rows?.[0]?.id;
     if (id != null) {
       ids.push(id);
+      void operationalEventService.recordEvent({
+        source: "vehicle_access",
+        event_kind: "vehicle",
+        occurred_at: parsed.dateTime,
+        location_id: target.locationId,
+        device_id: deviceId,
+        summary: summaryVehicle({
+          plate,
+          laneType: target.laneType,
+        }),
+        ref_table: "vehicle_passageway_logs",
+        ref_id: id,
+        payload: {
+          licensePlate: plate || null,
+          laneType: target.laneType,
+          allowResult,
+        },
+      });
       if (
         policy.updatePresence &&
         plate &&

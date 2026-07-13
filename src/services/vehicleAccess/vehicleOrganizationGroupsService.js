@@ -80,14 +80,16 @@ async function buildOrganizationGroups(siteId, { logs = [], presentPlates } = {}
     }
   }
 
-  const presentSet =
-    presentPlates instanceof Set
+  /** 呼叫端明確傳入 presentPlates（含空陣列）時以 presence 為準，避免停車場 Reset 後誤用當日 logs */
+  const usePresentPlates =
+    presentPlates instanceof Set || Array.isArray(presentPlates);
+  const presentSet = usePresentPlates
+    ? presentPlates instanceof Set
       ? presentPlates
       : new Set(
-          (Array.isArray(presentPlates) ? presentPlates : [])
-            .map((p) => normalizePlate(p))
-            .filter(Boolean),
-        );
+          presentPlates.map((p) => normalizePlate(p)).filter(Boolean),
+        )
+    : null;
 
   const validLogs = (logs || []).filter(
     (log) => log.release_result === "released" || log.release_result == null,
@@ -101,10 +103,9 @@ async function buildOrganizationGroups(siteId, { logs = [], presentPlates } = {}
         plateNorms.has(normalizePlate(log.license_plate || log.licensePlate)),
       );
       const stats = statsFromVehicleLogs(personLogs);
-      const isPresent =
-        presentSet.size > 0
-          ? plates.some((p) => presentSet.has(normalizePlate(p)))
-          : stats.currentCount > 0;
+      const isPresent = usePresentPlates
+        ? plates.some((p) => presentSet.has(normalizePlate(p)))
+        : stats.currentCount > 0;
       return {
         id: person.id,
         name: person.full_name || person.employee_no || "—",

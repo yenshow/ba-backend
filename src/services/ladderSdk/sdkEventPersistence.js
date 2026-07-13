@@ -5,6 +5,8 @@ const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const { ALLOWED_EVENT_KEYS } = require("./acsEventLabels");
 const { resolveEventCardNo } = require("./ladderSdkCardCorrelation");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryElevator } = require("../operationalEvents/operationalEventCopy");
 
 const isAllowedEvent = (major, minor) =>
   ALLOWED_EVENT_KEYS.has(`${Number(major)}:${Number(minor)}`);
@@ -74,6 +76,26 @@ const persistLadderSdkEvent = async (options) => {
     eventName: eventName || "",
     floor: floor != null ? Number(floor) : null,
     cardNo: resolvedCardNo,
+  });
+
+  void operationalEventService.recordEvent({
+    source: "elevator",
+    event_kind: "elevator",
+    occurred_at: resolvedEventTime,
+    device_id: Number(deviceId),
+    summary: summaryElevator({
+      eventName,
+      major: Number(major),
+      minor: Number(minor),
+    }),
+    ref_table: "ladder_sdk_events",
+    ref_id: id,
+    payload: {
+      major: Number(major),
+      minor: Number(minor),
+      floor: floor != null ? Number(floor) : null,
+      cardNo: resolvedCardNo,
+    },
   });
 
   return { inserted: true, id };

@@ -34,6 +34,7 @@ const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const elevatorRoutes = require("./routes/elevatorRoutes");
 const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
 const alertRoutes = require("./routes/alertRoutes");
+const operationalEventRoutes = require("./routes/operationalEventRoutes");
 const externalDataRoutes = require("./routes/externalDataRoutes");
 const accessControlRoutes = require("./routes/accessControlRoutes");
 const ladderSdkRoutes = require("./routes/ladderSdkRoutes");
@@ -70,6 +71,9 @@ const externalIntegrationSchedulers = require("./services/externalIntegration/ex
 const {
   startAlertDailyRolloverScheduler,
 } = require("./services/alerts/alertRolloverScheduler");
+const {
+  startOperationalEventRetentionScheduler,
+} = require("./services/operationalEvents/operationalEventRetentionScheduler");
 
 const app = express();
 
@@ -162,6 +166,7 @@ app.use(
   vehicleAccessRoutes,
 );
 app.use("/api/alerts", alertRoutes);
+app.use("/api/operational-events", operationalEventRoutes);
 app.use("/api/external-data", externalDataRoutes); // 車輛相關路由在 externalDataRoutes 內依 requireFeature(vehicle_access) 控管
 app.use("/api/access-control", accessControlRoutes);
 app.use("/api/ladder-sdk", ladderSdkRoutes);
@@ -283,6 +288,9 @@ async function startServer() {
 
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
+
+    global.__operationalEventRetentionStop =
+      startOperationalEventRetentionScheduler();
 
     global.__externalSyncHandle = externalIntegrationSchedulers.startExternalSync();
     global.__recordExportHandle = externalIntegrationSchedulers.startRecordExport();

@@ -209,10 +209,51 @@ async function ensureExternalIntegrationTables(pool) {
   `);
 }
 
+async function ensureOperationalEventsTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS operational_events (
+      id BIGSERIAL PRIMARY KEY,
+      occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      source VARCHAR(64) NOT NULL,
+      event_kind VARCHAR(32) NOT NULL
+        CHECK (event_kind IN (
+          'control_write', 'state_change', 'linkage_write',
+          'access', 'vehicle', 'elevator'
+        )),
+      location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+      system_id INTEGER REFERENCES location_systems(id) ON DELETE SET NULL,
+      device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+      bit_key VARCHAR(64),
+      address INTEGER,
+      old_value BOOLEAN,
+      new_value BOOLEAN,
+      summary TEXT NOT NULL,
+      actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
+      ref_table VARCHAR(64),
+      ref_id BIGINT,
+      payload JSONB,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_operational_events_occurred
+      ON operational_events(occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_source_occurred
+      ON operational_events(source, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_kind_occurred
+      ON operational_events(event_kind, occurred_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_alert_id
+      ON operational_events(alert_id)
+      WHERE alert_id IS NOT NULL;
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
   await ensureExternalIntegrationTables(pool);
+  await ensureOperationalEventsTable(pool);
   logger.info("schema patches 已套用", { module: "schemaPatches" });
 }
 
@@ -221,5 +262,6 @@ module.exports = {
   ensureEnumValue,
   ensureAlertSourceEnumValues,
   ensureExternalIntegrationTables,
+  ensureOperationalEventsTable,
   applySchemaPatches,
 };

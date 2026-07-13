@@ -1,20 +1,17 @@
 /**
- * 泛用 DI/DO 警報監控
- *
- * 定期掃描所有啟用的 DI/DO 規則（`alert_type IN ('di','do')`），
- * 依規則的 target 解析對應的 location_systems → device → Modbus 暫存器，
- * 讀取位元值後觸發或解除警報。
- *
- * 本模組為 DI/DO（bit_state）單一路徑：以規格化 `di|do|discrete|coil:<addr>` 讀 Modbus，
- * 不依賴各系統自訂 statusPoints。語意請由 alert_rules 的訊息模板／名稱補足。
+ * 泛用 DI/DO 監控（單次 batch 讀）
+ * - 警報：啟用 di/do 規則 → create/resolve alert
+ * - 營運事件：已配置 bit 0↔1（modbus_config DI/DO + status_points discrete／coil；重啟首輪只建 baseline）
  */
-
 const logger = require("../../utils/logger");
 const db = require("../../database/db");
 const alertService = require("../alerts/alertService");
 const alertRuleService = require("../alerts/alertRuleService");
 const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlertHelper = require("../alerts/systemAlertHelper");
+const { collectConfiguredBitPointsFromSystemConfig } = require("../devices/modbusDiDoConfig");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryStateChange } = require("../operationalEvents/operationalEventCopy");
 
 const getDeviceService = () => require("../devices/deviceService");
 
@@ -23,34 +20,29 @@ const SOURCE_TO_SYSTEM_TYPE = {
   lighting: "lighting",
   drainage: "drainage",
   power: "power",
+  hvac: "hvac",
   fire: "fire",
   emergency_rescue: "emergency_rescue",
   air_circulation: "air_circulation",
   smoke_alarm: "smoke_alarm",
 };
 
-/**
- * 解析 bit_key 為 registerType + address
- * @param {string} bitKey - e.g. "di:0", "do:3"
- * @returns {{ registerType: string, address: number } | null}
- */
+const CONFIGURED_SYSTEM_TYPES = Object.values(SOURCE_TO_SYSTEM_TYPE);
+
+/** @type {Map<string, boolean>} */
+const lastBitState = new Map();
+/** @type {Set<string>} */
+const baselinedKeys = new Set();
+
 function parseBitKey(bitKey) {
   const m = String(bitKey || "").match(/^(di|do|discrete|coil):(\d+)$/i);
   if (!m) return null;
   const kind = m[1].toLowerCase();
   const registerType =
     kind === "di" || kind === "discrete" ? "discrete" : "coil";
-  return {
-    registerType,
-    address: Number(m[2]),
-  };
+  return { registerType, address: Number(m[2]) };
 }
 
-/**
- * 從 devices 表解析 Modbus 連線資訊
- * @param {number} deviceId
- * @returns {Promise<{ host: string, port: number, unitId: number } | null>}
- */
 const deviceCfgCache = new Map();
 const DEVICE_CFG_TTL_MS = 60_000;
 
@@ -74,26 +66,18 @@ async function resolveDeviceConfig(deviceId) {
   }
 }
 
-/**
- * 查詢符合規則 target 範圍的 location_systems 並取得 deviceId
- * @param {Object} rule
- * @returns {Promise<Array<{ systemId: number, deviceId: number | null }>>}
- */
 async function resolveTargetSystems(rule) {
   const systemType = SOURCE_TO_SYSTEM_TYPE[rule.source];
   if (!systemType) return [];
 
-  let whereClause;
+  let whereClause = "";
   const params = [systemType];
-
   if (rule.target_type === "location" && rule.target_id != null) {
     whereClause = "AND ls.location_id = ?";
     params.push(rule.target_id);
   } else if (rule.target_type === "zone" && rule.target_id != null) {
     whereClause = "AND l.zone_id = ?";
     params.push(rule.target_id);
-  } else {
-    whereClause = "";
   }
 
   const rows = await db.query(
@@ -112,9 +96,41 @@ async function resolveTargetSystems(rule) {
   }));
 }
 
-/**
- * 單條規則 × 單個 location_system：觸發或解除警報
- */
+async function loadConfiguredDiDoPoints() {
+  const placeholders = CONFIGURED_SYSTEM_TYPES.map(() => "?").join(", ");
+  const rows = await db.query(
+    `
+    SELECT
+      ls.id AS system_id,
+      ls.location_id,
+      ls.system_type,
+      ls.system_config
+    FROM location_systems ls
+    WHERE ls.system_type IN (${placeholders})
+      AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
+    `,
+    CONFIGURED_SYSTEM_TYPES,
+  );
+
+  const points = [];
+  for (const row of rows || []) {
+    const bits = collectConfiguredBitPointsFromSystemConfig(row.system_config);
+    for (const b of bits) {
+      points.push({
+        systemId: row.system_id,
+        locationId: row.location_id,
+        systemType: row.system_type,
+        deviceId: b.deviceId,
+        bitKey: b.bitKey,
+        registerType: b.registerType,
+        address: b.address,
+        role: b.role,
+      });
+    }
+  }
+  return points;
+}
+
 async function syncDiDoAlert(rule, systemId, bitValue) {
   const dimensionKey =
     rule.dimension_key ||
@@ -163,48 +179,88 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
   }
 }
 
+function recordStateEdge(point, bitValue) {
+  const stateKey = `${point.systemId}:${point.bitKey}`;
+  if (!baselinedKeys.has(stateKey)) {
+    lastBitState.set(stateKey, bitValue);
+    baselinedKeys.add(stateKey);
+    return;
+  }
+  const prev = lastBitState.get(stateKey);
+  if (prev === bitValue) return;
+  lastBitState.set(stateKey, bitValue);
+
+  void operationalEventService.recordEvent({
+    source: point.systemType,
+    event_kind: "state_change",
+    location_id: point.locationId,
+    system_id: point.systemId,
+    device_id: point.deviceId,
+    bit_key: point.bitKey,
+    address: point.address,
+    old_value: prev,
+    new_value: bitValue,
+    summary: summaryStateChange({
+      source: point.systemType,
+      bitKey: point.bitKey,
+      address: point.address,
+      newValue: bitValue,
+    }),
+    payload: {
+      bitKey: point.bitKey,
+      role: point.role || null,
+      oldValue: prev,
+      newValue: bitValue,
+    },
+  });
+}
+
 /**
- * 主監控函式：掃描所有啟用 DI/DO 規則，讀取 Modbus，觸發/解除警報
+ * 單次 batch：已配置點 edge + 規則警報 + 連線狀態
  */
 async function checkDiDoAlerts() {
   const monitorLogger = logger.createLogger("diDoMonitor");
   try {
-    const rules = await alertRuleService.getEnabledDiDoRules();
-    if (!rules || rules.length === 0) return;
+    const [configuredPoints, rules] = await Promise.all([
+      loadConfiguredDiDoPoints(),
+      alertRuleService.getEnabledDiDoRules(),
+    ]);
 
-    // 對每條規則展開 target → location_systems，組成 { rule, systemId, deviceId, parsed }
-    const tasks = [];
-    for (const rule of rules) {
+    /** @type {Map<string, { deviceId: number, parsed: { registerType: string, address: number }, alertTasks: any[], edgePoints: any[] }>} */
+    const readKeyMap = new Map();
+
+    const ensureEntry = (deviceId, registerType, address) => {
+      const key = `${deviceId}:${registerType}:${address}`;
+      if (!readKeyMap.has(key)) {
+        readKeyMap.set(key, {
+          deviceId,
+          parsed: { registerType, address },
+          alertTasks: [],
+          edgePoints: [],
+        });
+      }
+      return readKeyMap.get(key);
+    };
+
+    for (const p of configuredPoints) {
+      if (!p.deviceId) continue;
+      ensureEntry(p.deviceId, p.registerType, p.address).edgePoints.push(p);
+    }
+
+    for (const rule of rules || []) {
       const parsed = parseBitKey(rule.condition_config?.bit_key);
       if (!parsed) continue;
-
       const systems = await resolveTargetSystems(rule);
       for (const sys of systems) {
         if (!sys.deviceId) continue;
-        tasks.push({
+        ensureEntry(sys.deviceId, parsed.registerType, parsed.address).alertTasks.push({
           rule,
           systemId: sys.systemId,
-          deviceId: sys.deviceId,
-          parsed,
         });
       }
     }
 
-    if (tasks.length === 0) return;
-
-    // 依 device + registerType + address 去重，同一暫存器只讀一次
-    const readKeyMap = new Map();
-    for (const t of tasks) {
-      const key = `${t.deviceId}:${t.parsed.registerType}:${t.parsed.address}`;
-      if (!readKeyMap.has(key)) {
-        readKeyMap.set(key, {
-          deviceId: t.deviceId,
-          parsed: t.parsed,
-          tasks: [],
-        });
-      }
-      readKeyMap.get(key).tasks.push(t);
-    }
+    if (readKeyMap.size === 0) return;
 
     const readEntries = [...readKeyMap.values()];
     const batchRequests = [];
@@ -227,11 +283,8 @@ async function checkDiDoAlerts() {
     if (batchRequests.length === 0) return;
 
     const results = await modbusBatchService.batchRead(batchRequests);
+    const deviceOutcome = new Map();
 
-    // 依「設備（host:port:unitId）」彙整本輪讀取的成敗，統一同步 device offline tracking
-    // - 背景讀 DI/DO 走 modbusBatchService（非 HTTP 路由），原本不會觸發 notifyModbusHttpDevice*
-    //   導致 DI/DO 控制器恢復連線時，沒有任何路徑會清除「連續 N 次無法連接」警報
-    const deviceOutcome = new Map(); // deviceKey -> { config, anyOk, errorMessage }
     for (let i = 0; i < validEntries.length; i++) {
       const entry = validEntries[i];
       const req = batchRequests[i];
@@ -253,7 +306,11 @@ async function checkDiDoAlerts() {
       if (!result?.ok) continue;
       const bitValue = Boolean(result.data?.[0]);
 
-      for (const task of entry.tasks) {
+      for (const point of entry.edgePoints) {
+        recordStateEdge(point, bitValue);
+      }
+
+      for (const task of entry.alertTasks) {
         try {
           await syncDiDoAlert(task.rule, task.systemId, bitValue);
         } catch (err) {
@@ -265,7 +322,6 @@ async function checkDiDoAlerts() {
       }
     }
 
-    // 以「整台控制器至少一條讀取成功」判斷為連線 OK；全失敗才累計 offline
     await Promise.allSettled(
       [...deviceOutcome.values()].map(
         async ({ config, anyOk, errorMessage }) => {
@@ -306,4 +362,9 @@ const DI_DO_ALERT_FEATURE_KEYS = [
 module.exports = {
   checkDiDoAlerts,
   DI_DO_ALERT_FEATURE_KEYS,
+  /** @internal */
+  _resetEdgeStateForTests: () => {
+    lastBitState.clear();
+    baselinedKeys.clear();
+  },
 };

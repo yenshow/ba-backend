@@ -78,6 +78,22 @@ const SHARED_MODULES = [
     },
   },
   {
+    code: "system.operational_log",
+    name: "營運事件",
+    sort_order: 4,
+    children: [
+      { code: "report.export", name: "報表匯出", sort_order: 1 },
+    ],
+    ui: {
+      id: 19,
+      icon: "maintenance",
+      description: "現場營運事件與控制歷程查詢",
+      category: "core",
+      routePrefix: "/core/operational-log",
+      featureKey: null,
+    },
+  },
+  {
     code: "system.people_counting",
     name: "人流統計",
     profileNames: { central: "門禁管理" },
@@ -160,7 +176,7 @@ const CENTRAL_MODULES = [
   {
     code: "system.area_point_map",
     name: "全區點位圖",
-    sort_order: 4,
+    sort_order: 5,
     children: [
       { code: "zone.delete", name: "區域刪除", sort_order: 1 },
       { code: "location.delete", name: "地點刪除", sort_order: 2 },

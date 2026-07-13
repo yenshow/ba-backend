@@ -3,6 +3,8 @@
  */
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryPeopleCounting } = require("../operationalEvents/operationalEventCopy");
 
 function safeInt(v) {
   const n = Number(v);
@@ -138,6 +140,27 @@ async function persistPeopleCountingEvent(options) {
       enter: enterNum,
       exit: exitNum,
       currentCount,
+    });
+    void operationalEventService.recordEvent({
+      source: "people_counting",
+      event_kind: "access",
+      occurred_at: eventTime,
+      location_id: locationId,
+      device_id: deviceId,
+      summary: summaryPeopleCounting({
+        regionName,
+        enterDelta,
+        exitDelta,
+      }),
+      ref_table: "isapi_people_counting_events",
+      ref_id: id,
+      payload: {
+        enter: enterNum,
+        exit: exitNum,
+        enterDelta,
+        exitDelta,
+        regionId,
+      },
     });
   }
 

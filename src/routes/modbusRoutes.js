@@ -17,6 +17,8 @@ const {
 const logger = require("../utils/logger");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrors");
+const operationalEventService = require("../services/operationalEvents/operationalEventService");
+const { summaryControlWrite } = require("../services/operationalEvents/operationalEventCopy");
 
 const router = express.Router();
 
@@ -196,6 +198,28 @@ router.put(
       );
       if (success) {
         modbusBatchService.invalidateDeviceCache(deviceConfig, "coil");
+        const controlScope = String(req.query.controlScope || "").trim() || "modbus";
+        void operationalEventService.recordEvent({
+          source: controlScope,
+          event_kind: "control_write",
+          address,
+          new_value: value,
+          bit_key: `do:${address}`,
+          summary: summaryControlWrite({
+            source: controlScope,
+            address,
+            bitKey: `do:${address}`,
+            value,
+          }),
+          actor_user_id: req.user?.id ?? null,
+          payload: {
+            host: deviceConfig.host,
+            port: deviceConfig.port,
+            unitId: deviceConfig.unitId,
+            address,
+            value,
+          },
+        });
       }
       return res.sendSuccess({ address, value, success, device: deviceConfig });
     }
@@ -219,6 +243,29 @@ router.put(
       );
       if (success) {
         modbusBatchService.invalidateDeviceCache(deviceConfig, "coil");
+        const controlScope = String(req.query.controlScope || "").trim() || "modbus";
+        void operationalEventService.recordEvent({
+          source: controlScope,
+          event_kind: "control_write",
+          address,
+          new_value: values[0],
+          bit_key: `do:${address}`,
+          summary: summaryControlWrite({
+            source: controlScope,
+            address,
+            bitKey: `do:${address}`,
+            value: values[0],
+            batchCount: values.length,
+          }),
+          actor_user_id: req.user?.id ?? null,
+          payload: {
+            host: deviceConfig.host,
+            port: deviceConfig.port,
+            unitId: deviceConfig.unitId,
+            address,
+            values,
+          },
+        });
       }
       return res.sendSuccess({
         address,

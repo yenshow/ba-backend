@@ -264,6 +264,13 @@ const ladderSdk = {
   bridgeExePath: getEnv("LADDER_SDK_BRIDGE_EXE", ""),
 };
 
+/**
+ * 營運事件（線上保留天數）
+ */
+const operationalEvents = {
+  retentionDays: toNumber(getEnv("OPERATIONAL_EVENTS_RETENTION_DAYS", "90"), 90),
+};
+
 module.exports = {
   server,
   isProduction,
@@ -277,6 +284,7 @@ module.exports = {
   license,
   mediaMTX,
   ladderSdk,
+  operationalEvents,
   cors,
   serverHost: server.host,
   serverPort: server.port,

@@ -19,6 +19,7 @@ const MODULE_PERM_KEYS = {
   "system.equipment_management": "equipment",
   "system.personnel": "personnel",
   "system.alert_log": "alertLog",
+  "system.operational_log": "operationalLog",
   "system.people_counting": "peopleCounting",
   "system.environment": "environment",
   "system.vehicle_access": "vehicleAccess",
