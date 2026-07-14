@@ -104,6 +104,7 @@ const SHARED_MODULES = [
       { code: "device_sync", name: "門禁設備同步", sort_order: 5 },
       { code: "sync.edit", name: "門禁名單編輯", sort_order: 6 },
       { code: "statistics.reset", name: "重置統計", sort_order: 7 },
+      { code: "door.control", name: "門控", sort_order: 8 },
     ],
     ui: {
       id: 6,

@@ -814,6 +814,27 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // ========== 警報門禁全開連動（rule 啟用後對全部 access_control 送 alwaysOpen） ==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_access_door_linkages (
+        id SERIAL PRIMARY KEY,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rule_id)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_access_door_linkages");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_access_door_linkages_enabled ON alert_access_door_linkages(enabled);
+      CREATE INDEX IF NOT EXISTS idx_alert_access_door_linkages_rule_id ON alert_access_door_linkages(rule_id);
+    `);
+    schemaLogger.info("alert_access_door_linkages 表已建立（門禁全開連動）", {
+      module: "initSchema",
+    });
+
     // ========== 警報外部通知（Email / SMTP，每規則獨立）==========
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_email_subscriptions (

@@ -5,6 +5,7 @@ const alertIgnoreService = require("../services/alerts/alertIgnoreService");
 const alertRuleService = require("../services/alerts/alertRuleService");
 const alertLinkageService = require("../services/alerts/alertLinkageService");
 const alertCameraLinkageService = require("../services/alerts/alertCameraLinkageService");
+const alertAccessDoorLinkageService = require("../services/alerts/alertAccessDoorLinkageService");
 const alertEmailSubscriptionService = require("../services/alerts/alertEmailSubscriptionService");
 const db = require("../database/db");
 const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
@@ -96,6 +97,15 @@ function validateRuleIntegrationsPayload(body) {
     if (unique.length > 4) {
       return "cameraLinkage.camera_device_ids 最多 4 台";
     }
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(b, "accessDoorLinkage") &&
+    b.accessDoorLinkage &&
+    b.accessDoorLinkage.enabled !== undefined &&
+    typeof b.accessDoorLinkage.enabled !== "boolean"
+  ) {
+    return "accessDoorLinkage.enabled 需為布林值";
   }
 
   if (Object.prototype.hasOwnProperty.call(b, "emailSubscription")) {
@@ -496,7 +506,7 @@ router.get(
   }),
 );
 
-// 批次取得多個規則的整合設定（DO / 攝影機 / Email）
+// 批次取得多個規則的整合設定（DO／攝影機／門禁全開／Email）
 router.post(
   "/rules/integrations/batch",
   requirePermission("system.alert_log.alert.update"),
@@ -512,17 +522,20 @@ router.post(
       return res.sendSuccess({});
     }
 
-    const [doLinkages, cameraLinkages, emailSubs] = await Promise.all([
-      alertLinkageService.getLatestLinkagesByRuleIds(ids),
-      alertCameraLinkageService.getByRuleIds(ids),
-      alertEmailSubscriptionService.getByRuleIds(ids),
-    ]);
+    const [doLinkages, cameraLinkages, accessDoorLinkages, emailSubs] =
+      await Promise.all([
+        alertLinkageService.getLatestLinkagesByRuleIds(ids),
+        alertCameraLinkageService.getByRuleIds(ids),
+        alertAccessDoorLinkageService.getByRuleIds(ids),
+        alertEmailSubscriptionService.getByRuleIds(ids),
+      ]);
 
     const result = {};
     for (const id of ids) {
       result[id] = {
         doLinkage: null,
         cameraLinkage: null,
+        accessDoorLinkage: null,
         emailSubscription: null,
       };
     }
@@ -536,6 +549,11 @@ router.post(
       const rid = c?.rule_id != null ? Number(c.rule_id) : null;
       if (!rid || !result[rid]) continue;
       result[rid].cameraLinkage = c;
+    }
+    for (const a of accessDoorLinkages || []) {
+      const rid = a?.rule_id != null ? Number(a.rule_id) : null;
+      if (!rid || !result[rid]) continue;
+      result[rid].accessDoorLinkage = a;
     }
     for (const e of emailSubs || []) {
       const rid = e?.rule_id != null ? Number(e.rule_id) : null;
@@ -566,7 +584,7 @@ router.post(
   }),
 );
 
-// 取得單一規則的整合設定（連動 DO / 攝影機 / Email）
+// 取得單一規則的整合設定（連動 DO / 攝影機 / 門禁全開 / Email）
 router.get(
   "/rules/:id/integrations",
   requirePermission("system.alert_log"),
@@ -577,9 +595,16 @@ router.get(
     const doLinkage =
       await alertLinkageService.getSingleLinkageByRuleId(ruleId);
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
+    const accessDoorLinkage =
+      await alertAccessDoorLinkageService.getByRuleId(ruleId);
     const emailSubscription =
       await alertEmailSubscriptionService.getByRuleId(ruleId);
-    res.sendSuccess({ doLinkage, cameraLinkage, emailSubscription });
+    res.sendSuccess({
+      doLinkage,
+      cameraLinkage,
+      accessDoorLinkage,
+      emailSubscription,
+    });
   }),
 );
 
@@ -624,6 +649,19 @@ router.put(
       }
     }
 
+    // Access door linkage（全開；無設備清單）
+    if (Object.prototype.hasOwnProperty.call(body, "accessDoorLinkage")) {
+      if (!body.accessDoorLinkage) {
+        await alertAccessDoorLinkageService.deleteForRule(ruleId);
+      } else {
+        await alertAccessDoorLinkageService.upsertForRule(
+          ruleId,
+          body.accessDoorLinkage,
+          userId,
+        );
+      }
+    }
+
     // Email subscription (upsert)
     if (Object.prototype.hasOwnProperty.call(body, "emailSubscription")) {
       if (!body.emailSubscription) {
@@ -640,9 +678,16 @@ router.put(
     const doLinkage =
       await alertLinkageService.getSingleLinkageByRuleId(ruleId);
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
+    const accessDoorLinkage =
+      await alertAccessDoorLinkageService.getByRuleId(ruleId);
     const emailSubscription =
       await alertEmailSubscriptionService.getByRuleId(ruleId);
-    res.sendSuccess({ doLinkage, cameraLinkage, emailSubscription });
+    res.sendSuccess({
+      doLinkage,
+      cameraLinkage,
+      accessDoorLinkage,
+      emailSubscription,
+    });
   }),
 );
 

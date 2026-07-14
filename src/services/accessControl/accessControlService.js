@@ -7,6 +7,10 @@ const { createIsapiClient } = require("./isapiClient");
 const FormData = require("form-data");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const {
+  summaryAccessDoorControlWrite,
+} = require("../operationalEvents/operationalEventCopy");
 
 const ISAPI_PATHS = {
   userInfoSearch: "/ISAPI/AccessControl/UserInfo/Search?format=json",
@@ -22,6 +26,26 @@ const ISAPI_PATHS = {
   fingerPrintSetUp: "/ISAPI/AccessControl/FingerPrint/SetUp?format=json",
   captureFingerPrint: "/ISAPI/AccessControl/CaptureFingerPrint",
 };
+
+const VALID_REMOTE_DOOR_CMDS = new Set([
+  "open",
+  "close",
+  "alwaysOpen",
+  "alwaysClose",
+]);
+
+function normalizeDoorNo(doorNo) {
+  return Number.isFinite(Number(doorNo)) && Number(doorNo) > 0
+    ? Math.trunc(Number(doorNo))
+    : 1;
+}
+
+function buildRemoteControlDoorXml(cmd) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<RemoteControlDoor xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
+  <cmd>${cmd}</cmd>
+</RemoteControlDoor>`;
+}
 
 /** 從 UserInfo 中只保留文檔指定欄位 */
 const USER_INFO_FIELDS = [
@@ -577,6 +601,89 @@ async function deleteCardInfo(deviceId, cardNo) {
   return { success: true };
 }
 
+/**
+ * 遠端門控（RemoteControlDoor）；成功／失敗皆寫營運事件。
+ * @param {number} deviceId
+ * @param {object} options
+ * @param {'open'|'close'|'alwaysOpen'|'alwaysClose'} options.cmd
+ * @param {number} [options.doorNo=1]
+ * @param {object} [options.operationalEvent]
+ * @param {number|null} [options.operationalEvent.actorUserId]
+ * @param {boolean} [options.operationalEvent.fromAlertLinkage]
+ * @param {number|null} [options.operationalEvent.alertId]
+ * @param {number|null} [options.operationalEvent.ruleId]
+ */
+async function controlRemoteDoor(deviceId, options = {}) {
+  const cmd = String(options.cmd || "").trim();
+  if (!VALID_REMOTE_DOOR_CMDS.has(cmd)) {
+    throw createApiError(
+      C.BAD_REQUEST,
+      "cmd 須為 open、close、alwaysOpen 或 alwaysClose",
+    );
+  }
+  const doorNo = normalizeDoorNo(options.doorNo);
+  const { device, client } = await getDeviceAndClient(deviceId);
+  const oe = options.operationalEvent || {};
+  const fromAlertLinkage = Boolean(oe.fromAlertLinkage);
+  const deviceName = device?.name || `設備 #${deviceId}`;
+
+  const recordOe = (success, errorMessage = null) => {
+    void operationalEventService.recordEvent({
+      source: fromAlertLinkage ? "alert_linkage" : "access_control",
+      event_kind: "control_write",
+      device_id: deviceId,
+      bit_key: `access_door:${cmd}`,
+      new_value: success ? true : null,
+      actor_user_id: oe.actorUserId ?? null,
+      summary: summaryAccessDoorControlWrite({
+        deviceName,
+        cmd,
+        success,
+        errorMessage,
+        fromAlertLinkage,
+      }),
+      ref_table: fromAlertLinkage ? "alerts" : "devices",
+      ref_id: fromAlertLinkage
+        ? oe.alertId != null
+          ? Number(oe.alertId)
+          : null
+        : deviceId,
+      payload: {
+        cmd,
+        success,
+        accessDeviceId: deviceId,
+        doorNo,
+        ...(fromAlertLinkage
+          ? {
+              fromAlertLinkage: true,
+              linkageKind: "access_door",
+              alertId: oe.alertId != null ? Number(oe.alertId) : null,
+              ruleId: oe.ruleId != null ? Number(oe.ruleId) : null,
+            }
+          : {}),
+        ...(errorMessage
+          ? { errorMessage: String(errorMessage).slice(0, 500) }
+          : {}),
+      },
+    });
+  };
+
+  try {
+    await client.request({
+      method: "PUT",
+      path: `/ISAPI/AccessControl/RemoteControl/door/${doorNo}`,
+      data: buildRemoteControlDoorXml(cmd),
+      headers: { "Content-Type": "application/xml" },
+      responseType: "text",
+    });
+    recordOe(true);
+    return { success: true, doorNo, cmd };
+  } catch (err) {
+    recordOe(false, err?.message || String(err));
+    throw err;
+  }
+}
+
 module.exports = {
   getDeviceAndClient,
   searchUserInfo,
@@ -590,4 +697,5 @@ module.exports = {
   deleteCardInfo,
   captureFingerPrint,
   setFingerPrint,
+  controlRemoteDoor,
 };

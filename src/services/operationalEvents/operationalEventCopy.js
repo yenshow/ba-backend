@@ -54,6 +54,29 @@ const summaryLinkageWrite = ({ address, value, executionType }) => {
   return executionType ? `${base}（${executionType}）` : base;
 };
 
+/** 門禁 RemoteControlDoor 控制寫入摘要 */
+const ACCESS_DOOR_CMD_LABEL = {
+  open: "門禁開啟",
+  close: "門禁關閉",
+  alwaysOpen: "門禁常開",
+  alwaysClose: "門禁常關",
+};
+
+const summaryAccessDoorControlWrite = ({
+  deviceName,
+  cmd,
+  success = true,
+  errorMessage = null,
+  fromAlertLinkage = false,
+}) => {
+  const name = deviceName || "門禁設備";
+  const label = ACCESS_DOOR_CMD_LABEL[cmd] || `門禁指令 ${cmd}`;
+  const prefix = fromAlertLinkage ? "警報連動 " : "";
+  if (success) return `${prefix}${label}：${name}`;
+  const reason = errorMessage ? `（${String(errorMessage).slice(0, 120)}）` : "";
+  return `${prefix}${label}失敗：${name}${reason}`;
+};
+
 /** 門禁 ISAPI */
 const summaryAccessEvent = ({ personName }) => {
   const who = personName ? `：${personName}` : "";
@@ -89,6 +112,7 @@ module.exports = {
   summaryStateChange,
   summaryControlWrite,
   summaryLinkageWrite,
+  summaryAccessDoorControlWrite,
   summaryAccessEvent,
   summaryPeopleCounting,
   summaryVehicle,

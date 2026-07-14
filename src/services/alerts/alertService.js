@@ -3,6 +3,7 @@ const runtimeConfigService = require("../platform/runtimeConfigService");
 const { getCalendarDateKeyInTimeZone } = require("../../utils/alertRolloverTz");
 const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");
+const alertAccessDoorLinkageService = require("./alertAccessDoorLinkageService");
 const { notifyNewAlertByEmail } = require("./alertEmailNotifier");
 const logger = require("../../utils/logger");
 const { getDeviceTypeName } = require("../../constants/deviceTypes");
@@ -853,6 +854,13 @@ async function createAlert(alertData) {
           .catch((err) => {
             alertLogger.warn(
               `[alertService] 警報連動執行失敗 | alertId=${enrichedAlert?.id} | ${err?.message || String(err)}`,
+            );
+          });
+        alertAccessDoorLinkageService
+          .processAccessDoorLinkagesForNewAlert(enrichedAlert)
+          .catch((err) => {
+            alertLogger.warn(
+              `[alertService] 門禁全開連動失敗 | alertId=${enrichedAlert?.id} | ${err?.message || String(err)}`,
             );
           });
       });

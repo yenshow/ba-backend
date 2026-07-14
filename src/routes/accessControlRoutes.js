@@ -201,4 +201,24 @@ router.post(
   }),
 );
 
+/**
+ * 遠端門控（ISAPI RemoteControlDoor）
+ * PUT /api/access-control/devices/:deviceId/remote-control-door
+ * Body: { cmd: open|close|alwaysOpen|alwaysClose, doorNo? }
+ */
+router.put(
+  "/devices/:deviceId/remote-control-door",
+  requirePermission("system.people_counting.door.control"),
+  validateIntegers("deviceId"),
+  asyncHandler(async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId, 10);
+    const result = await accessControlService.controlRemoteDoor(deviceId, {
+      cmd: req.body?.cmd,
+      doorNo: req.body?.doorNo,
+      operationalEvent: { actorUserId: req.user?.id ?? null },
+    });
+    res.sendSuccess(result);
+  }),
+);
+
 module.exports = router;
