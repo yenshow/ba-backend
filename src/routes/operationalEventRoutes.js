@@ -36,7 +36,7 @@ router.get(
   requireOperationalExportIfBulk(),
   disableHttpCache,
   asyncHandler(async (req, res) => {
-    const { source, event_kind, start_date, end_date, q, limit, offset } =
+    const { source, event_kind, start_date, end_date, limit, offset } =
       req.query;
 
     const result = await operationalEventService.listEvents({
@@ -44,7 +44,6 @@ router.get(
       event_kind,
       start_date,
       end_date,
-      q,
       limit: limit != null ? Number.parseInt(String(limit), 10) : undefined,
       offset: offset != null ? Number.parseInt(String(offset), 10) : undefined,
     });

@@ -603,7 +603,8 @@ async function getAlerts(filters = {}) {
     ];
     const orderByCol = validOrderBy.includes(orderBy) ? orderBy : "created_at";
     const orderDirection = order.toLowerCase() === "asc" ? "ASC" : "DESC";
-    query += ` ORDER BY a.${orderByCol} ${orderDirection}`;
+    // active（未解決）置頂，其餘依 orderBy／order
+    query += ` ORDER BY CASE WHEN a.status = 'active'::alert_status THEN 0 ELSE 1 END ASC, a.${orderByCol} ${orderDirection}`;
 
     query += " LIMIT ? OFFSET ?";
     params.push(parseInt(limit), parseInt(offset));

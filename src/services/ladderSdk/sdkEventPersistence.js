@@ -1,5 +1,6 @@
 /**
  * 梯控 SDK 佈防事件寫入（Bridge 輸出全部 ACS 事件，寫庫前套用白名單）
+ * 營運雙寫對齊電梯表：略過門開副作用／呼梯鄰近繼電器；樓層用邏輯顯示名
  */
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
@@ -7,6 +8,12 @@ const { ALLOWED_EVENT_KEYS } = require("./acsEventLabels");
 const { resolveEventCardNo } = require("./ladderSdkCardCorrelation");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryElevator } = require("../operationalEvents/operationalEventCopy");
+const {
+  resolveElevatorContextByDeviceId,
+  shouldOmitOperationalElevatorEvent,
+  formatOperationalElevatorFloor,
+  markCallElevatorForRelaySuppress,
+} = require("../operationalEvents/operationalEventHooks");
 
 const isAllowedEvent = (major, minor) =>
   ALLOWED_EVENT_KEYS.has(`${Number(major)}:${Number(minor)}`);
@@ -33,6 +40,12 @@ const persistLadderSdkEvent = async (options) => {
   }
 
   const resolvedEventTime = eventTime || new Date().toISOString();
+  const majorN = Number(major);
+  const minorN = Number(minor);
+  const deviceIdN = Number(deviceId);
+  const floorN = floor != null ? Number(floor) : null;
+  const safeFloor = Number.isFinite(floorN) ? floorN : null;
+
   const resolvedCardNo = await resolveEventCardNo({
     deviceId,
     eventTime: resolvedEventTime,
@@ -49,13 +62,13 @@ const persistLadderSdkEvent = async (options) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      RETURNING id`,
     [
-      Number(deviceId),
+      deviceIdN,
       String(deviceIp || ""),
       resolvedEventTime,
-      Number(major),
-      Number(minor),
+      majorN,
+      minorN,
       eventName || null,
-      floor != null ? Number(floor) : null,
+      safeFloor,
       resolvedCardNo,
       JSON.stringify(payload || {}),
     ],
@@ -68,32 +81,53 @@ const persistLadderSdkEvent = async (options) => {
 
   websocketService.emitLadderSdkEvent({
     id,
-    deviceId: Number(deviceId),
+    deviceId: deviceIdN,
     deviceIp: String(deviceIp || ""),
     eventTime: resolvedEventTime,
-    major: Number(major),
-    minor: Number(minor),
+    major: majorN,
+    minor: minorN,
     eventName: eventName || "",
-    floor: floor != null ? Number(floor) : null,
+    floor: safeFloor,
     cardNo: resolvedCardNo,
   });
 
+  const omit = await shouldOmitOperationalElevatorEvent({
+    deviceId: deviceIdN,
+    major: majorN,
+    minor: minorN,
+    eventTime: resolvedEventTime,
+  });
+  if (omit) {
+    return { inserted: true, id };
+  }
+
+  // 呼梯：標記短窗，避免後續繼電器先／後到達造成營運多記
+  if (majorN === 3 && (minorN === 1028 || minorN === 1029)) {
+    markCallElevatorForRelaySuppress(deviceIdN);
+  }
+
+  const elevCtx = await resolveElevatorContextByDeviceId(deviceIdN);
+  const floorLabel = formatOperationalElevatorFloor(safeFloor, elevCtx?.floors);
   void operationalEventService.recordEvent({
     source: "elevator",
     event_kind: "elevator",
     occurred_at: resolvedEventTime,
-    device_id: Number(deviceId),
+    location_id: elevCtx?.locationId ?? null,
+    system_id: elevCtx?.systemId ?? null,
+    device_id: deviceIdN,
     summary: summaryElevator({
       eventName,
-      major: Number(major),
-      minor: Number(minor),
+      major: majorN,
+      minor: minorN,
+      floor: floorLabel,
     }),
     ref_table: "ladder_sdk_events",
     ref_id: id,
     payload: {
-      major: Number(major),
-      minor: Number(minor),
-      floor: floor != null ? Number(floor) : null,
+      major: majorN,
+      minor: minorN,
+      floor: safeFloor,
+      floorLabel: floorLabel || null,
       cardNo: resolvedCardNo,
     },
   });

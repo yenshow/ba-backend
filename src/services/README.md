@@ -19,7 +19,7 @@
 | `devices/` | 10 | 設備 CRUD、Modbus、`modbusDiDoConfig` |
 | `monitoring/` | 11 | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／電梯／快照／DI-DO 監控 |
 | `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
-| `operationalEvents/` | 3 | 營運事件寫入／查詢／文案／保留清理 |
+| `operationalEvents/` | 4 | `service` 查寫／`copy` 文案／`hooks` 控制寫入·抑制·電梯投影／`retentionScheduler` |
 | `backup/` | 8 | 備份排程與各系統報表格式 |
 | `accessControl/` | 5 | 門禁業務、ISAPI 訂閱／持久化 |
 | `isapi/` | 1 | **佈防訂閱中心** `isapiSubscribeHub`（`licenseRuntimeService` reconcile） |

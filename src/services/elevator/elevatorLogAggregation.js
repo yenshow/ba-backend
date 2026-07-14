@@ -20,6 +20,12 @@ const isCallElevator = (log) =>
 const isRelayEvent = (log) =>
   log.major === 5 && (log.minor === 95 || log.minor === 96);
 
+/** major/minor 版（營運雙寫略過判斷） */
+const isAcsDoorOpenSideEffect = (major, minor) =>
+  isDoorOpen({ major: Number(major), minor: Number(minor) });
+const isAcsRelayEvent = (major, minor) =>
+  isRelayEvent({ major: Number(major), minor: Number(minor) });
+
 const isSuppressedEvent = (log) => isDoorClose(log) || isManualClose(log);
 const isPassThroughRemoteOp = (log) =>
   log.major === 3 && !isManualOpen(log) && !isSuppressedEvent(log);
@@ -250,4 +256,7 @@ const toPublicLog = (log) => {
 
 module.exports = {
   aggregateElevatorLogs,
+  CALL_RELAY_SUPPRESS_MS,
+  isAcsDoorOpenSideEffect,
+  isAcsRelayEvent,
 };

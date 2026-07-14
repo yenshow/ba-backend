@@ -319,7 +319,13 @@ class ModbusClient extends EventEmitter {
         timeoutMsg,
         C.MODBUS_WRITE_TIMEOUT,
       );
-      return response.value === value;
+      // modbus-serial FC5 回傳 { address, state }；舊碼讀 value 會讓 ON 永遠誤判失敗
+      // （Boolean(undefined)===Boolean(true) → false），OFF 卻剛好通過
+      const echoed = response?.state ?? response?.value;
+      if (echoed === undefined) {
+        return response != null;
+      }
+      return Boolean(echoed) === Boolean(value);
     } catch (error) {
       if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
         throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);

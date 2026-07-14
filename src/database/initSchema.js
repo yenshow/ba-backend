@@ -703,7 +703,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // ========== 營運事件（與 alerts 分離） ==========
+    // ========== 營運事件（與 alerts 分離；無 alert_id／無 linkage_write） ==========
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS operational_events (
         id BIGSERIAL PRIMARY KEY,
@@ -711,7 +711,7 @@ async function initSchema() {
         source VARCHAR(64) NOT NULL,
         event_kind VARCHAR(32) NOT NULL
           CHECK (event_kind IN (
-            'control_write', 'state_change', 'linkage_write',
+            'control_write', 'state_change',
             'access', 'vehicle', 'elevator'
           )),
         location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
@@ -723,7 +723,6 @@ async function initSchema() {
         new_value BOOLEAN,
         summary TEXT NOT NULL,
         actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
         ref_table VARCHAR(64),
         ref_id BIGINT,
         payload JSONB,
@@ -737,9 +736,6 @@ async function initSchema() {
         ON operational_events(source, occurred_at DESC);
       CREATE INDEX IF NOT EXISTS idx_operational_events_kind_occurred
         ON operational_events(event_kind, occurred_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_operational_events_alert_id
-        ON operational_events(alert_id)
-        WHERE alert_id IS NOT NULL;
     `);
     schemaLogger.info("operational_events 表已建立（營運事件）", {
       module: "initSchema",

@@ -57,7 +57,6 @@ async function persistIsapiEvent(options) {
       event_kind: "access",
       occurred_at: eventTime || new Date().toISOString(),
       summary: summaryAccessEvent({
-        eventType,
         personName,
       }),
       ref_table: "isapi_access_events",

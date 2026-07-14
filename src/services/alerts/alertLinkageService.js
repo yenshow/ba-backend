@@ -4,6 +4,11 @@ const modbusBatchService = require("../devices/modbusBatchService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
+const { summaryLinkageWrite } = require("../operationalEvents/operationalEventCopy");
+const {
+  recordControlWriteEvent,
+  markCoilControlWrite,
+} = require("../operationalEvents/operationalEventHooks");
 
 const linkageLogger = logger.createLogger("alertLinkageService");
 
@@ -28,7 +33,7 @@ async function resolveDeviceConfig(deviceId) {
   const c = device?.config || {};
   if (!c.host || c.port == null) return null;
   const cfg = {
-    host: String(c.host),
+    host: String(c.host).trim(),
     port: Number(c.port),
     unitId: Number(c.unitId ?? 1),
   };
@@ -47,7 +52,7 @@ async function insertExecution({
   errorMessage = null,
   createdBy = null,
 }) {
-  await db.query(
+  const rows = await db.query(
     `
       INSERT INTO alert_linkage_executions (
         linkage_id,
@@ -62,6 +67,7 @@ async function insertExecution({
         created_at
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      RETURNING id
     `,
     [
       Number(linkageId),
@@ -75,6 +81,7 @@ async function insertExecution({
       createdBy != null ? Number(createdBy) : null,
     ],
   );
+  return rows?.[0]?.id ?? null;
 }
 
 const normalizeDoOutputValue = (v) => {
@@ -87,9 +94,6 @@ const normalizeDoOutputValue = (v) => {
 const outputValueToBool = (v) => normalizeDoOutputValue(v) === "on";
 const invertOutputValue = (v) =>
   normalizeDoOutputValue(v) === "on" ? "off" : "on";
-
-const operationalEventService = require("../operationalEvents/operationalEventService");
-const { summaryLinkageWrite } = require("../operationalEvents/operationalEventCopy");
 
 async function writeDo({
   linkageId,
@@ -125,6 +129,43 @@ async function writeDo({
     );
     if (ok) {
       modbusBatchService.invalidateDeviceCache(cfg, "coil");
+      // mark 須在任何 await 之前，避免 diDoMonitor 搶先寫 state_change
+      markCoilControlWrite(cfg, doAddress);
+      const execId = await insertExecution({
+        linkageId,
+        alertId,
+        executionType,
+        doDeviceId,
+        doAddress,
+        doValue,
+        success: true,
+        errorMessage: null,
+        createdBy,
+      });
+      void recordControlWriteEvent({
+        deviceConfig: cfg,
+        source: "alert_linkage",
+        deviceId: doDeviceId,
+        address: doAddress,
+        value: Boolean(doValue),
+        actorUserId: createdBy,
+        summary: summaryLinkageWrite({
+          address: doAddress,
+          value: Boolean(doValue),
+          executionType,
+        }),
+        refTable: "alert_linkage_executions",
+        refId: execId,
+        payloadExtra: {
+          fromAlertLinkage: true,
+          linkageId,
+          executionType,
+          doDeviceId,
+          doAddress,
+          doValue: Boolean(doValue),
+        },
+      });
+      return { success: true };
     }
     await insertExecution({
       linkageId,
@@ -133,36 +174,11 @@ async function writeDo({
       doDeviceId,
       doAddress,
       doValue,
-      success: Boolean(ok),
-      errorMessage: ok ? null : "writeCoil 回傳失敗",
+      success: false,
+      errorMessage: "writeCoil 回傳失敗",
       createdBy,
     });
-    if (ok && alertId != null) {
-      void operationalEventService.recordEvent({
-        source: "alert_linkage",
-        event_kind: "linkage_write",
-        device_id: doDeviceId,
-        address: doAddress,
-        bit_key: `do:${doAddress}`,
-        new_value: Boolean(doValue),
-        summary: summaryLinkageWrite({
-          address: doAddress,
-          value: Boolean(doValue),
-          executionType,
-        }),
-        alert_id: alertId,
-        actor_user_id: createdBy,
-        ref_table: "alert_linkage_executions",
-        payload: {
-          linkageId,
-          executionType,
-          doDeviceId,
-          doAddress,
-          doValue: Boolean(doValue),
-        },
-      });
-    }
-    return { success: Boolean(ok) };
+    return { success: false };
   } catch (err) {
     const msg = err?.message || String(err);
     await insertExecution({

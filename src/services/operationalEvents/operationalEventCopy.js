@@ -1,8 +1,9 @@
 /**
  * 營運事件顯示名稱／摘要文案（後端 SSOT）
  */
+const { formatAcsEventDisplayName } = require("../ladderSdk/acsEventLabels");
+
 const SOURCE_LABELS = {
-  device: "設備",
   environment: "環境品質",
   lighting: "照明系統",
   hvac: "空調系統",
@@ -42,24 +43,28 @@ const summaryControlWrite = ({ source, bitKey, address, value, batchCount }) => 
   return `${label} 控制寫入 ${point} → ${onOff(value)}`;
 };
 
-/** 警報連動寫入 */
+/** 警報連動寫入（落庫為 control_write；以 source／文案辨識） */
 const summaryLinkageWrite = ({ address, value, executionType }) => {
-  const typeHint = executionType ? `（${executionType}）` : "";
-  return `警報連動寫入 DO:${address} → ${onOff(value)}${typeHint}`;
+  const base = summaryControlWrite({
+    source: "alert_linkage",
+    address,
+    bitKey: `do:${address}`,
+    value,
+  });
+  return executionType ? `${base}（${executionType}）` : base;
 };
 
 /** 門禁 ISAPI */
-const summaryAccessEvent = ({ eventType, personName }) => {
+const summaryAccessEvent = ({ personName }) => {
   const who = personName ? `：${personName}` : "";
   return `門禁事件${who}`;
 };
 
-/** 人流攝影機計數 */
+/** 人流攝影機計數（呼叫端僅在 enter／exit delta > 0 時寫入） */
 const summaryPeopleCounting = ({ regionName, enterDelta, exitDelta }) => {
   const region = regionName || "區域";
   if (enterDelta > 0) return `人流計數 ${region} 進場 +${enterDelta}`;
-  if (exitDelta > 0) return `人流計數 ${region} 出場 +${exitDelta}`;
-  return `人流計數 ${region} 讀數更新`;
+  return `人流計數 ${region} 出場 +${exitDelta}`;
 };
 
 /** 車輛過車 */
@@ -69,15 +74,18 @@ const summaryVehicle = ({ plate, laneType }) => {
   return plate ? `過車 ${plate}${dir}` : `過車事件${dir}`;
 };
 
-/** 電梯 */
-const summaryElevator = ({ eventName, major, minor }) =>
-  eventName
-    ? `電梯：${eventName}`
-    : `電梯事件 ${major}/${minor}`;
+/** 電梯（顯示名與電梯頁 formatAcsEventDisplayName 對齊） */
+const summaryElevator = ({ eventName, major, minor, floor }) => {
+  const label =
+    formatAcsEventDisplayName(eventName, major, minor) ||
+    (eventName ? String(eventName) : null) ||
+    `${major}/${minor}`;
+  const floorHint =
+    floor != null && floor !== "" ? `（${floor}）` : "";
+  return `電梯：${label}${floorHint}`;
+};
 
 module.exports = {
-  SOURCE_LABELS,
-  sourceLabel,
   summaryStateChange,
   summaryControlWrite,
   summaryLinkageWrite,

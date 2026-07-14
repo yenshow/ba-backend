@@ -12,6 +12,9 @@ const systemAlertHelper = require("../alerts/systemAlertHelper");
 const { collectConfiguredBitPointsFromSystemConfig } = require("../devices/modbusDiDoConfig");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryStateChange } = require("../operationalEvents/operationalEventCopy");
+const {
+  shouldSuppressCoilStateChange,
+} = require("../operationalEvents/operationalEventHooks");
 
 const getDeviceService = () => require("../devices/deviceService");
 
@@ -55,7 +58,7 @@ async function resolveDeviceConfig(deviceId) {
     const c = device?.config || {};
     if (!c.host || c.port == null) return null;
     const cfg = {
-      host: c.host,
+      host: String(c.host).trim(),
       port: Number(c.port),
       unitId: Number(c.unitId ?? 1),
     };
@@ -179,7 +182,7 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
   }
 }
 
-function recordStateEdge(point, bitValue) {
+function recordStateEdge(point, bitValue, deviceConfig = null) {
   const stateKey = `${point.systemId}:${point.bitKey}`;
   if (!baselinedKeys.has(stateKey)) {
     lastBitState.set(stateKey, bitValue);
@@ -189,6 +192,15 @@ function recordStateEdge(point, bitValue) {
   const prev = lastBitState.get(stateKey);
   if (prev === bitValue) return;
   lastBitState.set(stateKey, bitValue);
+
+  // 控制寫入造成的 coil 變化只留 control_write，不另記 state_change
+  if (
+    point.registerType === "coil" &&
+    deviceConfig &&
+    shouldSuppressCoilStateChange(deviceConfig, point.address)
+  ) {
+    return;
+  }
 
   void operationalEventService.recordEvent({
     source: point.systemType,
@@ -307,7 +319,7 @@ async function checkDiDoAlerts() {
       const bitValue = Boolean(result.data?.[0]);
 
       for (const point of entry.edgePoints) {
-        recordStateEdge(point, bitValue);
+        recordStateEdge(point, bitValue, deviceCfg);
       }
 
       for (const task of entry.alertTasks) {

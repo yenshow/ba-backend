@@ -11,7 +11,6 @@ const opLogger = logger.createLogger("operationalEvents");
 const EVENT_KINDS = Object.freeze([
   "control_write",
   "state_change",
-  "linkage_write",
   "access",
   "vehicle",
   "elevator",
@@ -28,30 +27,44 @@ const toBoolOrNull = (v) => {
   return Boolean(v);
 };
 
+function parseMultiFilter(value) {
+  if (value == null || value === "") return [];
+  return String(value)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function buildListWhere(filters = {}) {
-  const { source, event_kind, start_date, end_date, q } = filters;
+  const { source, event_kind, start_date, end_date } = filters;
   let where = "WHERE 1=1";
   const params = [];
 
-  if (source) {
-    where += " AND source = ?";
-    params.push(String(source));
+  const sources = parseMultiFilter(source);
+  if (sources.length === 1) {
+    where += " AND oe.source = ?";
+    params.push(sources[0]);
+  } else if (sources.length > 1) {
+    where += ` AND oe.source IN (${sources.map(() => "?").join(", ")})`;
+    params.push(...sources);
   }
-  if (event_kind) {
-    where += " AND event_kind = ?";
-    params.push(String(event_kind));
+
+  const kinds = parseMultiFilter(event_kind);
+  if (kinds.length === 1) {
+    where += " AND oe.event_kind = ?";
+    params.push(kinds[0]);
+  } else if (kinds.length > 1) {
+    where += ` AND oe.event_kind IN (${kinds.map(() => "?").join(", ")})`;
+    params.push(...kinds);
   }
+
   if (start_date) {
-    where += " AND occurred_at >= ?";
+    where += " AND oe.occurred_at >= ?";
     params.push(start_date);
   }
   if (end_date) {
-    where += " AND occurred_at <= ?";
+    where += " AND oe.occurred_at <= ?";
     params.push(end_date);
-  }
-  if (q && String(q).trim()) {
-    where += " AND summary ILIKE ?";
-    params.push(`%${String(q).trim()}%`);
   }
 
   return { where, params };
@@ -77,11 +90,6 @@ async function recordEvent(input = {}) {
 
     const summary =
       String(input.summary || "").trim() || `${source} ${eventKind}`;
-    const alertId = toIntOrNull(input.alert_id);
-    if (eventKind === "linkage_write" && alertId == null) {
-      opLogger.warn("略過 linkage_write：缺少 alert_id", { source });
-      return null;
-    }
 
     let payload = null;
     if (input.payload != null) {
@@ -97,13 +105,13 @@ async function recordEvent(input = {}) {
         occurred_at, source, event_kind,
         location_id, system_id, device_id,
         bit_key, address, old_value, new_value,
-        summary, actor_user_id, alert_id,
+        summary, actor_user_id,
         ref_table, ref_id, payload
       ) VALUES (
         COALESCE(?, CURRENT_TIMESTAMP), ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?,
+        ?, ?,
         ?, ?, ?::jsonb
       )
       RETURNING id
@@ -121,7 +129,6 @@ async function recordEvent(input = {}) {
         toBoolOrNull(input.new_value),
         summary,
         toIntOrNull(input.actor_user_id),
-        alertId,
         input.ref_table != null ? String(input.ref_table) : null,
         toIntOrNull(input.ref_id),
         payload,
@@ -148,31 +155,39 @@ async function listEvents(filters = {}) {
 
   const [countRows, events, byKind] = await Promise.all([
     db.query(
-      `SELECT COUNT(*)::int AS total FROM operational_events ${where}`,
+      `SELECT COUNT(*)::int AS total FROM operational_events oe ${where}`,
       params,
     ),
     db.query(
       `
       SELECT
-        id, occurred_at, source, event_kind,
-        location_id, system_id, device_id,
-        bit_key, address, old_value, new_value,
-        summary, actor_user_id, alert_id,
-        ref_table, ref_id, payload, created_at
-      FROM operational_events
+        oe.id, oe.occurred_at, oe.source, oe.event_kind,
+        oe.location_id, oe.system_id, oe.device_id,
+        oe.bit_key, oe.address, oe.old_value, oe.new_value,
+        oe.summary, oe.actor_user_id,
+        oe.ref_table, oe.ref_id, oe.payload, oe.created_at,
+        d.name AS device_name,
+        l.name AS location_name,
+        z.name AS zone_name,
+        u.username AS actor_username
+      FROM operational_events oe
+      LEFT JOIN devices d ON oe.device_id = d.id
+      LEFT JOIN locations l ON oe.location_id = l.id
+      LEFT JOIN zones z ON l.zone_id = z.id
+      LEFT JOIN users u ON oe.actor_user_id = u.id
       ${where}
-      ORDER BY occurred_at DESC, id DESC
+      ORDER BY oe.occurred_at DESC, oe.id DESC
       LIMIT ? OFFSET ?
       `,
       [...params, lim, off],
     ),
     db.query(
       `
-      SELECT event_kind, COUNT(*)::int AS count
-      FROM operational_events
+      SELECT oe.event_kind, COUNT(*)::int AS count
+      FROM operational_events oe
       ${where}
-      GROUP BY event_kind
-      ORDER BY event_kind
+      GROUP BY oe.event_kind
+      ORDER BY oe.event_kind
       `,
       params,
     ),
@@ -206,7 +221,6 @@ async function purgeExpiredEvents(retentionDays) {
 }
 
 module.exports = {
-  EVENT_KINDS,
   recordEvent,
   listEvents,
   purgeExpiredEvents,

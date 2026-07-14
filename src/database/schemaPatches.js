@@ -217,7 +217,7 @@ async function ensureOperationalEventsTable(pool) {
       source VARCHAR(64) NOT NULL,
       event_kind VARCHAR(32) NOT NULL
         CHECK (event_kind IN (
-          'control_write', 'state_change', 'linkage_write',
+          'control_write', 'state_change',
           'access', 'vehicle', 'elevator'
         )),
       location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
@@ -229,7 +229,6 @@ async function ensureOperationalEventsTable(pool) {
       new_value BOOLEAN,
       summary TEXT NOT NULL,
       actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
       ref_table VARCHAR(64),
       ref_id BIGINT,
       payload JSONB,
@@ -243,9 +242,56 @@ async function ensureOperationalEventsTable(pool) {
       ON operational_events(source, occurred_at DESC);
     CREATE INDEX IF NOT EXISTS idx_operational_events_kind_occurred
       ON operational_events(event_kind, occurred_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_operational_events_alert_id
-      ON operational_events(alert_id)
-      WHERE alert_id IS NOT NULL;
+  `);
+
+  // 既有庫：移除 linkage_write／alert_id 相容殘留
+  await pool.query(`
+    DO $do$
+    DECLARE
+      r RECORD;
+    BEGIN
+      IF to_regclass('public.operational_events') IS NULL THEN
+        RETURN;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'operational_events'
+          AND column_name = 'alert_id'
+      ) THEN
+        EXECUTE 'DROP INDEX IF EXISTS idx_operational_events_alert_id';
+        EXECUTE 'ALTER TABLE operational_events DROP COLUMN alert_id';
+      END IF;
+
+      UPDATE operational_events
+      SET event_kind = 'control_write'
+      WHERE event_kind = 'linkage_write';
+
+      FOR r IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'public'
+          AND t.relname = 'operational_events'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) LIKE '%event_kind%'
+      LOOP
+        EXECUTE format(
+          'ALTER TABLE operational_events DROP CONSTRAINT %I',
+          r.conname
+        );
+      END LOOP;
+
+      ALTER TABLE operational_events
+        ADD CONSTRAINT operational_events_event_kind_check
+        CHECK (event_kind IN (
+          'control_write', 'state_change',
+          'access', 'vehicle', 'elevator'
+        ));
+    END
+    $do$;
   `);
 }
 
