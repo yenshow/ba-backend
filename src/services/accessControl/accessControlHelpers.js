@@ -1,5 +1,5 @@
 /**
- * 平台 validity（config.access_control.validity）→ ISAPI Valid payload
+ * 門禁共用 helpers（平台 validity → ISAPI Valid payload）
  *
  * 規則（SSOT）：
  * - longTerm=true  => enable=false
@@ -24,4 +24,3 @@ function buildIsapiValidPayloadFromPlatformValidity(validity) {
 module.exports = {
   buildIsapiValidPayloadFromPlatformValidity,
 };
-

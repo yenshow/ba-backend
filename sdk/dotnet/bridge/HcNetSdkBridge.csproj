@@ -20,6 +20,8 @@
     <Compile Include="..\common\SdkCardService.cs" Link="SdkCardService.cs" />
     <Compile Include="..\common\SdkDoorService.cs" Link="SdkDoorService.cs" />
     <Compile Include="..\common\SdkAlarmHelper.cs" Link="SdkAlarmHelper.cs" />
+    <Compile Include="..\common\VideoIntercomAlarmHelper.cs" Link="VideoIntercomAlarmHelper.cs" />
+    <Compile Include="..\common\SdkStdXmlService.cs" Link="SdkStdXmlService.cs" />
     <Compile Include="..\common\AcsEventNames.cs" Link="AcsEventNames.cs" />
     <Compile Include="..\common\SdkCardJson.cs" Link="SdkCardJson.cs" />
   </ItemGroup>

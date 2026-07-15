@@ -6,7 +6,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const {
   buildIsapiValidPayloadFromPlatformValidity,
-} = require("../accessControl/accessControlValidityUtils");
+} = require("../accessControl/accessControlHelpers");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 
 const VALID_SYNC_STATUSES = new Set([

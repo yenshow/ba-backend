@@ -21,7 +21,7 @@
 | `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
 | `operationalEvents/` | 4 | `service` 查寫／`copy` 文案／`hooks` 控制寫入·抑制·電梯投影／`retentionScheduler` |
 | `backup/` | 8 | 備份排程與各系統報表格式 |
-| `accessControl/` | 5 | 門禁業務、ISAPI 訂閱／持久化 |
+| `accessControl/` | 4 | 門禁 ISAPI 業務、Digest 客戶端、佈防訂閱／事件寫入、validity helpers |
 | `isapi/` | 1 | **佈防訂閱中心** `isapiSubscribeHub`（`licenseRuntimeService` reconcile） |
 | `externalData/` | 14 | 外部 DB handler 與車輛群組彙總 |
 | `communication/` | 2 | MediaMTX 串流（對應 license `surveillance`） |

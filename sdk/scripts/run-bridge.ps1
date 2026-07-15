@@ -1,6 +1,7 @@
 param(
   [string]$Configuration = "Release",
   [switch]$Arming,
+  [switch]$ArmingIntercom,
   [switch]$BuildOnly
 )
 
@@ -92,6 +93,8 @@ Push-Location $dotnetOut
 try {
   if ($Arming) {
     & $dotnetExe --arming
+  } elseif ($ArmingIntercom) {
+    & $dotnetExe --arming-intercom
   } else {
     & $dotnetExe
   }

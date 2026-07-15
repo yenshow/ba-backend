@@ -425,6 +425,45 @@ internal static class HcNetSdkNative
         int lChannel,
         byte[] lpInBuffer,
         uint dwInBufferSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct NET_DVR_XML_CONFIG_INPUT
+    {
+        public uint dwSize;
+        public IntPtr lpRequestUrl;
+        public uint dwRequestUrlLen;
+        public IntPtr lpInBuffer;
+        public uint dwInBufferSize;
+        public uint dwRecvTimeOut;
+        public byte byForceEncrpt;
+        public byte byNumOfMultiPart;
+        public byte byMIMEType;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 29)]
+        public byte[] byRes;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct NET_DVR_XML_CONFIG_OUTPUT
+    {
+        public uint dwSize;
+        public IntPtr lpOutBuffer;
+        public uint dwOutBufferSize;
+        public uint dwReturnedXMLSize;
+        public IntPtr lpStatusBuffer;
+        public uint dwStatusSize;
+        public IntPtr lpDataBuffer;
+        public byte byNumOfMultiPart;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 23)]
+        public byte[] byRes;
+    }
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern bool NET_DVR_STDXMLConfig(
+        int lUserID,
+        ref NET_DVR_XML_CONFIG_INPUT lpInputParam,
+        ref NET_DVR_XML_CONFIG_OUTPUT lpOutputParam);
 }
 
 internal sealed record SdkCardWriteRequest(
@@ -882,9 +921,11 @@ internal static class SdkErrorHelper
     {
         1 => "使用者名稱或密碼錯誤",
         7 => "連線設備失敗（設備離線或網路不通）",
+        23 => "設備不支援此功能（NET_DVR_NOSUPPORT）",
+        29 => "設備操作失敗（操作無效／參數錯誤）",
         109 => "載入報警元件失敗（請確認 HCNetSDKCom\\HCAlarm.dll 已複製）",
         1924 => "佈防資源已滿",
-        _ => "請查閱 HCNetSDK 錯誤碼手冊",
+        _ => $"HCNetSDK 錯誤碼 {code}",
     };
 }
 

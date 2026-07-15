@@ -1,20 +1,24 @@
 /**
  * 門禁 ISAPI 佈防訂閱服務
  * 後端主動向門禁設備 POST subscribeEvent，建立長連線接收事件，寫入 isapi_access_events 並推送 WebSocket。
+ * 含：事件過濾／寫入／附圖（原 isapiEventPersistence）
  */
+const path = require("path");
+const fs = require("fs");
 const db = require("../../database/db");
 const accessControlService = require("./accessControlService");
-const {
-  persistIsapiEvent,
-  isProcessableEvent,
-  attachPictureToEvent,
-} = require("./isapiEventPersistence");
+const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
-const { getUploadsDir } = require("../../utils/baDataPaths");
+const {
+  getUploadsDir,
+  formatUploadTimestampForFilename,
+} = require("../../utils/baDataPaths");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryAccessEvent } = require("../operationalEvents/operationalEventCopy");
 
-/** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件（見 isapiEventPersistence） */
+/** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件 */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
     <heartbeat>30</heartbeat>
@@ -23,8 +27,102 @@ const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 
 const RE_CONNECT_DELAY_MS = 10000;
 
+/** 人臉辨識成功/失敗、酒精檢測正常/飲酒/醉酒 等 */
+const SUB_TYPES_PROCESS = new Set([1, 9, 38, 39, 75, 76, 2077, 2078, 2079]);
+
 /** 各設備訂閱迴圈控制器（refresh/stop 時中止串流） */
 const deviceLoopControllers = new Map();
+
+/**
+ * 是否為要寫入 DB 的門禁事件（major=5 且 sub 為上述種類）
+ * @param {object} ac - AccessControllerEvent 巢狀物件
+ */
+function isProcessableEvent(ac) {
+  if (!ac || Number(ac.majorEventType) !== 5) return false;
+  return SUB_TYPES_PROCESS.has(Number(ac.subEventType));
+}
+
+/**
+ * 寫入一筆門禁事件（附圖由訂閱串流依「先 JSON 後圖」以 attachPictureToEvent 補上）
+ * @returns {Promise<{ inserted: boolean, id?: number }>}
+ */
+async function persistIsapiEvent(options) {
+  const {
+    deviceIp = "",
+    eventTime,
+    eventType = "AccessControllerEvent",
+    payload,
+  } = options;
+
+  if (!isProcessableEvent(payload)) return { inserted: false };
+
+  const rows = await db.query(
+    `INSERT INTO isapi_access_events (device_ip, event_time, event_type, payload, file_count, picture_path)
+     VALUES (?, ?, ?, ?, 0, NULL) RETURNING id`,
+    [
+      deviceIp,
+      eventTime || new Date().toISOString(),
+      eventType,
+      JSON.stringify(payload || {}),
+    ],
+  );
+  const id = rows?.[0]?.id ?? null;
+  websocketService.emitIsapiAccessEvent();
+  if (id != null) {
+    const ac = payload || {};
+    const personName =
+      ac.name || ac.employeeNoString || ac.cardNo || deviceIp || "";
+    void operationalEventService.recordEvent({
+      source: "people_counting",
+      event_kind: "access",
+      occurred_at: eventTime || new Date().toISOString(),
+      summary: summaryAccessEvent({
+        personName,
+      }),
+      ref_table: "isapi_access_events",
+      ref_id: id,
+      payload: {
+        deviceIp,
+        eventType,
+        majorEventType: ac.majorEventType,
+        subEventType: ac.subEventType,
+      },
+    });
+  }
+  return { inserted: true, id };
+}
+
+/**
+ * 為剛寫入的門禁事件補上附圖（multipart 順序：先 JSON 後圖）
+ */
+async function attachPictureToEvent(eventId, pictureBuffer, uploadsDir) {
+  if (
+    eventId == null ||
+    !Buffer.isBuffer(pictureBuffer) ||
+    pictureBuffer.length === 0 ||
+    !uploadsDir
+  )
+    return;
+  const rows = await db.query(
+    `SELECT device_ip, event_time FROM isapi_access_events WHERE id = ?`,
+    [eventId],
+  );
+  const row = rows?.[0];
+  if (!row) return;
+  const deviceIp = row.device_ip || "unknown";
+  const eventTime = row.event_time || new Date().toISOString();
+  const safeIp = String(deviceIp).replace(/[^0-9a-fA-F.:]/g, "_");
+  const rawTime = formatUploadTimestampForFilename(eventTime, 16);
+  const basename = `${safeIp}_${rawTime}.jpg`;
+  const filePath = path.join(uploadsDir, basename);
+  fs.writeFileSync(filePath, pictureBuffer);
+  const picturePath = `/uploads/access-events/${basename}`;
+  await db.query(
+    `UPDATE isapi_access_events SET picture_path = ?, file_count = 1 WHERE id = ?`,
+    [picturePath, eventId],
+  );
+  websocketService.emitIsapiAccessEvent();
+}
 
 /**
  * 取得需訂閱的門禁設備 ID 列表（people_counting 地點的 entry_device_ids、exit_device_ids 去重）
@@ -122,7 +220,6 @@ async function handleEvent(parsed, deviceIp) {
   return id ?? null;
 }
 
-const CRLF = Buffer.from("\r\n");
 const CRLFCRLF = Buffer.from("\r\n\r\n");
 
 /**

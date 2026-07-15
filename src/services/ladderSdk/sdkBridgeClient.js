@@ -76,7 +76,7 @@ const mapBridgeError = (response) => {
   const apiCode = BRIDGE_CODE_MAP[bridgeCode] || C.LADDER_SDK_ERROR;
   const message = response?.message || "HCNetSDK 操作失敗";
 
-  throw createApiError(apiCode, message, {
+  return createApiError(apiCode, message, {
     details: response?.data ?? null,
   });
 };
@@ -217,7 +217,7 @@ const invokeBridge = (request, options = {}) =>
     child.stdin.end();
   });
 
-const spawnArmingProcess = (deviceCredentials, handlers = {}) => {
+const spawnArmingProcess = (deviceCredentials, handlers = {}, options = {}) => {
   const exePath = resolveBridgeExe();
   ensureSdkDlls(exePath);
   const cwd = path.dirname(exePath);
@@ -234,7 +234,11 @@ const spawnArmingProcess = (deviceCredentials, handlers = {}) => {
     SDK_DEVICE_PASS: deviceCredentials.password,
   };
 
-  const child = spawn(exePath, ["--arming"], {
+  const args = Array.isArray(options.args) && options.args.length
+    ? options.args
+    : ["--arming"];
+
+  const child = spawn(exePath, args, {
     cwd,
     env,
     windowsHide: true,
@@ -255,6 +259,11 @@ const spawnArmingProcess = (deviceCredentials, handlers = {}) => {
         const message = JSON.parse(trimmed);
         if (message.type === "event" && typeof handlers.onEvent === "function") {
           handlers.onEvent(message);
+        } else if (
+          message.type === "raw" &&
+          typeof handlers.onRaw === "function"
+        ) {
+          handlers.onRaw(message);
         } else if (
           message.type === "ready" &&
           typeof handlers.onReady === "function"

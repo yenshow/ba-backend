@@ -8,7 +8,7 @@ const db = require("../../database/db");
 const accessControlService = require("../accessControl/accessControlService");
 const {
   buildIsapiValidPayloadFromPlatformValidity,
-} = require("../accessControl/accessControlValidityUtils");
+} = require("../accessControl/accessControlHelpers");
 const personnelService = require("./personnelService");
 const logger = require("../../utils/logger").createLogger("PersonSyncService");
 const personDeviceSyncStateService = require("./personDeviceSyncStateService");
@@ -325,7 +325,7 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// validity → ISAPI Valid payload：抽到 accessControlValidityUtils 做 SSOT
+// validity → ISAPI Valid payload：accessControlHelpers 做 SSOT
 
 /**
  * 將 face_url 解析為圖片 Buffer
