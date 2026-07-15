@@ -6,17 +6,23 @@ const { createIsapiClient } = require("../accessControl/isapiClient");
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError, throwApiError } = require("../../utils/apiErrors");
-const { parseConfig } = require("./vehicleAccessValidation");
+const { parseConfig } = require("./vehicleAccessConfig");
 const { ensureIntArray } = require("../location/locationShared");
 const {
   parseLicensePlateSearchResult,
   normalizeListTypeToApi,
   normalizeListTypeToDevice,
-} = require("./isapiVehicleTrafficXmlParser");
-const { executeBarrierGateControl } = require("./vehicleBarrierGateControl");
+} = require("./isapiVehicleXmlParser");
 
 const VALID_CTRL_MODES = new Set(["open", "close", "lock", "unlock"]);
 const VALID_OPERATION_TYPES = new Set(["add", "modify"]);
+const MODEL_46_G0 = "YS-46-G0";
+const IO_TRIGGER_PATH = "/ISAPI/System/IO/outputs/1/trigger";
+const IO_PULSE_MS = 3000;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function formatIsapiTime(date = new Date()) {
   return new Date(date).toISOString().replace(/\.\d{3}Z$/, "");
@@ -37,6 +43,92 @@ function responseBodyToString(data) {
   if (Buffer.isBuffer(data)) return data.toString("utf8");
   if (typeof data === "string") return data;
   return JSON.stringify(data);
+}
+
+function isYs46G0Model(modelName) {
+  return String(modelName || "")
+    .trim()
+    .toUpperCase()
+    .includes(MODEL_46_G0);
+}
+
+function buildParkingBarrierPath(channelId) {
+  return `/ISAPI/Parking/channels/${resolveChannelId(channelId)}/barrierGate`;
+}
+
+function buildBarrierControlXml(ctrlMode) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<BarrierGate xmlns="http://www.isapi.org/ver20/XMLSchema" version="2.0">
+  <ctrlMode>${ctrlMode}</ctrlMode>
+</BarrierGate>`;
+}
+
+function buildIoTriggerXml(outputState) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<IOPortData>
+    <outputState>${outputState}</outputState>
+</IOPortData>`;
+}
+
+async function putIoOutputState(client, outputState) {
+  await client.request({
+    method: "PUT",
+    path: IO_TRIGGER_PATH,
+    data: buildIoTriggerXml(outputState),
+    headers: { "Content-Type": "application/xml" },
+    responseType: "text",
+  });
+}
+
+/**
+ * YS-46-G0：IO outputs/1/trigger（high=常開、low=常關；open/close 為脈衝）
+ */
+async function controlYs46G0Barrier(client, ctrlMode) {
+  switch (ctrlMode) {
+    case "open":
+      await putIoOutputState(client, "high");
+      await delay(IO_PULSE_MS);
+      await putIoOutputState(client, "low");
+      break;
+    case "close":
+      // 現場需求：關閉後維持常關（low），不可再回送 high 造成再次開啟
+      await putIoOutputState(client, "low");
+      break;
+    case "lock":
+      await putIoOutputState(client, "high");
+      break;
+    case "unlock":
+      await putIoOutputState(client, "low");
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * YS-TCG405-E（預設）：Parking barrierGate
+ */
+async function controlYsTcg405EBarrier(client, channelId, ctrlMode) {
+  await client.request({
+    method: "PUT",
+    path: buildParkingBarrierPath(channelId),
+    data: buildBarrierControlXml(ctrlMode),
+    headers: { "Content-Type": "application/xml" },
+    responseType: "text",
+  });
+}
+
+async function executeBarrierGateControl({
+  client,
+  modelName,
+  channelId,
+  ctrlMode,
+}) {
+  if (isYs46G0Model(modelName)) {
+    await controlYs46G0Barrier(client, ctrlMode);
+    return;
+  }
+  await controlYsTcg405EBarrier(client, channelId, ctrlMode);
 }
 
 async function getCameraDeviceAndClient(deviceId) {
@@ -136,17 +228,12 @@ async function fetchLicensePlateIndex(client, channelId) {
 }
 
 function buildDeletePayloadForDeviceModel(params) {
-  const {
-    modelName,
-    normalizedIds,
-    normalizedPlates,
-    idsToDelete,
-  } = params || {};
+  const { modelName, normalizedIds, normalizedPlates, idsToDelete } =
+    params || {};
 
-  const upperModel = String(modelName || "").trim().toUpperCase();
-  const isYs46G0 = upperModel.includes("YS-46-G0");
-
-  if (isYs46G0) return { payload: { id: idsToDelete }, count: idsToDelete.length };
+  if (isYs46G0Model(modelName)) {
+    return { payload: { id: idsToDelete }, count: idsToDelete.length };
+  }
 
   const licensePlate =
     Array.isArray(normalizedPlates) && normalizedPlates.length > 0
@@ -199,7 +286,7 @@ async function upsertLicensePlates(deviceId, options = {}) {
   );
 
   const modelName = String(device.model_name || device.model?.name || "").trim();
-  const isYs46G0 = modelName.toUpperCase().includes("YS-46-G0");
+  const useNumericId = isYs46G0Model(modelName);
 
   // 需要設備現況來：
   // - 46-G0：分配/沿用數字 id
@@ -225,14 +312,15 @@ async function upsertLicensePlates(deviceId, options = {}) {
     }
     const providedId = String(p.id || "").trim();
     let id = String(p.id || licensePlate).trim();
-    if (isYs46G0) {
+    if (useNumericId) {
       if (providedId && /^\d+$/.test(providedId)) {
         id = providedId;
       } else if (existingByPlate?.has(plateKey)) {
         const existingId = String(existingByPlate.get(plateKey) || "").trim();
-        id = existingId && /^\d+$/.test(existingId) ? existingId : String(nextNumericId++);
-      } else if (operationType === "add") {
-        id = String(nextNumericId++);
+        id =
+          existingId && /^\d+$/.test(existingId)
+            ? existingId
+            : String(nextNumericId++);
       } else {
         id = String(nextNumericId++);
       }
@@ -269,9 +357,13 @@ async function upsertLicensePlates(deviceId, options = {}) {
 async function deleteLicensePlates(deviceId, options = {}) {
   await assertDeviceBelongsToSite(deviceId, options.siteId);
   const ids = Array.isArray(options.ids) ? options.ids : [];
-  const plates = Array.isArray(options.licensePlates) ? options.licensePlates : [];
+  const plates = Array.isArray(options.licensePlates)
+    ? options.licensePlates
+    : [];
   const normalizedIds = ids.map((p) => String(p || "").trim()).filter(Boolean);
-  const normalizedPlates = plates.map((p) => String(p || "").trim()).filter(Boolean);
+  const normalizedPlates = plates
+    .map((p) => String(p || "").trim())
+    .filter(Boolean);
   if (normalizedIds.length === 0 && normalizedPlates.length === 0) {
     throwApiError(C.BAD_REQUEST, "請提供 ids 或 licensePlates 陣列");
   }
@@ -284,14 +376,15 @@ async function deleteLicensePlates(deviceId, options = {}) {
   );
 
   const modelName = String(device.model_name || device.model?.name || "").trim();
-  const isYs46G0 = modelName.toUpperCase().includes("YS-46-G0");
   let idsToDelete = normalizedIds;
-  if (isYs46G0 && idsToDelete.length === 0) {
+  if (isYs46G0Model(modelName) && idsToDelete.length === 0) {
     // 前端不輸入 id：後端用車牌查詢對應的數字 id 再刪除
     const want = new Set(normalizedPlates.map((p) => p.toUpperCase()));
     const { parsed } = await fetchLicensePlateIndex(client, channelId);
     idsToDelete = (parsed?.items || [])
-      .filter((i) => want.has(String(i.licensePlate || "").trim().toUpperCase()))
+      .filter((i) =>
+        want.has(String(i.licensePlate || "").trim().toUpperCase()),
+      )
       .map((i) => String(i.id || "").trim())
       .filter(Boolean);
     if (idsToDelete.length === 0) {

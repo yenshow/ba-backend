@@ -2,9 +2,9 @@
  * 人員車牌 ↔ ISAPI 設備名單同步（獨立於門禁 person_device_sync）
  */
 const db = require("../../database/db");
-const { parseConfig } = require("./vehicleAccessValidation");
+const { parseConfig } = require("./vehicleAccessConfig");
 const isapiVehicleDeviceService = require("./isapiVehicleDeviceService");
-const { normalizeListTypeToDevice } = require("./isapiVehicleTrafficXmlParser");
+const { normalizeListTypeToDevice } = require("./isapiVehicleXmlParser");
 const personLicensePlateService = require("../personnel/personLicensePlateService");
 
 const SYNC_STATUS = {

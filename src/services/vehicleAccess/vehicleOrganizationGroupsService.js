@@ -5,10 +5,8 @@ const db = require("../../database/db");
 const personnelService = require("../personnel/personnelService");
 const { computeTransitionStats } = require("../entryExit/stats");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
-const {
-  ENTRY_EXIT_MAX_RECORDS,
-  resolveStatsTimeRange,
-} = require("../entryExit/resolveTimeOptions");
+const { resolveStatsTimeRange } = require("../entryExit/resolveTimeOptions");
+const { normalizeVehicleDirection } = require("./vehicleAccessHelpers");
 
 const UNGROUPED_GROUP_ID = 0;
 const UNGROUPED_GROUP_NAME = "未分組";
@@ -39,20 +37,17 @@ function groupPersonsByPersonGroup(persons) {
 function statsFromVehicleLogs(logs) {
   return computeTransitionStats(logs || [], {
     getKey: (log) => normalizePlate(log.license_plate || log.licensePlate),
-    getDirection: (log) => {
-      const laneType = log.lane_type ?? log.laneType;
-      if (laneType === 1) return "entry";
-      if (laneType === 2) return "exit";
-      return null;
-    },
+    getDirection: (log) =>
+      normalizeVehicleDirection({
+        allow_result: 1,
+        lane_type: log.lane_type ?? log.laneType,
+      }),
     getTime: (log) => log.trigger_time ?? log.triggerTime,
   });
 }
 
 function collectPlatesForPerson(person, platesByPersonId) {
-  const fromMap = platesByPersonId.get(Number(person.id)) || [];
-  if (fromMap.length > 0) return fromMap;
-  return [];
+  return platesByPersonId.get(Number(person.id)) || [];
 }
 
 async function buildOrganizationGroups(siteId, { logs = [], presentPlates } = {}) {

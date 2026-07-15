@@ -15,7 +15,7 @@ const { normalizePlate } = require("../../utils/vehiclePlateUtils");
 const { computeTransitionStats } = require("../entryExit/stats");
 const {
   normalizeVehicleDirection,
-} = require("../vehicleAccess/normalizeVehicleDirection");
+} = require("../vehicleAccess/vehicleAccessHelpers");
 
 const sep = "\x00";
 

@@ -2,14 +2,16 @@
  * ISAPI 車輛進出（vehicle_passageway_logs, data_source=isapi_camera）
  */
 const db = require("../../../database/db");
-const { enrichLogsWithPerson } = require("../vehiclePlateEnrichment");
 const { normalizePlate } = require("../../../utils/vehiclePlateUtils");
 const { computeTransitionStats } = require("../../entryExit/stats");
 const {
   resolveStatsTimeRange,
   ENTRY_EXIT_MAX_RECORDS,
 } = require("../../entryExit/resolveTimeOptions");
-const { normalizeVehicleDirection } = require("../normalizeVehicleDirection");
+const {
+  enrichLogsWithPerson,
+  normalizeVehicleDirection,
+} = require("../vehicleAccessHelpers");
 
 /** 顯示用車道名稱：devices.name（寫入時已用 devices.name；此處不做舊「線別 N」相容） */
 function resolveIsapiLaneDisplayName(row) {

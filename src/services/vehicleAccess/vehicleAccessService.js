@@ -6,7 +6,6 @@ const getLocationService = () => require("../location/locationService");
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
-const { parseConfig } = require("./vehicleAccessValidation");
 const {
   getEffectiveSince,
   parseVehicleAccessConfigFields,
@@ -18,7 +17,7 @@ const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFea
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
 const { computeTransitionStats } = require("../entryExit/stats");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
-const { normalizeVehicleDirection } = require("./normalizeVehicleDirection");
+const { normalizeVehicleDirection } = require("./vehicleAccessHelpers");
 const { performLocationStatsReset } = require("../entryExit/locationStatsReset");
 const logger = require("../../utils/logger");
 
@@ -33,10 +32,6 @@ function getProvider(dataSource) {
 
 function ensureArray(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function normalizeId(id) {
-  return id != null ? String(id) : "";
 }
 
 function getVehicleAccessConfig(location) {
@@ -374,5 +369,4 @@ module.exports = {
   getSiteConfig,
   getVehicleAccessConfig,
   getOrganizationGroups,
-  normalizeId,
 };

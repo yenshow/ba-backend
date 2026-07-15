@@ -21,7 +21,7 @@ const {
   validateVehicleAccessConfig,
   parseConfig,
   applyVehicleAccessEpochOnSave,
-} = require("../vehicleAccess/vehicleAccessValidation");
+} = require("../vehicleAccess/vehicleAccessConfig");
 const {
   validatePeopleCountingSystemConfig,
 } = require("../peopleCounting/peopleCountingValidation");
@@ -454,7 +454,7 @@ async function createSystem(query, locationId, system) {
 
   if (systemType === "vehicle_access") {
     systemConfig = applyVehicleAccessEpochOnSave(systemConfig, null);
-    await validateVehicleAccessConfig(systemConfig, locationId);
+    await validateVehicleAccessConfig(systemConfig);
   }
   await validatePeopleCountingSystemIfNeeded(
     query,
@@ -571,7 +571,7 @@ async function updateSystem(query, systemId, system) {
       systemConfig,
       currentSystemType === "vehicle_access" ? currentSystemConfig : null,
     );
-    await validateVehicleAccessConfig(systemConfig, vaLocationId);
+    await validateVehicleAccessConfig(systemConfig);
   }
   if (vaLocationId != null) {
     await validatePeopleCountingSystemIfNeeded(

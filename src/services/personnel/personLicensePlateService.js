@@ -5,7 +5,7 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
-const { normalizeListTypeToApi } = require("../vehicleAccess/isapiVehicleTrafficXmlParser");
+const { normalizeListTypeToApi } = require("../vehicleAccess/isapiVehicleXmlParser");
 
 const VALID_SYNC_STATUSES = new Set([
   "pending",

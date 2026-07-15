@@ -11,7 +11,7 @@ const {
   resolveStatsTimeRange,
   ENTRY_EXIT_MAX_RECORDS,
 } = require("../../entryExit/resolveTimeOptions");
-const { createVehicleDirectionResolver } = require("../normalizeVehicleDirection");
+const { createVehicleDirectionResolver } = require("../vehicleAccessHelpers");
 const logger = require("../../../utils/logger");
 
 const passageMapper = new PassagewayLogDataHandler();

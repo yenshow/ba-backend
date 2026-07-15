@@ -3,7 +3,7 @@
  */
 const db = require("../../database/db");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
-const { normalizeVehicleDirection } = require("./normalizeVehicleDirection");
+const { normalizeVehicleDirection } = require("./vehicleAccessHelpers");
 const websocketService = require("../websocket/websocketService");
 
 async function upsertPresenceFromPassage(locationId, plateRaw, laneTypeRecord, eventTime) {

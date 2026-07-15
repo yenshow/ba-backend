@@ -6,9 +6,9 @@ const fs = require("fs");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
-const { lookupPersonByPlate } = require("./vehiclePlateEnrichment");
-const { parseConfig } = require("./vehicleAccessValidation");
+const { lookupPersonByPlate } = require("./vehicleAccessHelpers");
 const {
+  parseConfig,
   getEffectiveSince,
   isEventAfterEffectiveSince,
 } = require("./vehicleAccessConfig");
