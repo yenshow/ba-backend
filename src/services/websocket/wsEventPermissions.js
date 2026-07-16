@@ -24,6 +24,7 @@ const EVENT_PERMISSION_CODES = {
   "device:created": "system.equipment_management",
   "device:updated": "system.equipment_management",
   "device:deleted": "system.equipment_management",
+  "operational-event:new": "system.operational_log",
 };
 
 const normalizePermissionCodes = (codes) => {

@@ -5,6 +5,7 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const config = require("../../config");
+const websocketService = require("../websocket/websocketService");
 
 const opLogger = logger.createLogger("operationalEvents");
 
@@ -40,7 +41,11 @@ function buildListWhere(filters = {}) {
   let where = "WHERE 1=1";
   const params = [];
 
+  // 篩選 people_counting 時一併含歷史 access_control
   const sources = parseMultiFilter(source);
+  if (sources.includes("people_counting") && !sources.includes("access_control")) {
+    sources.push("access_control");
+  }
   if (sources.length === 1) {
     where += " AND oe.source = ?";
     params.push(sources[0]);
@@ -114,7 +119,7 @@ async function recordEvent(input = {}) {
         ?, ?,
         ?, ?, ?::jsonb
       )
-      RETURNING id
+      RETURNING id, occurred_at
       `,
       [
         input.occurred_at || null,
@@ -134,7 +139,21 @@ async function recordEvent(input = {}) {
         payload,
       ],
     );
-    return rows?.[0]?.id ?? null;
+    const row = rows?.[0];
+    const id = row?.id ?? null;
+    if (id != null) {
+      websocketService.emitOperationalEventNew({
+        id,
+        source,
+        event_kind: eventKind,
+        summary,
+        occurred_at:
+          row.occurred_at != null
+            ? new Date(row.occurred_at).toISOString()
+            : new Date().toISOString(),
+      });
+    }
+    return id;
   } catch (err) {
     opLogger.warn("寫入營運事件失敗（不影響主流程）", {
       error: err?.message || String(err),

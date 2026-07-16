@@ -559,6 +559,22 @@ function emitIsapiAccessEvent() {
   );
 }
 
+/** 營運事件寫入後推送；首頁／營運事件頁監聽後即時更新 */
+function emitOperationalEventNew(data) {
+  safeEmit(
+    "operational-event:new",
+    {
+      id: data.id,
+      source: data.source,
+      event_kind: data.event_kind,
+      summary: data.summary,
+      occurred_at: data.occurred_at,
+      timestamp: new Date().toISOString(),
+    },
+    { logMessage: `營運事件 ID: ${data.id}` },
+  );
+}
+
 /** 攝影機 PeopleCounting 事件寫入後推送，前端人流統計頁監聽並重新載入 */
 function emitIsapiPeopleCountingEvent(data) {
   safeEmit(
@@ -655,6 +671,7 @@ module.exports = {
   emitDeviceDeleted,
   emitEnvironmentReading,
   emitIsapiAccessEvent,
+  emitOperationalEventNew,
   emitIsapiPeopleCountingEvent,
   emitLadderSdkEvent,
   emitElevatorRuntimeUpdate,

@@ -14,6 +14,8 @@ const SOURCE_LABELS = {
   smoke_alarm: "煙霧警報",
   emergency_rescue: "緊急求救",
   people_counting: "門禁管理",
+  /** @deprecated 歷史列；新寫入已改 people_counting */
+  access_control: "門禁管理",
   vehicle_access: "車輛進出",
   elevator: "電梯管理",
   alert_linkage: "警報連動",

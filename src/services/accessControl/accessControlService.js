@@ -629,7 +629,8 @@ async function controlRemoteDoor(deviceId, options = {}) {
 
   const recordOe = (success, errorMessage = null) => {
     void operationalEventService.recordEvent({
-      source: fromAlertLinkage ? "alert_linkage" : "access_control",
+      // 與門禁管理模組一致（人流事件同源 people_counting）
+      source: fromAlertLinkage ? "alert_linkage" : "people_counting",
       event_kind: "control_write",
       device_id: deviceId,
       bit_key: `access_door:${cmd}`,
