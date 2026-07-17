@@ -82,6 +82,9 @@ const server = {
   nodeEnv: getEnv("NODE_ENV", "development"),
 };
 
+/** 產品版型號來自程式 catalog，不允許透過 API 修改。 */
+const deviceModelsLocked = isProduction;
+
 /**
  * Modbus 配置
  */
@@ -113,7 +116,10 @@ const jwt = {
   secret: getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
   expiresIn: getEnv("JWT_EXPIRES_IN", "7d"),
   refreshThreshold: JWT_REFRESH_THRESHOLD,
-  refreshThresholdMs: parseDurationToMs(JWT_REFRESH_THRESHOLD, 24 * 60 * 60 * 1000),
+  refreshThresholdMs: parseDurationToMs(
+    JWT_REFRESH_THRESHOLD,
+    24 * 60 * 60 * 1000,
+  ),
 };
 
 /**
@@ -268,12 +274,16 @@ const ladderSdk = {
  * 營運事件（線上保留天數）
  */
 const operationalEvents = {
-  retentionDays: toNumber(getEnv("OPERATIONAL_EVENTS_RETENTION_DAYS", "90"), 90),
+  retentionDays: toNumber(
+    getEnv("OPERATIONAL_EVENTS_RETENTION_DAYS", "90"),
+    90,
+  ),
 };
 
 module.exports = {
   server,
   isProduction,
+  deviceModelsLocked,
   modbus,
   database,
   jwt,

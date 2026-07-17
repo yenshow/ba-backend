@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const environmentService = require("../services/environment/environmentService");
+const environmentCatalogService = require("../services/environment/environmentCatalogService");
 const {
   authenticate,
   requirePermission,
@@ -12,6 +13,17 @@ const { validateIntegers } = require("../middleware/validation");
 
 // 以下路由皆需登入且具備系統權限
 router.use(authenticate, requirePermission("system.environment"));
+
+// ========== 參數 catalog ==========
+
+router.get(
+  "/parameters",
+  disableHttpCache,
+  asyncHandler(async (req, res) => {
+    const result = environmentCatalogService.getParameters();
+    res.sendSuccess(result);
+  }),
+);
 
 // ========== 區域管理路由 ==========
 

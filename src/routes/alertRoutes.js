@@ -19,6 +19,10 @@ const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrors");
+const {
+  isValidAlertThresholdParameterKey,
+  listAlertThresholdParameterKeys,
+} = require("../constants/environmentParameterCatalog");
 
 const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold", "di", "do"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
@@ -380,6 +384,28 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
   }
   if (!allowPartial && condition_type === "threshold" && !opOk) {
     return `threshold 規則需提供 operator，且 ${allowedOpHint}`;
+  }
+
+  const effectiveConditionType =
+    condition_type ??
+    (alert_type === "threshold" ? "threshold" : undefined);
+  if (effectiveConditionType === "threshold" && condCfg?.parameter != null) {
+    const param = String(condCfg.parameter).trim();
+    if (param && !isValidAlertThresholdParameterKey(param)) {
+      const allowed = listAlertThresholdParameterKeys().join(", ");
+      return `threshold 的 parameter 不合法：${param}（支援：${allowed}）`;
+    }
+  }
+  if (
+    !allowPartial &&
+    effectiveConditionType === "threshold" &&
+    source === "environment"
+  ) {
+    const param = condCfg?.parameter != null ? String(condCfg.parameter).trim() : "";
+    if (!param || !isValidAlertThresholdParameterKey(param)) {
+      const allowed = listAlertThresholdParameterKeys().join(", ");
+      return `environment threshold 規則需提供合法的 parameter（支援：${allowed}）`;
+    }
   }
 
   return null;

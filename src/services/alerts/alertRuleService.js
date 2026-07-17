@@ -42,18 +42,9 @@ const LOCATION_SYSTEM_SOURCES = new Set([
   "smoke_alarm",
 ]);
 
-/** 環境參數代碼 → 訊息／列表顯示名（與前端 getAlertParameterDisplayName 對齊） */
-const PARAMETER_DISPLAY_NAMES = {
-  pm25: "PM2.5",
-  pm10: "PM10",
-  tvoc: "TVOC",
-  hcho: "HCHO",
-  humidity: "濕度",
-  temperature: "溫度",
-  co2: "CO2",
-  noise: "噪音值",
-  wind: "風速",
-};
+const {
+  getParameterDisplayName: getCatalogParameterDisplayName,
+} = require("../../constants/environmentParameterCatalog");
 
 function inferDefaultTemplateKey(alertType) {
   if (alertType === "threshold") return MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
@@ -913,11 +904,7 @@ function formatMessage(template, variables) {
  * @returns {string} 顯示名稱
  */
 function getParameterDisplayName(parameter) {
-  if (parameter == null || parameter === "") {
-    return "";
-  }
-  const code = String(parameter).trim();
-  return PARAMETER_DISPLAY_NAMES[code] || code.toUpperCase();
+  return getCatalogParameterDisplayName(parameter);
 }
 
 /**

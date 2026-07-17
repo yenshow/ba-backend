@@ -15,6 +15,10 @@ const {
   normalizeDeviceTypeCode,
   getDeviceTypeName,
 } = require("../../constants/deviceTypes");
+const {
+  listSensorParameterKeys,
+  isValidSensorParameterKey,
+} = require("../../constants/environmentParameterCatalog");
 
 const deviceModelLogger = logger.createLogger("deviceModelService");
 
@@ -111,17 +115,7 @@ function validateSensorParametersConfig(config) {
       );
     }
 
-    const validParameterTypes = [
-      "pm25",
-      "pm10",
-      "tvoc",
-      "hcho",
-      "humidity",
-      "temperature",
-      "co2",
-      "noise",
-      "wind",
-    ];
+    const validParameterTypes = listSensorParameterKeys();
 
     for (const param of config.sensorParameters) {
       if (!param.type) {
@@ -130,7 +124,7 @@ function validateSensorParametersConfig(config) {
           "參數定義必須包含 type 欄位",
         );
       }
-      if (!validParameterTypes.includes(param.type)) {
+      if (!isValidSensorParameterKey(param.type)) {
         throwApiError(
           C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
           `無效的參數類型: ${param.type}。有效類型: ${validParameterTypes.join(", ")}`,

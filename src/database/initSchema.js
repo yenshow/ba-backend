@@ -4,6 +4,7 @@ const logger = require("../utils/logger");
 
 const schemaLogger = logger.createLogger("initSchema");
 const syncDefinitions = require("../access/syncDefinitions");
+const { syncDeviceModelCatalog } = require("./syncDeviceModelCatalog");
 
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
@@ -206,114 +207,11 @@ async function initSchema() {
 
     schemaLogger.info("device_models 表已建立", { module: "initSchema" });
 
-    // 種子：門禁設備預設型號（可重跑，不重複）
-    const accessControlModelSeeds = [
-      { name: "YS AC-02F", type_code: "access_control" },
-      { name: "YS AC-07", type_code: "access_control" },
-    ];
-    for (const m of accessControlModelSeeds) {
-      await targetPool.query(
-        `
-          INSERT INTO device_models (name, type_code, category_code, description, config)
-          VALUES ($1, $2, $3, $4, $5::jsonb)
-          ON CONFLICT (type_code, name) DO UPDATE
-          SET category_code = EXCLUDED.category_code,
-              description = EXCLUDED.description,
-              config = EXCLUDED.config,
-              updated_at = CURRENT_TIMESTAMP
-        `,
-        [m.name, m.type_code, null, "門禁設備預設型號", "{}"],
-      );
-    }
-    schemaLogger.info("device_models：門禁預設型號種子已插入", {
+    // 產品型號 catalog：僅補入不存在資料，不覆寫現場既有設定。
+    const deviceModelSync = await syncDeviceModelCatalog(targetPool);
+    schemaLogger.info("device_models：產品型號 catalog 已同步", {
       module: "initSchema",
-    });
-
-    // 種子：控制器預設型號（可重跑、可覆蓋更新）
-    const controllerModelSeeds = [
-      {
-        name: "YS-K2210",
-        port: 8000,
-        config: { protocol: "hcnet_sdk" },
-        description: "HCNetSDK 梯控控制器",
-      },
-      {
-        name: "ZC160",
-        port: 502,
-        config: {},
-        description: "Modbus DI/DO 控制器",
-      },
-    ];
-    for (const m of controllerModelSeeds) {
-      await targetPool.query(
-        `
-          INSERT INTO device_models (name, type_code, category_code, description, port, config)
-          VALUES ($1, 'controller', $2, $3, $4, $5::jsonb)
-          ON CONFLICT (type_code, name) DO UPDATE
-          SET port = EXCLUDED.port,
-              description = EXCLUDED.description,
-              config = EXCLUDED.config,
-              updated_at = CURRENT_TIMESTAMP
-        `,
-        [m.name, null, m.description, m.port, JSON.stringify(m.config || {})],
-      );
-    }
-    schemaLogger.info("device_models：控制器預設型號種子已插入", {
-      module: "initSchema",
-    });
-
-    // 種子：攝影機預設型號（含分類；可重跑、可覆蓋更新）
-    // category_code（互斥單選）：
-    // - people_counting：人流統計
-    // - license_plate_recognition：車牌辨識
-    // - surveillance_2mp / 4mp / 5mp / 6mp / 8mp：影像監控（按解析度）
-    const cameraModelSeeds = [
-      // 人流統計
-      { name: "YS-2CD3046G2H-IU", category_code: "people_counting" },
-      { name: "YS-47-G0", category_code: "people_counting" },
-
-      // 車牌辨識
-      { name: "YS-46-G0", category_code: "license_plate_recognition" },
-      { name: "YS-TCG405-E", category_code: "license_plate_recognition" },
-
-      // 影像監控：2MP
-      { name: "YS-2CD3021G0-IU(2.8mm)", category_code: "surveillance_2mp" },
-      { name: "YS-2CD3321G2-IUF", category_code: "surveillance_2mp" },
-      { name: "YS-2CD3T43G2-2ISU", category_code: "surveillance_2mp" },
-
-      // 影像監控：4MP
-      { name: "YS-2CD3047G2E-LUF", category_code: "surveillance_4mp" },
-      { name: "YS-2CD2043G2-IU(4mm)", category_code: "surveillance_4mp" },
-      { name: "YS-2CD3347G2E-LUF", category_code: "surveillance_4mp" },
-
-      // 影像監控：5MP
-      { name: "YS-2CD3151G0-I", category_code: "surveillance_5mp" },
-      { name: "YS-2CD3051G0-IUF", category_code: "surveillance_5mp" },
-      { name: "YS-2CD3956G2-IS(U)", category_code: "surveillance_5mp" },
-
-      // 影像監控：6MP
-      { name: "YS-2CD3661G2-LIZSU", category_code: "surveillance_6mp" },
-
-      // 影像監控：8MP
-      { name: "YS 4G-55", category_code: "surveillance_8mp" },
-      { name: "YS-2CD3381G2P-LIUF/SL", category_code: "surveillance_8mp" },
-    ];
-    for (const m of cameraModelSeeds) {
-      await targetPool.query(
-        `
-          INSERT INTO device_models (name, type_code, category_code, description, config)
-          VALUES ($1, 'camera', $2, $3, $4::jsonb)
-          ON CONFLICT (type_code, name) DO UPDATE
-          SET category_code = EXCLUDED.category_code,
-              description = EXCLUDED.description,
-              config = EXCLUDED.config,
-              updated_at = CURRENT_TIMESTAMP
-        `,
-        [m.name, m.category_code, "攝影機預設型號", "{}"],
-      );
-    }
-    schemaLogger.info("device_models：攝影機預設型號（含分類）種子已插入", {
-      module: "initSchema",
+      ...deviceModelSync,
     });
 
     // 建立 devices 表
@@ -1310,7 +1208,9 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_external_sync_configs_push_time
       ON external_sync_configs(push_time);
     `);
-    schemaLogger.info("external_sync_configs 表已建立", { module: "initSchema" });
+    schemaLogger.info("external_sync_configs 表已建立", {
+      module: "initSchema",
+    });
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS external_sync_field_mappings (

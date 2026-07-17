@@ -2,6 +2,10 @@
  * 既有資料庫 schema 增量修補（啟動時執行；新裝仍由 initSchema 建立完整 enum）。
  */
 const logger = require("../utils/logger").createLogger("schemaPatches");
+const {
+  isValidSensorParameterKey,
+} = require("../constants/environmentParameterCatalog");
+const { syncDeviceModelCatalog } = require("./syncDeviceModelCatalog");
 
 /** 與 initSchema `alert_source`、alertService.ALERT_SOURCES 對齊 */
 const ALERT_SOURCE_ENUM_VALUES = [
@@ -295,12 +299,101 @@ async function ensureOperationalEventsTable(pool) {
   `);
 }
 
+async function migrateLegacySensorModelConfigs(pool) {
+  const { rows } = await pool.query(`
+    SELECT id, name, config
+    FROM device_models
+    WHERE type_code = 'sensor'
+      AND config ? 'modbusPoints'
+    ORDER BY id
+  `);
+
+  let migratedCount = 0;
+  for (const row of rows) {
+    const config =
+      row.config && typeof row.config === "object" ? row.config : {};
+    const legacyPoints = Array.isArray(config.modbusPoints)
+      ? config.modbusPoints
+      : [];
+    let sensorParameters = config.sensorParameters;
+    let registerType = config.registerType;
+
+    if (!Array.isArray(sensorParameters)) {
+      const convertedParameters = [];
+      const registerTypes = new Set();
+
+      for (const point of legacyPoints) {
+        const type = String(point?.key || point?.type || "").trim();
+        const address = Number(point?.address);
+        const pointRegisterType = String(
+          point?.registerType || point?.register_type || "holding",
+        ).toLowerCase();
+
+        if (
+          !isValidSensorParameterKey(type) ||
+          !Number.isInteger(address) ||
+          address < 0
+        ) {
+          continue;
+        }
+        if (
+          ["coils", "discrete", "holding", "input"].includes(pointRegisterType)
+        ) {
+          registerTypes.add(pointRegisterType);
+        }
+
+        const transform = String(point?.transform || "").trim();
+        convertedParameters.push({
+          type,
+          modbusConfig: {
+            address,
+            ...(transform ? { transform } : {}),
+          },
+        });
+      }
+
+      if (registerTypes.size > 1) {
+        logger.error("感測器舊型號混用多種 registerType，無法自動遷移", {
+          module: "schemaPatches",
+          modelId: row.id,
+          modelName: row.name,
+          registerTypes: [...registerTypes],
+        });
+        continue;
+      }
+
+      sensorParameters = convertedParameters;
+      registerType = [...registerTypes][0] || "holding";
+    }
+
+    const nextConfig = {
+      ...config,
+      registerType: registerType || "holding",
+      sensorParameters,
+    };
+    delete nextConfig.modbusPoints;
+    await pool.query(
+      "UPDATE device_models SET config = $1::jsonb WHERE id = $2",
+      [JSON.stringify(nextConfig), row.id],
+    );
+    migratedCount += 1;
+  }
+
+  return migratedCount;
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
-  logger.info("schema patches 已套用", { module: "schemaPatches" });
+  const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
+  const deviceModelSync = await syncDeviceModelCatalog(pool);
+  logger.info("schema patches 已套用", {
+    module: "schemaPatches",
+    migratedSensorModels,
+    ...deviceModelSync,
+  });
 }
 
 module.exports = {
@@ -309,5 +402,6 @@ module.exports = {
   ensureAlertSourceEnumValues,
   ensureExternalIntegrationTables,
   ensureOperationalEventsTable,
+  migrateLegacySensorModelConfigs,
   applySchemaPatches,
 };

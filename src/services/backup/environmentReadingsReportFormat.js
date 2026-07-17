@@ -5,18 +5,7 @@
  */
 
 const { formatDateTimeZhTW, formatZoneLocation } = require("./reportFormatUtils");
-
-const PARAM_LABELS = {
-  temperature: "溫度",
-  humidity: "濕度",
-  pm25: "PM2.5",
-  pm10: "PM10",
-  co2: "CO2",
-  noise: "噪音值",
-  tvoc: "TVOC",
-  hcho: "HCHO",
-  wind: "風速",
-};
+const { getParameterDisplayName } = require("../../constants/environmentParameterCatalog");
 
 const FRACTION_DIGITS = 1;
 
@@ -37,7 +26,7 @@ function transformEnvironmentReadingsToReportFormat(rows) {
     };
 
     for (const [key, value] of Object.entries(data)) {
-      const label = PARAM_LABELS[key] ?? key;
+      const label = getParameterDisplayName(key) || key;
       base[label] = roundParamValue(key, value);
     }
 

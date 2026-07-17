@@ -5,6 +5,9 @@ const { FIXED_DEVICE_TYPES } = require("../constants/deviceTypes");
 const deviceModelService = require("../services/devices/deviceModelService");
 const deviceStreamService = require("../services/devices/deviceStreamService");
 const deviceConnectivityService = require("../services/devices/deviceConnectivityService");
+const config = require("../config");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrors");
 const {
   authenticate,
   requirePermission,
@@ -17,6 +20,16 @@ const { validateIntegers } = require("../middleware/validation");
 
 // 以下路由皆需登入
 router.use(authenticate);
+
+const requireDeviceModelsUnlocked = (req, res, next) => {
+  if (!config.deviceModelsLocked) {
+    return next();
+  }
+  throwApiError(
+    C.DEVICE_MODEL_MANAGEMENT_LOCKED,
+    "產品環境的設備型號由系統 catalog 管理，不允許新增、修改或刪除",
+  );
+};
 
 // ========== 設備類型 API ==========
 // 注意：必須放在 /:id 之前，避免路由衝突
@@ -61,6 +74,7 @@ router.get(
 router.post(
   "/models",
   requirePlatformAdmin,
+  requireDeviceModelsUnlocked,
   requirePermission("system.equipment_management.device.create"),
   asyncHandler(async (req, res) => {
     const result = await deviceModelService.createDeviceModel(
@@ -75,6 +89,7 @@ router.post(
 router.put(
   "/models/:id",
   requirePlatformAdmin,
+  requireDeviceModelsUnlocked,
   requirePermission("system.equipment_management.device.update"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
@@ -92,6 +107,7 @@ router.put(
 router.delete(
   "/models/:id",
   requirePlatformAdmin,
+  requireDeviceModelsUnlocked,
   requirePermission("system.equipment_management.device.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
@@ -120,7 +136,10 @@ router.get(
         .filter((n) => Number.isFinite(n));
       if (ids.length > 0) {
         const shouldDebug = String(debug || "").trim() === "1";
-        const r = await deviceConnectivityService.checkAndBroadcastConnectivityByDeviceIds(ids);
+        const r =
+          await deviceConnectivityService.checkAndBroadcastConnectivityByDeviceIds(
+            ids,
+          );
         debugResult = shouldDebug ? r : null;
       }
     }
