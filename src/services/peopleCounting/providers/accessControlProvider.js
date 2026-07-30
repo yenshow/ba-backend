@@ -190,16 +190,11 @@ async function getAccessControlSiteLogs(options = {}) {
     for (const r of personRows || []) {
       const no = r.employee_no != null ? String(r.employee_no).trim() : "";
       if (no) {
-        const hasGroup =
-          r.person_group_id != null && Number.isFinite(Number(r.person_group_id));
-        const unitNameRaw =
-          r.unit_name != null ? String(r.unit_name).trim() : "";
         personByEmployeeNo.set(no, {
           personId: r.id,
           personName: r.full_name != null ? String(r.full_name).trim() : "",
-          unitId: hasGroup ? Number(r.person_group_id) : UNGROUPED_GROUP_ID,
-          // 有對到人員但未分組時顯示「未分組」，與右側群組卡一致
-          unitName: hasGroup ? unitNameRaw : UNGROUPED_GROUP_NAME,
+          unitId: r.person_group_id != null ? Number(r.person_group_id) : null,
+          unitName: r.unit_name != null ? String(r.unit_name).trim() : "",
         });
       }
     }

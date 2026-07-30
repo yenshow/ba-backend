@@ -147,6 +147,8 @@ async function getSiteData(siteId, config) {
   let currentCount = 0;
 
   let units = [];
+  // 正常模式：取各 region 最新一筆累計值（設備回報的絕對 enter/exit 計數，代表整個營運日）
+  // 重置模式：改用 delta 加總（因為累計值包含重置前的計數，不可直接使用）
   if (isStatsResetActive(config.statsResetAt)) {
     const byRegion = await getStatsFromDeltasByRegion(
       siteId,

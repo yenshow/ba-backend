@@ -4,7 +4,9 @@
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
-const { summaryPeopleCounting } = require("../operationalEvents/operationalEventCopy");
+const {
+  summaryPeopleCounting,
+} = require("../operationalEvents/operationalEventCopy");
 
 function safeInt(v) {
   const n = Number(v);

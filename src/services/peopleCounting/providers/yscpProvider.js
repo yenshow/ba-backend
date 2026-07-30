@@ -324,9 +324,8 @@ async function getSitesData(locations, getPeopleCountingConfig) {
 /**
  * 進出紀錄
  */
-async function getSiteLogs(siteId, config, options = {}, context = {}) {
+async function getSiteLogs(siteId, config, options = {}) {
   const { entryDoorIds, exitDoorIds } = config;
-  const generateRecordIdFn = context.generateRecordId || generateRecordId;
   const allowedPhysicalIds = normalizeDoorPhysicalIds(entryDoorIds, exitDoorIds);
   if (allowedPhysicalIds.length === 0) return { logs: [] };
   const records = await getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, {
@@ -359,7 +358,7 @@ async function getSiteLogs(siteId, config, options = {}, context = {}) {
       physicalId != null ? (doorNameMap.get(physicalId) ?? "") : "";
     const resolvedType = eventType || "failed";
     return {
-      id: generateRecordIdFn(record.person_id, record.swip_card_rev_time),
+      id: generateRecordId(record.person_id, record.swip_card_rev_time),
       personId: record.person_id,
       personName: record.person_name || "陌生人員",
       unitId: record.unit_id || null,

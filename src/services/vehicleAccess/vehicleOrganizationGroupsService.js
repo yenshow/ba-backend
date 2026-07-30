@@ -75,15 +75,10 @@ async function buildOrganizationGroups(siteId, { logs = [], presentPlates } = {}
     }
   }
 
-  /** 呼叫端明確傳入 presentPlates（含空陣列）時以 presence 為準，避免停車場 Reset 後誤用當日 logs */
-  const usePresentPlates =
-    presentPlates instanceof Set || Array.isArray(presentPlates);
+  /** 呼叫端傳入 presentPlates（含空陣列）時以 session 推算在場為準，避免停車場 Reset 後誤用當日 logs */
+  const usePresentPlates = Array.isArray(presentPlates);
   const presentSet = usePresentPlates
-    ? presentPlates instanceof Set
-      ? presentPlates
-      : new Set(
-          presentPlates.map((p) => normalizePlate(p)).filter(Boolean),
-        )
+    ? new Set(presentPlates.map((p) => normalizePlate(p)).filter(Boolean))
     : null;
 
   const validLogs = (logs || []).filter(

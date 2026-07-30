@@ -16,7 +16,9 @@ const {
   formatUploadTimestampForFilename,
 } = require("../../utils/baDataPaths");
 const operationalEventService = require("../operationalEvents/operationalEventService");
-const { summaryAccessEvent } = require("../operationalEvents/operationalEventCopy");
+const {
+  summaryAccessEvent,
+} = require("../operationalEvents/operationalEventCopy");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件 */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -286,9 +288,7 @@ async function consumeEventStreamIncremental(
         lastWrittenEventId,
         body,
         getUploadsDir("access-events"),
-      ).catch(
-        () => {},
-      );
+      ).catch(() => {});
       lastWrittenEventId = null;
     }
   };

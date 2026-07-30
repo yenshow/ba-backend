@@ -435,22 +435,8 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 車輛在場狀態（ISAPI；停車場／工地持續在場）
-    await targetPool.query(`
-      CREATE TABLE IF NOT EXISTS vehicle_presence (
-        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-        plate_normalized VARCHAR(64) NOT NULL,
-        is_present BOOLEAN NOT NULL DEFAULT false,
-        last_event_time TIMESTAMPTZ,
-        last_lane_type SMALLINT,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (location_id, plate_normalized)
-      )
-    `);
-    await targetPool.query(`
-      CREATE INDEX IF NOT EXISTS idx_vehicle_presence_location_present
-      ON vehicle_presence(location_id) WHERE is_present = true
-    `);
+    // 舊版車輛在場物化表已廢除：在場改由 session／營運日放行 logs + transition 推算
+    await targetPool.query(`DROP TABLE IF EXISTS vehicle_presence`);
 
     // 停車場統計 Reset 稽核（可選）
     await targetPool.query(`

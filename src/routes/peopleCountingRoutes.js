@@ -232,11 +232,7 @@ router.get(
     const options = {
       limit: limit ? parseInt(limit, 10) : 50,
       offset: offset ? parseInt(offset, 10) : 0,
-      // unitId=0 為「未分組」，不可用 truthy 判斷
-      unitId:
-        unitId !== undefined && unitId !== null && unitId !== ""
-          ? parseInt(unitId, 10)
-          : undefined,
+      unitId: unitId ? parseInt(unitId, 10) : undefined,
       startTime: resolved.startTime,
       endTime: resolved.endTime,
     };

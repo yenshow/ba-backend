@@ -23,7 +23,6 @@ const {
 const yscpProvider = require("./providers/yscpProvider");
 const accessControlProvider = require("./providers/accessControlProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
-const { parseEventType } = require("./helpers/entryExitStats");
 const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
 const { validateLocationData } = require("./peopleCountingValidation");
@@ -31,7 +30,12 @@ const {
   parsePeopleCountingConfigFields,
   enrichOptionsWithStatsReset,
 } = require("./peopleCountingConfig");
-const { performLocationStatsReset } = require("../entryExit/locationStatsReset");
+const {
+  performLocationStatsReset,
+} = require("../entryExit/locationStatsReset");
+const {
+  emitPeopleCountingStatsReset,
+} = require("../websocket/websocketService");
 const db = require("../../database/db");
 
 const PROVIDERS = {
@@ -378,17 +382,6 @@ async function deletePeopleCountingLocation(id) {
 // ========== 業務邏輯 API ==========
 
 /**
- * 生成刷卡記錄的唯一 ID
- * @param {number} personId - 人員 ID
- * @param {string} timestamp - 時間戳記
- * @returns {string} 唯一 ID
- */
-function generateRecordId(personId, timestamp) {
-  const timestampNum = new Date(timestamp).getTime();
-  return `${personId}-${timestampNum}`;
-}
-
-/**
  * 取得所有工地列表（含統計）
  * 協調層：依 data_source 委派 provider.getSiteData / getSitesData
  */
@@ -506,9 +499,8 @@ async function getSiteLogs(siteId, options = {}) {
         return { logs: [] };
       }
       const provider = getProvider(dataSource);
-      const context = dataSource === "yscp" ? { generateRecordId } : {};
       const enriched = enrichOptionsWithStatsReset(siteConfig, options);
-      return await provider.getSiteLogs(siteId, siteConfig, enriched, context);
+      return await provider.getSiteLogs(siteId, siteConfig, enriched);
     },
     "取得工地進出場記錄失敗",
     { siteId, options },
@@ -523,6 +515,7 @@ async function resetSiteStats(siteId, userId = null) {
     notFoundMessage: "地點未設定人流統計系統",
     userId,
   });
+  emitPeopleCountingStatsReset({ locationId: siteId, statsResetAt: resetAt });
   return { statsResetAt: resetAt };
 }
 
@@ -747,8 +740,6 @@ module.exports = {
   deletePeopleCountingLocation,
   // 輔助函數（供其他模組使用）
   getPeopleCountingConfig,
-  generateRecordId,
-  parseEventType,
   // 業務邏輯 API
   getSites,
   getSiteStats,

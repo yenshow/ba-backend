@@ -12,7 +12,6 @@ const {
   getEffectiveSince,
   isEventAfterEffectiveSince,
 } = require("./vehicleAccessConfig");
-const vehiclePresenceService = require("./vehiclePresenceService");
 const { getUploadsDir, formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryVehicle } = require("../operationalEvents/operationalEventCopy");
@@ -48,7 +47,7 @@ async function getLocationIngestPolicy(locationId) {
     [locationId],
   );
   if (!locRows?.length) {
-    return { skipIngest: false, updatePresence: false };
+    return { skipIngest: false, filterEventsBeforeSince: false };
   }
   const cfg = parseConfig(locRows[0].system_config);
   const createdAt = locRows[0].created_at
@@ -61,7 +60,6 @@ async function getLocationIngestPolicy(locationId) {
     /** 停車場：略過 effectiveSince 之前的歷史事件 */
     filterEventsBeforeSince:
       cfg.operationMode === "parking" && effectiveSince != null,
-    updatePresence: cfg.operationMode === "parking",
   };
   locationParkingCache.set(locationId, {
     policy,
@@ -153,19 +151,6 @@ async function persistAnprEvent(options) {
           allowResult,
         },
       });
-      if (
-        policy.updatePresence &&
-        plate &&
-        allowResult === 1 &&
-        target.laneType != null
-      ) {
-        await vehiclePresenceService.upsertPresenceFromPassage(
-          target.locationId,
-          plate,
-          { allow_result: allowResult, lane_type: target.laneType },
-          parsed.dateTime,
-        );
-      }
     }
   }
 

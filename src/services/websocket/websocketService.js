@@ -434,7 +434,11 @@ function emitBatchDeviceStatus(updates) {
  * @param {{ system: string, items: object[], fetchedAt: string }} payload
  */
 function emitMonitoringSnapshotUpdated(payload) {
-  if (!payload?.system || !Array.isArray(payload.items) || payload.items.length === 0) {
+  if (
+    !payload?.system ||
+    !Array.isArray(payload.items) ||
+    payload.items.length === 0
+  ) {
     return;
   }
 
@@ -532,7 +536,10 @@ function emitEnvironmentReading(data) {
     ? data.devices
         .map((d) => ({
           deviceId: Number(d.deviceId ?? d.device_id),
-          status: String(d.status || "").toLowerCase() === "online" ? "online" : "offline",
+          status:
+            String(d.status || "").toLowerCase() === "online"
+              ? "online"
+              : "offline",
         }))
         .filter((d) => Number.isFinite(d.deviceId))
     : [];
@@ -572,6 +579,19 @@ function emitOperationalEventNew(data) {
       timestamp: new Date().toISOString(),
     },
     { logMessage: `營運事件 ID: ${data.id}` },
+  );
+}
+
+/** 人流統計重置後推送，前端可立即刷新重置地點 */
+function emitPeopleCountingStatsReset(data) {
+  safeEmit(
+    "people-counting:stats-reset",
+    {
+      ...(data || {}),
+      source: "people_counting",
+      timestamp: new Date().toISOString(),
+    },
+    { logMessage: "人流統計已重置" },
   );
 }
 
@@ -672,6 +692,7 @@ module.exports = {
   emitEnvironmentReading,
   emitIsapiAccessEvent,
   emitOperationalEventNew,
+  emitPeopleCountingStatsReset,
   emitIsapiPeopleCountingEvent,
   emitLadderSdkEvent,
   emitElevatorRuntimeUpdate,

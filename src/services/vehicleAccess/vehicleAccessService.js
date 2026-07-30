@@ -12,13 +12,12 @@ const {
 } = require("./vehicleAccessConfig");
 const yscpProvider = require("./providers/yscpProvider");
 const isapiCameraProvider = require("./providers/isapiCameraProvider");
-const vehiclePresenceService = require("./vehiclePresenceService");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const { ENTRY_EXIT_MAX_RECORDS } = require("../entryExit/resolveTimeOptions");
-const { computeTransitionStats } = require("../entryExit/stats");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
 const { normalizeVehicleDirection } = require("./vehicleAccessHelpers");
 const { performLocationStatsReset } = require("../entryExit/locationStatsReset");
+const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger");
 
 const PROVIDERS = {
@@ -103,8 +102,7 @@ async function getSites() {
         const session = await getSiteSessionStats(siteId);
         entryCount = session.entryCount;
         exitCount = session.exitCount;
-        const presence = await getSitePresence(siteId);
-        currentCount = presence.currentCount;
+        currentCount = session.currentCount;
       } else {
         const provider = getProvider(cfg.dataSource);
         const stats = await provider.getSiteStats(siteId, cfg, {
@@ -151,72 +149,111 @@ async function loadSessionReleasedRows(siteId, since) {
 }
 
 /**
- * 停車場：以 session 放行 logs 對齊 vehicle_presence（清孤兒在場）
+ * Session 放行 logs 單次掃描：進／出計數 + 在場車牌（與 computeTransitionStats 同口徑）
+ * @param {Array<{ license_plate?: string, lane_type?: number|null, allow_result?: number, trigger_time?: * }>} rows
  */
-async function alignParkingPresenceWithConfig(siteId, siteCfg) {
+function computeSessionFromReleasedRows(rows) {
+  /** @type {Map<string, 'entry'|'exit'>} */
+  const lastByPlate = new Map();
+  let entryCount = 0;
+  let exitCount = 0;
+
+  for (const row of rows || []) {
+    const plate = normalizePlate(row.license_plate);
+    if (!plate) continue;
+    const dir = normalizeVehicleDirection(row);
+    if (dir !== "entry" && dir !== "exit") continue;
+
+    const prev = lastByPlate.get(plate);
+    if (prev === undefined && dir === "exit") continue;
+    if (prev !== dir) {
+      if (dir === "entry") entryCount += 1;
+      else exitCount += 1;
+    }
+    lastByPlate.set(plate, dir);
+  }
+
+  const presentPlates = [];
+  for (const [plate, dir] of lastByPlate) {
+    if (dir === "entry") presentPlates.push(plate);
+  }
+  presentPlates.sort((a, b) => a.localeCompare(b));
+
+  return {
+    entryCount,
+    exitCount,
+    currentCount: presentPlates.length,
+    presentPlates,
+  };
+}
+
+/**
+ * @returns {Promise<
+ *   | { ok: false, capacity: number|null }
+ *   | { ok: true, entryCount: number, exitCount: number, currentCount: number, presentPlates: string[], since: string|null, capacity: number|null }
+ * >}
+ */
+async function tryLoadParkingSession(siteId) {
+  const siteCfg = await getSiteConfig(siteId);
+  const capacity =
+    siteCfg.operationMode === "parking" ? siteCfg.parkingCapacity : null;
   if (
     siteCfg.operationMode !== "parking" ||
     siteCfg.dataSource !== "isapi_camera"
   ) {
-    return null;
+    return { ok: false, capacity };
   }
+
   const since = getEffectiveSince(siteCfg, siteCfg.createdAt);
+  if (!since) {
+    return {
+      ok: true,
+      entryCount: 0,
+      exitCount: 0,
+      currentCount: 0,
+      presentPlates: [],
+      since: null,
+      capacity,
+    };
+  }
+
   const rows = await loadSessionReleasedRows(siteId, since);
-  return vehiclePresenceService.syncPresenceFromReleasedRows(siteId, rows);
+  const computed = computeSessionFromReleasedRows(rows);
+  return { ok: true, ...computed, since, capacity };
 }
 
 async function getSiteSessionStats(siteId) {
-  const { dataSource, operationMode, createdAt, ...cfg } =
-    await getSiteConfig(siteId);
-  if (operationMode !== "parking") {
+  const session = await tryLoadParkingSession(siteId);
+  if (!session.ok) {
     throwApiError(
       C.VEHICLE_ACCESS_VALIDATION_FAILED,
-      "僅停車場模式可使用 session 統計",
+      "僅停車場 ISAPI 模式可使用 session 統計",
     );
   }
-  if (dataSource !== "isapi_camera") {
-    throwApiError(
-      C.VEHICLE_ACCESS_VALIDATION_FAILED,
-      "停車場 session 統計僅支援 ISAPI",
-    );
-  }
-  const since = getEffectiveSince(cfg, createdAt);
-  if (!since) {
-    return { entryCount: 0, exitCount: 0, since: null };
-  }
-  const rows = await loadSessionReleasedRows(siteId, since);
-  const stats = computeTransitionStats(rows, {
-    getKey: (r) => normalizePlate(r.license_plate),
-    getDirection: normalizeVehicleDirection,
-    getTime: (r) => r.trigger_time,
-    sortByTime: false,
-  });
   return {
-    entryCount: stats.entryCount,
-    exitCount: stats.exitCount,
-    since,
+    entryCount: session.entryCount,
+    exitCount: session.exitCount,
+    currentCount: session.currentCount,
+    capacity: session.capacity,
+    since: session.since,
   };
 }
 
 async function getSitePresence(siteId) {
-  const siteCfg = await getSiteConfig(siteId);
-  await alignParkingPresenceWithConfig(siteId, siteCfg);
-  const currentCount = await vehiclePresenceService.getPresenceCount(siteId);
+  const session = await tryLoadParkingSession(siteId);
+  if (!session.ok) {
+    return { currentCount: 0, capacity: session.capacity };
+  }
   return {
-    currentCount,
-    capacity:
-      siteCfg.operationMode === "parking" ? siteCfg.parkingCapacity : null,
+    currentCount: session.currentCount,
+    capacity: session.capacity,
   };
 }
 
 async function getSitePresencePlates(siteId) {
-  const siteCfg = await getSiteConfig(siteId);
-  const aligned = await alignParkingPresenceWithConfig(siteId, siteCfg);
-  if (aligned?.presentPlates) {
-    return { plates: aligned.presentPlates };
-  }
-  const plates = await vehiclePresenceService.getPresentPlates(siteId);
-  return { plates };
+  const session = await tryLoadParkingSession(siteId);
+  if (!session.ok) return { plates: [] };
+  return { plates: session.presentPlates };
 }
 
 async function resetSiteStats(siteId, userId = null) {
@@ -236,9 +273,12 @@ async function resetSiteStats(siteId, userId = null) {
     userId,
   });
 
-  await vehiclePresenceService.resetPresence(siteId);
   const { invalidateLocationIngestCache } = require("./isapiVehiclePersistence");
   invalidateLocationIngestCache(siteId);
+  websocketService.emitVehicleAccessIsapiEvent({
+    type: "stats_reset",
+    locationId: Number(siteId),
+  });
 
   return { statsResetAt: resetAt };
 }
@@ -346,7 +386,7 @@ async function getOrganizationGroups(siteId, options = {}) {
   if (operationMode === "parking") {
     try {
       const presence = await getSitePresencePlates(siteId);
-      presentPlates = presence?.plates;
+      presentPlates = presence.plates ?? [];
     } catch {
       presentPlates = [];
     }
