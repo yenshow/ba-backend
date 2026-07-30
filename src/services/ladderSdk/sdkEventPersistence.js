@@ -120,6 +120,7 @@ const persistLadderSdkEvent = async (options) => {
       major: majorN,
       minor: minorN,
       floor: floorLabel,
+      placeLabel: elevCtx?.placeLabel ?? null,
     }),
     ref_table: "ladder_sdk_events",
     ref_id: id,

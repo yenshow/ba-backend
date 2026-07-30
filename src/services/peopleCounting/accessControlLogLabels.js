@@ -3,8 +3,9 @@
  */
 
 const EVENT_LABEL_BY_SUB = {
-  2079: "醉酒",
+  2077: "酒精檢測正常",
   2078: "飲酒",
+  2079: "醉酒",
 };
 
 const VERIFY_KEY_BY_SUB = {
@@ -63,9 +64,29 @@ function yscpEventLabel(eventType) {
   return "失敗";
 }
 
+/** 營運事件摘要用語意（subEventType + 進／出場設備角色） */
+function resolveOperationalAccessSemantics(payload, { deviceRole } = {}) {
+  const sub = extractSubEventType(payload);
+  if (sub != null && EVENT_LABEL_BY_SUB[sub]) {
+    return EVENT_LABEL_BY_SUB[sub];
+  }
+  const verify = resolveVerifyMethodLabel(payload);
+  if (sub != null && FAIL_SUBS.has(sub)) {
+    return verify ? `${verify}驗證失敗` : "驗證失敗";
+  }
+  const role =
+    deviceRole === "entry" ? "進場" : deviceRole === "exit" ? "出場" : null;
+  if (verify) {
+    return role ? `${verify}通過（${role}）` : `${verify}通過`;
+  }
+  if (role) return role;
+  return "門禁事件";
+}
+
 module.exports = {
   extractSubEventType,
   resolveAccessControlEvent,
   resolveVerifyMethodLabel,
+  resolveOperationalAccessSemantics,
   yscpEventLabel,
 };

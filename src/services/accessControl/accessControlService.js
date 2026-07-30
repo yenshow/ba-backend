@@ -11,6 +11,9 @@ const operationalEventService = require("../operationalEvents/operationalEventSe
 const {
   summaryAccessDoorControlWrite,
 } = require("../operationalEvents/operationalEventCopy");
+const {
+  loadPlaceContextByAccessDeviceId,
+} = require("../operationalEvents/operationalEventPlaceContext");
 
 const ISAPI_PATHS = {
   userInfoSearch: "/ISAPI/AccessControl/UserInfo/Search?format=json",
@@ -626,12 +629,15 @@ async function controlRemoteDoor(deviceId, options = {}) {
   const oe = options.operationalEvent || {};
   const fromAlertLinkage = Boolean(oe.fromAlertLinkage);
   const deviceName = device?.name || `設備 #${deviceId}`;
+  const placeCtx = await loadPlaceContextByAccessDeviceId(deviceId);
 
   const recordOe = (success, errorMessage = null) => {
     void operationalEventService.recordEvent({
       // 與門禁管理模組一致（人流事件同源 people_counting）
       source: fromAlertLinkage ? "alert_linkage" : "people_counting",
       event_kind: "control_write",
+      location_id: placeCtx.locationId,
+      system_id: placeCtx.systemId,
       device_id: deviceId,
       bit_key: `access_door:${cmd}`,
       new_value: success ? true : null,
@@ -642,6 +648,7 @@ async function controlRemoteDoor(deviceId, options = {}) {
         success,
         errorMessage,
         fromAlertLinkage,
+        placeLabel: placeCtx.placeLabel,
       }),
       ref_table: fromAlertLinkage ? "alerts" : "devices",
       ref_id: fromAlertLinkage

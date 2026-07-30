@@ -256,4 +256,101 @@ router.put(
   }),
 );
 
+const isUint16 = (n) =>
+  typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 65535;
+
+// PUT /holding-registers - 寫入單個或多個 AO（holding；需 controlScope）
+router.put(
+  "/holding-registers",
+  disableHttpCache,
+  requireModbusControlScope,
+  validateRequired("address"),
+  asyncHandler(async (req, res) => {
+    const { address, value, values } = req.body;
+    const deviceConfig = parseDeviceParams(req);
+
+    if (
+      typeof address !== "number" ||
+      address < 0 ||
+      !Number.isInteger(address)
+    ) {
+      return res.sendError(
+        C.MODBUS_INVALID_ADDRESS,
+        "address must be a non-negative integer",
+        400,
+      );
+    }
+
+    if (isUint16(value)) {
+      const success = await modbusClient.writeRegister(
+        address,
+        value,
+        deviceConfig,
+      );
+      if (success) {
+        modbusBatchService.invalidateDeviceCache(deviceConfig, "holding");
+        const controlScope =
+          String(req.query.controlScope || "").trim() || "modbus";
+        void recordControlWriteEvent({
+          deviceConfig,
+          source: controlScope,
+          address,
+          value,
+          actorUserId: req.user?.id ?? null,
+          registerType: "holding",
+        });
+      }
+      return res.sendSuccess({ address, value, success, device: deviceConfig });
+    }
+
+    if (Array.isArray(values)) {
+      if (values.length === 0 || values.length > 123) {
+        return res.sendError(
+          C.MODBUS_INVALID_VALUES,
+          "values array length must be between 1 and 123",
+          400,
+        );
+      }
+      if (!values.every((v) => isUint16(v))) {
+        return res.sendError(
+          C.MODBUS_INVALID_VALUES,
+          "all values must be integers between 0 and 65535",
+          400,
+        );
+      }
+      const success = await modbusClient.writeRegisters(
+        address,
+        values,
+        deviceConfig,
+      );
+      if (success) {
+        modbusBatchService.invalidateDeviceCache(deviceConfig, "holding");
+        const controlScope =
+          String(req.query.controlScope || "").trim() || "modbus";
+        void recordControlWriteEvent({
+          deviceConfig,
+          source: controlScope,
+          address,
+          value: values[0],
+          values,
+          actorUserId: req.user?.id ?? null,
+          registerType: "holding",
+        });
+      }
+      return res.sendSuccess({
+        address,
+        values,
+        success,
+        device: deviceConfig,
+      });
+    }
+
+    return res.sendError(
+      C.MODBUS_INVALID_BODY,
+      "must provide either value (0–65535 integer) or values (integer[])",
+      400,
+    );
+  }),
+);
+
 module.exports = router;

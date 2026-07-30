@@ -7,7 +7,15 @@
  */
 const db = require("../../database/db");
 const operationalEventService = require("./operationalEventService");
-const { summaryControlWrite } = require("./operationalEventCopy");
+const {
+  summaryControlWrite,
+  resolvePointLabel,
+} = require("./operationalEventCopy");
+const {
+  loadSystemPlaceContext,
+  formatPlaceLabel,
+} = require("./operationalEventPlaceContext");
+const { resolveDiDoParts } = require("../devices/modbusDiDoConfig");
 const {
   CALL_RELAY_SUPPRESS_MS,
   isAcsDoorOpenSideEffect,
@@ -136,11 +144,84 @@ async function resolveControlWriteTargets({
   };
 }
 
+/**
+ * address → statusPoints 鍵／scale，或主 DO → 電源
+ * @param {{ systemConfig: object|null, address: number, registerType: 'coil'|'holding' }} args
+ */
+function resolveControlPointMeta({ systemConfig, address, registerType }) {
+  const addr = Number(address);
+  if (!Number.isFinite(addr)) {
+    return { pointKey: null, scale: null, pointLabel: null };
+  }
+
+  const cfg =
+    systemConfig && typeof systemConfig === "object" ? systemConfig : {};
+  // DB SSOT：status_points／modbus_config；API 入庫前可能暫存 camelCase
+  const statusPoints =
+    cfg.status_points && typeof cfg.status_points === "object"
+      ? cfg.status_points
+      : cfg.statusPoints && typeof cfg.statusPoints === "object"
+        ? cfg.statusPoints
+        : null;
+
+  if (statusPoints) {
+    for (const [key, def] of Object.entries(statusPoints)) {
+      if (!def || typeof def !== "object") continue;
+      if (Number(def.address) !== addr) continue;
+      const rt = String(def.registerType || "").toLowerCase();
+      if (registerType === "holding") {
+        if (rt && rt !== "holding") continue;
+        const scale =
+          def.scale != null && Number.isFinite(Number(def.scale))
+            ? Number(def.scale)
+            : null;
+        return {
+          pointKey: key,
+          scale,
+          pointLabel: resolvePointLabel(key, null, addr, "holding"),
+        };
+      }
+      // coil：discrete／coil 或未標 registerType
+      if (rt === "holding" || rt === "input") continue;
+      return {
+        pointKey: key,
+        scale: null,
+        pointLabel: resolvePointLabel(key, null, addr, "coil"),
+      };
+    }
+  }
+
+  if (registerType === "coil") {
+    const { do: doPart } = resolveDiDoParts(cfg.modbus_config || cfg.modbus);
+    if (doPart && Number(doPart.address) === addr) {
+      return {
+        pointKey: "isOn",
+        scale: null,
+        pointLabel: resolvePointLabel("isOn", `do:${addr}`, addr, "coil"),
+      };
+    }
+  }
+
+  return { pointKey: null, scale: null, pointLabel: null };
+}
+
+function applyHoldingDisplayScale(rawValue, scale) {
+  const raw = Number(rawValue);
+  if (!Number.isFinite(raw)) return rawValue;
+  const s = scale != null ? Number(scale) : 1;
+  if (!Number.isFinite(s) || s === 0 || s === 1) return raw;
+  const display = raw * s;
+  return Number.isInteger(display) ? display : Math.round(display * 1000) / 1000;
+}
+
 // ─── control_write ───────────────────────────────────────────
 
 /**
- * mark suppress + 反查設備／地點 + recordEvent
+ * mark suppress（僅 coil）+ 反查設備／地點 + recordEvent
  * 呼叫端若需先 await 其他 I/O，請先自行 markCoilControlWrite
+ *
+ * @param {object} args
+ * @param {'coil'|'holding'} [args.registerType='coil'] holding＝AO 數值寫入，不抑制 DI/DO state_change
  */
 async function recordControlWriteEvent({
   deviceConfig,
@@ -154,13 +235,18 @@ async function recordControlWriteEvent({
   payloadExtra = null,
   refTable = null,
   refId = null,
+  registerType = "coil",
 }) {
   if (!deviceConfig || address == null) return null;
 
-  markCoilControlWrite(deviceConfig, address);
-  if (Array.isArray(values)) {
-    for (let i = 1; i < values.length; i++) {
-      markCoilControlWrite(deviceConfig, address + i);
+  const isHolding = registerType === "holding";
+
+  if (!isHolding) {
+    markCoilControlWrite(deviceConfig, address);
+    if (Array.isArray(values)) {
+      for (let i = 1; i < values.length; i++) {
+        markCoilControlWrite(deviceConfig, address + i);
+      }
     }
   }
 
@@ -171,7 +257,32 @@ async function recordControlWriteEvent({
     systemType: controlScope,
   });
 
+  const placeCtx = await loadSystemPlaceContext(targets.system_id);
+  const pointMeta = resolveControlPointMeta({
+    systemConfig: placeCtx.systemConfig,
+    address,
+    registerType: isHolding ? "holding" : "coil",
+  });
+
   const batchCount = Array.isArray(values) ? values.length : null;
+  const bitKey = isHolding ? `ao:${address}` : `do:${address}`;
+  const rawWriteValue = isHolding
+    ? values != null
+      ? values[0]
+      : value
+    : Boolean(value);
+  const displayValue = isHolding
+    ? applyHoldingDisplayScale(rawWriteValue, pointMeta.scale)
+    : rawWriteValue;
+
+  const payloadValue = isHolding
+    ? values != null
+      ? { values }
+      : { value: Number(value) }
+    : values != null
+      ? { values }
+      : { value: Boolean(value) };
+
   return operationalEventService.recordEvent({
     source: controlScope,
     event_kind: "control_write",
@@ -179,15 +290,20 @@ async function recordControlWriteEvent({
     system_id: targets.system_id,
     device_id: targets.device_id || deviceId,
     address,
-    new_value: Boolean(value),
-    bit_key: `do:${address}`,
+    // new_value 欄位為 BOOLEAN；AO 數值改放 payload，此處留 null
+    new_value: isHolding ? null : Boolean(value),
+    bit_key: bitKey,
     summary:
       summary ||
       summaryControlWrite({
         source: controlScope,
         address,
-        bitKey: `do:${address}`,
-        value: Boolean(value),
+        bitKey,
+        value: displayValue,
+        registerType: isHolding ? "holding" : "coil",
+        placeLabel: placeCtx.placeLabel,
+        pointKey: pointMeta.pointKey,
+        pointLabel: pointMeta.pointLabel,
         ...(batchCount != null && batchCount > 1 ? { batchCount } : {}),
       }),
     actor_user_id: actorUserId,
@@ -198,7 +314,12 @@ async function recordControlWriteEvent({
       port: deviceConfig.port,
       unitId: deviceConfig.unitId,
       address,
-      ...(values != null ? { values } : { value: Boolean(value) }),
+      registerType: isHolding ? "holding" : "coil",
+      ...(pointMeta.pointKey ? { pointKey: pointMeta.pointKey } : {}),
+      ...(isHolding && pointMeta.scale != null && pointMeta.scale !== 1
+        ? { scale: pointMeta.scale, displayValue }
+        : {}),
+      ...payloadValue,
       ...(payloadExtra && typeof payloadExtra === "object" ? payloadExtra : {}),
     },
   });
@@ -226,8 +347,12 @@ async function resolveElevatorContextByDeviceId(deviceId) {
     SELECT
       ls.id AS system_id,
       ls.location_id,
-      ls.system_config
+      ls.system_config,
+      l.name AS location_name,
+      z.name AS zone_name
     FROM location_systems ls
+    LEFT JOIN locations l ON ls.location_id = l.id
+    LEFT JOIN zones z ON l.zone_id = z.id
     WHERE ls.system_type = 'elevator'
       AND (
         (ls.system_config->'ladder_device'->>'device_id')::int = ?
@@ -253,6 +378,7 @@ async function resolveElevatorContextByDeviceId(deviceId) {
     systemId: row.system_id,
     locationId: row.location_id,
     floors: elevCfg.floors || [],
+    placeLabel: formatPlaceLabel(row.zone_name, row.location_name),
   };
   elevatorContextCache.set(id, { ts: Date.now(), ctx });
   return ctx;
@@ -316,6 +442,8 @@ module.exports = {
   markCoilControlWrite,
   shouldSuppressCoilStateChange,
   recordControlWriteEvent,
+  loadSystemPlaceContext,
+  resolveControlPointMeta,
   resolveElevatorContextByDeviceId,
   shouldOmitOperationalElevatorEvent,
   formatOperationalElevatorFloor,

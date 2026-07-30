@@ -19,6 +19,12 @@ const operationalEventService = require("../operationalEvents/operationalEventSe
 const {
   summaryAccessEvent,
 } = require("../operationalEvents/operationalEventCopy");
+const {
+  loadPlaceContextByAccessDeviceId,
+} = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  resolveOperationalAccessSemantics,
+} = require("../peopleCounting/accessControlLogLabels");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件 */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -50,6 +56,7 @@ function isProcessableEvent(ac) {
  */
 async function persistIsapiEvent(options) {
   const {
+    deviceId = null,
     deviceIp = "",
     eventTime,
     eventType = "AccessControllerEvent",
@@ -73,21 +80,38 @@ async function persistIsapiEvent(options) {
   if (id != null) {
     const ac = payload || {};
     const personName =
-      ac.name || ac.employeeNoString || ac.cardNo || deviceIp || "";
+      ac.personName ||
+      ac.name ||
+      ac.employeeNoString ||
+      ac.cardNo ||
+      "";
+    const placeCtx = deviceId
+      ? await loadPlaceContextByAccessDeviceId(deviceId)
+      : { placeLabel: null, locationId: null, systemId: null, deviceRole: null };
+    const action = resolveOperationalAccessSemantics(ac, {
+      deviceRole: placeCtx.deviceRole,
+    });
     void operationalEventService.recordEvent({
       source: "people_counting",
       event_kind: "access",
       occurred_at: eventTime || new Date().toISOString(),
+      location_id: placeCtx.locationId,
+      system_id: placeCtx.systemId,
+      device_id: deviceId || null,
       summary: summaryAccessEvent({
         personName,
+        placeLabel: placeCtx.placeLabel,
+        action,
       }),
       ref_table: "isapi_access_events",
       ref_id: id,
       payload: {
         deviceIp,
+        deviceId: deviceId || null,
         eventType,
         majorEventType: ac.majorEventType,
         subEventType: ac.subEventType,
+        deviceRole: placeCtx.deviceRole,
       },
     });
   }
@@ -205,7 +229,7 @@ function parseEventJson(jsonStr) {
  * 處理單一事件：寫入 DB（附圖由下一個 part 以「先 JSON 後圖」補上）
  * @returns {Promise<number|null>} 新插入的 isapi_access_events.id，供下一 part 補圖
  */
-async function handleEvent(parsed, deviceIp) {
+async function handleEvent(parsed, deviceIp, deviceId = null) {
   const ac = parsed.AccessControllerEvent || {};
   const payload = {
     ...ac,
@@ -214,6 +238,7 @@ async function handleEvent(parsed, deviceIp) {
     personName: parsed.personName ?? "",
   };
   const { id } = await persistIsapiEvent({
+    deviceId,
     deviceIp: parsed.ipAddress || deviceIp || "",
     eventTime: parsed.dateTime || new Date().toISOString(),
     eventType: parsed.eventType || "AccessControllerEvent",
@@ -258,7 +283,7 @@ async function consumeEventStreamIncremental(
     const ac = parsed.AccessControllerEvent || {};
     if (String(parsed.eventType).toLowerCase() === "heartbeat") return;
     if (!isProcessableEvent(ac)) return;
-    const id = await handleEvent(parsed, deviceIp);
+    const id = await handleEvent(parsed, deviceIp, deviceId);
     if (id) lastWrittenEventId = id;
     logger.info("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };

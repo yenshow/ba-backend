@@ -17,7 +17,7 @@
 | `vehicleAccess/` | 14 | 車輛進出 API、ISAPI 訂閱／持久化／設備代理、車牌同步、helpers |
 | `entryExit/` | 4 | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 10 | 設備 CRUD、Modbus、`modbusDiDoConfig` |
-| `monitoring/` | 11 | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／電梯／快照／DI-DO 監控 |
+| `monitoring/` | 11 | `backgroundMonitor`（固定分層間隔）、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
 | `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
 | `operationalEvents/` | 4 | `service` 查寫／`copy` 文案／`hooks` 控制寫入·抑制·電梯投影／`retentionScheduler` |
 | `backup/` | 8 | 備份排程與各系統報表格式 |

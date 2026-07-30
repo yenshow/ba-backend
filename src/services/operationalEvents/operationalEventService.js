@@ -63,12 +63,13 @@ function buildListWhere(filters = {}) {
     params.push(...kinds);
   }
 
+  // 半開區間 [start, end)：end 為次日 00:00 ISO；cast timestamptz 避免 TIMESTAMP 無時區誤切
   if (start_date) {
-    where += " AND oe.occurred_at >= ?";
+    where += " AND oe.occurred_at >= ?::timestamptz";
     params.push(start_date);
   }
   if (end_date) {
-    where += " AND oe.occurred_at <= ?";
+    where += " AND oe.occurred_at < ?::timestamptz";
     params.push(end_date);
   }
 
@@ -96,6 +97,12 @@ async function recordEvent(input = {}) {
     const summary =
       String(input.summary || "").trim() || `${source} ${eventKind}`;
 
+    // 一律寫入 ISO（與門禁／人流一致），避免 TIMESTAMP + CURRENT_TIMESTAMP 在時區下被「今天」篩掉
+    const occurredAt =
+      input.occurred_at != null && String(input.occurred_at).trim() !== ""
+        ? String(input.occurred_at)
+        : new Date().toISOString();
+
     let payload = null;
     if (input.payload != null) {
       payload =
@@ -113,7 +120,7 @@ async function recordEvent(input = {}) {
         summary, actor_user_id,
         ref_table, ref_id, payload
       ) VALUES (
-        COALESCE(?, CURRENT_TIMESTAMP), ?, ?,
+        ?::timestamptz, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?,
@@ -122,7 +129,7 @@ async function recordEvent(input = {}) {
       RETURNING id, occurred_at
       `,
       [
-        input.occurred_at || null,
+        occurredAt,
         source,
         eventKind,
         toIntOrNull(input.location_id),

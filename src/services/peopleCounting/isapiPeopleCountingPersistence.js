@@ -7,6 +7,9 @@ const operationalEventService = require("../operationalEvents/operationalEventSe
 const {
   summaryPeopleCounting,
 } = require("../operationalEvents/operationalEventCopy");
+const {
+  loadPlaceContextByLocationId,
+} = require("../operationalEvents/operationalEventPlaceContext");
 
 function safeInt(v) {
   const n = Number(v);
@@ -144,6 +147,7 @@ async function persistPeopleCountingEvent(options) {
       currentCount,
     });
     if (enterDelta > 0 || exitDelta > 0) {
+      const placeCtx = await loadPlaceContextByLocationId(locationId);
       void operationalEventService.recordEvent({
         source: "people_counting",
         event_kind: "access",
@@ -154,6 +158,7 @@ async function persistPeopleCountingEvent(options) {
           regionName,
           enterDelta,
           exitDelta,
+          placeLabel: placeCtx.placeLabel,
         }),
         ref_table: "isapi_people_counting_events",
         ref_id: id,

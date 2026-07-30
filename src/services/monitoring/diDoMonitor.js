@@ -11,10 +11,14 @@ const modbusBatchService = require("../devices/modbusBatchService");
 const systemAlertHelper = require("../alerts/systemAlertHelper");
 const { collectConfiguredBitPointsFromSystemConfig } = require("../devices/modbusDiDoConfig");
 const operationalEventService = require("../operationalEvents/operationalEventService");
-const { summaryStateChange } = require("../operationalEvents/operationalEventCopy");
+const {
+  summaryStateChange,
+  resolvePointLabel,
+} = require("../operationalEvents/operationalEventCopy");
 const {
   shouldSuppressCoilStateChange,
 } = require("../operationalEvents/operationalEventHooks");
+const { formatPlaceLabel } = require("../operationalEvents/operationalEventPlaceContext");
 
 const getDeviceService = () => require("../devices/deviceService");
 
@@ -107,8 +111,12 @@ async function loadConfiguredDiDoPoints() {
       ls.id AS system_id,
       ls.location_id,
       ls.system_type,
-      ls.system_config
+      ls.system_config,
+      l.name AS location_name,
+      z.name AS zone_name
     FROM location_systems ls
+    LEFT JOIN locations l ON l.id = ls.location_id
+    LEFT JOIN zones z ON l.zone_id = z.id
     WHERE ls.system_type IN (${placeholders})
       AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
     `,
@@ -117,6 +125,11 @@ async function loadConfiguredDiDoPoints() {
 
   const points = [];
   for (const row of rows || []) {
+    const zoneName = row.zone_name != null ? String(row.zone_name).trim() : "";
+    const locationName =
+      row.location_name != null ? String(row.location_name).trim() : "";
+    const placeLabel = formatPlaceLabel(zoneName, locationName);
+
     const bits = collectConfiguredBitPointsFromSystemConfig(row.system_config);
     for (const b of bits) {
       points.push({
@@ -128,6 +141,7 @@ async function loadConfiguredDiDoPoints() {
         registerType: b.registerType,
         address: b.address,
         role: b.role,
+        placeLabel,
       });
     }
   }
@@ -217,6 +231,23 @@ function recordStateEdge(point, bitValue, deviceConfig = null) {
       bitKey: point.bitKey,
       address: point.address,
       newValue: bitValue,
+      placeLabel: point.placeLabel || null,
+      pointKey:
+        point.role === "modbus_do"
+          ? "isOn"
+          : point.role === "modbus_di"
+            ? null
+            : point.role || null,
+      pointLabel: resolvePointLabel(
+        point.role === "modbus_do"
+          ? "isOn"
+          : point.role === "modbus_di"
+            ? null
+            : point.role || null,
+        point.bitKey,
+        point.address,
+        "coil",
+      ),
     }),
     payload: {
       bitKey: point.bitKey,

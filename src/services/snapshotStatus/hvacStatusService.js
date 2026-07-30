@@ -106,7 +106,23 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   for (const r of results) {
     const k = r?.meta?.pointKey;
     if (!k) continue;
-    raw[k] = r.ok ? r.data?.[0] : undefined;
+    if (!r.ok) {
+      raw[k] = undefined;
+      continue;
+    }
+    let value = r.data?.[0];
+    const def = statusPoints[k];
+    const scale = def?.scale != null ? Number(def.scale) : 1;
+    if (
+      value != null &&
+      Number.isFinite(Number(value)) &&
+      Number.isFinite(scale) &&
+      scale !== 0 &&
+      scale !== 1
+    ) {
+      value = Number(value) * scale;
+    }
+    raw[k] = value;
   }
   return raw;
 }
@@ -177,7 +193,7 @@ function collectItemsFromZones(zones) {
   return items;
 }
 
-async function buildItem(zone, location, system, options = {}) {
+async function buildItem(zone, location, system) {
   const cfg = system.config || {};
   const deviceId = cfg.deviceId;
   const modbus = cfg.modbus;
@@ -212,20 +228,20 @@ async function buildItem(zone, location, system, options = {}) {
 
   const configuredKeys = [...pointKeys, ...(modbus ? ["isOn"] : [])];
   const uiStatus = deriveUiStatus(raw, hadDeviceConfig, configuredKeys);
-    try {
-      await syncConnectivityAlert(
-        Number(system.id),
-        hadDeviceConfig,
-        configuredKeys,
-        raw,
-        readError,
-      );
-    } catch (alertErr) {
-      statusLogger.warn("同步警報失敗（略過）", {
-        systemId: Number(system.id),
-        error: alertErr?.message || String(alertErr),
-        module: "hvacStatusService",
-      });
+  try {
+    await syncConnectivityAlert(
+      Number(system.id),
+      hadDeviceConfig,
+      configuredKeys,
+      raw,
+      readError,
+    );
+  } catch (alertErr) {
+    statusLogger.warn("同步警報失敗（略過）", {
+      systemId: Number(system.id),
+      error: alertErr?.message || String(alertErr),
+      module: "hvacStatusService",
+    });
   }
 
   return {

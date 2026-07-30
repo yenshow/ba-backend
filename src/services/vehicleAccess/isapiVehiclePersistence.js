@@ -15,6 +15,7 @@ const {
 const { getUploadsDir, formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryVehicle } = require("../operationalEvents/operationalEventCopy");
+const { formatPlaceLabel } = require("../operationalEvents/operationalEventPlaceContext");
 
 async function resolveDeviceDisplayName(deviceId) {
   if (!deviceId) return null;
@@ -142,6 +143,7 @@ async function persistAnprEvent(options) {
         summary: summaryVehicle({
           plate,
           laneType: target.laneType,
+          placeLabel: formatPlaceLabel(target.zoneName, target.locationName),
         }),
         ref_table: "vehicle_passageway_logs",
         ref_id: id,
