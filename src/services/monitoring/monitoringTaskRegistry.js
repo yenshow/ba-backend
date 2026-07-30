@@ -11,6 +11,13 @@ const deviceConnectivityService = require("../devices/deviceConnectivityService"
 const {
   processActiveAlertEmailResends,
 } = require("../alerts/alertEmailNotifier");
+const {
+  FAST_POLL_MS,
+  STANDARD_POLL_MS,
+  ELEVATOR_POLL_IDLE_MS,
+  ELEVATOR_POLL_MOVING_MS,
+  fixedIntervalOptions,
+} = require("../../config/realtimeTiming");
 
 const TASK_IDS = {
   deviceConnectivity: "platform:device_connectivity",
@@ -18,36 +25,22 @@ const TASK_IDS = {
   diDo: "platform:di_do",
 };
 
-/** 環境 Modbus 輪詢固定間隔（不再使用 backgroundMonitor 自適應放慢） */
-const ENVIRONMENT_POLL_INTERVAL_MS = 15_000;
-
-/** DI/DO 泛用讀取／警報／edge 固定間隔 */
-const DI_DO_POLL_INTERVAL_MS = 1000;
-
 const monitoringTaskRegistry = [
   {
     taskId: TASK_IDS.deviceConnectivity,
     systemName: "設備連線狀態",
     taskFunction: async () => {
       await deviceConnectivityService.checkAndBroadcastConnectivity();
-      return { nextIntervalMs: 15_000 };
+      return { nextIntervalMs: STANDARD_POLL_MS };
     },
-    options: {
-      baseIntervalMs: 15_000,
-      minIntervalMs: 15_000,
-      maxIntervalMs: 15_000,
-    },
+    options: fixedIntervalOptions(STANDARD_POLL_MS),
   },
   {
     taskId: "environment",
     systemName: "環境系統",
     featureKey: "environment",
     taskFunction: environmentMonitor.checkEnvironmentLocations,
-    options: {
-      baseIntervalMs: ENVIRONMENT_POLL_INTERVAL_MS,
-      minIntervalMs: ENVIRONMENT_POLL_INTERVAL_MS,
-      maxIntervalMs: ENVIRONMENT_POLL_INTERVAL_MS,
-    },
+    options: fixedIntervalOptions(STANDARD_POLL_MS),
   },
   {
     taskId: "elevator",
@@ -55,9 +48,9 @@ const monitoringTaskRegistry = [
     featureKey: "elevator",
     taskFunction: checkElevatorRuntime,
     options: {
-      baseIntervalMs: 2000,
-      minIntervalMs: 1000,
-      maxIntervalMs: 2000,
+      baseIntervalMs: ELEVATOR_POLL_IDLE_MS,
+      minIntervalMs: ELEVATOR_POLL_MOVING_MS,
+      maxIntervalMs: ELEVATOR_POLL_IDLE_MS,
     },
   },
   {
@@ -65,24 +58,16 @@ const monitoringTaskRegistry = [
     systemName: "DI/DO 泛用警報",
     requiresAnyFeature: DI_DO_ALERT_FEATURE_KEYS,
     taskFunction: checkDiDoAlerts,
-    options: {
-      baseIntervalMs: DI_DO_POLL_INTERVAL_MS,
-      minIntervalMs: DI_DO_POLL_INTERVAL_MS,
-      maxIntervalMs: DI_DO_POLL_INTERVAL_MS,
-    },
+    options: fixedIntervalOptions(FAST_POLL_MS),
   },
   {
     taskId: TASK_IDS.alertEmailResend,
     systemName: "警報 Email 重送",
     taskFunction: async () => {
       await processActiveAlertEmailResends({ limit: 50 });
-      return { nextIntervalMs: 15_000 };
+      return { nextIntervalMs: STANDARD_POLL_MS };
     },
-    options: {
-      baseIntervalMs: 15_000,
-      minIntervalMs: 15_000,
-      maxIntervalMs: 15_000,
-    },
+    options: fixedIntervalOptions(STANDARD_POLL_MS),
   },
   ...snapshotTaskRegistry,
 ];
@@ -108,6 +93,6 @@ const getLicensedMonitoringTasks = (licensedFeatures) => {
 module.exports = {
   getLicensedMonitoringTasks,
   TASK_IDS,
-  ENVIRONMENT_POLL_INTERVAL_MS,
-  DI_DO_POLL_INTERVAL_MS,
+  ENVIRONMENT_POLL_INTERVAL_MS: STANDARD_POLL_MS,
+  DI_DO_POLL_INTERVAL_MS: FAST_POLL_MS,
 };

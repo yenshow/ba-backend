@@ -47,7 +47,7 @@ function parseBitKey(bitKey) {
 }
 
 const deviceCfgCache = new Map();
-const DEVICE_CFG_TTL_MS = 60_000;
+const { DEVICE_CFG_TTL_MS } = require("../../config/realtimeTiming");
 
 async function resolveDeviceConfig(deviceId) {
   if (!deviceId) return null;

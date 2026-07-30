@@ -9,6 +9,7 @@ const logger = require("../../utils/logger");
 const { getDeviceTypeName } = require("../../constants/deviceTypes");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
+const { EVENT_COALESCE_MS } = require("../../config/realtimeTiming");
 
 const alertLogger = logger.createLogger("alertService");
 
@@ -1489,7 +1490,6 @@ async function getUnresolvedAlertCount(filters = {}) {
 
 // 防抖計時器，避免頻繁推送未解決警報數量（優化：減少資料庫查詢和 WebSocket 推送）
 let unresolvedCountTimer = null;
-const UNRESOLVED_COUNT_DEBOUNCE_MS = 500; // 500ms 防抖
 
 /**
  * 推送未解決警報數量（內部輔助函數）
@@ -1522,7 +1522,7 @@ function emitUnresolvedAlertCount() {
     } finally {
       unresolvedCountTimer = null;
     }
-  }, UNRESOLVED_COUNT_DEBOUNCE_MS);
+  }, EVENT_COALESCE_MS);
 }
 
 /**

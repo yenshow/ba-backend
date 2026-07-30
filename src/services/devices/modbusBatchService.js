@@ -14,7 +14,7 @@ const { throwApiError } = require("../../utils/apiErrors");
 
 const MAX_LENGTH = 125;
 const MAX_GAP = 0;
-const CACHE_TTL = 4500;
+const { MODBUS_BATCH_CACHE_TTL_MS: CACHE_TTL } = require("../../config/realtimeTiming");
 
 const cache = new Map(); // key -> { ts, data }
 const inflight = new Map(); // key -> Promise

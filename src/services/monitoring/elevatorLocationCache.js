@@ -1,7 +1,7 @@
 /**
  * 電梯地點列表快取（供背景輪詢使用，獨立模組以避免 location ↔ monitor 循環依賴）
  */
-const LOCATION_CACHE_MS = 5_000;
+const { ELEVATOR_LOCATION_CACHE_MS: LOCATION_CACHE_MS } = require("../../config/realtimeTiming");
 
 let cachedLocations = [];
 let lastLocationFetch = 0;

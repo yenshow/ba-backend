@@ -9,7 +9,7 @@ class ModbusClient extends EventEmitter {
   constructor(modbusConfig) {
     super();
     this.client = new ModbusRTU();
-    this.timeout = modbusConfig?.timeout || 2000;
+    this.timeout = modbusConfig?.timeout ?? 10000;
     this.connecting = new Map(); // 追蹤每個連接的連線狀態
     this.lastConnectedAt = new Map(); // 追蹤每個連接的最後連線時間
     this.clientConnections = new Map(); // 儲存多個設備連接

@@ -2,7 +2,10 @@
  * 依 deviceId 快取環境感測器最新讀數（由 environmentMonitor 寫入，multimedia 等消費）。
  */
 
-const STALE_MS = 10 * 60 * 1000;
+const {
+  ENVIRONMENT_READING_STALE_MS: STALE_MS,
+} = require("../../config/realtimeTiming");
+
 const byDeviceId = new Map();
 
 const isFresh = (entry) => {

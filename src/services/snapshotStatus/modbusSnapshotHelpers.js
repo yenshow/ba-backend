@@ -5,7 +5,7 @@
 
 const deviceService = require("../devices/deviceService");
 
-const DEVICE_CFG_CACHE_TTL = 60_000;
+const { DEVICE_CFG_TTL_MS: DEVICE_CFG_CACHE_TTL } = require("../../config/realtimeTiming");
 const deviceCfgCache = new Map();
 
 const ALLOWED_REGISTER_TYPES = new Set([

@@ -21,8 +21,6 @@ const {
 
 const statusLogger = logger.createLogger("smokeAlarmStatusService");
 
-const STATUS_SNAPSHOT_ITEM_TIMEOUT_MS = 4000;
-
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
   if (!statusPoints || typeof statusPoints !== "object") {
@@ -256,26 +254,6 @@ function smokeAlarmFallbackItem(zone, location, system, errorMsg) {
   };
 }
 
-async function buildSmokeAlarmItemWithTimeout(zone, location, system, options) {
-  try {
-    return await Promise.race([
-      buildItemForSmokeAlarmSystem(zone, location, system, options),
-      new Promise((_, reject) => {
-        setTimeout(
-          () => reject(new Error("STATUS_SNAPSHOT_ITEM_TIMEOUT")),
-          STATUS_SNAPSHOT_ITEM_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } catch (err) {
-    const msg =
-      String(err?.message || err) === "STATUS_SNAPSHOT_ITEM_TIMEOUT"
-        ? "timeout"
-        : String(err?.message || err);
-    return smokeAlarmFallbackItem(zone, location, system, msg);
-  }
-}
-
 function collectSmokeAlarmItemsFromZones(zones) {
   const items = [];
   for (const zone of zones) {
@@ -314,7 +292,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone, location, system }) =>
-      buildSmokeAlarmItemWithTimeout(zone, location, system),
+      buildItemForSmokeAlarmSystem(zone, location, system),
     ),
   );
   const items = settled.map((r, idx) => {
@@ -346,7 +324,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone: z, location, system }) =>
-      buildSmokeAlarmItemWithTimeout(z, location, system),
+      buildItemForSmokeAlarmSystem(z, location, system),
     ),
   );
   const items = settled.map((r, idx) => {

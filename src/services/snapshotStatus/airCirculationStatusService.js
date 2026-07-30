@@ -22,8 +22,6 @@ const {
 
 const statusLogger = logger.createLogger("airCirculationStatusService");
 
-const STATUS_SNAPSHOT_ITEM_TIMEOUT_MS = 4000;
-
 async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const raw = {};
   if (!statusPoints || typeof statusPoints !== "object") return raw;
@@ -263,31 +261,6 @@ function airCirculationFallbackItem(zone, location, system, errorMsg) {
   };
 }
 
-async function buildAirCirculationItemWithTimeout(
-  zone,
-  location,
-  system,
-  options,
-) {
-  try {
-    return await Promise.race([
-      buildItem(zone, location, system, options),
-      new Promise((_, reject) => {
-        setTimeout(
-          () => reject(new Error("STATUS_SNAPSHOT_ITEM_TIMEOUT")),
-          STATUS_SNAPSHOT_ITEM_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } catch (err) {
-    const msg =
-      String(err?.message || err) === "STATUS_SNAPSHOT_ITEM_TIMEOUT"
-        ? "timeout"
-        : String(err?.message || err);
-    return airCirculationFallbackItem(zone, location, system, msg);
-  }
-}
-
 async function getStatusSnapshot(query = {}) {
   const zoneIdsFilter = Array.isArray(query.zoneIds) ? query.zoneIds : [];
 
@@ -310,8 +283,7 @@ async function getStatusSnapshot(query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone, location, system }) =>
-      buildAirCirculationItemWithTimeout(zone, location, system, {
-        }),
+      buildItem(zone, location, system, {}),
     ),
   );
   const items = settled.map((r, idx) => {
@@ -342,7 +314,7 @@ async function getZoneStatusSnapshot(zoneId, query = {}) {
   );
   const settled = await Promise.allSettled(
     triples.map(({ zone: z, location, system }) =>
-      buildAirCirculationItemWithTimeout(z, location, system),
+      buildItem(z, location, system),
     ),
   );
   const items = settled.map((r, idx) => {

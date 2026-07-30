@@ -7,6 +7,12 @@ const config = require("../../config");
 const logger = require("../../utils/logger");
 const userService = require("../platform/userService");
 const permissionService = require("../../access/permissionService");
+const {
+  SOCKET_CONNECT_TIMEOUT_MS,
+  SOCKET_PING_INTERVAL_MS,
+  SOCKET_PING_TIMEOUT_MS,
+  DEVICE_STATUS_DEDUPE_TTL_MS,
+} = require("../../config/realtimeTiming");
 
 const {
   getEventPermissionCodes,
@@ -116,12 +122,9 @@ function initializeWebSocket(httpServer) {
       credentials: true,
       methods: ["GET", "POST"],
     },
-    // 連接超時設置
-    connectTimeout: 45000,
-    // Ping 超時設置
-    pingTimeout: 20000,
-    // Ping 間隔
-    pingInterval: 25000,
+    connectTimeout: SOCKET_CONNECT_TIMEOUT_MS,
+    pingTimeout: SOCKET_PING_TIMEOUT_MS,
+    pingInterval: SOCKET_PING_INTERVAL_MS,
   });
 
   const logConnections = true;
@@ -339,7 +342,6 @@ function emitAlertDailyRollover(data) {
  * @param {string} status - 狀態 (online, offline)
  * @param {number} [deviceId] - 可選的設備 ID（用於前端設備管理頁面）
  */
-const DEVICE_STATUS_DEDUPE_TTL_MS = 2000;
 const deviceStatusDedupe = new Map(); // key -> lastTs
 let lastDedupeSweepAt = 0;
 

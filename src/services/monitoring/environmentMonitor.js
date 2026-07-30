@@ -18,12 +18,13 @@ const {
   computeDerivedMetrics,
 } = require("../environment/environmentDerivedMetrics");
 const logger = require("../../utils/logger");
+const {
+  ENVIRONMENT_RAW_WRITE_INTERVAL_MS: RAW_WRITE_INTERVAL_MS,
+} = require("../../config/realtimeTiming");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
 
-// 每 5 分鐘才寫入一筆 raw 至 DB（見 docs/40-systems/environment.md）
-const RAW_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const lastRawWriteByLocation = new Map(); // key: location_id, value: timestamp
 
 /** 依 register_type 分組讀取 Modbus（FC01～FC04），合併為 deviceValues */

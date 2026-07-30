@@ -12,12 +12,12 @@ const {
   getElevatorConfigFromLocation,
 } = require("./elevatorFloorModel");
 
-const POLL_MOVING_TIMEOUT_MS = 60_000;
-const ARRIVED_HOLD_MS = 1500;
-/** 背景輪詢：idle 間隔（與前端 ELEVATOR_RUNTIME_POLL_MS 對齊） */
-const ELEVATOR_POLL_IDLE_MS = 2000;
-/** 背景輪詢：任一電梯 moving 時加速 */
-const ELEVATOR_POLL_MOVING_MS = 1000;
+const {
+  ELEVATOR_POLL_IDLE_MS,
+  ELEVATOR_POLL_MOVING_MS,
+  ELEVATOR_ARRIVED_HOLD_MS: ARRIVED_HOLD_MS,
+  ELEVATOR_MOVING_TIMEOUT_MS: POLL_MOVING_TIMEOUT_MS,
+} = require("../../config/realtimeTiming");
 const READ_FAILED = Object.freeze({ bits: new Map(), readOk: false });
 
 /** @type {Map<number, object>} */

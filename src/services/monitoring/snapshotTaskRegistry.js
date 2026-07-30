@@ -1,4 +1,8 @@
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
+const {
+  STANDARD_POLL_MS,
+  fixedIntervalOptions,
+} = require("../../config/realtimeTiming");
 const { createSystemSnapshotMonitor } = require("./systemSnapshotMonitorFactory");
 const lightingStatusService = require("../snapshotStatus/lightingStatusService");
 const hvacStatusService = require("../snapshotStatus/hvacStatusService");
@@ -90,4 +94,5 @@ module.exports = SNAPSHOT_TASK_DEFS.map(({ systemKey, systemName, monitor }) => 
   systemName,
   featureKey: systemKey,
   taskFunction: () => monitor.check(),
+  options: fixedIntervalOptions(STANDARD_POLL_MS),
 }));

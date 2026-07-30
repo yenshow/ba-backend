@@ -22,7 +22,7 @@ const VALID_STATUSES = new Set(["online", "offline"]);
 
 const FAIL_THRESHOLD = 1;
 // Unified timeout for connectivity probes (RTSP / ISAPI).
-const CONNECTIVITY_TIMEOUT_MS = 5000;
+const { CONNECTIVITY_TIMEOUT_MS } = require("../../config/realtimeTiming");
 const CONCURRENCY = 8;
 
 function nowIso() {
