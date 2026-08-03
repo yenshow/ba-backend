@@ -8,6 +8,7 @@ const { LOCATION_TYPE_MODULE } = require("../../access/catalog");
 /** @type {Record<string, string | string[]>} */
 const EVENT_PERMISSION_CODES = {
   "environment:reading:new": "system.environment",
+  "energy:reading:new": "system.energy",
   "alert:new": "system.alert_log",
   "alert:updated": "system.alert_log",
   "alert:count": "system.alert_log",

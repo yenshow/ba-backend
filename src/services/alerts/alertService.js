@@ -357,6 +357,7 @@ const ALERT_SOURCES = {
   PEOPLE_COUNTING: "people_counting",
   DRAINAGE: "drainage",
   POWER: "power",
+  ENERGY: "energy",
   HVAC: "hvac",
   AIR_CIRCULATION: "air_circulation",
   FIRE: "fire",
@@ -364,6 +365,16 @@ const ALERT_SOURCES = {
   SMOKE_ALARM: "smoke_alarm",
   SECURITY: "security",
 };
+
+/** 站級能源契約告警：source=energy 且 source_id=1（energy_settings.id） */
+const ENERGY_STATION_ALERT_SQL =
+  "(a.source = 'energy' AND a.source_id = 1)";
+
+/** 設備中心 source（source_id = devices.id；不含 LOCATION_ALERT_SOURCES） */
+const DEVICE_SCOPED_ALERT_SOURCES = [ALERT_SOURCES.DEVICE, ALERT_SOURCES.ENERGY];
+const DEVICE_SCOPED_ALERT_SOURCES_SQL = DEVICE_SCOPED_ALERT_SOURCES.map(
+  (source) => `'${source}'`,
+).join(", ");
 
 /** 關聯 location_systems 的 alert source（供列表 JOIN 用） */
 const LOCATION_ALERT_SOURCES = [
@@ -451,8 +462,13 @@ function enrichAlert(alert) {
   enriched.resolved = alert.status === ALERT_STATUS.RESOLVED;
   enriched.ignored = alert.status === ALERT_STATUS.IGNORED;
 
-  // 相容欄位：設備來源時提供 device_id
+  // 相容欄位：設備來源／能源設備中心告警提供 device_id（排除站級契約 source_id=1）
   if (alert.source === ALERT_SOURCES.DEVICE) {
+    enriched.device_id = alert.source_id;
+  } else if (
+    alert.source === ALERT_SOURCES.ENERGY &&
+    Number(alert.source_id) !== 1
+  ) {
     enriched.device_id = alert.source_id;
   }
 
@@ -488,28 +504,38 @@ function buildAlertSelectQuery() {
       a.updated_at,
       iu.username as ignored_by_username,
       CASE 
-        WHEN a.source = 'device' THEN d.type_code
+        WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.type_code
         WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
         ELSE NULL
       END as device_type_code,
       CASE 
-        WHEN a.source = 'device' THEN d.name
+        WHEN ${ENERGY_STATION_ALERT_SQL} THEN '能源管理（契約容量）'
+        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
         WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
         ELSE NULL
       END as source_name,
-      CASE WHEN a.source = 'device' THEN d.name END as device_name,
+      CASE
+        WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
+        ELSE NULL
+      END as device_name,
       CASE 
         WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
         ELSE NULL 
       END as zone_name,
       CASE 
-        WHEN a.source = 'device' THEN d.config
+        WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.config
         WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
         ELSE NULL
       END as device_config
     FROM alerts a
     LEFT JOIN users iu ON a.ignored_by = iu.id
-    LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
+    LEFT JOIN devices d
+      ON a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL})
+     AND a.source_id = d.id
+     AND NOT ${ENERGY_STATION_ALERT_SQL}
     LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
@@ -1632,34 +1658,39 @@ async function getAlertById(id) {
       SELECT 
         a.*,
         iu.username as ignored_by_username,
-        -- 設備類型資訊（type_code 固定映射；不查 deviceTypes 表）
         CASE 
-          WHEN a.source = 'device' THEN d.type_code
+          WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.type_code
           WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
           ELSE NULL
         END as device_type_code,
-        -- 來源名稱（統一欄位，適用於所有來源類型）
         CASE 
-          WHEN a.source = 'device' THEN d.name
+          WHEN ${ENERGY_STATION_ALERT_SQL} THEN '能源管理（契約容量）'
+          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
           WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
           ELSE NULL
         END as source_name,
-        -- 相容欄位：device_name（當 source = 'device'）
-        CASE WHEN a.source = 'device' THEN d.name END as device_name,
-        -- 區域名稱（統一使用 zones 表）
+        CASE
+          WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
+          ELSE NULL
+        END as device_name,
         CASE 
           WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
           ELSE NULL 
         END as zone_name,
         CASE 
-          WHEN a.source = 'device' THEN d.config
+          WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.config
           WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
           ELSE NULL
         END as device_config
       FROM alerts a
       LEFT JOIN users iu ON a.ignored_by = iu.id
-      LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
-      -- 使用新架構：location_systems 關聯到 locations 和 zones
+      LEFT JOIN devices d
+        ON a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL})
+       AND a.source_id = d.id
+       AND NOT ${ENERGY_STATION_ALERT_SQL}
       LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
       LEFT JOIN locations l ON ls.location_id = l.id
       LEFT JOIN zones z ON l.zone_id = z.id
@@ -1699,12 +1730,14 @@ const ALERT_BACKUP_SELECT = `
     a.updated_at,
     iu.username as ignored_by_username,
     CASE 
-      WHEN a.source = 'device' THEN d.type_code
+      WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+      WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.type_code
       WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
       ELSE NULL
     END as device_type_code,
     CASE 
-      WHEN a.source = 'device' THEN d.name
+      WHEN ${ENERGY_STATION_ALERT_SQL} THEN '能源管理（契約容量）'
+      WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
       WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
       ELSE NULL
     END as source_name,
@@ -1713,13 +1746,17 @@ const ALERT_BACKUP_SELECT = `
       ELSE NULL 
     END as zone_name,
     CASE 
-      WHEN a.source = 'device' THEN d.config
+      WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
+      WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.config
       WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
       ELSE NULL
     END as device_config
   FROM alerts a
   LEFT JOIN users iu ON a.ignored_by = iu.id
-  LEFT JOIN devices d ON a.source = 'device' AND a.source_id = d.id
+  LEFT JOIN devices d
+    ON a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL})
+   AND a.source_id = d.id
+   AND NOT ${ENERGY_STATION_ALERT_SQL}
   LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
   LEFT JOIN locations l ON ls.location_id = l.id
   LEFT JOIN zones z ON l.zone_id = z.id

@@ -26,6 +26,7 @@ const FEATURE_KEYS_CENTRAL = [
   "air_circulation",
   "drainage",
   "power",
+  "energy",
   "fire",
   "emergency_rescue",
   "smoke_alarm",

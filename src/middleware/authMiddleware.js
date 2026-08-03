@@ -268,6 +268,23 @@ const requireEnvironmentReportFullIfScoped = () => async (req, res, next) => {
   return next();
 };
 
+const requireEnergyReportFullIfScoped = () => async (req, res, next) => {
+  const scope = String(req.query.reportScope || "").trim().toLowerCase();
+  if (scope === "full") {
+    return requirePermission("system.energy.report.full")(req, res, next);
+  }
+  const hasRange =
+    String(req.query.startTime || "").trim() !== "" &&
+    String(req.query.endTime || "").trim() !== "";
+  const routePath = String(req.route?.path || "");
+  const isAggregatedRoute =
+    routePath.endsWith("/aggregated") || routePath.includes("/usage/aggregated");
+  if (!isAggregatedRoute && hasRange) {
+    return requirePermission("system.energy.report.full")(req, res, next);
+  }
+  return next();
+};
+
 const requirePlateUpsert = () => async (req, res, next) => {
   const mutation = String(req.query.mutation || "").trim().toLowerCase();
   if (mutation === "create") {
@@ -305,5 +322,6 @@ module.exports = {
   requirePlateUpsert,
   requireAlertExportIfBulk,
   requireEnvironmentReportFullIfScoped,
+  requireEnergyReportFullIfScoped,
   ALERT_EXPORT_BULK_LIMIT_THRESHOLD,
 };

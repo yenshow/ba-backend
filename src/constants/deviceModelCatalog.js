@@ -64,6 +64,50 @@ const DEVICE_MODEL_CATALOG = [
     },
   },
   {
+    name: "數位電表範例",
+    typeCode: "sensor",
+    description: "能源管理電表範例（請依實際暫存器修改）",
+    config: {
+      registerType: "holding",
+      meterKind: "electricity",
+      sensorParameters: [
+        {
+          type: "active_energy",
+          modbusConfig: {
+            address: 0,
+            length: 2,
+            dataType: "uint32_be",
+            transform: "value / 100",
+          },
+        },
+        {
+          type: "active_power",
+          modbusConfig: { address: 10, length: 1, dataType: "uint16", transform: "value / 10" },
+        },
+      ],
+    },
+  },
+  {
+    name: "數位水表範例",
+    typeCode: "sensor",
+    description: "能源管理水表範例（請依實際暫存器修改）",
+    config: {
+      registerType: "holding",
+      meterKind: "water",
+      sensorParameters: [
+        {
+          type: "water_volume",
+          modbusConfig: {
+            address: 0,
+            length: 2,
+            dataType: "uint32_be",
+            transform: "value / 1000",
+          },
+        },
+      ],
+    },
+  },
+  {
     name: "TP-Link",
     typeCode: "camera",
     description: "通用 RTSP 攝影機",

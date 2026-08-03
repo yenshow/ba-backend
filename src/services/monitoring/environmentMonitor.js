@@ -98,6 +98,7 @@ async function readValuesByRegisterType(enabledValues, deviceConfig) {
         const convertedValue = deviceLoggingConfig.applyConversion(
           rawValue,
           valueConfig.conversion,
+          valueConfig.dataType || "uint16",
         );
         deviceValues[valueConfig.name] = {
           value: convertedValue,

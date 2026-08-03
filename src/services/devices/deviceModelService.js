@@ -19,6 +19,12 @@ const {
   listSensorParameterKeys,
   isValidSensorParameterKey,
 } = require("../../constants/environmentParameterCatalog");
+const {
+  isValidEnergyParameterKey,
+  listEnergyParameterKeys,
+  METER_KINDS,
+  MODBUS_DATA_TYPES,
+} = require("../../constants/energyParameterCatalog");
 
 const deviceModelLogger = logger.createLogger("deviceModelService");
 
@@ -107,6 +113,15 @@ function validateSensorParametersConfig(config) {
     return;
   }
 
+  if (config.meterKind != null) {
+    if (!METER_KINDS.includes(config.meterKind)) {
+      throwApiError(
+        C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
+        `config.meterKind 須為 ${METER_KINDS.join(", ")} 之一`,
+      );
+    }
+  }
+
   if (config.sensorParameters) {
     if (!Array.isArray(config.sensorParameters)) {
       throwApiError(
@@ -115,7 +130,10 @@ function validateSensorParametersConfig(config) {
       );
     }
 
-    const validParameterTypes = listSensorParameterKeys();
+    const validParameterTypes = [
+      ...listSensorParameterKeys(),
+      ...listEnergyParameterKeys(),
+    ];
 
     for (const param of config.sensorParameters) {
       if (!param.type) {
@@ -124,7 +142,10 @@ function validateSensorParametersConfig(config) {
           "參數定義必須包含 type 欄位",
         );
       }
-      if (!isValidSensorParameterKey(param.type)) {
+      const typeOk =
+        isValidSensorParameterKey(param.type) ||
+        isValidEnergyParameterKey(param.type);
+      if (!typeOk) {
         throwApiError(
           C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
           `無效的參數類型: ${param.type}。有效類型: ${validParameterTypes.join(", ")}`,
@@ -143,6 +164,23 @@ function validateSensorParametersConfig(config) {
         throwApiError(
           C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
           `參數 ${param.type} 的 modbusConfig.address 必須為非負整數`,
+        );
+      }
+      const length = param.modbusConfig.length;
+      if (length != null) {
+        const n = Number(length);
+        if (!Number.isInteger(n) || n < 1 || n > 4) {
+          throwApiError(
+            C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
+            `參數 ${param.type} 的 modbusConfig.length 須為 1–4`,
+          );
+        }
+      }
+      const dataType = param.modbusConfig.dataType;
+      if (dataType != null && !MODBUS_DATA_TYPES.includes(dataType)) {
+        throwApiError(
+          C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
+          `參數 ${param.type} 的 modbusConfig.dataType 須為 ${MODBUS_DATA_TYPES.join(", ")} 之一`,
         );
       }
     }

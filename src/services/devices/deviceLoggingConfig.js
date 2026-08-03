@@ -32,11 +32,17 @@ function _buildLoggingValuesFromSensorParameters(sensorParameters, defaultRegist
         formula = t.replace(/value/gi, "value");
       }
     }
+    const dataType = param.modbusConfig?.dataType || "uint16";
+    let length = Number(param.modbusConfig?.length);
+    if (!Number.isFinite(length) || length < 1) {
+      length = dataType === "uint16" ? 1 : 2;
+    }
     values.push({
       name: param.type,
       address: Number(addr),
       register_type: registerType,
-      length: 1,
+      length,
+      dataType,
       enabled: true,
       conversion: formula ? { formula } : undefined,
     });
@@ -99,10 +105,31 @@ async function getDeviceLoggingConfig(deviceId) {
   }
 }
 
-function applyConversion(rawValue, conversion) {
-  if (!conversion) return rawValue;
+/**
+ * 將 Modbus 暫存器陣列解成數值（uint16 / uint32 BE|LE）
+ * @param {number|number[]} raw
+ * @param {string} [dataType]
+ */
+function decodeRegisterValue(raw, dataType = "uint16") {
+  if (!Array.isArray(raw)) {
+    return Number(raw);
+  }
+  if (raw.length === 0) return null;
+  if (dataType === "uint32_be" && raw.length >= 2) {
+    return ((Number(raw[0]) & 0xffff) << 16) + (Number(raw[1]) & 0xffff);
+  }
+  if (dataType === "uint32_le" && raw.length >= 2) {
+    return ((Number(raw[1]) & 0xffff) << 16) + (Number(raw[0]) & 0xffff);
+  }
+  return Number(raw[0]);
+}
 
-  let value = rawValue;
+function applyConversion(rawValue, conversion, dataType = "uint16") {
+  let value = decodeRegisterValue(rawValue, dataType);
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return rawValue;
+  }
+  if (!conversion) return value;
 
   if (conversion.scale !== undefined) {
     value = value * conversion.scale;
@@ -113,7 +140,7 @@ function applyConversion(rawValue, conversion) {
 
   if (conversion.formula) {
     try {
-      const formula = conversion.formula.replace(/value/g, value);
+      const formula = conversion.formula.replace(/value/g, String(value));
       value = new Function("return " + formula)();
     } catch (error) {
       loggingCfgLogger.warn("公式轉換失敗（回退原值）", {
@@ -121,7 +148,7 @@ function applyConversion(rawValue, conversion) {
         error: error?.message || String(error),
         module: "deviceLoggingConfig",
       });
-      return rawValue;
+      return value;
     }
   }
 
@@ -131,4 +158,5 @@ function applyConversion(rawValue, conversion) {
 module.exports = {
   getDeviceLoggingConfig,
   applyConversion,
+  decodeRegisterValue,
 };

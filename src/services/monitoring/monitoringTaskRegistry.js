@@ -1,4 +1,5 @@
 const environmentMonitor = require("./environmentMonitor");
+const energyMonitor = require("./energyMonitor");
 const {
   checkElevatorRuntime,
 } = require("./elevatorFloorDetectionMonitor");
@@ -40,6 +41,13 @@ const monitoringTaskRegistry = [
     systemName: "環境系統",
     featureKey: "environment",
     taskFunction: environmentMonitor.checkEnvironmentLocations,
+    options: fixedIntervalOptions(STANDARD_POLL_MS),
+  },
+  {
+    taskId: "energy",
+    systemName: "能源管理",
+    featureKey: "energy",
+    taskFunction: energyMonitor.checkEnergyMeters,
     options: fixedIntervalOptions(STANDARD_POLL_MS),
   },
   {

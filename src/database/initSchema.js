@@ -80,6 +80,7 @@ async function initSchema() {
           "people_counting",
           "drainage",
           "power",
+          "energy",
           "hvac",
           "air_circulation",
           "fire",
@@ -1148,6 +1149,66 @@ async function initSchema() {
     schemaLogger.info("environment_readings_aggregated 表已建立", {
       module: "initSchema",
     });
+
+    // 能源管理：設備維度讀數／彙總／設定
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS energy_readings (
+        id BIGSERIAL PRIMARY KEY,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        recorded_at TIMESTAMP NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_energy_readings_device_recorded
+        ON energy_readings(device_id, recorded_at);
+      CREATE INDEX IF NOT EXISTS idx_energy_readings_recorded_at
+        ON energy_readings(recorded_at);
+    `);
+    schemaLogger.info("energy_readings 表已建立", { module: "initSchema" });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS energy_usage_aggregated (
+        id BIGSERIAL PRIMARY KEY,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        bucket_type VARCHAR(10) NOT NULL,
+        bucket_at TIMESTAMP NOT NULL,
+        delta_energy_kwh DOUBLE PRECISION,
+        delta_water_m3 DOUBLE PRECISION,
+        tou_peak_kwh DOUBLE PRECISION,
+        tou_semi_peak_kwh DOUBLE PRECISION,
+        tou_off_peak_kwh DOUBLE PRECISION,
+        max_power_kw DOUBLE PRECISION,
+        max_demand_kw DOUBLE PRECISION,
+        data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(device_id, bucket_type, bucket_at)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_energy_agg_device_bucket
+        ON energy_usage_aggregated(device_id, bucket_type, bucket_at);
+    `);
+    schemaLogger.info("energy_usage_aggregated 表已建立", {
+      module: "initSchema",
+    });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS energy_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        config JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "energy_settings");
+    await targetPool.query(`
+      INSERT INTO energy_settings (id, config)
+      VALUES (1, '{}'::jsonb)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    schemaLogger.info("energy_settings 表已建立", { module: "initSchema" });
 
     // 建立 system_settings 表（系統設定表）
     await targetPool.query(`

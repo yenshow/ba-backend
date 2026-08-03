@@ -12,6 +12,10 @@ const {
   startEnvironmentAggregationScheduler,
   stopEnvironmentAggregationScheduler,
 } = require("../environment/environmentAggregationScheduler");
+const {
+  startEnergyAggregationScheduler,
+  stopEnergyAggregationScheduler,
+} = require("../energy/energyAggregationScheduler");
 const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const sdkArmingService = require("../ladderSdk/sdkArmingService");
 const { setCachedEffectiveFeatures } = require("./effectiveFeaturesCache");
@@ -60,6 +64,13 @@ const reconcileBackgroundServices = async ({
     stopEnvironmentAggregationScheduler();
   }
 
+  const energyOn = licenseService.hasLicensedFeature(features, "energy");
+  if (energyOn) {
+    startEnergyAggregationScheduler();
+  } else {
+    stopEnergyAggregationScheduler();
+  }
+
   const isapi = await isapiSubscribeHub.reconcile({ licensedFeatures: features });
   const elevator = await reconcileElevatorSdk(features);
 
@@ -67,6 +78,7 @@ const reconcileBackgroundServices = async ({
     reason,
     monitoringTaskCount: monitoring.taskCount,
     environment: environmentOn ? "on" : "off",
+    energy: energyOn ? "on" : "off",
     isapi: isapi.profileKeys || [],
     elevator: elevator.armed ? "on" : "off",
   });
@@ -95,6 +107,7 @@ const reconcileBackgroundServices = async ({
 const stopLicensedBackgroundServices = async () => {
   await backgroundMonitor.stopMonitoring();
   stopEnvironmentAggregationScheduler();
+  stopEnergyAggregationScheduler();
   isapiSubscribeHub.stop();
   sdkArmingService.stop();
   elevatorArmed = false;

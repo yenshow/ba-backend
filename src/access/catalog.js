@@ -259,9 +259,23 @@ const CENTRAL_MODULES = [
     },
   },
   {
+    code: "system.energy",
+    name: "能源管理",
+    sort_order: 23,
+    children: [{ code: "report.full", name: "完整報表", sort_order: 1 }],
+    ui: {
+      id: 22,
+      icon: "energy",
+      description: "數位電表／水表能耗監測、參考費率與契約容量告警",
+      category: "utilities",
+      routePrefix: "/utilities/energy",
+      featureKey: "energy",
+    },
+  },
+  {
     code: "system.drainage",
     name: "排水系統",
-    sort_order: 23,
+    sort_order: 24,
     children: LOCATION_MUTATION_CHILDREN,
     ui: {
       id: 13,
@@ -275,7 +289,7 @@ const CENTRAL_MODULES = [
   {
     code: "system.air_circulation",
     name: "空氣循環",
-    sort_order: 24,
+    sort_order: 25,
     children: LOCATION_MUTATION_CHILDREN,
     ui: {
       id: 14,
@@ -289,7 +303,7 @@ const CENTRAL_MODULES = [
   {
     code: "system.fire",
     name: "消防系統",
-    sort_order: 25,
+    sort_order: 26,
     children: LOCATION_MUTATION_CHILDREN,
     ui: {
       id: 15,
@@ -303,7 +317,7 @@ const CENTRAL_MODULES = [
   {
     code: "system.emergency_rescue",
     name: "緊急求救",
-    sort_order: 26,
+    sort_order: 27,
     children: LOCATION_MUTATION_CHILDREN,
     ui: {
       id: 17,
@@ -317,7 +331,7 @@ const CENTRAL_MODULES = [
   {
     code: "system.smoke_alarm",
     name: "煙霧警報",
-    sort_order: 27,
+    sort_order: 28,
     children: LOCATION_MUTATION_CHILDREN,
     ui: {
       id: 18,
@@ -331,7 +345,7 @@ const CENTRAL_MODULES = [
   {
     code: "system.multimedia",
     name: "多媒體資訊",
-    sort_order: 28,
+    sort_order: 29,
     children: [{ code: "settings.update", name: "設定編輯", sort_order: 1 }],
     ui: {
       id: 21,

@@ -29,6 +29,7 @@ const userRoutes = require("./routes/userRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const { mountSnapshotSystemRoutes } = require("./routes/snapshotSystems");
 const environmentRoutes = require("./routes/environmentRoutes");
+const energyRoutes = require("./routes/energyRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const elevatorRoutes = require("./routes/elevatorRoutes");
@@ -149,6 +150,7 @@ app.use("/api/modules", moduleRegistryRoutes);
 app.use("/api/devices", deviceRoutes);
 mountSnapshotSystemRoutes(app, requireFeature);
 app.use("/api/environment", requireFeature("environment"), environmentRoutes);
+app.use("/api/energy", requireFeature("energy"), energyRoutes);
 app.use("/api/locations", locationRoutes); // 統一地點管理 API
 app.use(
   "/api/people-counting",

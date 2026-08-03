@@ -678,6 +678,20 @@ function emitYscpEvent(type) {
   );
 }
 
+function emitEnergyReadingNew(data) {
+  const eventData = {
+    deviceId: data.deviceId,
+    deviceName: data.deviceName,
+    recordedAt: data.recordedAt || new Date().toISOString(),
+    data: data.data || {},
+    online: data.online !== false,
+    timestamp: new Date().toISOString(),
+  };
+  safeEmit("energy:reading:new", eventData, {
+    logMessage: `設備 ID: ${data.deviceId}`,
+  });
+}
+
 module.exports = {
   initializeWebSocket,
   getIO,
@@ -692,6 +706,7 @@ module.exports = {
   emitDeviceUpdated,
   emitDeviceDeleted,
   emitEnvironmentReading,
+  emitEnergyReadingNew,
   emitIsapiAccessEvent,
   emitOperationalEventNew,
   emitPeopleCountingStatsReset,

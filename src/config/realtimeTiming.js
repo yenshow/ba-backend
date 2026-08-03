@@ -24,6 +24,9 @@ const MODBUS_BATCH_CACHE_TTL_MS = 800;
 const CONNECTIVITY_TIMEOUT_MS = 5000;
 const ENVIRONMENT_RAW_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const ENVIRONMENT_READING_STALE_MS = 10 * 60 * 1000;
+/** 能源表計：幾乎每 poll 寫 raw（利於差分） */
+const ENERGY_RAW_WRITE_INTERVAL_MS = 15_000;
+const ENERGY_READING_STALE_MS = 10 * 60 * 1000;
 
 /** 固定間隔任務用：base = min = max */
 const fixedIntervalOptions = (ms) => ({
@@ -50,5 +53,7 @@ module.exports = {
   CONNECTIVITY_TIMEOUT_MS,
   ENVIRONMENT_RAW_WRITE_INTERVAL_MS,
   ENVIRONMENT_READING_STALE_MS,
+  ENERGY_RAW_WRITE_INTERVAL_MS,
+  ENERGY_READING_STALE_MS,
   fixedIntervalOptions,
 };

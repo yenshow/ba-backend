@@ -29,6 +29,7 @@ const MODULE_PERM_KEYS = {
   "system.lighting": "lighting",
   "system.hvac": "hvac",
   "system.power": "power",
+  "system.energy": "energy",
   "system.drainage": "drainage",
   "system.air_circulation": "airCirculation",
   "system.fire": "fire",

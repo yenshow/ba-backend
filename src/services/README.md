@@ -13,6 +13,7 @@
 | `ladderSdk/` | 10 | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
 | `snapshotStatus/` | 9 | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
 | `environment/` | 6 | 環境讀數、衍生指標、彙總排程 |
+| `energy/` | 5 | 能源讀數、設定、差分彙總／TOU、Dashboard |
 | `peopleCounting/` | 13 | 人流 API、sync、providers；含 ISAPI 攝影機訂閱（`isapiPeopleCounting*`） |
 | `vehicleAccess/` | 14 | 車輛進出 API、ISAPI 訂閱／持久化／設備代理、車牌同步、helpers |
 | `entryExit/` | 4 | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
@@ -40,6 +41,7 @@
 | `licenseRoutes` | `license/*` |
 | `locationRoutes` | `location/locationService` |
 | `environmentRoutes` | `environment/environmentService` |
+| `energyRoutes` | `energy/*` |
 | `peopleCountingRoutes` | `peopleCounting/peopleCountingService`、`entryExit/resolveTimeOptions` |
 | `lighting`～`smokeAlarm` Routes（狀態 API） | `snapshotStatus/*StatusService` + `location/locationService` |
 | `deviceRoutes` / `modbusRoutes` | `devices/*` |
