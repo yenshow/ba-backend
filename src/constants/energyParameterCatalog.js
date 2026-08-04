@@ -80,11 +80,15 @@ function getEnergyParameter(key) {
 }
 
 function getEnergyParametersPayload() {
+  const {
+    getEnergyUsageSystemsPayload,
+  } = require("./energyUsageSystemCatalog");
   return {
     version: CATALOG_VERSION,
     parameters: ENERGY_PARAMETERS,
     meterKinds: METER_KINDS,
     dataTypes: MODBUS_DATA_TYPES,
+    usageSystems: getEnergyUsageSystemsPayload(),
   };
 }
 

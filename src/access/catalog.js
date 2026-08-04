@@ -262,7 +262,10 @@ const CENTRAL_MODULES = [
     code: "system.energy",
     name: "能源管理",
     sort_order: 23,
-    children: [{ code: "report.full", name: "完整報表", sort_order: 1 }],
+    children: [
+      { code: "report.full", name: "完整報表", sort_order: 1 },
+      { code: "settings.update", name: "設定編輯", sort_order: 2 },
+    ],
     ui: {
       id: 22,
       icon: "energy",

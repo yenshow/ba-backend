@@ -33,6 +33,7 @@ router.get(
 
 router.put(
   "/settings",
+  requirePermission("system.energy.settings.update"),
   asyncHandler(async (req, res) => {
     res.sendSuccess(await energySettingsService.updateSettings(req.body || {}));
   }),
@@ -71,6 +72,14 @@ router.get(
     res.sendSuccess(
       await energyDashboardService.getRanking(parseInt(req.query.limit, 10) || 5),
     );
+  }),
+);
+
+router.get(
+  "/dashboard/breakdown",
+  disableHttpCache,
+  asyncHandler(async (_req, res) => {
+    res.sendSuccess(await energyDashboardService.getBreakdown());
   }),
 );
 

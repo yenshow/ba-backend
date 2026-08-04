@@ -115,6 +115,16 @@ const validateDeviceConfig = (config, typeCode) => {
           deviceConfigInvalid("sensor (mqtt) 需要 connection_string (string)");
         }
       }
+      if (config.energy_usage_system != null && config.energy_usage_system !== "") {
+        const {
+          isValidEnergyUsageSystemKey,
+        } = require("../constants/energyUsageSystemCatalog");
+        if (!isValidEnergyUsageSystemKey(config.energy_usage_system)) {
+          deviceConfigInvalid(
+            "sensor 的 energy_usage_system 須為有效用途系統 key（hvac/lighting/elevator/other）",
+          );
+        }
+      }
       break;
 
     case "access_control":
