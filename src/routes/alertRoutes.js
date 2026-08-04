@@ -6,6 +6,9 @@ const alertRuleService = require("../services/alerts/alertRuleService");
 const alertLinkageService = require("../services/alerts/alertLinkageService");
 const alertCameraLinkageService = require("../services/alerts/alertCameraLinkageService");
 const alertAccessDoorLinkageService = require("../services/alerts/alertAccessDoorLinkageService");
+const {
+  MAX_DEVICE_IDS: ACCESS_DOOR_LINKAGE_MAX_DEVICE_IDS,
+} = alertAccessDoorLinkageService;
 const alertEmailSubscriptionService = require("../services/alerts/alertEmailSubscriptionService");
 const db = require("../database/db");
 const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
@@ -103,13 +106,31 @@ function validateRuleIntegrationsPayload(body) {
     }
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(b, "accessDoorLinkage") &&
-    b.accessDoorLinkage &&
-    b.accessDoorLinkage.enabled !== undefined &&
-    typeof b.accessDoorLinkage.enabled !== "boolean"
-  ) {
-    return "accessDoorLinkage.enabled 需為布林值";
+  if (Object.prototype.hasOwnProperty.call(b, "accessDoorLinkage")) {
+    if (b.accessDoorLinkage && typeof b.accessDoorLinkage !== "object") {
+      return "accessDoorLinkage 需為物件或 null";
+    }
+    if (b.accessDoorLinkage) {
+      const a = b.accessDoorLinkage || {};
+      if (a.enabled !== undefined && typeof a.enabled !== "boolean") {
+        return "accessDoorLinkage.enabled 需為布林值";
+      }
+      if (a.device_ids !== undefined) {
+        if (!Array.isArray(a.device_ids)) {
+          return "accessDoorLinkage.device_ids 需為陣列";
+        }
+        const ids = a.device_ids
+          .map((v) => Number(v))
+          .filter((n) => Number.isInteger(n) && n > 0);
+        const unique = [...new Set(ids)];
+        if (unique.length !== ids.length) {
+          return "accessDoorLinkage.device_ids 不可重複";
+        }
+        if (unique.length > ACCESS_DOOR_LINKAGE_MAX_DEVICE_IDS) {
+          return `accessDoorLinkage.device_ids 最多 ${ACCESS_DOOR_LINKAGE_MAX_DEVICE_IDS} 台`;
+        }
+      }
+    }
   }
 
   if (Object.prototype.hasOwnProperty.call(b, "emailSubscription")) {
@@ -675,7 +696,7 @@ router.put(
       }
     }
 
-    // Access door linkage（全開；無設備清單）
+    // Access door linkage（device_ids 空＝全部；有值＝指定）
     if (Object.prototype.hasOwnProperty.call(body, "accessDoorLinkage")) {
       if (!body.accessDoorLinkage) {
         await alertAccessDoorLinkageService.deleteForRule(ruleId);

@@ -1,8 +1,8 @@
 /**
- * 警報門禁全開：新 active INSERT 時對全部門禁送 alwaysOpen（不復歸；OE 由 controlRemoteDoor 寫入）。
+ * 警報門禁連動：新 active INSERT 時送 alwaysOpen。
+ * device_ids 空＝全部已設定門禁；有值＝僅指定設備。不復歸；OE 由 controlRemoteDoor 寫入。
  */
 const db = require("../../database/db");
-const { parseConfig } = require("../../utils/deviceHelpers");
 const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
@@ -10,10 +10,33 @@ const { createLogger } = require("../../utils/logger");
 
 const logger = createLogger("alertAccessDoorLinkage");
 const ALWAYS_OPEN_CMD = "alwaysOpen";
+const MAX_DEVICE_IDS = 100;
 
 const normalizeId = (v) => {
   const n = Number(v);
   return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const normalizeIdList = (v, maxLen = MAX_DEVICE_IDS) => {
+  if (!Array.isArray(v)) return [];
+  const ids = v.map(normalizeId).filter(Boolean);
+  return [...new Set(ids)].slice(0, maxLen);
+};
+
+const parsePgIntArray = (v) => {
+  if (Array.isArray(v)) return normalizeIdList(v);
+  if (typeof v !== "string") return [];
+  const inner = v.trim().replace(/^\s*\{|\}\s*$/g, "");
+  if (!inner) return [];
+  return normalizeIdList(inner.split(","));
+};
+
+const normalizeRow = (row) => {
+  if (!row) return row;
+  return {
+    ...row,
+    device_ids: parsePgIntArray(row.device_ids),
+  };
 };
 
 async function getByRuleId(ruleId) {
@@ -23,7 +46,7 @@ async function getByRuleId(ruleId) {
     `SELECT * FROM alert_access_door_linkages WHERE rule_id = ? LIMIT 1`,
     [rid],
   );
-  return rows?.[0] || null;
+  return normalizeRow(rows?.[0] || null);
 }
 
 async function getByRuleIds(ruleIds) {
@@ -31,29 +54,33 @@ async function getByRuleIds(ruleIds) {
     ? [...new Set(ruleIds.map(normalizeId).filter(Boolean))]
     : [];
   if (ids.length === 0) return [];
-  return db.query(
+  const rows = await db.query(
     `SELECT * FROM alert_access_door_linkages WHERE rule_id = ANY(?)`,
     [ids],
   );
+  return (rows || []).map(normalizeRow);
 }
 
 async function upsertForRule(ruleId, payload, userId = null) {
   const rid = normalizeId(ruleId);
   if (!rid) throwApiError(C.ALERT_LINKAGE_RULE_ID_INVALID, "rule_id 不合法");
   const enabled = payload?.enabled !== undefined ? Boolean(payload.enabled) : true;
+  const deviceIds = normalizeIdList(payload?.device_ids, MAX_DEVICE_IDS);
+
   const rows = await db.query(
     `
-    INSERT INTO alert_access_door_linkages (rule_id, enabled, created_by)
-    VALUES (?, ?, ?)
+    INSERT INTO alert_access_door_linkages (rule_id, enabled, device_ids, created_by)
+    VALUES (?, ?, ?, ?)
     ON CONFLICT (rule_id)
     DO UPDATE SET
       enabled = EXCLUDED.enabled,
+      device_ids = EXCLUDED.device_ids,
       updated_at = CURRENT_TIMESTAMP
     RETURNING *
     `,
-    [rid, enabled, userId != null ? Number(userId) : null],
+    [rid, enabled, deviceIds, userId != null ? Number(userId) : null],
   );
-  return rows?.[0] || null;
+  return normalizeRow(rows?.[0] || null);
 }
 
 async function deleteForRule(ruleId) {
@@ -66,7 +93,7 @@ async function deleteForRule(ruleId) {
   return { deleted: rows?.length || 0 };
 }
 
-async function listConfiguredAccessDevices() {
+async function listAccessDevices() {
   const rows = await db.query(
     `
     SELECT id, name, config
@@ -75,9 +102,7 @@ async function listConfiguredAccessDevices() {
     ORDER BY name ASC
     `,
   );
-  return (rows || [])
-    .map((row) => ({ ...row, config: parseConfig(row.config) }))
-    .filter((d) => d.config?.host && d.config?.username && d.config?.password);
+  return rows || [];
 }
 
 async function processAccessDoorLinkagesForNewAlert(alert) {
@@ -88,7 +113,7 @@ async function processAccessDoorLinkagesForNewAlert(alert) {
   try {
     linkage = await getByRuleId(rid);
   } catch (err) {
-    logger.warn("查詢門禁全開連動失敗", {
+    logger.warn("查詢門禁連動失敗", {
       ruleId: rid,
       error: err?.message || String(err),
     });
@@ -98,13 +123,24 @@ async function processAccessDoorLinkagesForNewAlert(alert) {
 
   let devices = [];
   try {
-    devices = await listConfiguredAccessDevices();
+    devices = await listAccessDevices();
   } catch (err) {
     logger.warn("載入門禁設備失敗", { error: err?.message || String(err) });
     return;
   }
+
+  const selectedIds = Array.isArray(linkage.device_ids) ? linkage.device_ids : [];
+  if (selectedIds.length > 0) {
+    const allow = new Set(selectedIds);
+    devices = devices.filter((d) => allow.has(Number(d.id)));
+  }
+
   if (devices.length === 0) {
-    logger.warn("門禁全開已啟用但無可用門禁設備", { ruleId: rid, alertId: alert?.id });
+    logger.warn("門禁連動已啟用但無可用門禁設備", {
+      ruleId: rid,
+      alertId: alert?.id,
+      selectedCount: selectedIds.length,
+    });
     return;
   }
 
@@ -116,7 +152,7 @@ async function processAccessDoorLinkagesForNewAlert(alert) {
         operationalEvent: { fromAlertLinkage: true, alertId, ruleId: rid },
       });
     } catch (err) {
-      logger.warn("門禁全開連動失敗", {
+      logger.warn("門禁連動失敗", {
         deviceId: device.id,
         alertId,
         error: err?.message || String(err),
@@ -126,6 +162,7 @@ async function processAccessDoorLinkagesForNewAlert(alert) {
 }
 
 module.exports = {
+  MAX_DEVICE_IDS,
   getByRuleId,
   getByRuleIds,
   upsertForRule,

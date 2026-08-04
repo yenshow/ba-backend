@@ -437,12 +437,35 @@ async function ensureEnergyTables(pool) {
   `);
 }
 
+/** 既有庫：警報門禁連動補 device_ids（空陣列＝全部門禁） */
+async function ensureAlertAccessDoorDeviceIds(pool) {
+  await pool.query(`
+    DO $do$
+    BEGIN
+      IF to_regclass('public.alert_access_door_linkages') IS NULL THEN
+        RETURN;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'alert_access_door_linkages'
+          AND column_name = 'device_ids'
+      ) THEN
+        ALTER TABLE alert_access_door_linkages
+          ADD COLUMN device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[];
+      END IF;
+    END
+    $do$;
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
   await ensureEnergyTables(pool);
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
+  await ensureAlertAccessDoorDeviceIds(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
   const deviceModelSync = await syncDeviceModelCatalog(pool);
   logger.info("schema patches 已套用", {
@@ -459,6 +482,7 @@ module.exports = {
   ensureEnergyTables,
   ensureExternalIntegrationTables,
   ensureOperationalEventsTable,
+  ensureAlertAccessDoorDeviceIds,
   migrateLegacySensorModelConfigs,
   applySchemaPatches,
 };

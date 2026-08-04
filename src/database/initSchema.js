@@ -699,12 +699,13 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // ========== 警報門禁全開連動（rule 啟用後對全部 access_control 送 alwaysOpen） ==========
+    // ========== 警報門禁連動（alwaysOpen；device_ids 空＝全部，有值＝指定設備） ==========
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_access_door_linkages (
         id SERIAL PRIMARY KEY,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -716,7 +717,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_access_door_linkages_enabled ON alert_access_door_linkages(enabled);
       CREATE INDEX IF NOT EXISTS idx_alert_access_door_linkages_rule_id ON alert_access_door_linkages(rule_id);
     `);
-    schemaLogger.info("alert_access_door_linkages 表已建立（門禁全開連動）", {
+    schemaLogger.info("alert_access_door_linkages 表已建立（門禁連動）", {
       module: "initSchema",
     });
 
