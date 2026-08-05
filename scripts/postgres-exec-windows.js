@@ -51,7 +51,11 @@ function runWindowsAclStep(innerCommand, label) {
   }
 }
 
-/** initdb 前：設定目錄 ACL（空目錄，不含 /T）。 */
+/**
+ * initdb 前：設定目錄 ACL（空目錄，不含 /T）。
+ * 順序：takeown → 先授 Administrators → 再切斷繼承 → 其餘主體
+ * （先 /inheritance:r 在既有鎖定 DACL 上常會 Access is denied）
+ */
 function prepareWindowsDirAcl(dirPath) {
   if (process.platform !== "win32" || !dirPath) {
     return;
@@ -66,6 +70,12 @@ function prepareWindowsDirAcl(dirPath) {
 
   log(`🔐 設定執行期資料目錄權限: ${dirPath}`, "yellow");
 
+  // /A：Administrators 取得擁有權；/R /D Y：子項亦接管（空目錄亦安全）
+  runWindowsAclStep(`takeown /F ${quoted} /A /R /D Y`, "takeown /A");
+  runWindowsAclStep(
+    `icacls ${quoted} /grant:r ${WIN_ACL_BUILTIN.administrators}:(OI)(CI)F`,
+    "icacls Administrators (pre)",
+  );
   runWindowsAclStep(`icacls ${quoted} /inheritance:r`, "icacls /inheritance:r");
   runWindowsAclStep(
     `icacls ${quoted} /grant:r ${WIN_ACL_BUILTIN.administrators}:(OI)(CI)F`,
@@ -88,7 +98,7 @@ function prepareWindowsDirAcl(dirPath) {
   }
 }
 
-/** 套用至目錄與既有子檔（PM2 Local Service 須能讀取 PG_VERSION 等檔案）。 */
+/** 套用至目錄與既有子檔（服務帳號 LocalSystem／LocalService 須能讀取 PG_VERSION 等）。 */
 function applyWindowsDirAclRecursive(dirPath) {
   if (process.platform !== "win32" || !dirPath || !fs.existsSync(dirPath)) {
     return;
@@ -99,6 +109,10 @@ function applyWindowsDirAclRecursive(dirPath) {
   runWindowsAclStep(
     `icacls ${quoted} /grant ${WIN_ACL_BUILTIN.localService}:(OI)(CI)M /T`,
     "icacls LocalService /T",
+  );
+  runWindowsAclStep(
+    `icacls ${quoted} /grant ${WIN_ACL_BUILTIN.system}:(OI)(CI)F /T`,
+    "icacls SYSTEM /T",
   );
 }
 

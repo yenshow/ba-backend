@@ -1,7 +1,7 @@
 /**
  * 在本機直接啟動 MediaMTX（開發用）
  * 可執行檔需放在 mediamtx/bin/mediamtx.exe（Windows）或 mediamtx/bin/mediamtx（Linux/macOS）
- * 正式環境建議用 PM2：從 ba-system 根目錄執行 pm2 start ecosystem.config.cjs --only ba-mediamtx
+ * 出貨由 WinSW `{Product}-MediaMTX` 服務啟動本腳本；本機開發：`npm run mediamtx`
  */
 const path = require("path");
 const { spawn } = require("child_process");
@@ -22,7 +22,7 @@ const binPath = path.join(mediamtxDir, "bin", exeName);
 if (!fs.existsSync(binPath)) {
   console.error(`找不到 MediaMTX 可執行檔: ${binPath}`);
   console.error("請從 https://github.com/bluenviron/mediamtx/releases 下載並解壓至 mediamtx/bin/");
-  console.error("或從 ba-system 根目錄執行: pm2 start ecosystem.config.cjs --only ba-mediamtx");
+  console.error("出貨環境請確認 WinSW MediaMTX 服務與 mediamtx/bin 是否就緒");
   process.exit(1);
 }
 

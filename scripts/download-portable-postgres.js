@@ -321,20 +321,10 @@ function setupDatabase() {
   );
 
   log(`✅ 資料庫和使用者已設定完成`, "green");
-
-  console.log("");
-  log(`🎉 可攜式 PostgreSQL 設定完成！`, "green");
-  console.log("");
-  const displayPort = getPostgresPort();
-  console.log("連線資訊:");
-  console.log(`  Host: ${PSQL_HOST}`);
-  console.log(`  Port: ${displayPort}`);
-  console.log(`  Database: ${dbName}`);
-  console.log(`  User: ${dbUser}`);
-  console.log(`  Password: postgres`);
-  console.log("");
-  console.log("使用方式:");
-  console.log(`  本機／安裝: PM2 ba-postgres（ecosystem.config.cjs）`);
+  log(
+    `🎉 可攜式 PostgreSQL 設定完成（${PSQL_HOST}:${getPostgresPort()}/${dbName}）`,
+    "green",
+  );
 }
 
 function repairWindowsPostgresRuntimeAcl() {
@@ -342,7 +332,7 @@ function repairWindowsPostgresRuntimeAcl() {
     return;
   }
 
-  log("🔐 套用 postgres 執行期目錄 ACL（PM2 Local Service）...", "yellow");
+  log("🔐 套用 postgres 執行期目錄 ACL（Administrators／SYSTEM）...", "yellow");
   prepareWindowsPostgresDataLayout({ dataDir: DATA_DIR, logDir: LOG_DIR });
   log("✅ postgres 執行期目錄 ACL 已套用", "green");
 }
@@ -372,6 +362,7 @@ async function main() {
   repairWindowsPostgresRuntimeAcl();
   startPortablePostgres();
   setupDatabase();
+  // ① 內已 bootstrap；postmaster 留給 ② 使用。② 成功後由精靈 stop-portable-postgres 再交 SCM。
 }
 
 if (require.main === module) {

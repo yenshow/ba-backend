@@ -11,9 +11,10 @@ const dotenv = require("dotenv");
 // 載入環境變數
 dotenv.config({
   path: process.env.ENV_FILE || path.resolve(process.cwd(), ".env"),
+  quiet: true,
 });
 
-/** PM2／封裝環境見 `scripts/generate-ecosystem.cjs`（`NODE_ENV: "production"`）；其餘視為非 production（較詳細的 debug／連線 log） */
+/** 出貨 WinSW／安裝環境通常為 `NODE_ENV: "production"`；其餘視為非 production（較詳細的 debug／連線 log） */
 const isProduction = process.env.NODE_ENV === "production";
 
 /**
@@ -158,7 +159,7 @@ const normalizeYscpHost = (raw) =>
     .split(":")[0] || DEFAULT_YSCP_HOST;
 
 /**
- * YSCP／外部平台（Bootstrap；由安裝精靈寫入 .env，變更後須重啟 PM2）
+ * YSCP／外部平台（Bootstrap；由安裝精靈寫入 .env，變更後須重啟服務）
  */
 const yscpHost = normalizeYscpHost(getEnv("YSCP_HOST", DEFAULT_YSCP_HOST));
 

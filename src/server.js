@@ -117,6 +117,22 @@ app.use(securityHeaders);
 // 統一響應格式（須早於限流，供 rateLimitHandler 等使用 sendFailure）
 app.use(responseHandler);
 
+// 極簡健康檢查（公開；不經 API 限流）
+app.get("/api/health", async (req, res) => {
+  try {
+    const { pool } = require("./database/db");
+    await pool.query("SELECT 1");
+    return res.sendSuccess({ status: "ok", db: "ok" });
+  } catch (err) {
+    return res.sendError(
+      "SERVICE_UNAVAILABLE",
+      "database unavailable",
+      503,
+      { db: "error" },
+    );
+  }
+});
+
 // API 限流（登入路由在 userRoutes 內另掛更嚴格 limiter）
 app.use("/api", apiRateLimiter);
 
@@ -130,6 +146,10 @@ app.use(
     skip: (req, res) => {
       // 1) /ws（舊端點）或 Socket.IO polling（若存在）不記錄
       if (req.url === "/ws" || req.url?.startsWith("/socket.io")) {
+        return true;
+      }
+      // health 探活不記錄
+      if (req.url === "/api/health" || req.url?.startsWith("/api/health?")) {
         return true;
       }
 
@@ -236,10 +256,33 @@ async function startServer() {
   try {
     const localIP = getLocalIPAddress();
 
-    // 創建 HTTP 伺服器
-    const httpServer = http.createServer(app);
+    // 開機時 SCM 可能並行起 PostgreSQL／Backend：先等 DB，再 listen，避免「Running 但半殘」
+    const dbReady = await db.waitForDatabase({
+      timeoutMs: 90_000,
+      intervalMs: 2_000,
+      logger: serverLogger,
+    });
+    if (!dbReady) {
+      serverLogger.error(
+        "資料庫未就緒（逾時）。請確認 {Product}-PostgreSQL／ACL 後由 WinSW 重試啟動。",
+      );
+      try {
+        await db.close();
+      } catch (_e) {}
+      process.exit(1);
+      return;
+    }
 
-    // 初始化 WebSocket 服務
+    await applySchemaPatches(db.pool).catch((err) =>
+      serverLogger.warn("schema patches 失敗", { error: err.message }),
+    );
+    await syncDefinitions(db.pool).catch((err) =>
+      serverLogger.warn("權限定義同步失敗", { error: err.message }),
+    );
+    await bootstrapRuntimeInfrastructure();
+    await licenseRuntimeService.reconcileBackgroundServices({ reason: "boot" });
+
+    const httpServer = http.createServer(app);
     websocketService.initializeWebSocket(httpServer);
 
     await new Promise((resolve, reject) => {
@@ -261,30 +304,6 @@ async function startServer() {
       ...(lanUrl ? { lanUrl } : {}),
       websocket: "Socket.IO",
     });
-
-    // 測試資料庫連線（listen 成功後再做，避免啟動失敗時觸發一堆背景任務）
-    const dbConnected = await db.testConnection();
-    if (!dbConnected) {
-      serverLogger.warn("資料庫連線失敗，但伺服器仍會啟動");
-    }
-
-    if (dbConnected) {
-      await applySchemaPatches(db.pool).catch((err) =>
-        serverLogger.warn("schema patches 失敗", { error: err.message }),
-      );
-      await syncDefinitions(db.pool).catch((err) =>
-        serverLogger.warn("權限定義同步失敗", { error: err.message }),
-      );
-      await bootstrapRuntimeInfrastructure();
-    } else {
-      serverLogger.warn("主資料庫未連線，略過 runtime 設定載入");
-    }
-
-    if (dbConnected) {
-      await licenseRuntimeService.reconcileBackgroundServices({ reason: "boot" });
-    } else {
-      serverLogger.warn("主資料庫未連線，略過授權背景服務協調");
-    }
 
     global.__backupSchedulerHandle = backupScheduler.startScheduler();
 

@@ -143,8 +143,37 @@ function startPortablePostgres(options = {}) {
   return { alreadyRunning: false };
 }
 
+/**
+ * 停止可攜式 PostgreSQL（非 SCM；精靈②後／③前使用）
+ */
+function stopPortablePostgres(options = {}) {
+  const quiet = options.quiet === true;
+  const say = (message, color) => {
+    if (!quiet) {
+      log(message, color);
+    }
+  };
+
+  if (!isPgCtlRunning()) {
+    say("PostgreSQL 未在運行（略過 stop）", "yellow");
+    return { stopped: false };
+  }
+
+  const pgCtlPath = getBinPath("pg_ctl");
+  say("🛑 停止手動啟動的 PostgreSQL（交由 Windows 服務接管）...", "yellow");
+  try {
+    execWithUtf8OnWindows(`"${pgCtlPath}" -D "${DATA_DIR}" stop -m fast`, {
+      stdio: quiet ? "pipe" : "inherit",
+    });
+  } catch (error) {
+    say(`stop 警告: ${error.message}`, "yellow");
+  }
+  return { stopped: true };
+}
+
 module.exports = {
   startPortablePostgres,
+  stopPortablePostgres,
   verifyPsqlReady,
   readRecentLogErrors,
   PSQL_HOST,

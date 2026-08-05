@@ -31,9 +31,7 @@
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",
     "mediamtx": "node scripts/start-mediamtx.js",
-    "mediamtx:generate": "node scripts/generate-mediamtx-config.js",
-    "mediamtx:pm2:start": "pm2 start ../ecosystem.config.cjs --only ba-mediamtx",
-    "mediamtx:pm2:stop": "pm2 stop ba-mediamtx"
+    "mediamtx:generate": "node scripts/generate-mediamtx-config.js"
   },
   "keywords": [],
   "author": "",

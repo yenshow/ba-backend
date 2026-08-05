@@ -16,7 +16,7 @@ const os = require("os");
 const dotenv = require("dotenv");
 
 // 載入 .env 以讀取 DB_PORT 等配置
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+dotenv.config({ path: path.resolve(__dirname, "..", ".env"), quiet: true });
 
 const {
   getProjectDir,

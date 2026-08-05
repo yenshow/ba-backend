@@ -6,47 +6,30 @@ const ADMIN_PASSWORD = "Aa83124007";
 
 async function createAdmin() {
 	try {
-		console.log("=".repeat(60));
-		console.log("建立系統管理員");
-		console.log("=".repeat(60));
-		console.log();
-
 		const existing = await db.query("SELECT id FROM users WHERE username = ?", [ADMIN_USERNAME]);
 
 		if (existing.length > 0) {
-			console.log(`已存在管理員：${ADMIN_USERNAME}`);
+			console.log(`[createAdmin] 已存在管理員：${ADMIN_USERNAME}`);
 			return;
 		}
 
-		console.log(`正在建立管理員... (${ADMIN_USERNAME})`);
+		console.log(`[createAdmin] 正在建立管理員（${ADMIN_USERNAME}）…`);
 		const user = await userService.createBootstrapAdminUser({
 			username: ADMIN_USERNAME,
 			password: ADMIN_PASSWORD,
 		});
 
-		console.log();
-		console.log("✅ 管理員建立成功！");
-		console.log("=".repeat(60));
-		console.log(`用戶名: ${user.username}`);
-		console.log(`角色: ${user.role}`);
-		console.log(`狀態: ${user.status}`);
-		console.log("=".repeat(60));
-
+		console.log(`[createAdmin] 成功：${user.username}（${user.role}/${user.status}）`);
 	} catch (error) {
-		console.error();
-		console.error("❌ 建立管理員失敗:", error.message);
+		console.error(`[createAdmin] 失敗：${error.message}`);
 		process.exit(1);
 	} finally {
 		await db.close();
 	}
 }
 
-// 如果直接執行此腳本（GUI / Redirect 子程序須明確結束，否則父程序 WaitForExit 會卡住）
 if (require.main === module) {
-	createAdmin()
-		.then(() => process.exit(0))
-		.catch(() => process.exit(1));
+	createAdmin();
 }
 
 module.exports = { createAdmin };
-
