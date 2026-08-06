@@ -5,42 +5,68 @@ const { validateRequired } = require("../middleware/validation");
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrors");
 const externalSyncService = require("../services/externalIntegration/externalSyncService");
-const { ACCESS_CONTROL_FIELD_CATALOG } = require("../services/externalIntegration/accessControlFields");
+const {
+  getAdapter,
+  isValidEventType,
+  listEventTypes,
+} = require("../services/externalIntegration/eventTypeRegistry");
 
 const router = express.Router();
 
 router.use(authenticate, requireAdmin);
 
-/**
- * GET /api/external-sync/configs?eventType=access_control
- */
 router.get(
-  "/configs",
-  asyncHandler(async (req, res) => {
-    const eventType = String(req.query?.eventType ?? "access_control").trim();
-    if (eventType !== "access_control") {
-      throwApiError(C.VALIDATION_CUSTOM, "目前僅支援 access_control", {
-        statusCode: 400,
-      });
-    }
-    const config = await externalSyncService.getConfig();
-    res.sendSuccess({ config, fields: ACCESS_CONTROL_FIELD_CATALOG });
+  "/event-types",
+  asyncHandler(async (_req, res) => {
+    res.sendSuccess({ eventTypes: listEventTypes() });
   }),
 );
 
 /**
- * PUT /api/external-sync/configs
- * body: { eventType, pushTime, dbType, host, port, database, username, password, targetTable, mappings }
+ * GET /api/external-sync/configs?eventType=
+ * 無 eventType 時回傳全部 configs + eventTypes 目錄
  */
+router.get(
+  "/configs",
+  asyncHandler(async (req, res) => {
+    const raw = req.query?.eventType;
+    if (raw == null || String(raw).trim() === "") {
+      const configs = await externalSyncService.listConfigs();
+      res.sendSuccess({ configs, eventTypes: listEventTypes() });
+      return;
+    }
+    const eventType = String(raw).trim();
+    if (!isValidEventType(eventType)) {
+      throwApiError(C.VALIDATION_CUSTOM, "不支援的 eventType", { statusCode: 400 });
+    }
+    const adapter = getAdapter(eventType);
+    const config = await externalSyncService.getConfig(eventType);
+    res.sendSuccess({
+      config,
+      fields: adapter.catalog,
+      filterSchema: adapter.filterSchema,
+      eventTypes: listEventTypes(),
+    });
+  }),
+);
+
 router.put(
   "/configs",
-  validateRequired("eventType", "pushTime", "dbType", "host", "port", "database", "username", "password", "targetTable", "mappings"),
+  validateRequired(
+    "eventType",
+    "pushTime",
+    "dbType",
+    "host",
+    "port",
+    "database",
+    "username",
+    "targetTable",
+    "mappings",
+  ),
   asyncHandler(async (req, res) => {
     const eventType = String(req.body?.eventType ?? "").trim();
-    if (eventType !== "access_control") {
-      throwApiError(C.VALIDATION_CUSTOM, "目前僅支援 access_control", {
-        statusCode: 400,
-      });
+    if (!isValidEventType(eventType)) {
+      throwApiError(C.VALIDATION_CUSTOM, "不支援的 eventType", { statusCode: 400 });
     }
     const saved = await externalSyncService.upsertConfig(req.body || {});
     if (global.__externalSyncHandle?.reschedule) {
@@ -50,10 +76,21 @@ router.put(
   }),
 );
 
-/**
- * POST /api/external-sync/test-connection
- * body: { dbType, host, port, database, username, password }
- */
+router.delete(
+  "/configs/:eventType",
+  asyncHandler(async (req, res) => {
+    const eventType = String(req.params.eventType ?? "").trim();
+    if (!isValidEventType(eventType)) {
+      throwApiError(C.VALIDATION_CUSTOM, "不支援的 eventType", { statusCode: 400 });
+    }
+    await externalSyncService.deleteConfig(eventType);
+    if (global.__externalSyncHandle?.reschedule) {
+      global.__externalSyncHandle.reschedule();
+    }
+    res.sendSuccess({ ok: true });
+  }),
+);
+
 router.post(
   "/test-connection",
   validateRequired("dbType", "host", "port", "database", "username", "password"),
@@ -68,10 +105,16 @@ router.post(
       throwApiError(C.VALIDATION_CUSTOM, "Port 必須為 1–65535", { statusCode: 400 });
     }
 
-    await externalSyncService.testExternalDbConnection({ dbType, host, port: Math.trunc(port), database, username, password });
+    await externalSyncService.testExternalDbConnection({
+      dbType,
+      host,
+      port: Math.trunc(port),
+      database,
+      username,
+      password,
+    });
     res.sendSuccess({ ok: true });
   }),
 );
 
 module.exports = router;
-

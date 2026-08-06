@@ -1,11 +1,11 @@
 /**
  * 資料匯出本機測試 CLI（假第三方 DB + 立刻執行，略過排程）
  *
- *   npm run test:data-export              # 一鍵 all
- *   npm run test:data-export -- setup --apply-config
- *   npm run test:data-export -- seed [--count N]
- *   npm run test:data-export -- sync [--reset-cursor] [--verify]
- *   npm run test:data-export -- export --group-id <id> | --rule-id <id>
+ *   npm run test:data-export              # 一鍵 all（門禁 + energy/operational 煙測）
+ *   npm run test:data-export -- setup --apply-config [--event-type TYPE]
+ *   npm run test:data-export -- seed [--count N] [--event-type TYPE]
+ *   npm run test:data-export -- sync [--reset-cursor] [--verify] [--event-type TYPE]
+ *   npm run test:data-export -- export --group-id <id> | --rule-id <id> [--event-type TYPE]
  */
 
 const fs = require("fs");
@@ -20,10 +20,18 @@ const externalSyncService = require("../../src/services/externalIntegration/exte
 const recordExportService = require("../../src/services/externalIntegration/recordExportService");
 const { decryptSecret } = require("../../src/utils/secretCrypto");
 
-const DEFAULT_TABLE = "ba_export_test_access_events";
+const DEFAULT_TABLE = {
+  access_control: "ba_export_test_access_events",
+  energy: "ba_export_test_energy_readings",
+  operational: "ba_export_test_operational_events",
+};
 const GROUP_NAME = "BA_EXPORT_TEST_GROUP";
 const EMPLOYEE_PREFIX = "BA_EXPORT_TEST_";
-const TEST_RULE_NAME = "BA_EXPORT_TEST_RULE";
+const TEST_RULE_NAME = {
+  access_control: "BA_EXPORT_TEST_RULE",
+  energy: "BA_EXPORT_TEST_RULE_ENERGY",
+  operational: "BA_EXPORT_TEST_RULE_OPERATIONAL",
+};
 const DEFAULT_EXPORT_DIR = path.resolve(process.cwd(), "tmp", "record-export-test");
 
 const quoteIdent = (name) => `"${String(name).replaceAll('"', '""')}"`;
@@ -43,39 +51,57 @@ const hasFlag = (argv, name) => {
   return true;
 };
 
+const resolveEventType = (argv, fallback = "access_control") => {
+  const raw = takeFlag(argv, "--event-type") || takeFlag(argv, "--eventType") || fallback;
+  const v = String(raw || "").trim();
+  if (!["access_control", "energy", "operational"].includes(v)) {
+    throw new Error(`此腳本煙測僅支援 access_control|energy|operational，收到: ${v}`);
+  }
+  return v;
+};
+
 const printHelp = () => {
   console.log(`
 用法: node scripts/externalIntegration/testDataExport.js <command> [options]
 
 commands:
-  all      一鍵：setup --apply-config → seed → sync --reset-cursor --verify → export
-  setup    建立測試目標表 [--table NAME] [--apply-config]
-  seed     種子人員／門禁事件 [--count N]
-  sync     立刻資料庫對接 [--reset-cursor] [--verify]
-  export   立刻記錄轉存 --group-id N | --rule-id N [--dir PATH]
+  all      一鍵：門禁 setup/seed/sync/export → energy／operational 煙測
+  setup    建立測試目標表 [--table NAME] [--apply-config] [--event-type TYPE]
+  seed     種子資料 [--count N] [--event-type TYPE]
+  sync     立刻資料庫對接 [--reset-cursor] [--verify] [--event-type TYPE]
+  export   立刻記錄轉存 --group-id N | --rule-id N [--dir PATH] [--event-type TYPE]
 `);
 };
 
-const DEFAULT_MAPPINGS = {
-  employeeId: { targetColumn: "employee_id" },
-  personName: { targetColumn: "person_name" },
-  personGroup: { targetColumn: "person_group" },
-  deviceName: { targetColumn: "device_name" },
-  deviceScreenshot: { targetColumn: "device_screenshot" },
-  eventDateTime: { targetColumn: "event_datetime", format: "yyyy-MM-dd HH:mm:ss" },
-  eventDate: { targetColumn: "event_date", format: "yyyy-MM-dd" },
-  eventTime: { targetColumn: "event_time", format: "HH:mm:ss" },
-  cardNo: { targetColumn: "card_no" },
+const MAPPINGS = {
+  access_control: {
+    employeeId: { targetColumn: "employee_id" },
+    personName: { targetColumn: "person_name" },
+    personGroup: { targetColumn: "person_group" },
+    deviceName: { targetColumn: "device_name" },
+    deviceScreenshot: { targetColumn: "device_screenshot" },
+    eventDateTime: { targetColumn: "event_datetime", format: "yyyy-MM-dd HH:mm:ss" },
+    eventDate: { targetColumn: "event_date", format: "yyyy-MM-dd" },
+    eventTime: { targetColumn: "event_time", format: "HH:mm:ss" },
+    cardNo: { targetColumn: "card_no" },
+  },
+  energy: {
+    deviceId: { targetColumn: "device_id" },
+    deviceName: { targetColumn: "device_name" },
+    recordedAt: { targetColumn: "recorded_at", format: "yyyy-MM-dd HH:mm:ss" },
+    dataJson: { targetColumn: "data_json" },
+  },
+  operational: {
+    occurredAt: { targetColumn: "occurred_at", format: "yyyy-MM-dd HH:mm:ss" },
+    source: { targetColumn: "source" },
+    eventKind: { targetColumn: "event_kind" },
+    summary: { targetColumn: "summary" },
+    deviceName: { targetColumn: "device_name" },
+  },
 };
 
-const cmdSetup = async (argv) => {
-  const applyConfig = hasFlag(argv, "--apply-config");
-  const table = takeFlag(argv, "--table") || DEFAULT_TABLE;
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) {
-    throw new Error(`表名不合法: ${table}`);
-  }
-
-  await db.query(`
+const CREATE_SQL = {
+  access_control: (table) => `
     CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (
       id BIGSERIAL PRIMARY KEY,
       employee_id TEXT,
@@ -88,18 +114,72 @@ const cmdSetup = async (argv) => {
       event_time TEXT,
       card_no TEXT,
       pushed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    )`,
+  energy: (table) => `
+    CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (
+      id BIGSERIAL PRIMARY KEY,
+      device_id TEXT,
+      device_name TEXT,
+      recorded_at TEXT,
+      data_json TEXT,
+      pushed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+  operational: (table) => `
+    CREATE TABLE IF NOT EXISTS ${quoteIdent(table)} (
+      id BIGSERIAL PRIMARY KEY,
+      occurred_at TEXT,
+      source TEXT,
+      event_kind TEXT,
+      summary TEXT,
+      device_name TEXT,
+      pushed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+};
+
+const EXPORT_FIELDS = {
+  access_control: [
+    { fieldKey: "employeeId", headerLabel: "員工ID" },
+    { fieldKey: "personName", headerLabel: "姓名" },
+    { fieldKey: "personGroup", headerLabel: "群組" },
+    { fieldKey: "deviceName", headerLabel: "出入口" },
+    { fieldKey: "eventDateTime", headerLabel: "進出時間", format: "yyyy-MM-dd HH:mm:ss" },
+    { fieldKey: "cardNo", headerLabel: "卡號" },
+  ],
+  energy: [
+    { fieldKey: "deviceId", headerLabel: "設備ID" },
+    { fieldKey: "deviceName", headerLabel: "設備名稱" },
+    { fieldKey: "recordedAt", headerLabel: "記錄時間", format: "yyyy-MM-dd HH:mm:ss" },
+    { fieldKey: "dataJson", headerLabel: "讀數JSON" },
+  ],
+  operational: [
+    { fieldKey: "occurredAt", headerLabel: "發生時間", format: "yyyy-MM-dd HH:mm:ss" },
+    { fieldKey: "source", headerLabel: "來源" },
+    { fieldKey: "eventKind", headerLabel: "事件類型" },
+    { fieldKey: "summary", headerLabel: "摘要" },
+  ],
+};
+
+const cmdSetup = async (argv) => {
+  const applyConfig = hasFlag(argv, "--apply-config");
+  const eventType = resolveEventType(argv);
+  const table = takeFlag(argv, "--table") || DEFAULT_TABLE[eventType];
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) {
+    throw new Error(`表名不合法: ${table}`);
+  }
+
+  await db.query(CREATE_SQL[eventType](table));
   await db.query(
     `CREATE INDEX IF NOT EXISTS ${quoteIdent(`idx_${table}_pushed_at`)}
      ON ${quoteIdent(table)} (pushed_at DESC)`,
   );
-  console.log(`✓ 目標表 ${table} @ ${config.database.host}:${config.database.port}/${config.database.database}`);
+  console.log(
+    `✓ [${eventType}] 目標表 ${table} @ ${config.database.host}:${config.database.port}/${config.database.database}`,
+  );
 
   if (!applyConfig) return;
 
   await externalSyncService.upsertConfig({
-    eventType: "access_control",
+    eventType,
     pushTime: "23:59",
     dbType: "postgres",
     host: config.database.host,
@@ -108,21 +188,18 @@ const cmdSetup = async (argv) => {
     username: config.database.user,
     password: config.database.password,
     targetTable: table,
-    mappings: DEFAULT_MAPPINGS,
+    mappings: MAPPINGS[eventType],
   });
   await db.query(
     `UPDATE external_sync_configs
      SET cursor_ts = NULL, cursor_event_id = NULL
-     WHERE event_type = 'access_control'`,
+     WHERE event_type = ?`,
+    [eventType],
   );
-  console.log("✓ 已寫入對接設定（cursor 已清空）");
+  console.log(`✓ [${eventType}] 已寫入對接設定（cursor 已清空）`);
 };
 
-const cmdSeed = async (argv) => {
-  const raw = takeFlag(argv, "--count");
-  const n = Number(raw);
-  const count = Number.isFinite(n) && n > 0 ? Math.min(Math.trunc(n), 50) : 3;
-
+const cmdSeedAccess = async (count) => {
   let groupId;
   const existingGroup = await db.query(
     "SELECT id FROM person_groups WHERE name = ? LIMIT 1",
@@ -175,25 +252,81 @@ const cmdSeed = async (argv) => {
     );
   }
 
-  console.log(`✓ 群組 id=${groupId}；已種子 ${count} 人／事件（${EMPLOYEE_PREFIX}*）`);
-  return groupId;
+  console.log(`✓ [access_control] 群組 id=${groupId}；已種子 ${count} 人／事件`);
+  return { groupId };
+};
+
+const cmdSeedEnergy = async (count) => {
+  const devices = await db.query("SELECT id, name FROM devices ORDER BY id ASC LIMIT 1");
+  const device = devices?.[0];
+  if (!device?.id) {
+    throw new Error("庫中無 devices，無法種子 energy_readings。請先建立至少一台設備。");
+  }
+  for (let i = 1; i <= count; i += 1) {
+    await db.query(
+      `INSERT INTO energy_readings (device_id, recorded_at, data)
+       VALUES (?, CURRENT_TIMESTAMP, ?::jsonb)`,
+      [
+        device.id,
+        JSON.stringify({
+          kwh: 100 + i,
+          source: "BA_EXPORT_TEST",
+          seq: i,
+        }),
+      ],
+    );
+  }
+  console.log(`✓ [energy] device_id=${device.id}；已種子 ${count} 筆 energy_readings`);
+  return { deviceId: Number(device.id) };
+};
+
+const cmdSeedOperational = async (count) => {
+  for (let i = 1; i <= count; i += 1) {
+    await db.query(
+      `INSERT INTO operational_events (
+         occurred_at, source, event_kind, summary, payload
+       ) VALUES (
+         CURRENT_TIMESTAMP, 'system', 'control_write', ?, ?::jsonb
+       )`,
+      [
+        `BA_EXPORT_TEST operational #${i}`,
+        JSON.stringify({ source: "BA_EXPORT_TEST", seq: i }),
+      ],
+    );
+  }
+  console.log(`✓ [operational] 已種子 ${count} 筆 operational_events`);
+  return {};
+};
+
+const cmdSeed = async (argv) => {
+  const eventType = resolveEventType(argv);
+  const raw = takeFlag(argv, "--count");
+  const n = Number(raw);
+  const count = Number.isFinite(n) && n > 0 ? Math.min(Math.trunc(n), 50) : 3;
+  if (eventType === "energy") return cmdSeedEnergy(count);
+  if (eventType === "operational") return cmdSeedOperational(count);
+  return cmdSeedAccess(count);
 };
 
 const cmdSync = async (argv) => {
+  const eventType = resolveEventType(argv);
   const resetCursor = hasFlag(argv, "--reset-cursor");
   const verify = hasFlag(argv, "--verify");
 
   const cfgRows = await db.query(
     `SELECT id, host, port, database_name, target_table, cursor_ts, cursor_event_id, password_enc, username
-     FROM external_sync_configs WHERE event_type = 'access_control' LIMIT 1`,
+     FROM external_sync_configs WHERE event_type = ? LIMIT 1`,
+    [eventType],
   );
   const cfg = cfgRows?.[0];
   if (!cfg) {
-    throw new Error("尚未設定對接。請先: npm run test:data-export -- setup --apply-config");
+    throw new Error(
+      `尚未設定對接（${eventType}）。請先: npm run test:data-export -- setup --apply-config --event-type ${eventType}`,
+    );
   }
 
   console.log(
-    `設定: ${cfg.host}:${cfg.port}/${cfg.database_name} → ${cfg.target_table} (cursor=${cfg.cursor_ts || "null"}, eventId=${cfg.cursor_event_id ?? "null"})`,
+    `[${eventType}] ${cfg.host}:${cfg.port}/${cfg.database_name} → ${cfg.target_table} (cursor=${cfg.cursor_ts || "null"}, eventId=${cfg.cursor_event_id ?? "null"})`,
   );
 
   if (resetCursor) {
@@ -204,7 +337,7 @@ const cmdSync = async (argv) => {
     console.log("✓ 已清空 cursor");
   }
 
-  const result = await externalSyncService.runExternalSyncOnce();
+  const result = await externalSyncService.runExternalSyncOnce(eventType);
   console.log("結果:", result);
 
   if (!verify) return result;
@@ -252,40 +385,44 @@ const cmdSync = async (argv) => {
 };
 
 const cmdExport = async (argv) => {
+  const eventType = resolveEventType(argv);
   const ruleIdArg = takeFlag(argv, "--rule-id");
   const groupIdArg = takeFlag(argv, "--group-id");
-  const dir = takeFlag(argv, "--dir") || DEFAULT_EXPORT_DIR;
+  const dir = takeFlag(argv, "--dir") || path.join(DEFAULT_EXPORT_DIR, eventType);
 
   let ruleId = Number(ruleIdArg);
   if (!Number.isFinite(ruleId) || ruleId <= 0) {
-    const groupId = Number(groupIdArg);
-    if (!Number.isFinite(groupId) || groupId <= 0) {
-      throw new Error("請提供 --rule-id 或 --group-id");
-    }
     fs.mkdirSync(dir, { recursive: true });
+    const ruleName = TEST_RULE_NAME[eventType];
+    const filter =
+      eventType === "access_control"
+        ? (() => {
+            const groupId = Number(groupIdArg);
+            if (!Number.isFinite(groupId) || groupId <= 0) {
+              throw new Error("門禁轉存請提供 --rule-id 或 --group-id");
+            }
+            return { groupIds: [groupId] };
+          })()
+        : {};
+
     const payload = {
-      name: TEST_RULE_NAME,
-      description: "腳本測試規則",
-      filenamePrefix: "BaExportTest",
+      eventType,
+      name: ruleName,
+      description: `腳本測試規則 (${eventType})`,
+      filenamePrefix: `BaExportTest_${eventType}`,
       dateFormat: "yyyyMMdd",
       timeFormat: "HHmmss",
       outputFormat: "csv",
       exportTime: "23:59",
       storageType: "local",
       localDir: dir,
-      groupIds: [groupId],
-      fields: [
-        { fieldKey: "employeeId", headerLabel: "員工ID" },
-        { fieldKey: "personName", headerLabel: "姓名" },
-        { fieldKey: "personGroup", headerLabel: "群組" },
-        { fieldKey: "deviceName", headerLabel: "出入口" },
-        { fieldKey: "eventDateTime", headerLabel: "進出時間", format: "yyyy-MM-dd HH:mm:ss" },
-        { fieldKey: "cardNo", headerLabel: "卡號" },
-      ],
+      filter,
+      groupIds: Array.isArray(filter.groupIds) ? filter.groupIds : [],
+      fields: EXPORT_FIELDS[eventType],
     };
     const existing = await db.query(
       "SELECT id FROM record_export_rules WHERE name = ? LIMIT 1",
-      [TEST_RULE_NAME],
+      [ruleName],
     );
     if (existing?.[0]?.id) {
       ruleId = Number(existing[0].id);
@@ -294,7 +431,7 @@ const cmdExport = async (argv) => {
       const created = await recordExportService.upsertRule(null, payload);
       ruleId = Number(created.id);
     }
-    console.log(`✓ 測試規則 id=${ruleId} → ${dir}`);
+    console.log(`✓ [${eventType}] 測試規則 id=${ruleId} → ${dir}`);
   }
 
   const result = await recordExportService.runRecordExportRule(ruleId);
@@ -313,16 +450,41 @@ const cmdExport = async (argv) => {
   return result;
 };
 
+const smokeEventType = async (eventType) => {
+  console.log(`\n=== 煙測 ${eventType} ===`);
+  await cmdSetup(["--apply-config", "--event-type", eventType]);
+  await cmdSeed(["--count", "2", "--event-type", eventType]);
+  await cmdSync(["--reset-cursor", "--verify", "--event-type", eventType]);
+  await cmdExport(["--event-type", eventType]);
+};
+
 const cmdAll = async () => {
   console.log("=== 資料匯出一鍵測試 ===");
-  await cmdSetup(["--apply-config"]);
-  const groupId = await cmdSeed(["--count", "3"]);
-  await cmdSync(["--reset-cursor", "--verify"]);
-  await cmdExport(["--group-id", String(groupId)]);
+  await cmdSetup(["--apply-config", "--event-type", "access_control"]);
+  const seeded = await cmdSeed(["--count", "3", "--event-type", "access_control"]);
+  await cmdSync(["--reset-cursor", "--verify", "--event-type", "access_control"]);
+  await cmdExport([
+    "--event-type",
+    "access_control",
+    "--group-id",
+    String(seeded.groupId),
+  ]);
+
+  try {
+    await smokeEventType("energy");
+  } catch (e) {
+    console.warn(`⚠ energy 煙測略過／失敗: ${e?.message || e}`);
+  }
+  try {
+    await smokeEventType("operational");
+  } catch (e) {
+    console.warn(`⚠ operational 煙測略過／失敗: ${e?.message || e}`);
+  }
+
   console.log(`
 === 完成 ===
-目標表: ${DEFAULT_TABLE}
-CSV:    ${DEFAULT_EXPORT_DIR}
+門禁目標表: ${DEFAULT_TABLE.access_control}
+CSV 根目錄: ${DEFAULT_EXPORT_DIR}
 `);
 };
 

@@ -228,6 +228,10 @@ async function listEvents(filters = {}) {
   };
 }
 
+/**
+ * @deprecated 營運事件改由備份雙層保留冷刪（BACKUP_ONLINE_RETENTION_DAYS）。
+ * 保留函式供手動／相容呼叫；日常排程已停用。
+ */
 async function purgeExpiredEvents(retentionDays) {
   const days =
     toIntOrNull(retentionDays) ??
@@ -241,7 +245,10 @@ async function purgeExpiredEvents(retentionDays) {
   );
   const deleted = result?.rowCount ?? 0;
   if (deleted > 0) {
-    opLogger.info("營運事件過期清理完成", { deleted, retentionDays: safeDays });
+    opLogger.info("營運事件過期清理完成（deprecated 直刪）", {
+      deleted,
+      retentionDays: safeDays,
+    });
   }
   return { deleted, retentionDays: safeDays };
 }

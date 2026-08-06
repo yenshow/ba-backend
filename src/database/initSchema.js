@@ -1231,12 +1231,14 @@ async function initSchema() {
 
     schemaLogger.info("system_settings 表已建立", { module: "initSchema" });
 
-    // ========== 外部整合：資料庫對接 / 記錄轉存（第一版：access_control） ==========
+    // ========== 外部整合：資料庫對接 / 記錄轉存 ==========
 
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS external_sync_configs (
         id SERIAL PRIMARY KEY,
-        event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN ('access_control')),
+        event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN (
+          'access_control','energy','operational','vehicle','people_counting','alerts','environment'
+        )),
         push_time TIME NOT NULL,
         db_type VARCHAR(16) NOT NULL CHECK (db_type IN ('postgres','sqlserver','mysql')),
         host TEXT NOT NULL,
@@ -1307,7 +1309,9 @@ async function initSchema() {
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS record_export_rules (
         id SERIAL PRIMARY KEY,
-        event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN ('access_control')),
+        event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN (
+          'access_control','energy','operational','vehicle','people_counting','alerts','environment'
+        )),
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         name TEXT NOT NULL,
         description TEXT,
@@ -1323,6 +1327,7 @@ async function initSchema() {
         sftp_username TEXT,
         sftp_password_enc TEXT,
         sftp_remote_dir TEXT,
+        filter_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       )

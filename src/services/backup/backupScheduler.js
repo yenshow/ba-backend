@@ -31,6 +31,13 @@ const {
 const {
   transformLadderSdkEventsToReportFormat,
 } = require("./ladderSdkEventsReportFormat");
+const {
+  transformEnergyReadingsToReportFormat,
+} = require("./energyReadingsReportFormat");
+const {
+  transformOperationalEventsToReportFormat,
+} = require("./operationalEventsReportFormat");
+const energyReadingsService = require("../energy/energyReadingsService");
 const logger = require("../../utils/logger");
 const {
   peopleCounting: yscpPeopleFeature,
@@ -301,6 +308,41 @@ async function runBackup() {
       );
     }
 
+    let energyResult = { skipped: true };
+    if (effectiveFeaturesCache.hasCachedLicensedFeature("energy")) {
+      const energyDelete = buildDeleteSql("energy_readings", "recorded_at");
+      energyResult = await runBackupJob("能源讀數", async () =>
+        backupService.backupTableDual({
+          tableName: "energy_readings",
+          rows: await energyReadingsService.getReadingsForBackup(
+            archiveBeforeDate,
+          ),
+          dateField: "recorded_at",
+          category: "energyReadings",
+          csvTransform: transformEnergyReadingsToReportFormat,
+          selectColdTimestampsSql: `SELECT recorded_at FROM energy_readings WHERE recorded_at < $1`,
+          selectColdParams: [deleteBeforeDate],
+          ...energyDelete,
+        }),
+      );
+    }
+
+    const opDelete = buildDeleteSql("operational_events", "occurred_at");
+    const operationalResult = await runBackupJob("營運事件", async () =>
+      backupService.backupTableDual({
+        tableName: "operational_events",
+        rows: await backupService.getOperationalEventsForBackup(
+          archiveBeforeDate,
+        ),
+        dateField: "occurred_at",
+        category: "operationalEvents",
+        csvTransform: transformOperationalEventsToReportFormat,
+        selectColdTimestampsSql: `SELECT occurred_at FROM operational_events WHERE occurred_at < $1`,
+        selectColdParams: [deleteBeforeDate],
+        ...opDelete,
+      }),
+    );
+
     const { backed, deleted } = sumCounts(
       envResult,
       alertResult,
@@ -310,6 +352,8 @@ async function runBackup() {
       vehicleYscpResult,
       vehicleIsapiResult,
       ladderResult,
+      energyResult,
+      operationalResult,
     );
 
     const results = {
@@ -321,6 +365,8 @@ async function runBackup() {
       vehicle_passageway_logs: vehicleYscpResult,
       vehicle_passageway_logs_isapi: vehicleIsapiResult,
       ladder_sdk_events: ladderResult,
+      energy_readings: energyResult,
+      operational_events: operationalResult,
     };
 
     const noopBackup = backed === 0 && deleted === 0;

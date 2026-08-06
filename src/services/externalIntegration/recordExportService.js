@@ -6,13 +6,7 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
-const {
-  getAccessControlFieldByKey,
-  mapAccessControlEventToFieldValue,
-  fetchAccessControlEventsForGroups,
-} = require("./accessControlFields");
-
-const EVENT_TYPE_ACCESS_CONTROL = "access_control";
+const { getAdapter, requireEventType } = require("./eventTypeRegistry");
 
 const CSV_BOM = "\uFEFF";
 
@@ -33,28 +27,22 @@ function requireTimeHHmm(value, name) {
 }
 
 function normalizeOutputFormat(raw) {
-  const v = String(raw ?? "").trim().toLowerCase();
-  return v === "txt" ? "txt" : "csv";
+  return String(raw ?? "").trim().toLowerCase() === "txt" ? "txt" : "csv";
 }
 
 function normalizeStorageType(raw) {
-  const v = String(raw ?? "").trim().toLowerCase();
-  return v === "sftp" ? "sftp" : "local";
+  return String(raw ?? "").trim().toLowerCase() === "sftp" ? "sftp" : "local";
 }
 
 function safeCsvCell(value) {
   const s = value == null ? "" : String(value);
-  if (/[",\r\n]/.test(s)) {
-    return `"${s.replaceAll("\"", "\"\"")}"`;
-  }
+  if (/[",\r\n]/.test(s)) return `"${s.replaceAll("\"", "\"\"")}"`;
   return s;
 }
 
 function rowsToCsv(headers, rows) {
   let out = CSV_BOM + headers.map(safeCsvCell).join(",") + "\n";
-  for (const r of rows) {
-    out += r.map(safeCsvCell).join(",") + "\n";
-  }
+  for (const r of rows) out += r.map(safeCsvCell).join(",") + "\n";
   return out;
 }
 
@@ -64,11 +52,30 @@ function rowsToTxt(headers, rows) {
   return [head, ...lines].join("\n") + "\n";
 }
 
-async function listRules() {
-  const rules = await db.query(
-    "SELECT * FROM record_export_rules WHERE event_type = ? ORDER BY id DESC",
-    [EVENT_TYPE_ACCESS_CONTROL],
-  );
+function parseFilterJson(raw) {
+  if (raw == null) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+async function listRules(eventType) {
+  const params = [];
+  let sql = "SELECT * FROM record_export_rules";
+  if (eventType) {
+    const type = requireEventType(eventType);
+    sql += " WHERE event_type = ?";
+    params.push(type);
+  }
+  sql += " ORDER BY id DESC";
+  const rules = await db.query(sql, params);
   if (!rules?.length) return [];
 
   const ruleIds = rules.map((r) => r.id);
@@ -101,33 +108,50 @@ async function listRules() {
     });
   }
 
-  return rules.map((r) => ({
-    id: r.id,
-    name: r.name,
-    description: r.description ?? "",
-    filenamePrefix: r.filename_prefix,
-    dateFormat: r.date_format,
-    timeFormat: r.time_format,
-    outputFormat: r.output_format,
-    exportTime: String(r.export_time).slice(0, 5),
-    storageType: r.storage_type,
-    localDir: r.local_dir ?? "",
-    sftp: r.storage_type === "sftp"
-      ? {
-          host: r.sftp_host ?? "",
-          port: r.sftp_port ?? 22,
-          username: r.sftp_username ?? "",
-          remoteDir: r.sftp_remote_dir ?? "",
-        }
-      : null,
-    groupIds: groupIdsByRule.get(r.id) ?? [],
-    fields: fieldsByRule.get(r.id) ?? [],
-  }));
+  return rules.map((r) => {
+    const filter = parseFilterJson(r.filter_json);
+    const legacyGroups = groupIdsByRule.get(r.id) ?? [];
+    if (
+      r.event_type === "access_control" &&
+      (!Array.isArray(filter.groupIds) || filter.groupIds.length === 0) &&
+      legacyGroups.length
+    ) {
+      filter.groupIds = legacyGroups;
+    }
+    return {
+      id: r.id,
+      eventType: r.event_type,
+      name: r.name,
+      description: r.description ?? "",
+      filenamePrefix: r.filename_prefix,
+      dateFormat: r.date_format,
+      timeFormat: r.time_format,
+      outputFormat: r.output_format,
+      exportTime: String(r.export_time).slice(0, 5),
+      storageType: r.storage_type,
+      localDir: r.local_dir ?? "",
+      sftp:
+        r.storage_type === "sftp"
+          ? {
+              host: r.sftp_host ?? "",
+              port: r.sftp_port ?? 22,
+              username: r.sftp_username ?? "",
+              remoteDir: r.sftp_remote_dir ?? "",
+            }
+          : null,
+      filter,
+      groupIds: filter.groupIds || legacyGroups,
+      fields: fieldsByRule.get(r.id) ?? [],
+    };
+  });
 }
 
 function validateRulePayload(payload, options = {}) {
   const ruleId = options.ruleId ? Number(options.ruleId) : null;
   const isUpdate = Number.isFinite(ruleId) && ruleId > 0;
+  const eventType = requireEventType(payload.eventType || "access_control");
+  const adapter = getAdapter(eventType);
+
   const name = requireNonEmpty(payload.name, "規則名稱");
   const filenamePrefix = requireNonEmpty(payload.filenamePrefix, "檔案名稱前綴");
   const dateFormat = requireNonEmpty(payload.dateFormat, "檔名日期格式");
@@ -136,12 +160,13 @@ function validateRulePayload(payload, options = {}) {
   const outputFormat = normalizeOutputFormat(payload.outputFormat);
   const storageType = normalizeStorageType(payload.storageType);
 
-  const groupIds = Array.isArray(payload.groupIds)
-    ? payload.groupIds.map((v) => Number(v)).filter((n) => Number.isFinite(n) && n > 0)
-    : [];
-  if (groupIds.length === 0) {
-    throwApiError(C.VALIDATION_CUSTOM, "部門（人員群組）至少需選擇一項", { statusCode: 400 });
-  }
+  const rawFilter =
+    payload.filter && typeof payload.filter === "object"
+      ? payload.filter
+      : payload.groupIds
+        ? { groupIds: payload.groupIds }
+        : {};
+  const filter = adapter.validateFilter(rawFilter);
 
   const fields = Array.isArray(payload.fields) ? payload.fields : [];
   if (fields.length === 0) {
@@ -149,7 +174,7 @@ function validateRulePayload(payload, options = {}) {
   }
   for (const f of fields) {
     const fieldKey = String(f?.fieldKey ?? "").trim();
-    const catalog = getAccessControlFieldByKey(fieldKey);
+    const catalog = adapter.getFieldByKey(fieldKey);
     if (!catalog) {
       throwApiError(C.VALIDATION_CUSTOM, `不支援的欄位: ${fieldKey}`, { statusCode: 400 });
     }
@@ -180,6 +205,7 @@ function validateRulePayload(payload, options = {}) {
   }
 
   return {
+    eventType,
     name,
     description: String(payload.description ?? ""),
     enabled: payload.enabled !== false,
@@ -191,7 +217,7 @@ function validateRulePayload(payload, options = {}) {
     storageType,
     localDir,
     sftp,
-    groupIds,
+    filter,
     fields,
   };
 }
@@ -215,8 +241,9 @@ async function upsertRule(ruleId, payload) {
     }
   }
 
-  return await db.transaction(async (q) => {
+  return db.transaction(async (q) => {
     const params = [
+      normalized.eventType,
       normalized.name,
       normalized.description || null,
       normalized.enabled,
@@ -232,15 +259,16 @@ async function upsertRule(ruleId, payload) {
       normalized.storageType === "sftp" ? normalized.sftp.username : null,
       normalized.storageType === "sftp" ? sftpPasswordEnc : null,
       normalized.storageType === "sftp" ? normalized.sftp.remoteDir : null,
+      JSON.stringify(normalized.filter || {}),
     ];
 
     if (!id) {
       const rows = await q(
         `
           INSERT INTO record_export_rules
-            (event_type, name, description, enabled, filename_prefix, date_format, time_format, output_format, export_time, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir)
+            (event_type, name, description, enabled, filename_prefix, date_format, time_format, output_format, export_time, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
           VALUES
-            ('access_control', ?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
           RETURNING id
         `,
         params,
@@ -251,8 +279,9 @@ async function upsertRule(ruleId, payload) {
       await q(
         `
           UPDATE record_export_rules
-          SET name = ?, description = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, export_time = ?::time,
-              storage_type = ?, local_dir = ?, sftp_host = ?, sftp_port = ?, sftp_username = ?, sftp_password_enc = ?, sftp_remote_dir = ?, updated_at = CURRENT_TIMESTAMP
+          SET event_type = ?, name = ?, description = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, export_time = ?::time,
+              storage_type = ?, local_dir = ?, sftp_host = ?, sftp_port = ?, sftp_username = ?, sftp_password_enc = ?, sftp_remote_dir = ?,
+              filter_json = ?::jsonb, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `,
         params,
@@ -263,25 +292,14 @@ async function upsertRule(ruleId, payload) {
       throwApiError(C.INTERNAL_ERROR, "儲存規則失敗", { statusCode: 500 });
     }
 
-    await q("DELETE FROM record_export_rule_groups WHERE rule_id = ?", [id]);
-    for (const gid of normalized.groupIds) {
-      await q(
-        "INSERT INTO record_export_rule_groups (rule_id, group_id) VALUES (?, ?) ON CONFLICT (rule_id, group_id) DO NOTHING",
-        [id, gid],
-      );
-    }
-
     await q("DELETE FROM record_export_field_mappings WHERE rule_id = ?", [id]);
     let sortOrder = 0;
     for (const f of normalized.fields) {
       sortOrder += 1;
       await q(
-        `
-          INSERT INTO record_export_field_mappings
-            (rule_id, field_key, header_label, format, sort_order)
-          VALUES
-            (?, ?, ?, ?, ?)
-        `,
+        `INSERT INTO record_export_field_mappings
+           (rule_id, field_key, header_label, format, sort_order)
+         VALUES (?, ?, ?, ?, ?)`,
         [
           id,
           String(f.fieldKey).trim(),
@@ -351,8 +369,7 @@ async function writeRuleOutputSftp(rule, filename, content, password) {
       let i = 1;
       while (true) {
         const next = `${parsed.dir}/${parsed.name}_${i}${parsed.ext}`;
-        const nextExists = await client.exists(next);
-        if (!nextExists) {
+        if (!(await client.exists(next))) {
           await client.put(Buffer.from(content, "utf8"), next);
           return next;
         }
@@ -382,11 +399,15 @@ async function runRecordExportRule(ruleId) {
   const rule = rules?.[0];
   if (!rule || !rule.enabled) return { skipped: true };
 
-  const groupRows = await db.query(
-    "SELECT group_id FROM record_export_rule_groups WHERE rule_id = ?",
-    [ruleId],
-  );
-  const groupIds = (groupRows || []).map((r) => r.group_id).filter(Boolean);
+  const adapter = getAdapter(rule.event_type);
+  let filter = parseFilterJson(rule.filter_json);
+  if (rule.event_type === "access_control" && !filter.groupIds?.length) {
+    const groupRows = await db.query(
+      "SELECT group_id FROM record_export_rule_groups WHERE rule_id = ?",
+      [ruleId],
+    );
+    filter = { groupIds: (groupRows || []).map((r) => r.group_id).filter(Boolean) };
+  }
 
   const fieldRows = await db.query(
     "SELECT field_key, header_label, format FROM record_export_field_mappings WHERE rule_id = ? ORDER BY sort_order ASC, id ASC",
@@ -412,15 +433,17 @@ async function runRecordExportRule(ruleId) {
   const logId = logRows?.[0]?.id;
 
   try {
-    const events = await fetchAccessControlEventsForGroups({
-      groupIds,
+    const events = await adapter.fetchForExport({
+      filter,
       startTime: startTime.toJSDate(),
       endTime: endTime.toJSDate(),
     });
 
-    const headers = fieldConfigs.map((f) => f.headerLabel || getAccessControlFieldByKey(f.fieldKey)?.label || f.fieldKey);
+    const headers = fieldConfigs.map(
+      (f) => f.headerLabel || adapter.getFieldByKey(f.fieldKey)?.label || f.fieldKey,
+    );
     const rows = events.map((evt) =>
-      fieldConfigs.map((f) => mapAccessControlEventToFieldValue(evt, f.fieldKey, f)),
+      fieldConfigs.map((f) => adapter.mapValue(evt, f.fieldKey, f)),
     );
 
     const content =
@@ -455,4 +478,3 @@ module.exports = {
   deleteRule,
   runRecordExportRule,
 };
-

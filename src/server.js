@@ -72,9 +72,6 @@ const externalIntegrationSchedulers = require("./services/externalIntegration/ex
 const {
   startAlertDailyRolloverScheduler,
 } = require("./services/alerts/alertRolloverScheduler");
-const {
-  startOperationalEventRetentionScheduler,
-} = require("./services/operationalEvents/operationalEventRetentionScheduler");
 
 const app = express();
 
@@ -309,9 +306,6 @@ async function startServer() {
 
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
-
-    global.__operationalEventRetentionStop =
-      startOperationalEventRetentionScheduler();
 
     global.__externalSyncHandle = externalIntegrationSchedulers.startExternalSync();
     global.__recordExportHandle = externalIntegrationSchedulers.startRecordExport();

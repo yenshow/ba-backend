@@ -1,5 +1,6 @@
 /**
- * 營運事件保留天數清理排程（預設每日 Asia/Taipei 00:10）
+ * @deprecated 營運事件冷刪已併入備份排程（BACKUP_ONLINE_RETENTION_DAYS）。
+ * 此排程不再由 server.js 啟動；保留檔案僅供相容。
  */
 const { DateTime } = require("luxon");
 const logger = require("../../utils/logger");
@@ -41,10 +42,10 @@ function scheduleNextPurge() {
 }
 
 function startOperationalEventRetentionScheduler() {
-  scheduleNextPurge();
-  retentionLogger.info("營運事件保留清理排程已啟用", {
-    retentionDays: config.operationalEvents?.retentionDays ?? 90,
-  });
+  retentionLogger.warn(
+    "startOperationalEventRetentionScheduler 已棄用：請改用備份雙層保留，未啟動清理排程",
+    { retentionDays: config.operationalEvents?.retentionDays ?? 90 },
+  );
   return stopOperationalEventRetentionScheduler;
 }
 

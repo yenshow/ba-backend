@@ -97,21 +97,34 @@ function startExternalSync() {
     logger: externalSyncLogger,
     loadJobs: async () => {
       const rows = await db.query(
-        "SELECT push_time FROM external_sync_configs WHERE event_type = 'access_control' LIMIT 1",
+        "SELECT event_type, push_time FROM external_sync_configs ORDER BY id ASC",
         [],
       );
-      const pushTime = rows?.[0]?.push_time ? String(rows[0].push_time).slice(0, 5) : null;
-      if (!pushTime) return [];
+      if (!rows?.length) return [];
 
-      return [
-        {
-          key: "external-sync",
-          timeHHmm: pushTime,
-          run: async () => {
-            await runExternalSyncOnce();
-          },
+      const byTime = new Map();
+      for (const row of rows) {
+        const time = String(row.push_time).slice(0, 5);
+        if (!byTime.has(time)) byTime.set(time, []);
+        byTime.get(time).push(row.event_type);
+      }
+
+      return [...byTime.entries()].map(([timeHHmm, eventTypes]) => ({
+        key: `external-sync-${timeHHmm}`,
+        timeHHmm,
+        run: async () => {
+          for (const eventType of eventTypes) {
+            try {
+              await runExternalSyncOnce(eventType);
+            } catch (err) {
+              externalSyncLogger.warn("資料庫對接執行失敗", {
+                eventType,
+                error: err?.message || String(err),
+              });
+            }
+          }
         },
-      ];
+      }));
     },
   });
 
@@ -124,7 +137,7 @@ function startRecordExport() {
     logger: recordExportLogger,
     loadJobs: async () => {
       const rules = await db.query(
-        "SELECT id, export_time FROM record_export_rules WHERE enabled = TRUE AND event_type = 'access_control' ORDER BY id ASC",
+        "SELECT id, export_time FROM record_export_rules WHERE enabled = TRUE ORDER BY id ASC",
         [],
       );
       if (!rules?.length) return [];

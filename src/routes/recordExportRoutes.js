@@ -5,35 +5,65 @@ const { validateRequired, validateIntegers } = require("../middleware/validation
 const C = require("../utils/apiErrorCodes");
 const { throwApiError } = require("../utils/apiErrors");
 const recordExportService = require("../services/externalIntegration/recordExportService");
-const { ACCESS_CONTROL_FIELD_CATALOG } = require("../services/externalIntegration/accessControlFields");
+const {
+  getAdapter,
+  isValidEventType,
+  listEventTypes,
+} = require("../services/externalIntegration/eventTypeRegistry");
 
 const router = express.Router();
 
 router.use(authenticate, requireAdmin);
 
-/**
- * GET /api/record-export/rules?eventType=access_control
- */
 router.get(
-  "/rules",
-  asyncHandler(async (req, res) => {
-    const eventType = String(req.query?.eventType ?? "access_control").trim();
-    if (eventType !== "access_control") {
-      throwApiError(C.VALIDATION_CUSTOM, "目前僅支援 access_control", {
-        statusCode: 400,
-      });
-    }
-    const rules = await recordExportService.listRules();
-    res.sendSuccess({ rules, fields: ACCESS_CONTROL_FIELD_CATALOG });
+  "/event-types",
+  asyncHandler(async (_req, res) => {
+    res.sendSuccess({ eventTypes: listEventTypes() });
   }),
 );
 
 /**
- * POST /api/record-export/rules
+ * GET /api/record-export/rules?eventType=
  */
+router.get(
+  "/rules",
+  asyncHandler(async (req, res) => {
+    const raw = req.query?.eventType;
+    let eventType = null;
+    let fields = [];
+    let filterSchema = null;
+    if (raw != null && String(raw).trim() !== "") {
+      eventType = String(raw).trim();
+      if (!isValidEventType(eventType)) {
+        throwApiError(C.VALIDATION_CUSTOM, "不支援的 eventType", { statusCode: 400 });
+      }
+      const adapter = getAdapter(eventType);
+      fields = adapter.catalog;
+      filterSchema = adapter.filterSchema;
+    }
+    const rules = await recordExportService.listRules(eventType || undefined);
+    res.sendSuccess({
+      rules,
+      fields,
+      filterSchema,
+      eventTypes: listEventTypes(),
+    });
+  }),
+);
+
 router.post(
   "/rules",
-  validateRequired("name", "filenamePrefix", "dateFormat", "timeFormat", "exportTime", "storageType", "outputFormat", "groupIds", "fields"),
+  validateRequired(
+    "name",
+    "eventType",
+    "filenamePrefix",
+    "dateFormat",
+    "timeFormat",
+    "exportTime",
+    "storageType",
+    "outputFormat",
+    "fields",
+  ),
   asyncHandler(async (req, res) => {
     const saved = await recordExportService.upsertRule(null, req.body || {});
     if (global.__recordExportHandle?.reschedule) {
@@ -43,15 +73,25 @@ router.post(
   }),
 );
 
-/**
- * PUT /api/record-export/rules/:id
- */
 router.put(
   "/rules/:id",
   validateIntegers("id"),
-  validateRequired("name", "filenamePrefix", "dateFormat", "timeFormat", "exportTime", "storageType", "outputFormat", "groupIds", "fields"),
+  validateRequired(
+    "name",
+    "eventType",
+    "filenamePrefix",
+    "dateFormat",
+    "timeFormat",
+    "exportTime",
+    "storageType",
+    "outputFormat",
+    "fields",
+  ),
   asyncHandler(async (req, res) => {
-    const saved = await recordExportService.upsertRule(Number(req.params.id), req.body || {});
+    const saved = await recordExportService.upsertRule(
+      Number(req.params.id),
+      req.body || {},
+    );
     if (global.__recordExportHandle?.reschedule) {
       global.__recordExportHandle.reschedule();
     }
@@ -59,9 +99,6 @@ router.put(
   }),
 );
 
-/**
- * DELETE /api/record-export/rules/:id
- */
 router.delete(
   "/rules/:id",
   validateIntegers("id"),
@@ -75,4 +112,3 @@ router.delete(
 );
 
 module.exports = router;
-

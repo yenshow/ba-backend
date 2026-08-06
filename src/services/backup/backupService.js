@@ -369,6 +369,25 @@ async function getLadderSdkEventsForBackup(beforeDate) {
   return rows || [];
 }
 
+async function getOperationalEventsForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT e.*,
+            d.name AS device_name,
+            l.name AS location_name,
+            z.name AS zone_name,
+            u.username AS actor_username
+     FROM operational_events e
+     LEFT JOIN devices d ON d.id = e.device_id
+     LEFT JOIN locations l ON l.id = e.location_id
+     LEFT JOIN zones z ON z.id = l.zone_id
+     LEFT JOIN users u ON u.id = e.actor_user_id
+     WHERE e.occurred_at < $1
+     ORDER BY e.occurred_at ASC`,
+    [beforeDate],
+  );
+  return rows || [];
+}
+
 module.exports = {
   backupTableDual,
   validateBackup,
@@ -378,4 +397,5 @@ module.exports = {
   getIsapiPeopleCountingEventsForBackup,
   getVehiclePassagewayForBackup,
   getLadderSdkEventsForBackup,
+  getOperationalEventsForBackup,
 };

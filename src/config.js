@@ -272,7 +272,9 @@ const ladderSdk = {
 };
 
 /**
- * 營運事件（線上保留天數）
+ * 營運事件保留（已棄用獨立直刪）
+ * 冷刪改由備份雙層保留（BACKUP_ONLINE_RETENTION_DAYS）；見 backupScheduler。
+ * OPERATIONAL_EVENTS_RETENTION_DAYS 僅相容讀取，不再驅動排程。
  */
 const operationalEvents = {
   retentionDays: toNumber(

@@ -66,10 +66,14 @@ async function createUpdatedAtTrigger(pool, tableName) {
 }
 
 async function ensureExternalIntegrationTables(pool) {
+  const EVENT_TYPE_CHECK = `(
+    'access_control','energy','operational','vehicle','people_counting','alerts','environment'
+  )`;
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_sync_configs (
       id SERIAL PRIMARY KEY,
-      event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN ('access_control')),
+      event_type VARCHAR(32) NOT NULL DEFAULT 'access_control',
       push_time TIME NOT NULL,
       db_type VARCHAR(16) NOT NULL CHECK (db_type IN ('postgres','sqlserver','mysql')),
       host TEXT NOT NULL,
@@ -88,6 +92,26 @@ async function ensureExternalIntegrationTables(pool) {
   await pool.query(`
     ALTER TABLE external_sync_configs
       ADD COLUMN IF NOT EXISTS cursor_event_id BIGINT
+  `);
+  await pool.query(`
+    DO $$
+    DECLARE cname text;
+    BEGIN
+      SELECT con.conname INTO cname
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      WHERE rel.relname = 'external_sync_configs'
+        AND con.contype = 'c'
+        AND pg_get_constraintdef(con.oid) ILIKE '%event_type%';
+      IF cname IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE external_sync_configs DROP CONSTRAINT %I', cname);
+      END IF;
+      ALTER TABLE external_sync_configs
+        ADD CONSTRAINT external_sync_configs_event_type_check
+        CHECK (event_type IN ${EVENT_TYPE_CHECK});
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END $$;
   `);
   await createUpdatedAtTrigger(pool, "external_sync_configs");
   await pool.query(`
@@ -135,7 +159,7 @@ async function ensureExternalIntegrationTables(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS record_export_rules (
       id SERIAL PRIMARY KEY,
-      event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN ('access_control')),
+      event_type VARCHAR(32) NOT NULL DEFAULT 'access_control',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       name TEXT NOT NULL,
       description TEXT,
@@ -151,9 +175,34 @@ async function ensureExternalIntegrationTables(pool) {
       sftp_username TEXT,
       sftp_password_enc TEXT,
       sftp_remote_dir TEXT,
+      filter_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
+  `);
+  await pool.query(`
+    ALTER TABLE record_export_rules
+      ADD COLUMN IF NOT EXISTS filter_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    DO $$
+    DECLARE cname text;
+    BEGIN
+      SELECT con.conname INTO cname
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      WHERE rel.relname = 'record_export_rules'
+        AND con.contype = 'c'
+        AND pg_get_constraintdef(con.oid) ILIKE '%event_type%';
+      IF cname IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE record_export_rules DROP CONSTRAINT %I', cname);
+      END IF;
+      ALTER TABLE record_export_rules
+        ADD CONSTRAINT record_export_rules_event_type_check
+        CHECK (event_type IN ${EVENT_TYPE_CHECK});
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END $$;
   `);
   await createUpdatedAtTrigger(pool, "record_export_rules");
   await pool.query(`
@@ -177,6 +226,28 @@ async function ensureExternalIntegrationTables(pool) {
     ON record_export_rule_groups(rule_id);
     CREATE INDEX IF NOT EXISTS idx_record_export_rule_groups_group
     ON record_export_rule_groups(group_id);
+  `);
+
+  // 遷移既有門禁規則群組 → filter_json.groupIds（須在 rule_groups 表建立後）
+  await pool.query(`
+    UPDATE record_export_rules r
+    SET filter_json = jsonb_build_object(
+      'groupIds',
+      COALESCE((
+        SELECT jsonb_agg(g.group_id ORDER BY g.group_id)
+        FROM record_export_rule_groups g
+        WHERE g.rule_id = r.id
+      ), '[]'::jsonb)
+    )
+    WHERE r.event_type = 'access_control'
+      AND (
+        r.filter_json IS NULL
+        OR r.filter_json = '{}'::jsonb
+        OR NOT (r.filter_json ? 'groupIds')
+      )
+      AND EXISTS (
+        SELECT 1 FROM record_export_rule_groups g WHERE g.rule_id = r.id
+      )
   `);
 
   await pool.query(`

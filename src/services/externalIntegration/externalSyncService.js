@@ -5,14 +5,7 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
-const {
-  ACCESS_CONTROL_FIELD_CATALOG,
-  getAccessControlFieldByKey,
-  mapAccessControlEventToFieldValue,
-  fetchAccessControlEventsAfterCursor,
-} = require("./accessControlFields");
-
-const EVENT_TYPE_ACCESS_CONTROL = "access_control";
+const { getAdapter, requireEventType, listEventTypes } = require("./eventTypeRegistry");
 
 function normalizeDbType(raw) {
   const v = String(raw ?? "").trim().toLowerCase();
@@ -31,9 +24,7 @@ function requireNonEmpty(value, name) {
 function requirePort(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 1 || n > 65535) {
-    throwApiError(C.VALIDATION_CUSTOM, "Port 必須為 1–65535", {
-      statusCode: 400,
-    });
+    throwApiError(C.VALIDATION_CUSTOM, "Port 必須為 1–65535", { statusCode: 400 });
   }
   return Math.trunc(n);
 }
@@ -41,21 +32,17 @@ function requirePort(value) {
 function requirePushTime(value) {
   const v = String(value ?? "").trim();
   if (!/^\d{2}:\d{2}$/.test(v)) {
-    throwApiError(C.VALIDATION_CUSTOM, "推播時間格式必須為 HH:mm", {
-      statusCode: 400,
-    });
+    throwApiError(C.VALIDATION_CUSTOM, "推播時間格式必須為 HH:mm", { statusCode: 400 });
   }
   return v;
 }
 
-function validateMappings(mappings) {
+function validateMappings(adapter, mappings) {
   if (!mappings || typeof mappings !== "object" || Array.isArray(mappings)) {
-    throwApiError(C.VALIDATION_CUSTOM, "mappings 必須為物件", {
-      statusCode: 400,
-    });
+    throwApiError(C.VALIDATION_CUSTOM, "mappings 必須為物件", { statusCode: 400 });
   }
 
-  for (const field of ACCESS_CONTROL_FIELD_CATALOG) {
+  for (const field of adapter.catalog) {
     if (!field.required) continue;
     const cfg = mappings[field.key];
     if (!cfg || typeof cfg !== "object") {
@@ -63,8 +50,7 @@ function validateMappings(mappings) {
         statusCode: 400,
       });
     }
-    const targetColumn = String(cfg.targetColumn ?? "").trim();
-    if (!targetColumn) {
+    if (!String(cfg.targetColumn ?? "").trim()) {
       throwApiError(C.VALIDATION_CUSTOM, `${field.label} 的第三方欄位名為必填`, {
         statusCode: 400,
       });
@@ -72,7 +58,7 @@ function validateMappings(mappings) {
   }
 
   for (const [fieldKey, cfg] of Object.entries(mappings)) {
-    const catalog = getAccessControlFieldByKey(fieldKey);
+    const catalog = adapter.getFieldByKey(fieldKey);
     if (!catalog) {
       throwApiError(C.VALIDATION_CUSTOM, `不支援的欄位: ${fieldKey}`, {
         statusCode: 400,
@@ -83,21 +69,17 @@ function validateMappings(mappings) {
         statusCode: 400,
       });
     }
-    const targetColumn = String(cfg.targetColumn ?? "").trim();
-    if (!targetColumn) {
+    if (!String(cfg.targetColumn ?? "").trim()) {
       throwApiError(
         C.VALIDATION_CUSTOM,
         `欄位「${catalog.label}」的第三方欄位名不可為空`,
         { statusCode: 400 },
       );
     }
-    if (catalog.requiresFormat) {
-      const fmt = String(cfg.format ?? "").trim();
-      if (!fmt) {
-        throwApiError(C.VALIDATION_CUSTOM, `欄位「${catalog.label}」必須設定格式`, {
-          statusCode: 400,
-        });
-      }
+    if (catalog.requiresFormat && !String(cfg.format ?? "").trim()) {
+      throwApiError(C.VALIDATION_CUSTOM, `欄位「${catalog.label}」必須設定格式`, {
+        statusCode: 400,
+      });
     }
   }
 }
@@ -140,24 +122,14 @@ async function connectExternalDb({ dbType, host, port, database, username, passw
     await pool.connect();
     return { type: "sqlserver", client: pool };
   }
-  const err = new Error(`不支援的 dbType: ${dbType}`);
-  err.code = "UNSUPPORTED_DB_TYPE";
-  throw err;
+  throw new Error(`不支援的 dbType: ${dbType}`);
 }
 
 async function closeExternalDb(conn) {
   if (!conn) return;
-  if (conn.type === "postgres") {
-    await conn.client.end().catch(() => {});
-    return;
-  }
-  if (conn.type === "mysql") {
-    await conn.client.end().catch(() => {});
-    return;
-  }
-  if (conn.type === "sqlserver") {
-    await conn.client.close().catch(() => {});
-  }
+  if (conn.type === "postgres") await conn.client.end().catch(() => {});
+  else if (conn.type === "mysql") await conn.client.end().catch(() => {});
+  else if (conn.type === "sqlserver") await conn.client.close().catch(() => {});
 }
 
 function buildInsertStatement(dbType, tableName, columns, rowCount) {
@@ -166,8 +138,7 @@ function buildInsertStatement(dbType, tableName, columns, rowCount) {
     const values = [];
     let idx = 1;
     for (let r = 0; r < rowCount; r += 1) {
-      const rowPlaceholders = columns.map(() => `$${idx++}`).join(", ");
-      values.push(`(${rowPlaceholders})`);
+      values.push(`(${columns.map(() => `$${idx++}`).join(", ")})`);
     }
     return { sql: `INSERT INTO ${tableName} (${cols}) VALUES ${values.join(", ")}` };
   }
@@ -175,8 +146,7 @@ function buildInsertStatement(dbType, tableName, columns, rowCount) {
     const cols = columns.map((c) => `\`${c.replaceAll("`", "``")}\``).join(", ");
     const values = [];
     for (let r = 0; r < rowCount; r += 1) {
-      const rowPlaceholders = columns.map(() => "?").join(", ");
-      values.push(`(${rowPlaceholders})`);
+      values.push(`(${columns.map(() => "?").join(", ")})`);
     }
     return { sql: `INSERT INTO ${tableName} (${cols}) VALUES ${values.join(", ")}` };
   }
@@ -185,8 +155,7 @@ function buildInsertStatement(dbType, tableName, columns, rowCount) {
     const values = [];
     let idx = 1;
     for (let r = 0; r < rowCount; r += 1) {
-      const rowPlaceholders = columns.map(() => `@p${idx++}`).join(", ");
-      values.push(`(${rowPlaceholders})`);
+      values.push(`(${columns.map(() => `@p${idx++}`).join(", ")})`);
     }
     return { sql: `INSERT INTO ${tableName} (${cols}) VALUES ${values.join(", ")}` };
   }
@@ -197,23 +166,17 @@ async function insertRows(conn, tableName, columns, rows) {
   if (!rows.length) return;
   const stmt = buildInsertStatement(conn.type, tableName, columns, rows.length);
   const flat = rows.flat();
-  if (conn.type === "postgres") {
-    await conn.client.query(stmt.sql, flat);
-    return;
-  }
-  if (conn.type === "mysql") {
-    await conn.client.query(stmt.sql, flat);
-    return;
-  }
-  if (conn.type === "sqlserver") {
+  if (conn.type === "postgres") await conn.client.query(stmt.sql, flat);
+  else if (conn.type === "mysql") await conn.client.query(stmt.sql, flat);
+  else {
     const request = conn.client.request();
     flat.forEach((v, i) => request.input(`p${i + 1}`, v));
     await request.query(stmt.sql);
   }
 }
 
-async function testExternalDbConnection({ dbType, host, port, database, username, password }) {
-  const conn = await connectExternalDb({ dbType, host, port, database, username, password });
+async function testExternalDbConnection(opts) {
+  const conn = await connectExternalDb(opts);
   try {
     if (conn.type === "postgres") await conn.client.query("SELECT 1");
     else if (conn.type === "mysql") await conn.client.query("SELECT 1");
@@ -223,19 +186,7 @@ async function testExternalDbConnection({ dbType, host, port, database, username
   }
 }
 
-async function getConfig() {
-  const rows = await db.query(
-    "SELECT * FROM external_sync_configs WHERE event_type = ? LIMIT 1",
-    [EVENT_TYPE_ACCESS_CONTROL],
-  );
-  const config = rows?.[0] ?? null;
-  if (!config) return null;
-
-  const mapRows = await db.query(
-    "SELECT field_key, target_column, format FROM external_sync_field_mappings WHERE config_id = ? ORDER BY id ASC",
-    [config.id],
-  );
-
+function mapConfigRow(config, mapRows) {
   const mappings = {};
   for (const r of mapRows || []) {
     mappings[r.field_key] = {
@@ -243,7 +194,6 @@ async function getConfig() {
       format: r.format ?? "",
     };
   }
-
   return {
     id: config.id,
     eventType: config.event_type,
@@ -260,7 +210,44 @@ async function getConfig() {
   };
 }
 
+async function getConfig(eventType = "access_control") {
+  const type = requireEventType(eventType);
+  const rows = await db.query(
+    "SELECT * FROM external_sync_configs WHERE event_type = ? LIMIT 1",
+    [type],
+  );
+  const config = rows?.[0] ?? null;
+  if (!config) return null;
+  const mapRows = await db.query(
+    "SELECT field_key, target_column, format FROM external_sync_field_mappings WHERE config_id = ? ORDER BY id ASC",
+    [config.id],
+  );
+  return mapConfigRow(config, mapRows);
+}
+
+async function listConfigs() {
+  const rows = await db.query(
+    "SELECT * FROM external_sync_configs ORDER BY event_type ASC",
+  );
+  if (!rows?.length) return [];
+  const ids = rows.map((r) => r.id);
+  const mapRows = await db.query(
+    `SELECT config_id, field_key, target_column, format
+     FROM external_sync_field_mappings WHERE config_id IN (${ids.map(() => "?").join(",")})
+     ORDER BY config_id ASC, id ASC`,
+    ids,
+  );
+  const byConfig = new Map();
+  for (const r of mapRows || []) {
+    if (!byConfig.has(r.config_id)) byConfig.set(r.config_id, []);
+    byConfig.get(r.config_id).push(r);
+  }
+  return rows.map((cfg) => mapConfigRow(cfg, byConfig.get(cfg.id) || []));
+}
+
 async function upsertConfig(payload) {
+  const eventType = requireEventType(payload.eventType);
+  const adapter = getAdapter(eventType);
   const dbType = normalizeDbType(payload.dbType);
   if (!dbType) {
     throwApiError(C.VALIDATION_CUSTOM, "資料庫類型不正確", { statusCode: 400 });
@@ -272,12 +259,23 @@ async function upsertConfig(payload) {
   const databaseName = requireNonEmpty(payload.database, "資料庫名稱");
   const username = requireNonEmpty(payload.username, "使用者名稱");
   const targetTable = requireNonEmpty(payload.targetTable, "第三方資料庫表格名稱");
+  validateMappings(adapter, payload.mappings);
 
-  validateMappings(payload.mappings);
+  const existingRows = await db.query(
+    "SELECT password_enc FROM external_sync_configs WHERE event_type = ? LIMIT 1",
+    [eventType],
+  );
+  const passwordRaw = String(payload.password ?? "").trim();
+  let passwordEnc;
+  if (passwordRaw) {
+    passwordEnc = encryptSecret(passwordRaw);
+  } else if (existingRows?.[0]?.password_enc) {
+    passwordEnc = existingRows[0].password_enc;
+  } else {
+    throwApiError(C.VALIDATION_CUSTOM, "密碼為必填", { statusCode: 400 });
+  }
 
-  const passwordEnc = encryptSecret(requireNonEmpty(payload.password, "密碼"));
-
-  const saved = await db.transaction(async (q) => {
+  return db.transaction(async (q) => {
     const upsertRows = await q(
       `
         INSERT INTO external_sync_configs
@@ -297,7 +295,7 @@ async function upsertConfig(payload) {
         RETURNING id
       `,
       [
-        EVENT_TYPE_ACCESS_CONTROL,
+        eventType,
         pushTime,
         dbType,
         host,
@@ -310,21 +308,13 @@ async function upsertConfig(payload) {
     );
     const configId = upsertRows?.[0]?.id;
     if (!configId) {
-      throwApiError(C.INTERNAL_ERROR, "儲存資料庫對接設定失敗", {
-        statusCode: 500,
-      });
+      throwApiError(C.INTERNAL_ERROR, "儲存資料庫對接設定失敗", { statusCode: 500 });
     }
-
     await q("DELETE FROM external_sync_field_mappings WHERE config_id = ?", [configId]);
-
     for (const [fieldKey, cfg] of Object.entries(payload.mappings || {})) {
       await q(
-        `
-          INSERT INTO external_sync_field_mappings
-            (config_id, field_key, target_column, format)
-          VALUES
-            (?, ?, ?, ?)
-        `,
+        `INSERT INTO external_sync_field_mappings (config_id, field_key, target_column, format)
+         VALUES (?, ?, ?, ?)`,
         [
           configId,
           fieldKey,
@@ -333,18 +323,16 @@ async function upsertConfig(payload) {
         ],
       );
     }
-
     return { id: configId };
   });
-
-  return saved;
 }
 
-async function loadConfigWithMappings() {
+async function loadConfigWithMappings(eventType) {
+  const type = requireEventType(eventType);
   const cfgRows = await db.query(
     `SELECT *, cursor_ts::text AS cursor_ts_text
-     FROM external_sync_configs WHERE event_type = 'access_control' LIMIT 1`,
-    [],
+     FROM external_sync_configs WHERE event_type = ? LIMIT 1`,
+    [type],
   );
   const cfg = cfgRows?.[0] ?? null;
   if (!cfg) return null;
@@ -357,13 +345,13 @@ async function loadConfigWithMappings() {
     targetColumn: r.target_column,
     format: r.format ?? "",
   }));
-  return { cfg, mappings };
+  return { cfg, mappings, adapter: getAdapter(type) };
 }
 
-async function runExternalSyncOnce() {
-  const loaded = await loadConfigWithMappings();
-  if (!loaded) return { skipped: true };
-  const { cfg, mappings } = loaded;
+async function runExternalSyncOnce(eventType = "access_control") {
+  const loaded = await loadConfigWithMappings(eventType);
+  if (!loaded) return { skipped: true, eventType };
+  const { cfg, mappings, adapter } = loaded;
 
   const password = decryptSecret(cfg.password_enc);
   const logRows = await db.query(
@@ -374,18 +362,19 @@ async function runExternalSyncOnce() {
 
   let conn = null;
   try {
-    const { events: rawEvents, lastFetchedEventId } = await fetchAccessControlEventsAfterCursor(
-      {
-        cursorTsText: cfg.cursor_ts_text,
-        cursorEventId: cfg.cursor_event_id,
-      },
-      5000,
-    );
-    const events = rawEvents.filter((e) => e.employeeId);
+    const { events: rawEvents, lastFetchedEventId } = await adapter.fetchForSync({
+      cursorTsText: cfg.cursor_ts_text,
+      cursorEventId: cfg.cursor_event_id,
+      limit: 5000,
+    });
+    const events =
+      adapter.eventType === "access_control"
+        ? rawEvents.filter((e) => e.employeeId)
+        : rawEvents;
 
     const columns = mappings.map((m) => m.targetColumn);
     const dataRows = events.map((evt) =>
-      mappings.map((m) => mapAccessControlEventToFieldValue(evt, m.fieldKey, m)),
+      mappings.map((m) => adapter.mapValue(evt, m.fieldKey, m)),
     );
 
     conn = await connectExternalDb({
@@ -399,9 +388,14 @@ async function runExternalSyncOnce() {
     await insertRows(conn, cfg.target_table, columns, dataRows);
 
     if (lastFetchedEventId) {
+      const table = adapter.sourceTable;
+      const timeCol = adapter.timeColumn;
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table) || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(timeCol)) {
+        throw new Error("adapter sourceTable/timeColumn 不合法");
+      }
       await db.query(
         `UPDATE external_sync_configs
-         SET cursor_ts = (SELECT event_time FROM isapi_access_events WHERE id = ?),
+         SET cursor_ts = (SELECT ${timeCol} FROM ${table} WHERE id = ?),
              cursor_event_id = ?
          WHERE id = ?`,
         [lastFetchedEventId, lastFetchedEventId, cfg.id],
@@ -414,7 +408,7 @@ async function runExternalSyncOnce() {
         [dataRows.length, logId],
       );
     }
-    return { ok: true, rowCount: dataRows.length };
+    return { ok: true, eventType, rowCount: dataRows.length };
   } catch (err) {
     if (logId) {
       await db.query(
@@ -428,9 +422,17 @@ async function runExternalSyncOnce() {
   }
 }
 
+async function deleteConfig(eventType) {
+  const type = requireEventType(eventType);
+  await db.query("DELETE FROM external_sync_configs WHERE event_type = ?", [type]);
+}
+
 module.exports = {
   getConfig,
+  listConfigs,
   upsertConfig,
+  deleteConfig,
   runExternalSyncOnce,
   testExternalDbConnection,
+  listEventTypes,
 };

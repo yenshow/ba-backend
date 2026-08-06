@@ -78,8 +78,21 @@ async function listReadings({ deviceId, startTime, endTime, limit = 500, order =
   return (await db.query(sql, params)) || [];
 }
 
+async function getReadingsForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT er.id, er.device_id, er.recorded_at, er.data, d.name AS device_name
+     FROM energy_readings er
+     INNER JOIN devices d ON d.id = er.device_id
+     WHERE er.recorded_at < $1
+     ORDER BY er.recorded_at ASC`,
+    [beforeDate],
+  );
+  return rows || [];
+}
+
 module.exports = {
   saveReading,
   getLatestReadings,
   listReadings,
+  getReadingsForBackup,
 };
