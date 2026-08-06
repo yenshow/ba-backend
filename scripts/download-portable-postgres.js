@@ -25,6 +25,7 @@ const {
   execWithUtf8OnWindows,
   prepareWindowsDirAcl,
   prepareWindowsPostgresDataLayout,
+  ensurePgHbaTrustRules,
 } = require("./postgres-exec-windows");
 const {
   startPortablePostgres,
@@ -227,50 +228,6 @@ function initDatabase() {
 
   ensurePgHbaTrustRules(path.join(DATA_DIR, "pg_hba.conf"));
   log(`✅ 資料庫已初始化`, "green");
-}
-
-function ensurePgHbaTrustRules(pgHbaConfPath) {
-  ensureDirSync(path.dirname(pgHbaConfPath));
-  if (!fs.existsSync(pgHbaConfPath)) {
-    throw new Error(`找不到 pg_hba.conf：${pgHbaConfPath}`);
-  }
-
-  const beginMarker = "# BA_SYSTEM_MANAGED_BEGIN";
-  const endMarker = "# BA_SYSTEM_MANAGED_END";
-  const managedBlock = [
-    beginMarker,
-    "local all all trust",
-    "host all all 127.0.0.1/32 trust",
-    "host all all ::1/128 trust",
-    endMarker,
-    "",
-  ].join("\n");
-
-  const original = fs.readFileSync(pgHbaConfPath, "utf8");
-  let content = original.replace(/\r\n/g, "\n");
-
-  const blockRegex = new RegExp(
-    `${beginMarker}[\\s\\S]*?${endMarker}\\n?`,
-    "g",
-  );
-  content = content.replace(blockRegex, "");
-
-  const lines = content.split("\n");
-  let insertAt = 0;
-  while (insertAt < lines.length) {
-    const line = lines[insertAt].trim();
-    if (line === "" || line.startsWith("#")) {
-      insertAt += 1;
-      continue;
-    }
-    break;
-  }
-
-  lines.splice(insertAt, 0, managedBlock.trimEnd());
-  const next = lines.join("\n").replace(/\n{3,}/g, "\n\n");
-  if (next !== content) {
-    fs.writeFileSync(pgHbaConfPath, next.replace(/\n/g, os.EOL), "utf8");
-  }
 }
 
 function setupDatabase() {

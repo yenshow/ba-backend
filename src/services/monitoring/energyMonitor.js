@@ -1,12 +1,12 @@
 /**
- * 能源 Monitor：輪詢 include_device_ids 表計 → 寫入 readings → WS → 契約容量告警
+ * 能源 Monitor：輪詢 include_device_ids 表計 → 寫入 readings → WS → 內建 incident 偵測
  */
 const db = require("../../database/db");
 const modbusBatchService = require("../devices/modbusBatchService");
 const deviceLoggingConfig = require("../devices/deviceLoggingConfig");
 const energySettingsService = require("../energy/energySettingsService");
 const energyReadingsService = require("../energy/energyReadingsService");
-const alertService = require("../alerts/alertService");
+const energyAlertEvaluator = require("../energy/energyAlertEvaluator");
 const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger").createLogger("energyMonitor");
 const {
@@ -16,8 +16,6 @@ const { parseConfig } = require("../../utils/deviceHelpers");
 const { isValidEnergyParameterKey } = require("../../constants/energyParameterCatalog");
 
 const lastRawWriteByDevice = new Map();
-const CONTRACT_SOURCE_ID = energySettingsService.SETTINGS_ID;
-const CONTRACT_DIMENSION = "contract_demand";
 
 async function readMeterValues(enabledValues, deviceConfig) {
   const deviceValues = {};
@@ -106,66 +104,24 @@ function buildDeviceConfig(rawConfig) {
   };
 }
 
-async function resolveContractAlertQuietly() {
-  try {
-    await alertService.resolveAlert(
-      CONTRACT_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      alertService.ALERT_SOURCES.ENERGY,
-      CONTRACT_DIMENSION,
-    );
-  } catch (err) {
-    const msg = err?.message || String(err);
-    if (!msg.includes("未找到可更新的警報")) {
-      logger.warn("結案契約告警失敗", { error: msg });
-    }
-  }
-}
-
-/**
- * @param {{ enabled: boolean, demandKw: number|null, contractKw: number, hasSample: boolean }} opts
- * - hasSample=false：缺測，不更新告警狀態（避免誤清）
- * - include 為空或告警關閉：強制結案
- */
-async function syncContractDemandAlert({
-  enabled,
-  demandKw,
-  contractKw,
-  hasSample,
-}) {
-  if (!enabled || !(Number(contractKw) > 0)) {
-    await resolveContractAlertQuietly();
-    return;
-  }
-  if (!hasSample || !Number.isFinite(Number(demandKw))) {
-    return;
-  }
-
-  const over = Number(demandKw) >= Number(contractKw);
-  if (over) {
-    await alertService.createAlert({
-      source: alertService.ALERT_SOURCES.ENERGY,
-      source_id: CONTRACT_SOURCE_ID,
-      alert_type: alertService.ALERT_TYPES.THRESHOLD,
-      severity: alertService.SEVERITIES.WARNING,
-      dimension_key: CONTRACT_DIMENSION,
-      message: `即時功率／需量 ${Number(demandKw).toFixed(1)} kW 已達或超過契約容量 ${Number(contractKw).toFixed(1)} kW`,
-    });
-  } else {
-    await resolveContractAlertQuietly();
-  }
-}
-
 async function checkEnergyMeters() {
   const { config } = await energySettingsService.getSettings();
   const includeIds = config.include_device_ids || [];
 
   if (includeIds.length === 0) {
-    await syncContractDemandAlert({
-      enabled: false,
+    await energyAlertEvaluator.syncContractDemandAlerts({
+      warningEnabled: false,
+      alertEnabled: false,
+      warningPct: config.demand_warning_pct,
       demandKw: null,
       contractKw: config.contract_capacity_kw,
       hasSample: false,
+    });
+    await energyAlertEvaluator.syncMeterStaleAlerts({
+      enabled: false,
+      staleMinutes: config.meter_stale_minutes,
+      latestByDeviceId: new Map(),
+      includeDeviceIds: [],
     });
     return;
   }
@@ -183,6 +139,15 @@ async function checkEnergyMeters() {
   let hasDemand = false;
   let hasPowerSample = false;
   const now = Date.now();
+  const latestByDeviceId = new Map();
+
+  const latestRows = await energyReadingsService.getLatestReadings(includeIds);
+  for (const row of latestRows || []) {
+    latestByDeviceId.set(row.device_id, {
+      recordedAt: row.recorded_at,
+      deviceName: row.device_name,
+    });
+  }
 
   for (const device of devices || []) {
     const logging = await deviceLoggingConfig.getDeviceLoggingConfig(device.id);
@@ -207,10 +172,25 @@ async function checkEnergyMeters() {
     }
 
     if (online) {
+      latestByDeviceId.set(device.id, {
+        recordedAt: new Date(),
+        deviceName: device.name,
+      });
       const lastWrite = lastRawWriteByDevice.get(device.id) || 0;
       if (now - lastWrite >= ENERGY_RAW_WRITE_INTERVAL_MS) {
         await energyReadingsService.saveReading({ deviceId: device.id, data });
         lastRawWriteByDevice.set(device.id, now);
+
+        if (typeof data.active_energy === "number") {
+          await energyAlertEvaluator.evaluateReadingJump({
+            enabled: config.reading_jump_enabled,
+            deviceId: device.id,
+            deviceName: device.name,
+            activeEnergy: data.active_energy,
+            multiplier: config.reading_jump_multiplier,
+            minKwh: config.reading_jump_min_kwh,
+          });
+        }
       }
       if (typeof data.active_power === "number") {
         totalPower += data.active_power;
@@ -220,6 +200,15 @@ async function checkEnergyMeters() {
         totalDemand += data.demand;
         hasDemand = true;
       }
+    } else if (config.reading_jump_enabled) {
+      await energyAlertEvaluator.evaluateReadingJump({
+        enabled: false,
+        deviceId: device.id,
+        deviceName: device.name,
+        activeEnergy: null,
+        multiplier: config.reading_jump_multiplier,
+        minKwh: config.reading_jump_min_kwh,
+      });
     }
 
     websocketService.emitEnergyReadingNew({
@@ -231,13 +220,30 @@ async function checkEnergyMeters() {
     });
   }
 
+  const removedIds = includeIds.filter(
+    (id) => !(devices || []).some((d) => d.id === id),
+  );
+  if (removedIds.length > 0) {
+    await energyAlertEvaluator.disableAllDeviceEnergyAlerts(removedIds);
+  }
+
   const hasSample = hasDemand || hasPowerSample;
   const demandKw = hasDemand ? totalDemand : hasPowerSample ? totalPower : null;
-  await syncContractDemandAlert({
-    enabled: config.demand_alert_enabled,
+
+  await energyAlertEvaluator.syncContractDemandAlerts({
+    warningEnabled: config.demand_warning_enabled,
+    alertEnabled: config.demand_alert_enabled,
+    warningPct: config.demand_warning_pct,
     demandKw,
     contractKw: config.contract_capacity_kw,
     hasSample,
+  });
+
+  await energyAlertEvaluator.syncMeterStaleAlerts({
+    enabled: config.meter_stale_enabled,
+    staleMinutes: config.meter_stale_minutes,
+    latestByDeviceId,
+    includeDeviceIds: includeIds,
   });
 }
 

@@ -5,6 +5,7 @@
  */
 
 const fs = require("fs");
+const os = require("os");
 const { execSync } = require("child_process");
 
 const colors = {
@@ -126,9 +127,54 @@ function prepareWindowsPostgresDataLayout({ dataDir, logDir }) {
   }
 }
 
+/** 確保本機 trust 規則置頂（避免 Windows SSPI 把服務帳號當 PG 角色，如 LOCAL SERVICE）。 */
+function ensurePgHbaTrustRules(pgHbaConfPath) {
+  if (!pgHbaConfPath || !fs.existsSync(pgHbaConfPath)) {
+    return;
+  }
+
+  const beginMarker = "# BA_SYSTEM_MANAGED_BEGIN";
+  const endMarker = "# BA_SYSTEM_MANAGED_END";
+  const managedBlock = [
+    beginMarker,
+    "local all all trust",
+    "host all all 127.0.0.1/32 trust",
+    "host all all ::1/128 trust",
+    endMarker,
+    "",
+  ].join("\n");
+
+  const original = fs.readFileSync(pgHbaConfPath, "utf8");
+  let content = original.replace(/\r\n/g, "\n");
+
+  const blockRegex = new RegExp(
+    `${beginMarker}[\\s\\S]*?${endMarker}\\n?`,
+    "g",
+  );
+  content = content.replace(blockRegex, "");
+
+  const lines = content.split("\n");
+  let insertAt = 0;
+  while (insertAt < lines.length) {
+    const line = lines[insertAt].trim();
+    if (line === "" || line.startsWith("#")) {
+      insertAt += 1;
+      continue;
+    }
+    break;
+  }
+
+  lines.splice(insertAt, 0, managedBlock.trimEnd());
+  const next = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+  if (next !== content) {
+    fs.writeFileSync(pgHbaConfPath, next.replace(/\n/g, os.EOL), "utf8");
+  }
+}
+
 module.exports = {
   log,
   execWithUtf8OnWindows,
   prepareWindowsDirAcl,
   prepareWindowsPostgresDataLayout,
+  ensurePgHbaTrustRules,
 };

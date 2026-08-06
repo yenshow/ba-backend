@@ -19,6 +19,8 @@ const {
   serviceNames,
 } = require("./windows-product-services");
 const pgSvc = require("./postgres-windows-service");
+const { DATA_DIR } = require("./postgres-common");
+const { ensurePgHbaTrustRules } = require("./postgres-exec-windows");
 
 function run(file, args, opts = {}) {
   const r = spawnSync(file, args, {
@@ -201,6 +203,32 @@ function resolveNode(installRoot) {
   return p;
 }
 
+function applyPostgresRuntimeFixes() {
+  ensurePgHbaTrustRules(path.join(DATA_DIR, "pg_hba.conf"));
+}
+
+function reinforceServiceDependencies(installRoot) {
+  const product = resolveProductCode(installRoot);
+  const names = serviceNames(product);
+  const ids = winswServiceIds(installRoot);
+
+  applyPostgresRuntimeFixes();
+  pgSvc.ensureLocalSystemAccount(names.postgresql);
+  pgSvc.configureServiceRecovery(names.postgresql);
+  pgSvc.ensureAutoStart(names.postgresql);
+
+  for (const id of ids) {
+    run("sc.exe", ["config", id, "obj=", "LocalSystem"]);
+  }
+
+  if (ids.includes(names.backend)) {
+    run("sc.exe", ["config", names.backend, "depend=", names.postgresql]);
+  }
+  if (ids.includes(names.frontend)) {
+    run("sc.exe", ["config", names.frontend, "depend=", names.backend]);
+  }
+}
+
 function cmdInstall(installRoot) {
   const product = resolveProductCode(installRoot);
   const names = serviceNames(product);
@@ -220,15 +248,7 @@ function cmdInstall(installRoot) {
     }
   }
 
-  // Backend depend already in XML; reinforce
-  if (ids.includes(names.backend)) {
-    run("sc.exe", [
-      "config",
-      names.backend,
-      "depend=",
-      names.postgresql,
-    ]);
-  }
+  reinforceServiceDependencies(installRoot);
 
   console.log(`[services] install OK for ${product}`);
   return 0;
@@ -237,6 +257,7 @@ function cmdInstall(installRoot) {
 function cmdStart(installRoot) {
   const product = resolveProductCode(installRoot);
   const names = serviceNames(product);
+  reinforceServiceDependencies(installRoot);
   if (pgSvc.start(product) !== 0) return 1;
   if (!waitServiceRunning(names.postgresql, 90_000)) {
     console.error(`[services] PostgreSQL 未進入 RUNNING`);
@@ -282,6 +303,7 @@ function cmdRestart(installRoot) {
   ensureGenerated(installRoot, nodeExe);
   const ids = winswServiceIds(installRoot);
   copyWinswExes(installRoot, ids);
+  reinforceServiceDependencies(installRoot);
   return cmdStart(installRoot);
 }
 

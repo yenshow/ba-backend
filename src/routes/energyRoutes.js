@@ -12,6 +12,8 @@ const energySettingsService = require("../services/energy/energySettingsService"
 const energyDashboardService = require("../services/energy/energyDashboardService");
 const energyReadingsService = require("../services/energy/energyReadingsService");
 const energyAggregationService = require("../services/energy/energyAggregationService");
+const energyNotificationService = require("../services/energy/energyNotificationService");
+const config = require("../config");
 
 router.use(authenticate, requirePermission("system.energy"));
 
@@ -82,6 +84,40 @@ router.get(
     res.sendSuccess(await energyDashboardService.getBreakdown());
   }),
 );
+
+router.get(
+  "/dashboard/notifications",
+  disableHttpCache,
+  asyncHandler(async (req, res) => {
+    const limit = req.query.limit;
+    if (!config.isProduction && String(req.query.mock) === "1") {
+      return res.sendSuccess(
+        energyNotificationService.buildMockNotifications(limit),
+      );
+    }
+    res.sendSuccess(
+      await energyNotificationService.getDashboardNotifications({ limit }),
+    );
+  }),
+);
+
+if (!config.isProduction) {
+  router.post(
+    "/dev/seed-demo-alerts",
+    requirePermission("system.energy.settings.update"),
+    asyncHandler(async (_req, res) => {
+      res.sendSuccess(await energyNotificationService.seedDemoAlerts());
+    }),
+  );
+
+  router.delete(
+    "/dev/seed-demo-alerts",
+    requirePermission("system.energy.settings.update"),
+    asyncHandler(async (_req, res) => {
+      res.sendSuccess(await energyNotificationService.clearDemoAlerts());
+    }),
+  );
+}
 
 router.get(
   "/usage/aggregated",

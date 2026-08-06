@@ -142,8 +142,9 @@ function register(productCode) {
   const existing = scQuery(name);
   if (existing.exists) {
     console.log(`[postgres-svc] 服務已存在：${name}（略過 register）`);
-    // Ensure auto start
-    run("sc.exe", ["config", name, "start=", "auto"]);
+    ensureLocalSystemAccount(name);
+    ensureAutoStart(name);
+    configureServiceRecovery(name);
     return 0;
   }
 
@@ -151,11 +152,13 @@ function register(productCode) {
   stopOrphanPostmaster(productCode);
 
   const pgCtl = getBinPath("pg_ctl");
-  // LocalSystem：省略 -U；-S auto = Automatic
+  // -U LocalSystem：避免預設跑在 Local Service／Network Service，導致 role "LOCAL SERVICE" 不存在
   const r = run(pgCtl, [
     "register",
     "-N",
     name,
+    "-U",
+    "LocalSystem",
     "-D",
     DATA_DIR,
     "-S",
@@ -169,7 +172,34 @@ function register(productCode) {
   console.log(`[postgres-svc] 已登錄服務：${name}（LocalSystem, Automatic）`);
   // Display name
   run("sc.exe", ["config", name, "DisplayName=", `${productCode} PostgreSQL`]);
+  ensureLocalSystemAccount(name);
+  ensureAutoStart(name);
+  configureServiceRecovery(name);
   return 0;
+}
+
+function ensureLocalSystemAccount(name) {
+  run("sc.exe", ["config", name, "obj=", "LocalSystem"]);
+}
+
+function ensureAutoStart(name) {
+  run("sc.exe", ["config", name, "start=", "auto"]);
+}
+
+/** 開機若 PG 啟動失敗，SCM 自動重試（pg_ctl 服務預設無 onfailure）。 */
+function configureServiceRecovery(name) {
+  const q = scQuery(name);
+  if (!q.exists) {
+    return;
+  }
+  run("sc.exe", [
+    "failure",
+    name,
+    "reset=",
+    "86400",
+    "actions=",
+    "restart/60000/restart/60000/restart/60000",
+  ]);
 }
 
 function unregister(productCode) {
@@ -346,4 +376,7 @@ module.exports = {
   sanitizeConsoleText,
   waitServiceNotRunning,
   sleepSeconds,
+  ensureAutoStart,
+  configureServiceRecovery,
+  ensureLocalSystemAccount,
 };
