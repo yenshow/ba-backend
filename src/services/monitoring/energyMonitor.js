@@ -110,9 +110,7 @@ async function checkEnergyMeters() {
 
   if (includeIds.length === 0) {
     await energyAlertEvaluator.syncContractDemandAlerts({
-      warningEnabled: false,
-      alertEnabled: false,
-      warningPct: config.demand_warning_pct,
+      stages: config.load_shed_stages,
       demandKw: null,
       contractKw: config.contract_capacity_kw,
       hasSample: false,
@@ -231,9 +229,7 @@ async function checkEnergyMeters() {
   const demandKw = hasDemand ? totalDemand : hasPowerSample ? totalPower : null;
 
   await energyAlertEvaluator.syncContractDemandAlerts({
-    warningEnabled: config.demand_warning_enabled,
-    alertEnabled: config.demand_alert_enabled,
-    warningPct: config.demand_warning_pct,
+    stages: config.load_shed_stages,
     demandKw,
     contractKw: config.contract_capacity_kw,
     hasSample,

@@ -342,7 +342,8 @@ async function upsertConfig(payload) {
 
 async function loadConfigWithMappings() {
   const cfgRows = await db.query(
-    "SELECT * FROM external_sync_configs WHERE event_type = 'access_control' LIMIT 1",
+    `SELECT *, cursor_ts::text AS cursor_ts_text
+     FROM external_sync_configs WHERE event_type = 'access_control' LIMIT 1`,
     [],
   );
   const cfg = cfgRows?.[0] ?? null;
@@ -373,8 +374,11 @@ async function runExternalSyncOnce() {
 
   let conn = null;
   try {
-    const { events: rawEvents, lastFetchedEventTime } = await fetchAccessControlEventsAfterCursor(
-      cfg.cursor_ts,
+    const { events: rawEvents, lastFetchedEventId } = await fetchAccessControlEventsAfterCursor(
+      {
+        cursorTsText: cfg.cursor_ts_text,
+        cursorEventId: cfg.cursor_event_id,
+      },
       5000,
     );
     const events = rawEvents.filter((e) => e.employeeId);
@@ -394,11 +398,14 @@ async function runExternalSyncOnce() {
     });
     await insertRows(conn, cfg.target_table, columns, dataRows);
 
-    if (lastFetchedEventTime) {
-      await db.query("UPDATE external_sync_configs SET cursor_ts = ? WHERE id = ?", [
-        lastFetchedEventTime,
-        cfg.id,
-      ]);
+    if (lastFetchedEventId) {
+      await db.query(
+        `UPDATE external_sync_configs
+         SET cursor_ts = (SELECT event_time FROM isapi_access_events WHERE id = ?),
+             cursor_event_id = ?
+         WHERE id = ?`,
+        [lastFetchedEventId, lastFetchedEventId, cfg.id],
+      );
     }
 
     if (logId) {

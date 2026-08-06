@@ -6,10 +6,28 @@ const energySettingsService = require("./energySettingsService");
 const logger = require("../../utils/logger").createLogger("energyAlertEvaluator");
 
 const STATION_SOURCE_ID = energySettingsService.SETTINGS_ID;
-const DIM_CONTRACT_WARN = "contract_demand_warn";
-const DIM_CONTRACT_OVER = "contract_demand";
+
+/** @deprecated 舊兩段契約 key；啟動／同步時結案避免殘留 */
+const LEGACY_DIM_CONTRACT_WARN = "contract_demand_warn";
+const LEGACY_DIM_CONTRACT_OVER = "contract_demand";
+
+const DIM_CONTRACT_STAGE_1 = "contract_stage_1";
+const DIM_CONTRACT_STAGE_2 = "contract_stage_2";
+const DIM_CONTRACT_STAGE_3 = "contract_stage_3";
 const DIM_METER_STALE = "meter_stale";
 const DIM_READING_JUMP = "reading_jump";
+
+const CONTRACT_STAGE_DIMS = [
+  DIM_CONTRACT_STAGE_1,
+  DIM_CONTRACT_STAGE_2,
+  DIM_CONTRACT_STAGE_3,
+];
+
+const STAGE_SEVERITY = {
+  1: alertService.SEVERITIES.WARNING,
+  2: alertService.SEVERITIES.ERROR,
+  3: alertService.SEVERITIES.CRITICAL,
+};
 
 const lastActiveEnergyByDevice = new Map();
 const recentDeltasByDevice = new Map();
@@ -35,106 +53,92 @@ async function resolveEnergyAlertQuietly(sourceId, alertType, dimensionKey) {
   }
 }
 
+async function resolveLegacyContractAlerts() {
+  await resolveEnergyAlertQuietly(
+    STATION_SOURCE_ID,
+    alertService.ALERT_TYPES.THRESHOLD,
+    LEGACY_DIM_CONTRACT_WARN,
+  );
+  await resolveEnergyAlertQuietly(
+    STATION_SOURCE_ID,
+    alertService.ALERT_TYPES.THRESHOLD,
+    LEGACY_DIM_CONTRACT_OVER,
+  );
+}
+
+async function resolveAllContractStageAlerts() {
+  for (const dim of CONTRACT_STAGE_DIMS) {
+    await resolveEnergyAlertQuietly(
+      STATION_SOURCE_ID,
+      alertService.ALERT_TYPES.THRESHOLD,
+      dim,
+    );
+  }
+  await resolveLegacyContractAlerts();
+}
+
 /**
- * 契約接近預警 + 超限（兩段 dimension_key）
+ * 契約分級告警（1／2／3）：僅保留最高觸發級一筆
  */
 async function syncContractDemandAlerts({
-  warningEnabled,
-  alertEnabled,
-  warningPct,
+  stages,
   demandKw,
   contractKw,
   hasSample,
 }) {
   const contract = Number(contractKw) || 0;
+  const normalized =
+    Array.isArray(stages) && stages.length > 0
+      ? stages
+      : energySettingsService.DEFAULT_LOAD_SHED_STAGES;
 
-  if (contract <= 0 || (!warningEnabled && !alertEnabled)) {
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_WARN,
-    );
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_OVER,
-    );
+  const anyEnabled = normalized.some((s) => s.enabled !== false);
+  if (contract <= 0 || !anyEnabled) {
+    await resolveAllContractStageAlerts();
     return;
   }
 
   if (!hasSample || !Number.isFinite(Number(demandKw))) {
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_WARN,
-    );
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_OVER,
-    );
+    await resolveAllContractStageAlerts();
     return;
   }
 
   const demand = Number(demandKw);
-  const warnThreshold = contract * (Number(warningPct) || 90) / 100;
-  const over = demand >= contract;
-  const warn = !over && demand >= warnThreshold;
 
-  if (!alertEnabled) {
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_OVER,
-    );
+  let activeLevel = null;
+  for (let i = normalized.length - 1; i >= 0; i--) {
+    const stage = normalized[i];
+    if (stage.enabled === false) continue;
+    const pct = Number(stage.threshold_pct) || 0;
+    if (pct <= 0) continue;
+    if (demand >= (contract * pct) / 100) {
+      activeLevel = Number(stage.level);
+      break;
+    }
   }
 
-  if (!warningEnabled) {
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_WARN,
-    );
-  }
+  await resolveLegacyContractAlerts();
 
-  if (over && alertEnabled) {
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_WARN,
-    );
+  for (let level = 1; level <= 3; level++) {
+    const dim = CONTRACT_STAGE_DIMS[level - 1];
+    if (activeLevel !== level) {
+      await resolveEnergyAlertQuietly(
+        STATION_SOURCE_ID,
+        alertService.ALERT_TYPES.THRESHOLD,
+        dim,
+      );
+      continue;
+    }
+    const stage = normalized.find((s) => Number(s.level) === level);
+    const pct = Number(stage?.threshold_pct) || 0;
     await alertService.createAlert({
       source: alertService.ALERT_SOURCES.ENERGY,
       source_id: STATION_SOURCE_ID,
       alert_type: alertService.ALERT_TYPES.THRESHOLD,
-      severity: alertService.SEVERITIES.ERROR,
-      dimension_key: DIM_CONTRACT_OVER,
-      message: `即時功率／需量 ${demand.toFixed(1)} kW 已達或超過契約容量 ${contract.toFixed(1)} kW`,
+      severity: STAGE_SEVERITY[level] || alertService.SEVERITIES.WARNING,
+      dimension_key: dim,
+      message: `契約 ${level} 級：即時功率／需量 ${demand.toFixed(1)} kW 已達契約容量 ${contract.toFixed(1)} kW 的 ${pct}%`,
     });
-    return;
-  }
-
-  await resolveEnergyAlertQuietly(
-    STATION_SOURCE_ID,
-    alertService.ALERT_TYPES.THRESHOLD,
-    DIM_CONTRACT_OVER,
-  );
-
-  if (warn && warningEnabled) {
-    await alertService.createAlert({
-      source: alertService.ALERT_SOURCES.ENERGY,
-      source_id: STATION_SOURCE_ID,
-      alert_type: alertService.ALERT_TYPES.THRESHOLD,
-      severity: alertService.SEVERITIES.WARNING,
-      dimension_key: DIM_CONTRACT_WARN,
-      message: `即時功率／需量 ${demand.toFixed(1)} kW 接近契約容量 ${contract.toFixed(1)} kW（預警）`,
-    });
-  } else {
-    await resolveEnergyAlertQuietly(
-      STATION_SOURCE_ID,
-      alertService.ALERT_TYPES.THRESHOLD,
-      DIM_CONTRACT_WARN,
-    );
   }
 }
 
@@ -286,11 +290,13 @@ async function disableAllDeviceEnergyAlerts(deviceIds) {
 }
 
 module.exports = {
-  DIM_CONTRACT_WARN,
-  DIM_CONTRACT_OVER,
+  DIM_CONTRACT_STAGE_1,
+  DIM_CONTRACT_STAGE_2,
+  DIM_CONTRACT_STAGE_3,
   DIM_METER_STALE,
   DIM_READING_JUMP,
   resolveEnergyAlertQuietly,
+  resolveAllContractStageAlerts,
   syncContractDemandAlerts,
   syncMeterStaleAlerts,
   evaluateReadingJump,

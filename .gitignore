@@ -21,3 +21,6 @@ mediamtx/mediamtx.generated.yml
 
 /output
 /.loadtest-state
+
+# 資料匯出測試輸出
+tmp/

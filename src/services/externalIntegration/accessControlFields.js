@@ -129,12 +129,18 @@ const BASE_EVENT_SELECT = `
     p.employee_no,
     p.full_name,
     pg.name AS unit_name,
-    plc.card_no AS ladder_card_no
+    plc.ladder_card_no
   FROM isapi_access_events e
   LEFT JOIN persons p
     ON p.employee_no = COALESCE((e.payload->>'employeeNoString'), (e.payload->>'employeeNo'))
   LEFT JOIN person_groups pg ON p.person_group_id = pg.id
-  LEFT JOIN person_ladder_cards plc ON plc.person_id = p.id
+  LEFT JOIN LATERAL (
+    SELECT card_no AS ladder_card_no
+    FROM person_ladder_cards
+    WHERE person_id = p.id
+    ORDER BY id ASC
+    LIMIT 1
+  ) plc ON TRUE
 `;
 
 function buildAccessControlEventDto(row, ctx) {
@@ -191,23 +197,49 @@ async function resolveGroupIdsWithChildren(groupIds) {
   return [...all];
 }
 
-async function fetchAccessControlEventsAfterCursor(cursorTs, limit = 5000) {
+/**
+ * 增量抓取。cursor 以 text 保留 PG 微秒，並搭配 cursorEventId，
+ * 避免 JS Date 截斷或同刻多筆造成重推／漏推。
+ *
+ * @param {{ cursorTsText?: string|null, cursorEventId?: number|null }} [cursor]
+ */
+async function fetchAccessControlEventsAfterCursor(cursor = {}, limit = 5000) {
   const ctx = await loadAccessControlDeviceContext();
-  const start = cursorTs ? new Date(cursorTs) : new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const end = new Date();
+  const endIso = new Date().toISOString();
   const lim = Math.min(Math.max(Number(limit) || 5000, 1), 50000);
+
+  const cursorTsText = String(cursor?.cursorTsText ?? "").trim() || null;
+  const cursorEventId = Number(cursor?.cursorEventId);
+  const hasEventId = Number.isFinite(cursorEventId) && cursorEventId > 0;
+
+  let whereSql;
+  let params;
+  if (!cursorTsText) {
+    whereSql = `e.event_time > ?::timestamptz AND e.event_time <= ?::timestamptz`;
+    params = [new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), endIso];
+  } else if (hasEventId) {
+    whereSql = `(e.event_time > ?::timestamptz OR (e.event_time = ?::timestamptz AND e.id > ?))
+       AND e.event_time <= ?::timestamptz`;
+    params = [cursorTsText, cursorTsText, cursorEventId, endIso];
+  } else {
+    whereSql = `e.event_time > ?::timestamptz AND e.event_time <= ?::timestamptz`;
+    params = [cursorTsText, endIso];
+  }
 
   const rows = await db.query(
     `${BASE_EVENT_SELECT}
-     WHERE e.event_time > ? AND e.event_time <= ?
-     ORDER BY e.event_time ASC
+     WHERE ${whereSql}
+     ORDER BY e.event_time ASC, e.id ASC
      LIMIT ?`,
-    [start.toISOString(), end.toISOString(), lim],
+    [...params, lim],
   );
 
   const events = (rows || []).map((row) => buildAccessControlEventDto(row, ctx));
-  const lastFetchedEventTime = rows?.length ? rows[rows.length - 1].event_time : null;
-  return { events, lastFetchedEventTime };
+  const last = rows?.length ? rows[rows.length - 1] : null;
+  return {
+    events,
+    lastFetchedEventId: last?.id != null ? Number(last.id) : null,
+  };
 }
 
 async function fetchAccessControlEventsForGroups({ groupIds, startTime, endTime, limit = 5000 }) {
@@ -222,7 +254,7 @@ async function fetchAccessControlEventsForGroups({ groupIds, startTime, endTime,
     `${BASE_EVENT_SELECT}
      WHERE p.person_group_id IN (${placeholders})
        AND e.event_time >= ? AND e.event_time <= ?
-     ORDER BY e.event_time ASC
+     ORDER BY e.event_time ASC, e.id ASC
      LIMIT ?`,
     [...groupIdsAll, startTime.toISOString(), endTime.toISOString(), lim],
   );

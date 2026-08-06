@@ -79,10 +79,15 @@ async function ensureExternalIntegrationTables(pool) {
       password_enc TEXT NOT NULL,
       target_table TEXT NOT NULL,
       cursor_ts TIMESTAMPTZ,
+      cursor_event_id BIGINT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(event_type)
     )
+  `);
+  await pool.query(`
+    ALTER TABLE external_sync_configs
+      ADD COLUMN IF NOT EXISTS cursor_event_id BIGINT
   `);
   await createUpdatedAtTrigger(pool, "external_sync_configs");
   await pool.query(`

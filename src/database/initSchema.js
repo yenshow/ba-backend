@@ -1246,6 +1246,7 @@ async function initSchema() {
         password_enc TEXT NOT NULL,
         target_table TEXT NOT NULL,
         cursor_ts TIMESTAMPTZ,
+        cursor_event_id BIGINT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(event_type)

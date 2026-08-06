@@ -122,7 +122,14 @@ async function getDashboardSummary() {
   }
   const demandKw = hasDemand ? totalDemand : totalPower;
   const contract = Number(config.contract_capacity_kw) || 0;
-  const overContract = contract > 0 && demandKw >= contract;
+  const stages = config.load_shed_stages || [];
+  const stage3 = stages.find((s) => Number(s.level) === 3);
+  const highest = [...stages].sort(
+    (a, b) => Number(b.level) - Number(a.level),
+  )[0];
+  const overPct = Number(stage3?.threshold_pct) || Number(highest?.threshold_pct) || 100;
+  const overContract = contract > 0 && demandKw >= (contract * overPct) / 100;
+  const demandAlertEnabled = stages.some((s) => s.enabled !== false);
 
   const elecCost = calcElectricityCost(
     monthEnergyRows,
@@ -144,7 +151,7 @@ async function getDashboardSummary() {
     currentDemandKw: Math.round(demandKw * 1000) / 1000,
     currentPowerKw: Math.round(totalPower * 1000) / 1000,
     overContract,
-    demandAlertEnabled: config.demand_alert_enabled,
+    demandAlertEnabled,
     monthElectricityCost: elecCost,
     monthWaterCost: waterCost,
     includedDeviceCount: ids.length,

@@ -7,12 +7,13 @@ const { throwApiError } = require("../../utils/apiErrors");
 
 const SETTINGS_ID = 1;
 
+/** 新安裝預設無分級；由使用者按需新增（最多 3） */
+const DEFAULT_LOAD_SHED_STAGES = [];
+
+const STAGE_DEFAULT_PCT = { 1: 80, 2: 90, 3: 100 };
+
 const DEFAULT_CONFIG = {
   contract_capacity_kw: 0,
-  demand_window_minutes: 15,
-  demand_warning_enabled: true,
-  demand_warning_pct: 90,
-  demand_alert_enabled: true,
   meter_stale_enabled: true,
   meter_stale_minutes: 15,
   reading_jump_enabled: true,
@@ -35,7 +36,7 @@ const DEFAULT_CONFIG = {
     off_peak: { rate: 0, windows: [] },
   },
   water_tariff: { rate: 0 },
-  load_shed_stages: [],
+  load_shed_stages: DEFAULT_LOAD_SHED_STAGES,
 };
 
 function clampPct(value, fallback) {
@@ -53,6 +54,52 @@ function clampPositiveInt(value, fallback, min = 1) {
 function boolDefault(value, fallback = true) {
   if (value === undefined || value === null) return fallback;
   return value !== false;
+}
+
+function normalizeStage(raw, level, fallbackPct, fallbackEnabled) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  return {
+    level,
+    enabled: boolDefault(src.enabled, fallbackEnabled),
+    threshold_pct: clampPct(
+      src.threshold_pct,
+      STAGE_DEFAULT_PCT[level] ?? fallbackPct,
+    ),
+    actions: Array.isArray(src.actions) ? src.actions : [],
+  };
+}
+
+/**
+ * 0～3 階按需；不強制補齊。陣列鍵存在時以內容為準（含空陣列）。
+ * 舊資料無陣列時由 demand_warning_* / demand_alert_* 遷移。
+ */
+function normalizeLoadShedStages(src) {
+  if (Array.isArray(src.load_shed_stages)) {
+    const byLevel = new Map();
+    for (const s of src.load_shed_stages) {
+      const level = parseInt(s?.level, 10);
+      if (level >= 1 && level <= 3 && !byLevel.has(level)) {
+        byLevel.set(
+          level,
+          normalizeStage(s, level, STAGE_DEFAULT_PCT[level], true),
+        );
+      }
+    }
+    return [1, 2, 3].filter((l) => byLevel.has(l)).map((l) => byLevel.get(l));
+  }
+
+  const warnEnabled = boolDefault(src.demand_warning_enabled, true);
+  const alertEnabled = boolDefault(src.demand_alert_enabled, true);
+  const warnPct = clampPct(src.demand_warning_pct, 90);
+  const migrated = [];
+  if (warnEnabled) {
+    migrated.push(normalizeStage(null, 1, warnPct, true));
+  }
+  if (alertEnabled) {
+    const level = warnEnabled ? 3 : 1;
+    migrated.push(normalizeStage(null, level, 100, true));
+  }
+  return migrated;
 }
 
 function normalizeConfig(raw) {
@@ -76,10 +123,6 @@ function normalizeConfig(raw) {
     contract_capacity_kw: Number.isFinite(Number(src.contract_capacity_kw))
       ? Number(src.contract_capacity_kw)
       : 0,
-    demand_window_minutes: clampPositiveInt(src.demand_window_minutes, 15),
-    demand_warning_enabled: boolDefault(src.demand_warning_enabled),
-    demand_warning_pct: clampPct(src.demand_warning_pct, 90),
-    demand_alert_enabled: boolDefault(src.demand_alert_enabled),
     meter_stale_enabled: boolDefault(src.meter_stale_enabled),
     meter_stale_minutes: clampPositiveInt(src.meter_stale_minutes, 15),
     reading_jump_enabled: boolDefault(src.reading_jump_enabled),
@@ -110,9 +153,7 @@ function normalizeConfig(raw) {
         ? Number(src.water_tariff.rate)
         : 0,
     },
-    load_shed_stages: Array.isArray(src.load_shed_stages)
-      ? src.load_shed_stages
-      : [],
+    load_shed_stages: normalizeLoadShedStages(src),
   };
 }
 
@@ -169,6 +210,8 @@ async function updateSettings(payload) {
 
 module.exports = {
   SETTINGS_ID,
+  DEFAULT_LOAD_SHED_STAGES,
+  STAGE_DEFAULT_PCT,
   getSettings,
   updateSettings,
 };

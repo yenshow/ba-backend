@@ -30,6 +30,11 @@
     "yscp:resubscribe": "node scripts/yscpResubscribe.js",
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",
+    "test:data-export": "node scripts/externalIntegration/testDataExport.js",
+    "test:data-export:setup": "node scripts/externalIntegration/testDataExport.js setup",
+    "test:data-export:seed": "node scripts/externalIntegration/testDataExport.js seed",
+    "test:data-export:sync-now": "node scripts/externalIntegration/testDataExport.js sync",
+    "test:data-export:export-now": "node scripts/externalIntegration/testDataExport.js export",
     "mediamtx": "node scripts/start-mediamtx.js",
     "mediamtx:generate": "node scripts/generate-mediamtx-config.js"
   },

@@ -118,23 +118,23 @@ function buildMockNotifications(limit = 50) {
     {
       id: 9000,
       kind: "incident",
-      message: "即時功率／需量 20150.0 kW 已達或超過契約容量 20000.0 kW",
-      severity: "error",
+      message: "契約 3 級：即時功率／需量 20150.0 kW 已達契約容量 20000.0 kW 的 100%",
+      severity: "critical",
       created_at: ts(0.15),
       source: "energy",
       source_id: energySettingsService.SETTINGS_ID,
-      dimension_key: energyAlertEvaluator.DIM_CONTRACT_OVER,
+      dimension_key: energyAlertEvaluator.DIM_CONTRACT_STAGE_3,
       alert_type: "threshold",
     },
     {
       id: 9001,
       kind: "incident",
-      message: "即時功率／需量 18420.0 kW 接近契約容量 20000.0 kW（預警）",
-      severity: "warning",
+      message: "契約 2 級：即時功率／需量 18420.0 kW 已達契約容量 20000.0 kW 的 90%",
+      severity: "error",
       created_at: ts(0.4),
       source: "energy",
       source_id: energySettingsService.SETTINGS_ID,
-      dimension_key: energyAlertEvaluator.DIM_CONTRACT_WARN,
+      dimension_key: energyAlertEvaluator.DIM_CONTRACT_STAGE_2,
       alert_type: "threshold",
     },
     {
@@ -230,19 +230,20 @@ async function seedDemoAlerts() {
     source: alertService.ALERT_SOURCES.ENERGY,
     source_id: energySettingsService.SETTINGS_ID,
     alert_type: alertService.ALERT_TYPES.THRESHOLD,
-    severity: alertService.SEVERITIES.ERROR,
-    dimension_key: energyAlertEvaluator.DIM_CONTRACT_OVER,
-    message: "【示範】即時功率／需量 20150.0 kW 已達或超過契約容量 20000.0 kW",
+    severity: alertService.SEVERITIES.CRITICAL,
+    dimension_key: energyAlertEvaluator.DIM_CONTRACT_STAGE_3,
+    message:
+      "【示範】契約 3 級：即時功率／需量 20150.0 kW 已達契約容量 20000.0 kW 的 100%",
   });
 
   await alertService.createAlert({
     source: alertService.ALERT_SOURCES.ENERGY,
     source_id: energySettingsService.SETTINGS_ID,
     alert_type: alertService.ALERT_TYPES.THRESHOLD,
-    severity: alertService.SEVERITIES.WARNING,
-    dimension_key: energyAlertEvaluator.DIM_CONTRACT_WARN,
+    severity: alertService.SEVERITIES.ERROR,
+    dimension_key: energyAlertEvaluator.DIM_CONTRACT_STAGE_2,
     message:
-      "【示範】即時功率／需量 18420.0 kW 接近契約容量 20000.0 kW（預警）",
+      "【示範】契約 2 級：即時功率／需量 18420.0 kW 已達契約容量 20000.0 kW 的 90%",
   });
 
   await alertService.createAlert({
@@ -272,16 +273,7 @@ async function seedDemoAlerts() {
 }
 
 async function clearDemoAlerts() {
-  await energyAlertEvaluator.resolveEnergyAlertQuietly(
-    energySettingsService.SETTINGS_ID,
-    alertService.ALERT_TYPES.THRESHOLD,
-    energyAlertEvaluator.DIM_CONTRACT_WARN,
-  );
-  await energyAlertEvaluator.resolveEnergyAlertQuietly(
-    energySettingsService.SETTINGS_ID,
-    alertService.ALERT_TYPES.THRESHOLD,
-    energyAlertEvaluator.DIM_CONTRACT_OVER,
-  );
+  await energyAlertEvaluator.resolveAllContractStageAlerts();
 
   const { config } = await energySettingsService.getSettings();
   const ids = [...(config.include_device_ids || []), ...DEMO_DEVICE_IDS];
