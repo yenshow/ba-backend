@@ -5,6 +5,9 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { formatMissingPersonIdLabels } = require("../../utils/personDisplayUtils");
+const {
+  isFaceRecognitionCameraMode,
+} = require("../peopleCounting/peopleCountingConfig");
 const logger = require("../../utils/logger").createLogger("LocationMemberService");
 
 function parseSystemConfig(raw) {
@@ -16,6 +19,17 @@ function parseSystemConfig(raw) {
     }
   }
   return raw || {};
+}
+
+function isPeopleCountingSyncableConfig(cfg) {
+  const entryIds = Array.isArray(cfg.entry_device_ids) ? cfg.entry_device_ids : [];
+  if (entryIds.length > 0) return true;
+  if (String(cfg.data_source || "").trim() !== "isapi_camera") return false;
+  if (!isFaceRecognitionCameraMode(cfg.camera_mode)) return false;
+  const {
+    resolvePeopleCountingCameraDevices,
+  } = require("../peopleCounting/peopleCountingConfig");
+  return resolvePeopleCountingCameraDevices(cfg).cameraDeviceIds.length > 0;
 }
 
 async function getLocationSystemSyncFlags(locationId) {
@@ -32,8 +46,7 @@ async function getLocationSystemSyncFlags(locationId) {
   for (const row of rows || []) {
     const cfg = parseSystemConfig(row.system_config);
     if (row.system_type === "people_counting") {
-      const entryIds = Array.isArray(cfg.entry_device_ids) ? cfg.entry_device_ids : [];
-      if (entryIds.length > 0) peopleCounting = true;
+      if (isPeopleCountingSyncableConfig(cfg)) peopleCounting = true;
     }
     if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
       const entryCam = Array.isArray(cfg.entry_camera_device_ids)
@@ -84,10 +97,7 @@ async function ensureLocationAllowsAccessMembers(locationId) {
           })()
         : row.system_config || {};
     if (row.system_type === "people_counting") {
-      const entryIds = Array.isArray(cfg.entry_device_ids)
-        ? cfg.entry_device_ids
-        : [];
-      if (entryIds.length > 0) allowed = true;
+      if (isPeopleCountingSyncableConfig(cfg)) allowed = true;
     }
     if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
       const entryCam = Array.isArray(cfg.entry_camera_device_ids)
@@ -102,7 +112,7 @@ async function ensureLocationAllowsAccessMembers(locationId) {
   if (!allowed) {
     throwApiError(
       C.PERSONNEL_VALIDATION_FAILED,
-      "此地點不支援名單管理（需設定人流門禁入口設備或 ISAPI 車輛攝影機）",
+      "此地點不支援名單管理（需設定人流門禁入口設備、人流攝影機或 ISAPI 車輛攝影機）",
     );
   }
   return id;

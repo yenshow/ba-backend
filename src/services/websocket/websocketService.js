@@ -610,6 +610,19 @@ function emitIsapiPeopleCountingEvent(data) {
   );
 }
 
+/** 攝影機人臉比對（alarmResult）事件寫入後推送 */
+function emitIsapiFaceContrastEvent(data) {
+  safeEmit(
+    "people-counting:isapi-camera:face-contrast",
+    {
+      ...(data || {}),
+      source: "isapi_camera",
+      timestamp: new Date().toISOString(),
+    },
+    { logMessage: "攝影機人臉比對事件已寫入" },
+  );
+}
+
 /** 梯控 SDK 佈防事件寫入後推送，前端監聽 ladder-sdk:event 並重新載入最新紀錄 */
 function emitLadderSdkEvent(data) {
   safeEmit(
@@ -711,6 +724,7 @@ module.exports = {
   emitOperationalEventNew,
   emitPeopleCountingStatsReset,
   emitIsapiPeopleCountingEvent,
+  emitIsapiFaceContrastEvent,
   emitLadderSdkEvent,
   emitElevatorRuntimeUpdate,
   emitVehicleAccessIsapiEvent,

@@ -3,29 +3,37 @@
  *
  * Runbook：docs/10-setting/troubleshooting-isapi-events.md
  *
- * 用法：修改 SCRIPT_CONFIG 後執行
+ * 用法：修改 SCRIPT_CONFIG 後執行（測人臉時請先停掉後端佈防，避免搶連線）
  *   node scripts/isapiSubscribeProde.js
+ *
+ * fullDump=true：業務事件印完整 JSON／XML（預設省略 modelData base64）
+ * omitModelData=false：連 modelData 也印出（輸出會很長）
  */
 
 /* eslint-disable no-console */
 
-const { createIsapiClient } = require("../src/services/accessControl/isapiClient");
+const {
+  createIsapiClient,
+} = require("../src/services/accessControl/isapiClient");
 
 // ── 現場參數 ─────────────────────────────────────────────────────
 const SCRIPT_CONFIG = {
-  host: "192.168.6.101",
+  host: "192.168.2.103",
   port: 80,
   username: "admin",
-  password: "",
-  /** "all"（門禁）| "list"（PeopleCounting 攝影機） */
-  subscribeMode: "all",
-  channelId: null,
-  eventTypes: ["cidEvent"],
+  password: "Aa83124007",
+  /** "all"（門禁）| "list"（PeopleCounting／人臉攝影機） */
+  subscribeMode: "list",
+  channelId: 1,
+  eventTypes: ["PeopleCounting", "faceCapture", "alarmResult"],
   heartbeat: null,
   xmlNs: "http://www.hikvision.com/ver20/XMLSchema",
   maxParts: 20,
   exitAfterMs: 60_000,
   showKeepAlive: false,
+  /** 業務事件印完整內容（不截斷）；modelData base64 預設省略以便對欄位 */
+  fullDump: true,
+  omitModelData: true,
 };
 // ─────────────────────────────────────────────────────────────────
 
@@ -48,6 +56,39 @@ const toPreviewText = (buf, maxLen = 800) => {
   const s = raw.replace(/^\uFEFF/, "").trim();
   if (!s) return "";
   return s.length > maxLen ? `${s.slice(0, maxLen)}\n... (truncated)` : s;
+};
+
+/** 省略 modelData base64，其餘欄位完整保留 */
+const omitModelDataDeep = (node) => {
+  if (node == null || typeof node !== "object") return node;
+  if (Array.isArray(node)) return node.map(omitModelDataDeep);
+  const out = {};
+  for (const [key, val] of Object.entries(node)) {
+    if (/^modeldata$/i.test(key) && typeof val === "string") {
+      out[key] = `[base64 omitted, ${val.length} chars]`;
+    } else if (val && typeof val === "object") {
+      out[key] = omitModelDataDeep(val);
+    } else {
+      out[key] = val;
+    }
+  }
+  return out;
+};
+
+/** 業務事件完整輸出（JSON pretty；XML 全文） */
+const formatEventDump = (payloadText, { omitModelData = true } = {}) => {
+  const text = String(payloadText || "").replace(/^\uFEFF/, "").trim();
+  if (!text) return "(empty)";
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      let obj = JSON.parse(text);
+      if (omitModelData) obj = omitModelDataDeep(obj);
+      return JSON.stringify(obj, null, 2);
+    } catch {
+      return text;
+    }
+  }
+  return text;
 };
 
 const buildSubscribeXmlList = ({
@@ -89,9 +130,7 @@ const buildSubscribeXml = () => {
   return buildSubscribeXmlList({
     channelId: SCRIPT_CONFIG.channelId,
     eventTypes: SCRIPT_CONFIG.eventTypes,
-    heartbeat:
-      ensureInt(SCRIPT_CONFIG.heartbeat) ??
-      (mode === "list" ? 6 : 30),
+    heartbeat: ensureInt(SCRIPT_CONFIG.heartbeat) ?? (mode === "list" ? 6 : 30),
     xmlns: String(SCRIPT_CONFIG.xmlNs || "").trim() || SCRIPT_CONFIG.xmlNs,
   });
 };
@@ -112,7 +151,10 @@ const extractPartPayload = (headerStr, body) => {
     }
   }
 
-  const payloadText = payload.toString("utf8").replace(/^\uFEFF/, "").trim();
+  const payloadText = payload
+    .toString("utf8")
+    .replace(/^\uFEFF/, "")
+    .trim();
   return { partCt, payload, payloadText };
 };
 
@@ -148,7 +190,9 @@ const isKeepAliveEvent = (payloadText) => {
     const eventType = String(obj.eventType || "").toLowerCase();
     if (eventType === "heartbeat" || eventType === "heart beat") return true;
     if (String(obj.eventState || "").toLowerCase() === "inactive") return true;
-    return !obj.eventType && Boolean(obj.ipAddress || obj.portNo || obj.macAddress);
+    return (
+      !obj.eventType && Boolean(obj.ipAddress || obj.portNo || obj.macAddress)
+    );
   }
 
   if (payloadText[0] === "<") {
@@ -257,6 +301,8 @@ const main = async () => {
     maxParts,
     exitAfterMs,
     showKeepAlive,
+    fullDump,
+    omitModelData,
   } = SCRIPT_CONFIG;
   const port = ensureInt(SCRIPT_CONFIG.port) ?? 80;
 
@@ -276,6 +322,8 @@ const main = async () => {
     port,
     subscribeMode,
     filterKeepAlive: !showKeepAlive,
+    fullDump: fullDump !== false,
+    omitModelData: omitModelData !== false,
   });
   console.log("[ISAPI Probe] XML:\n", xmlBody);
 
@@ -329,7 +377,17 @@ const main = async () => {
           contentType: partCt || "(unknown)",
           bytes: payload.length,
         });
-        if (looksText) console.log(toPreviewText(payload));
+        if (looksText) {
+          if (fullDump === false) {
+            console.log(toPreviewText(payloadText, 800));
+          } else {
+            console.log(
+              formatEventDump(payloadText, {
+                omitModelData: omitModelData !== false,
+              }),
+            );
+          }
+        }
       },
     });
     console.log("\n[ISAPI Probe] done", { ...result, ...stats });
@@ -342,7 +400,7 @@ main().catch((err) => {
   console.error("[ISAPI Probe] failed:", err?.message || String(err));
   if (/HTTP 500/.test(err?.message) && SCRIPT_CONFIG.subscribeMode === "list") {
     console.error(
-      "[ISAPI Probe] 提示：list 模式 500 可改 subscribeMode=all；PeopleCounting 用 eventTypes=[\"PeopleCounting\"]、channelId=1。",
+      '[ISAPI Probe] 提示：list 模式 500 可改 subscribeMode=all；PeopleCounting 用 eventTypes=["PeopleCounting"]、channelId=1。',
     );
   }
   process.exitCode = 1;

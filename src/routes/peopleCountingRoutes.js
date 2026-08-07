@@ -1,5 +1,8 @@
 /**
  * 人流統計地點管理路由
+ *
+ * 人臉比對事件由 isapiPeopleCountingSubscribeService 佈防長連線接收，
+ * 主畫面 logs 經 getSiteLogs（face_recognition）讀取。
  */
 
 const express = require("express");
@@ -20,7 +23,6 @@ const {
   validateNumbers,
 } = require("../middleware/validation");
 
-// 以下路由皆需登入
 router.use(authenticate, requirePermission("system.people_counting"));
 
 // ========== 地點管理路由 ==========

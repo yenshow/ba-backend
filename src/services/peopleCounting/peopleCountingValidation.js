@@ -5,6 +5,10 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
 const { ensureIntArray } = require("../location/locationShared");
+const {
+  normalizeCameraMode,
+  CAMERA_MODE,
+} = require("./peopleCountingConfig");
 
 /**
  * 驗證地點資料（API camelCase）
@@ -22,6 +26,9 @@ function validateLocationData(locationData, isUpdate = false) {
     entryDeviceIds,
     exitDeviceIds,
     cameraDeviceIds,
+    entryCameraDeviceIds,
+    exitCameraDeviceIds,
+    cameraMode,
   } = locationData;
 
   if (!name?.trim()) {
@@ -170,23 +177,70 @@ function validateLocationData(locationData, isUpdate = false) {
       }
     }
     if (effectiveDataSource === "isapi_camera") {
-      const cameraIds = Array.isArray(cameraDeviceIds)
-        ? cameraDeviceIds.filter(
-            (id) => typeof id === "number" && Number.isFinite(id) && id > 0,
-          )
-        : [];
-
-      if (!isUpdate && cameraIds.length === 0) {
-        throwApiError(
-          C.PEOPLE_COUNTING_VALIDATION_FAILED,
-          "至少需要選擇一台攝影機設備",
-        );
+      const mode = normalizeCameraMode(cameraMode);
+      if (cameraMode !== undefined) {
+        const raw = String(cameraMode || "").trim();
+        if (
+          raw !== "" &&
+          raw !== CAMERA_MODE.PEOPLE_COUNTING &&
+          raw !== CAMERA_MODE.FACE_RECOGNITION
+        ) {
+          throwApiError(
+            C.PEOPLE_COUNTING_VALIDATION_FAILED,
+            "攝影機模式須為 people_counting 或 face_recognition",
+          );
+        }
       }
-      if (isUpdate && cameraDeviceIds !== undefined && cameraIds.length === 0) {
-        throwApiError(
-          C.PEOPLE_COUNTING_VALIDATION_FAILED,
-          "至少需要選擇一台攝影機設備",
-        );
+
+      if (mode === CAMERA_MODE.FACE_RECOGNITION) {
+        const entryCam = ensureIntArray(entryCameraDeviceIds);
+        const exitCam = ensureIntArray(exitCameraDeviceIds);
+        const touchingEntryExit =
+          entryCameraDeviceIds !== undefined ||
+          exitCameraDeviceIds !== undefined ||
+          !isUpdate;
+
+        if (touchingEntryExit) {
+          if (entryCam.length === 0) {
+            throwApiError(
+              C.PEOPLE_COUNTING_VALIDATION_FAILED,
+              "人臉辨識模式至少需要選擇一台進場攝影機",
+            );
+          }
+          if (exitCam.length === 0) {
+            throwApiError(
+              C.PEOPLE_COUNTING_VALIDATION_FAILED,
+              "人臉辨識模式至少需要選擇一台出場攝影機",
+            );
+          }
+          const entrySet = new Set(entryCam);
+          for (const id of exitCam) {
+            if (entrySet.has(id)) {
+              throwApiError(
+                C.PEOPLE_COUNTING_VALIDATION_FAILED,
+                "進場與出場攝影機不能為同一設備",
+              );
+            }
+          }
+        }
+      } else {
+        const cameraIds = ensureIntArray(cameraDeviceIds);
+        if (!isUpdate && cameraIds.length === 0) {
+          throwApiError(
+            C.PEOPLE_COUNTING_VALIDATION_FAILED,
+            "至少需要選擇一台攝影機設備",
+          );
+        }
+        if (
+          isUpdate &&
+          cameraDeviceIds !== undefined &&
+          cameraIds.length === 0
+        ) {
+          throwApiError(
+            C.PEOPLE_COUNTING_VALIDATION_FAILED,
+            "至少需要選擇一台攝影機設備",
+          );
+        }
       }
     }
   }
@@ -210,7 +264,10 @@ function validatePeopleCountingSystemConfig(systemConfig, context) {
       entryDeviceIds: ensureIntArray(cfg.entry_device_ids),
       exitDeviceIds: ensureIntArray(cfg.exit_device_ids),
       cameraDeviceIds: ensureIntArray(cfg.camera_device_ids),
+      entryCameraDeviceIds: ensureIntArray(cfg.entry_camera_device_ids),
+      exitCameraDeviceIds: ensureIntArray(cfg.exit_camera_device_ids),
       preferRegion: cfg.prefer_region,
+      cameraMode: normalizeCameraMode(cfg.camera_mode),
     },
     context.isUpdate === true,
   );

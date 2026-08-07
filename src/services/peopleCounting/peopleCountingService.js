@@ -194,8 +194,11 @@ async function createPeopleCountingLocation(locationData, userId) {
         dataSource = "yscp",
         entryDeviceIds = [],
         exitDeviceIds = [],
-        cameraDeviceIds = [],
+        cameraDeviceIds,
+        entryCameraDeviceIds,
+        exitCameraDeviceIds,
         preferRegion,
+        cameraMode,
         accessControlGroups = [], // 相容保留；門禁人員改由人員管理 person_location_access 處理
       } = locationData;
 
@@ -214,8 +217,11 @@ async function createPeopleCountingLocation(locationData, userId) {
             entryDeviceIds,
             exitDeviceIds,
             cameraDeviceIds,
+            entryCameraDeviceIds,
+            exitCameraDeviceIds,
             cameraChannelId: 1,
             preferRegion,
+            cameraMode,
             accessControlGroups,
           },
         },
@@ -247,7 +253,10 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         entryDeviceIds,
         exitDeviceIds,
         cameraDeviceIds,
+        entryCameraDeviceIds,
+        exitCameraDeviceIds,
         preferRegion,
+        cameraMode,
         accessControlGroups,
       } = locationData;
 
@@ -284,8 +293,11 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               .map((id) => Number(id))
               .filter((n) => Number.isFinite(n) && n > 0)
           : [],
+        entry_camera_device_ids: resetFields.entryCameraDeviceIds,
+        exit_camera_device_ids: resetFields.exitCameraDeviceIds,
         camera_channel_id: 1,
         prefer_region: existingConfig.preferRegion ?? false,
+        camera_mode: resetFields.cameraMode,
         access_control_groups: existingConfig.accessControlGroups || [],
         stats_reset_at: resetFields.statsResetAt ?? undefined,
       };
@@ -311,8 +323,25 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
         }),
+        ...(entryCameraDeviceIds !== undefined && {
+          entry_camera_device_ids: Array.isArray(entryCameraDeviceIds)
+            ? entryCameraDeviceIds
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+        }),
+        ...(exitCameraDeviceIds !== undefined && {
+          exit_camera_device_ids: Array.isArray(exitCameraDeviceIds)
+            ? exitCameraDeviceIds
+                .map((id) => Number(id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+        }),
         ...(preferRegion !== undefined && {
           prefer_region: preferRegion,
+        }),
+        ...(cameraMode !== undefined && {
+          camera_mode: cameraMode,
         }),
         ...(accessControlGroups !== undefined && {
           access_control_groups: accessControlGroups,
@@ -335,8 +364,11 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               entryDeviceIds: config.entry_device_ids,
               exitDeviceIds: config.exit_device_ids,
               cameraDeviceIds: config.camera_device_ids,
+              entryCameraDeviceIds: config.entry_camera_device_ids,
+              exitCameraDeviceIds: config.exit_camera_device_ids,
               cameraChannelId: 1,
               preferRegion: config.prefer_region,
+              cameraMode: config.camera_mode,
               accessControlGroups: config.access_control_groups,
               statsResetAt: config.stats_reset_at ?? undefined,
             },
@@ -457,6 +489,7 @@ async function getSites() {
         id: locationId,
         name: location.name,
         dataSource: "isapi_camera",
+        cameraMode: siteConfig.cameraMode,
         entryCount: data.entryCount,
         exitCount: data.exitCount,
         currentCount: data.currentCount ?? 0,
@@ -681,11 +714,12 @@ function getPeopleCountingConfig(location) {
     dataSource: peopleCountingSystem?.config?.dataSource || "yscp",
     entryDeviceIds: ensureArray(peopleCountingSystem?.config?.entryDeviceIds),
     exitDeviceIds: ensureArray(peopleCountingSystem?.config?.exitDeviceIds),
-    cameraDeviceIds: ensureArray(peopleCountingSystem?.config?.cameraDeviceIds)
-      .map((id) => Number(id))
-      .filter((n) => Number.isFinite(n) && n > 0),
+    cameraDeviceIds: resetFields.cameraDeviceIds,
+    entryCameraDeviceIds: resetFields.entryCameraDeviceIds,
+    exitCameraDeviceIds: resetFields.exitCameraDeviceIds,
     cameraChannelId: 1,
     preferRegion: peopleCountingSystem?.config?.preferRegion ?? false,
+    cameraMode: resetFields.cameraMode,
     accessControlGroups: ensureArray(
       peopleCountingSystem?.config?.accessControlGroups,
     ),
@@ -715,8 +749,11 @@ async function getSiteConfig(siteId) {
     entryDeviceIds: config.entryDeviceIds,
     exitDeviceIds: config.exitDeviceIds,
     cameraDeviceIds: config.cameraDeviceIds,
+    entryCameraDeviceIds: config.entryCameraDeviceIds,
+    exitCameraDeviceIds: config.exitCameraDeviceIds,
     cameraChannelId: 1,
     preferRegion: config.preferRegion,
+    cameraMode: config.cameraMode,
     accessControlGroups: config.accessControlGroups,
     statsResetAt: config.statsResetAt,
   };

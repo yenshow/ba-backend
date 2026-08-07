@@ -81,8 +81,15 @@ function peopleCountingRowConfigToMergeInput(raw) {
     cameraDeviceIds: Array.isArray(c.camera_device_ids)
       ? c.camera_device_ids
       : [],
+    entryCameraDeviceIds: Array.isArray(c.entry_camera_device_ids)
+      ? c.entry_camera_device_ids
+      : [],
+    exitCameraDeviceIds: Array.isArray(c.exit_camera_device_ids)
+      ? c.exit_camera_device_ids
+      : [],
     cameraChannelId: c.camera_channel_id,
     preferRegion: c.prefer_region,
+    cameraMode: c.camera_mode,
     accessControlGroups: c.access_control_groups,
     statsResetAt: c.stats_reset_at ?? c.statsResetAt,
   };
@@ -218,13 +225,10 @@ function buildSystemConfig(systemType, config) {
       } = require("../peopleCounting/logDisplayColumns");
       const {
         parsePeopleCountingConfigFields,
+        CAMERA_MODE,
       } = require("../peopleCounting/peopleCountingConfig");
       const resetFields = parsePeopleCountingConfigFields(config);
-      const ids = Array.isArray(config.cameraDeviceIds)
-        ? config.cameraDeviceIds
-            .map((id) => Number(id))
-            .filter((n) => Number.isFinite(n) && n > 0)
-        : [];
+      const isFace = resetFields.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
       return {
         person_group_ids: config.personGroupIds || [],
         entry_door_ids: Array.isArray(config.entryDoorIds)
@@ -240,9 +244,16 @@ function buildSystemConfig(systemType, config) {
         exit_device_ids: Array.isArray(config.exitDeviceIds)
           ? config.exitDeviceIds
           : [],
-        camera_device_ids: ids,
+        camera_device_ids: isFace ? [] : resetFields.cameraDeviceIds,
+        entry_camera_device_ids: isFace
+          ? resetFields.entryCameraDeviceIds
+          : [],
+        exit_camera_device_ids: isFace
+          ? resetFields.exitCameraDeviceIds
+          : [],
         camera_channel_id: 1,
         prefer_region: config.preferRegion ?? false,
+        camera_mode: resetFields.cameraMode,
         access_control_groups: config.accessControlGroups || [], // 相容保留
         log_display_columns: (() => {
           const cols = toStoredLogDisplayColumns(
@@ -653,6 +664,8 @@ async function createLocationWithSystems(
       exitLaneId,
       entryCameraDeviceIds,
       exitCameraDeviceIds,
+      cameraDeviceIds,
+      cameraMode,
       cameraChannelId,
       config,
       equipmentKind,
@@ -706,6 +719,13 @@ async function createLocationWithSystems(
             systemConfig.exitDeviceIds = exitDeviceIds;
           if (accessControlGroups !== undefined)
             systemConfig.accessControlGroups = accessControlGroups;
+          if (cameraDeviceIds !== undefined)
+            systemConfig.cameraDeviceIds = cameraDeviceIds;
+          if (entryCameraDeviceIds !== undefined)
+            systemConfig.entryCameraDeviceIds = entryCameraDeviceIds;
+          if (exitCameraDeviceIds !== undefined)
+            systemConfig.exitCameraDeviceIds = exitCameraDeviceIds;
+          if (cameraMode !== undefined) systemConfig.cameraMode = cameraMode;
           break;
         case "elevator": {
           if (location.accessDeviceIds !== undefined) {

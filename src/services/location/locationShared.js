@@ -7,7 +7,12 @@ const { throwApiError } = require("../../utils/apiErrors");
 /**
  * 處理唯一性約束錯誤
  */
-function handleUniqueConstraintError(error, constraintName, code, errorMessage) {
+function handleUniqueConstraintError(
+  error,
+  constraintName,
+  code,
+  errorMessage,
+) {
   if (error.code === "23505" && error.constraint === constraintName) {
     throwApiError(code, errorMessage);
   }
@@ -351,6 +356,12 @@ function formatSystem(system) {
       const {
         normalizeLogDisplayColumns,
       } = require("../peopleCounting/logDisplayColumns");
+      const {
+        parsePeopleCountingConfigFields,
+        CAMERA_MODE,
+      } = require("../peopleCounting/peopleCountingConfig");
+      const cameras = parsePeopleCountingConfigFields(config);
+      const isFace = cameras.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
       return {
         ...baseSystem,
         config: {
@@ -376,15 +387,22 @@ function formatSystem(system) {
                 .map((id) => Number(id))
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
-          cameraDeviceIds: Array.isArray(config.camera_device_ids)
-            ? config.camera_device_ids
-                .map((id) => Number(id))
-                .filter((n) => Number.isFinite(n) && n > 0)
+          cameraDeviceIds: isFace
+            ? undefined
+            : cameras.cameraDeviceIds.length
+              ? cameras.cameraDeviceIds
+              : undefined,
+          entryCameraDeviceIds: isFace
+            ? cameras.entryCameraDeviceIds
             : undefined,
+          exitCameraDeviceIds: isFace ? cameras.exitCameraDeviceIds : undefined,
           cameraChannelId: config.camera_channel_id ?? undefined,
           preferRegion: config.prefer_region ?? undefined,
+          cameraMode: cameras.cameraMode,
           accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
-          logDisplayColumns: normalizeLogDisplayColumns(config.log_display_columns),
+          logDisplayColumns: normalizeLogDisplayColumns(
+            config.log_display_columns,
+          ),
           statsResetAt: config.stats_reset_at ?? undefined,
         },
       };
@@ -704,7 +722,9 @@ function refreshSubscribesForSystemType(systemType, logger) {
   const run = async () => {
     const featureKey = ISAPI_SUBSCRIBE_FEATURE_BY_SYSTEM_TYPE[systemType];
     if (featureKey) {
-      return require("../isapi/isapiSubscribeHub").refreshForFeature(featureKey);
+      return require("../isapi/isapiSubscribeHub").refreshForFeature(
+        featureKey,
+      );
     }
     if (systemType === "elevator") {
       return require("../license/licenseRuntimeService").reconcileElevatorArmingAfterLocationChange();

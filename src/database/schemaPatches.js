@@ -535,6 +535,46 @@ async function ensureAlertAccessDoorDeviceIds(pool) {
   `);
 }
 
+/** 既有庫：補建人臉比對事件表（initSchema 已有；舊庫靠 patch） */
+async function ensureIsapiFaceContrastEventsTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS isapi_face_contrast_events (
+      id BIGSERIAL PRIMARY KEY,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      device_ip VARCHAR(255),
+      channel_id INTEGER NOT NULL DEFAULT 1,
+      event_time TIMESTAMPTZ NOT NULL,
+      event_type VARCHAR(64) NOT NULL DEFAULT 'alarmResult',
+      similarity DOUBLE PRECISION,
+      employee_no VARCHAR(64),
+      person_name VARCHAR(255),
+      pid VARCHAR(64),
+      certificate_number VARCHAR(128),
+      matched BOOLEAN NOT NULL DEFAULT TRUE,
+      payload JSONB,
+      picture_path TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_isapi_face_contrast_events_location_time
+    ON isapi_face_contrast_events(location_id, event_time DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_isapi_face_contrast_events_device_time
+    ON isapi_face_contrast_events(device_id, event_time DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_isapi_face_contrast_events_employee
+    ON isapi_face_contrast_events(employee_no)
+  `);
+  await pool.query(`
+    ALTER TABLE isapi_face_contrast_events
+      ADD COLUMN IF NOT EXISTS picture_path TEXT
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -542,6 +582,7 @@ async function applySchemaPatches(pool) {
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
+  await ensureIsapiFaceContrastEventsTable(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
   const deviceModelSync = await syncDeviceModelCatalog(pool);
   logger.info("schema patches 已套用", {
@@ -559,6 +600,7 @@ module.exports = {
   ensureExternalIntegrationTables,
   ensureOperationalEventsTable,
   ensureAlertAccessDoorDeviceIds,
+  ensureIsapiFaceContrastEventsTable,
   migrateLegacySensorModelConfigs,
   applySchemaPatches,
 };

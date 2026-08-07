@@ -9,6 +9,7 @@ const accessControlService = require("../accessControl/accessControlService");
 const {
   buildIsapiValidPayloadFromPlatformValidity,
 } = require("../accessControl/accessControlHelpers");
+const isapiCameraFdLibService = require("../peopleCounting/isapiCameraFdLibService");
 const personnelService = require("./personnelService");
 const logger = require("../../utils/logger").createLogger("PersonSyncService");
 const personDeviceSyncStateService = require("./personDeviceSyncStateService");
@@ -29,8 +30,7 @@ function normalizeIsapiErrorMessage(raw) {
   // ISAPI 常見回應：Unauthorized: <userCheck ...><statusValue>401</statusValue>...
   if (
     /Unauthorized/i.test(msg) &&
-    (/<statusValue>\s*401\s*<\/statusValue>/i.test(msg) ||
-      /\b401\b/.test(msg))
+    (/<statusValue>\s*401\s*<\/statusValue>/i.test(msg) || /\b401\b/.test(msg))
   ) {
     return "設備驗證失敗（401 Unauthorized），請確認帳密/權限";
   }
@@ -246,8 +246,19 @@ function createAllLocationsItemReporter(rootJob, locationId) {
   return { startOp, finishOp, skipOp, setTotals: noOp, markDevice: noOp };
 }
 
+function normalizePositiveIntIds(list) {
+  return [
+    ...new Set(
+      (Array.isArray(list) ? list : [])
+        .map((v) => Number(v))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  ];
+}
+
 /**
- * 取得地點的 people_counting 設定（entry/exit 門禁設備 ID）
+ * 取得地點的 people_counting 設定（門禁 entry/exit 與／或攝影機 camera_device_ids）
  */
 async function getPeopleCountingDevicesForLocation(locationId) {
   const rows = await db.query(
@@ -257,20 +268,34 @@ async function getPeopleCountingDevicesForLocation(locationId) {
   if (!rows || rows.length === 0) return null;
   const config = rows[0].system_config;
   const raw = typeof config === "string" ? JSON.parse(config) : config || {};
-  const entryDeviceIds = Array.isArray(raw.entry_device_ids)
-    ? raw.entry_device_ids
-    : [];
-  const exitDeviceIds = Array.isArray(raw.exit_device_ids)
-    ? raw.exit_device_ids
-    : [];
-  if (entryDeviceIds.length === 0) return null;
+  const entryDeviceIds = normalizePositiveIntIds(raw.entry_device_ids);
+  const exitDeviceIds = normalizePositiveIntIds(raw.exit_device_ids);
+  const {
+    resolvePeopleCountingCameraDevices,
+    isFaceRecognitionCameraMode,
+  } = require("../peopleCounting/peopleCountingConfig");
+  const cameras = resolvePeopleCountingCameraDevices(raw);
+  const cameraDeviceIds =
+    String(raw.data_source || "").trim() === "isapi_camera" &&
+    isFaceRecognitionCameraMode(raw.camera_mode)
+      ? cameras.cameraDeviceIds
+      : [];
+  const cameraChannelId = (() => {
+    const n = Number(raw.camera_channel_id);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 1;
+  })();
+  if (
+    entryDeviceIds.length === 0 &&
+    exitDeviceIds.length === 0 &&
+    cameraDeviceIds.length === 0
+  ) {
+    return null;
+  }
   return {
-    entryDeviceIds: entryDeviceIds
-      .map((v) => Number(v))
-      .filter((n) => Number.isFinite(n) && n > 0),
-    exitDeviceIds: exitDeviceIds
-      .map((v) => Number(v))
-      .filter((n) => Number.isFinite(n) && n > 0),
+    entryDeviceIds,
+    exitDeviceIds,
+    cameraDeviceIds,
+    cameraChannelId,
   };
 }
 
@@ -283,7 +308,7 @@ async function getLocationName(locationId) {
 }
 
 /**
- * 取得所有可同步的地點（people_counting 且具 entry_device_ids）
+ * 取得所有可同步的地點（people_counting：門禁入口或 ISAPI 攝影機）
  */
 async function getSyncableLocations() {
   const rows = await db.query(
@@ -292,6 +317,15 @@ async function getSyncableLocations() {
      INNER JOIN zones z ON l.zone_id = z.id
      INNER JOIN location_systems ls ON l.id = ls.location_id AND ls.system_type = 'people_counting'
      WHERE COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+        OR (
+          COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
+          AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
+          AND (
+            COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
+            OR COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
+            OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
+          )
+        )
      ORDER BY z.name, l.name`,
     [],
   );
@@ -628,7 +662,9 @@ async function syncPersonToDevice(
   const cardNos = resolveCardNos(ac);
   const cardsHash = personDeviceSyncStateService.hashCards({ cardNos });
   const lastHash = stateRow?.card_hash ? String(stateRow.card_hash) : null;
-  const lastStatus = stateRow?.card_status ? String(stateRow.card_status) : null;
+  const lastStatus = stateRow?.card_status
+    ? String(stateRow.card_status)
+    : null;
 
   if (!cardNos.length) {
     try {
@@ -1165,7 +1201,9 @@ async function syncAccessDevicesWithPersons(
           })
         : null;
       try {
-        await syncPersonToDevice(deviceId, p, warnings, reporter, { deviceNameById });
+        await syncPersonToDevice(deviceId, p, warnings, reporter, {
+          deviceNameById,
+        });
         reporter?.finishOp?.({
           employeeNo: p.employeeNo,
           deviceId,
@@ -1318,14 +1356,390 @@ async function syncAccessDevicesWithPersons(
 }
 
 /**
- * 對單一地點執行同步：目標名單為來源，設備與之對齊（新增/更新姓名與人臉；刪除僅限平台曾同步且已不在名單者）
+ * 將單一人員人臉同步至攝影機 FDLib（pictureUpload）；無圖則略過寫入（不改門禁無臉 UX）
+ */
+async function syncPersonFaceToCamera(
+  deviceId,
+  person,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const stateByEmployeeNo = reporter?.__stateByEmployeeNo || null;
+  const stateRow =
+    stateByEmployeeNo && person?.employeeNo != null
+      ? stateByEmployeeNo.get(String(person.employeeNo)) || null
+      : null;
+  const faceUrlRaw =
+    person?.face_url != null ? String(person.face_url).trim() : "";
+  const libMeta = options.libMeta || null;
+
+  const imageBuffer = await resolveFaceUrlToBuffer(person.face_url);
+  if (!faceUrlRaw || !imageBuffer || imageBuffer.length === 0) {
+    if (faceUrlRaw) {
+      const message = "平台大頭照無法讀取（檔案可能遺失或 URL 無效）";
+      logger.warn("攝影機人臉：解析 face_url 失敗（略過）", {
+        deviceId,
+        employeeNo: person.employeeNo,
+      });
+      pushPersonSyncWarning(warnings, person, {
+        type: "face",
+        deviceId,
+        message,
+      });
+      const startedAt = reporter?.startOp
+        ? reporter.startOp({
+            employeeNo: person.employeeNo,
+            deviceId,
+            action: "sync",
+            stage: "face",
+          })
+        : null;
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employeeNo,
+        step: "face",
+        status: "failed",
+        hash: personDeviceSyncStateService.hashFace({
+          faceBuffer: null,
+          faceUrl: faceUrlRaw,
+        }),
+        syncedAt: new Date(),
+        lastErrorMessage: message,
+      });
+      reporter?.finishOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "face",
+        startedAt,
+        ok: false,
+        message,
+      });
+    }
+    return;
+  }
+
+  const isLocalUpload = faceUrlRaw.startsWith("/uploads/");
+  const faceHash = personDeviceSyncStateService.hashFace({
+    faceBuffer: isLocalUpload ? imageBuffer : null,
+    faceUrl: isLocalUpload ? null : faceUrlRaw,
+  });
+  const lastHash = stateRow?.face_hash ? String(stateRow.face_hash) : null;
+  const lastStatus = stateRow?.face_status
+    ? String(stateRow.face_status)
+    : null;
+  if (
+    lastStatus === "success" &&
+    lastHash &&
+    faceHash &&
+    lastHash === faceHash
+  ) {
+    reporter?.skipOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "face",
+      message: "未變更",
+    });
+    return;
+  }
+
+  const startedAt = reporter?.startOp
+    ? reporter.startOp({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "face",
+      })
+    : null;
+  try {
+    // 曾同步過才先刪再傳，避免全新上傳多打 FDSearch
+    if (stateRow?.face_status || stateRow?.face_hash) {
+      try {
+        await isapiCameraFdLibService.deleteByCustomHumanId(
+          deviceId,
+          person.employeeNo,
+        );
+      } catch (_e) {
+        // 忽略：庫空或搜尋失敗時仍嘗試上傳
+      }
+    }
+    await isapiCameraFdLibService.pictureUpload(deviceId, {
+      employeeNo: person.employeeNo,
+      name: person.name,
+      imageBuffer,
+      FDID: libMeta?.FDID,
+      faceLibType: libMeta?.faceLibType,
+    });
+    await delay(SYNC_DELAY_MS);
+    await personDeviceSyncStateService.upsertStepState({
+      deviceId,
+      employeeNo: person.employeeNo,
+      step: "face",
+      status: "success",
+      hash: faceHash,
+      syncedAt: new Date(),
+      lastErrorMessage: null,
+    });
+    reporter?.finishOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "face",
+      startedAt,
+      ok: true,
+    });
+  } catch (faceErr) {
+    const message = normalizeIsapiErrorMessage(toMessage(faceErr));
+    logger.warn("攝影機 FDLib 上傳人臉失敗", {
+      deviceId,
+      employeeNo: person.employeeNo,
+      error: message,
+    });
+    pushPersonSyncWarning(warnings, person, {
+      type: "face",
+      deviceId,
+      deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
+      message,
+    });
+    await personDeviceSyncStateService.upsertStepState({
+      deviceId,
+      employeeNo: person.employeeNo,
+      step: "face",
+      status: "failed",
+      hash: faceHash,
+      syncedAt: new Date(),
+      lastErrorMessage: message,
+    });
+    reporter?.finishOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "face",
+      startedAt,
+      ok: false,
+      message,
+    });
+  }
+}
+
+/**
+ * 將目標人員名單同步至多台人流攝影機（僅臉庫；刪除僅限平台曾同步且已不在目標名單者）
+ */
+async function syncCameraDevicesWithPersons(
+  deviceIds,
+  targetList,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const locationId =
+    options.locationId != null ? Number(options.locationId) : null;
+  const channelId =
+    options.cameraChannelId != null ? Number(options.cameraChannelId) : 1;
+  const targetEmployeeNos = new Set(
+    (targetList || []).map((p) => String(p.employeeNo)),
+  );
+  const normalizedDeviceIds = normalizePositiveIntIds(deviceIds);
+  if (!normalizedDeviceIds.length) return;
+
+  const platformSyncedByDevice =
+    await personDeviceSyncStateService.getSyncedEmployeeNosByDeviceIds(
+      normalizedDeviceIds,
+    );
+  const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
+  reporter?.setTotals?.({
+    targetPersonsTotal: (targetList || []).length,
+    deviceTotal: normalizedDeviceIds.length,
+  });
+
+  let estimatedTotalOps = 0;
+  for (const deviceId of normalizedDeviceIds) {
+    const synced = platformSyncedByDevice.get(Number(deviceId)) || new Set();
+    const toDelete = [...synced].filter(
+      (no) => !targetEmployeeNos.has(String(no)),
+    );
+    estimatedTotalOps += (targetList || []).length + toDelete.length;
+  }
+  reporter?.setTotals?.({ totalOps: estimatedTotalOps });
+
+  for (let i = 0; i < normalizedDeviceIds.length; i++) {
+    const deviceId = normalizedDeviceIds[i];
+    reporter?.markDevice?.({
+      deviceId,
+      deviceIndex: i + 1,
+      deviceTotal: normalizedDeviceIds.length,
+    });
+
+    let libMeta = null;
+    try {
+      libMeta = await isapiCameraFdLibService.ensureFaceLib(deviceId);
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      logger.warn("攝影機人臉庫準備失敗（跳過該設備）", {
+        deviceId,
+        error: message,
+      });
+      warnings.push({
+        type: "sync",
+        ...(locationId != null ? { locationId } : {}),
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        message: `攝影機人臉庫準備失敗：${message}`,
+      });
+      continue;
+    }
+
+    // faceContrast 為比對規則；失敗不應阻擋 pictureUpload（設備可能已用網頁設定，或 XML schema 不同）
+    try {
+      await isapiCameraFdLibService.ensureFaceContrast(deviceId, {
+        channelId,
+        FDID: libMeta.FDID,
+        faceLibType: libMeta.faceLibType,
+      });
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      logger.warn("攝影機 faceContrast 設定失敗（仍繼續上傳人臉）", {
+        deviceId,
+        error: message,
+      });
+      warnings.push({
+        type: "sync",
+        ...(locationId != null ? { locationId } : {}),
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        message: `faceContrast 設定失敗（人臉仍會上傳）：${message}`,
+      });
+    }
+
+    const stateMap = await personDeviceSyncStateService.getStatesForDevice(
+      deviceId,
+      targetList.map((p) => p.employeeNo),
+    );
+    if (reporter && typeof reporter === "object") {
+      reporter.__stateByEmployeeNo = stateMap;
+    }
+
+    for (const p of targetList || []) {
+      const startedAt = reporter?.startOp
+        ? reporter.startOp({
+            employeeNo: p.employeeNo,
+            deviceId,
+            action: "update",
+            stage: "person",
+          })
+        : null;
+      try {
+        await syncPersonFaceToCamera(deviceId, p, warnings, reporter, {
+          libMeta,
+          deviceNameById,
+        });
+        reporter?.finishOp?.({
+          employeeNo: p.employeeNo,
+          deviceId,
+          action: "update",
+          stage: "person",
+          startedAt,
+          ok: true,
+        });
+      } catch (err) {
+        const message = normalizeIsapiErrorMessage(toMessage(err));
+        pushPersonSyncWarning(warnings, p, {
+          type: "update",
+          deviceId,
+          deviceName: deviceNameById.get(Number(deviceId)) || null,
+          message: `攝影機同步失敗：${message}`,
+        });
+        reporter?.finishOp?.({
+          employeeNo: p.employeeNo,
+          deviceId,
+          action: "update",
+          stage: "person",
+          startedAt,
+          ok: false,
+          message,
+        });
+      }
+    }
+
+    const synced = platformSyncedByDevice.get(Number(deviceId)) || new Set();
+    const toDelete = personDeviceSyncStateService.filterDeletableEmployeeNos(
+      synced,
+      targetEmployeeNos,
+      synced,
+    );
+
+    for (const no of toDelete) {
+      const startedAt = reporter?.startOp
+        ? reporter.startOp({
+            employeeNo: String(no),
+            deviceId,
+            action: "delete",
+            stage: "person",
+          })
+        : null;
+      try {
+        await isapiCameraFdLibService.deleteByCustomHumanId(deviceId, no);
+        await delay(SYNC_DELAY_MS);
+        await db.query(
+          `UPDATE person_device_sync_states
+           SET face_status = NULL,
+               face_hash = NULL,
+               face_synced_at = NULL,
+               last_error_message = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE device_id = ? AND employee_no = ?`,
+          [deviceId, String(no)],
+        );
+        reporter?.finishOp?.({
+          employeeNo: String(no),
+          deviceId,
+          action: "delete",
+          stage: "person",
+          startedAt,
+          ok: true,
+        });
+      } catch (err) {
+        const message = normalizeIsapiErrorMessage(toMessage(err));
+        warnings.push({
+          type: "delete",
+          ...(locationId != null ? { locationId } : {}),
+          deviceId,
+          deviceName: deviceNameById.get(Number(deviceId)) || null,
+          employeeNo: String(no),
+          message: `攝影機刪除失敗：${message}`,
+        });
+        reporter?.finishOp?.({
+          employeeNo: String(no),
+          deviceId,
+          action: "delete",
+          stage: "person",
+          startedAt,
+          ok: false,
+          message,
+        });
+      }
+    }
+
+    if (reporter && typeof reporter === "object") {
+      reporter.__stateByEmployeeNo = null;
+    }
+  }
+}
+
+/**
+ * 對單一地點執行同步：目標名單為來源；門禁走 UserInfo 四步、攝影機走 FDLib 臉庫
  * @returns {{ warnings: Array<{ type: string, employeeNo?: string, deviceId?: number, message: string }> }}
  */
 async function syncLocation(locationId, reporter = null) {
   const warnings = [];
   const devs = await getPeopleCountingDevicesForLocation(locationId);
   if (!devs) {
-    throwApiError(C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED, "該地點未設定門禁入口設備");
+    throwApiError(
+      C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED,
+      "該地點未設定門禁入口設備或人流攝影機",
+    );
   }
 
   const persons =
@@ -1337,12 +1751,32 @@ async function syncLocation(locationId, reporter = null) {
     config: p.config || null,
   }));
 
-  const deviceIds = [
+  const accessDeviceIds = [
     ...new Set([...(devs.entryDeviceIds || []), ...(devs.exitDeviceIds || [])]),
   ];
-  await syncAccessDevicesWithPersons(deviceIds, targetList, warnings, reporter, {
-    locationId,
-  });
+  if (accessDeviceIds.length > 0) {
+    await syncAccessDevicesWithPersons(
+      accessDeviceIds,
+      targetList,
+      warnings,
+      reporter,
+      { locationId },
+    );
+  }
+
+  const cameraDeviceIds = devs.cameraDeviceIds || [];
+  if (cameraDeviceIds.length > 0) {
+    await syncCameraDevicesWithPersons(
+      cameraDeviceIds,
+      targetList,
+      warnings,
+      reporter,
+      {
+        locationId,
+        cameraChannelId: devs.cameraChannelId,
+      },
+    );
+  }
 
   logger.info("同步完成", { locationId, warningsCount: warnings.length });
   return { warnings };
@@ -1360,12 +1794,7 @@ async function syncPersonsToAccessDevices({
     face_url: p.face_url || null,
     config: p.config || null,
   }));
-  await syncAccessDevicesWithPersons(
-    deviceIds,
-    targetList,
-    warnings,
-    reporter,
-  );
+  await syncAccessDevicesWithPersons(deviceIds, targetList, warnings, reporter);
   return { warnings };
 }
 
@@ -1416,7 +1845,11 @@ function startSyncLocationJob(locationId) {
     };
 
     try {
-      await personSyncJobStore.updateJob(jobId, { status: "running", startedAt, progress });
+      await personSyncJobStore.updateJob(jobId, {
+        status: "running",
+        startedAt,
+        progress,
+      });
       job.locationName = await getLocationName(job.locationId);
 
       const reporter = createLocationJobReporter(job, job.locationId);
@@ -1431,7 +1864,11 @@ function startSyncLocationJob(locationId) {
       job.progress.currentAction = null;
       job.progress.currentStage = null;
 
-      await personSyncJobStore.replaceWarnings(jobId, result?.warnings ?? [], job.locationId);
+      await personSyncJobStore.replaceWarnings(
+        jobId,
+        result?.warnings ?? [],
+        job.locationId,
+      );
       await personSyncJobStore.updateJob(jobId, {
         status: "completed",
         finishedAt,
@@ -1469,12 +1906,18 @@ async function getSyncLocationJobView(jobId, options = {}) {
   const includeIssues = Boolean(options.includeIssues);
   const includeTail = Boolean(options.includeTail);
   const issuesLimit =
-    options.issuesLimit != null ? Math.max(0, Math.trunc(Number(options.issuesLimit))) : null;
+    options.issuesLimit != null
+      ? Math.max(0, Math.trunc(Number(options.issuesLimit)))
+      : null;
   const tailLimit =
-    options.tailLimit != null ? Math.max(0, Math.trunc(Number(options.tailLimit))) : null;
+    options.tailLimit != null
+      ? Math.max(0, Math.trunc(Number(options.tailLimit)))
+      : null;
 
   const locationName =
-    job.locationId != null ? await getLocationName(Number(job.locationId)) : null;
+    job.locationId != null
+      ? await getLocationName(Number(job.locationId))
+      : null;
 
   const base = {
     jobId: job.jobId,
@@ -1501,7 +1944,9 @@ async function getSyncLocationJobView(jobId, options = {}) {
       offset: 0,
     });
     base.items = page?.items ?? [];
-    base.itemsMeta.issuesStored = Array.isArray(base.items) ? base.items.length : 0;
+    base.itemsMeta.issuesStored = Array.isArray(base.items)
+      ? base.items.length
+      : 0;
   }
   if (includeTail) {
     const page = await personSyncJobStore.listItems(jobId, "tail", {
@@ -1509,14 +1954,20 @@ async function getSyncLocationJobView(jobId, options = {}) {
       offset: 0,
     });
     base.tailItems = page?.items ?? [];
-    base.itemsMeta.tailStored = Array.isArray(base.tailItems) ? base.tailItems.length : 0;
+    base.itemsMeta.tailStored = Array.isArray(base.tailItems)
+      ? base.tailItems.length
+      : 0;
   }
 
   // 若沒 includeIssues/includeTail，仍回傳 stored=0（避免額外查詢）
   return base;
 }
 
-async function getSyncLocationJobItems(jobId, type = "issues", { limit = 200, offset = 0 } = {}) {
+async function getSyncLocationJobItems(
+  jobId,
+  type = "issues",
+  { limit = 200, offset = 0 } = {},
+) {
   const t = String(type || "").trim() === "tail" ? "tail" : "issues";
   const page = await personSyncJobStore.listItems(jobId, t, { limit, offset });
   if (!page) return null;
@@ -1586,10 +2037,16 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
           faceUrl: null,
         });
       } else {
-        hash = personDeviceSyncStateService.hashFace({ faceBuffer: null, faceUrl: u });
+        hash = personDeviceSyncStateService.hashFace({
+          faceBuffer: null,
+          faceUrl: u,
+        });
       }
     } catch (_e) {
-      hash = personDeviceSyncStateService.hashFace({ faceBuffer: null, faceUrl: u });
+      hash = personDeviceSyncStateService.hashFace({
+        faceBuffer: null,
+        faceUrl: u,
+      });
     }
     faceHashCache.set(u, hash);
     return hash;
@@ -1646,7 +2103,11 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     if (desired == null) return { status: "no_data", at: null };
     if (rows.length === 0) return { status: "success", at: null };
     if (hasFailed) return { status: "failed", at: lastAt };
-    if (hasSuccess && successCount === rows.length && matchCount === rows.length)
+    if (
+      hasSuccess &&
+      successCount === rows.length &&
+      matchCount === rows.length
+    )
       return { status: "unchanged", at: lastAt };
     if (hasSuccess) return { status: "success", at: lastAt };
     return { status: "success", at: lastAt };
@@ -1679,7 +2140,9 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
 
     const faceUrl =
       person?.face_url != null ? String(person.face_url).trim() : "";
-    const desiredFaceHash = faceUrl ? await computeDesiredFaceHash(faceUrl) : null;
+    const desiredFaceHash = faceUrl
+      ? await computeDesiredFaceHash(faceUrl)
+      : null;
 
     const cardNos = resolveCardNos(ac);
     const desiredCardHash = cardNos.length
@@ -1769,7 +2232,12 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     const n = needs[idx] || {
       needsSync: true,
       needsSyncSteps: ["user_info"],
-      desired: { userInfoHash: null, faceHash: null, cardHash: null, fingerprintHash: null },
+      desired: {
+        userInfoHash: null,
+        faceHash: null,
+        cardHash: null,
+        fingerprintHash: null,
+      },
     };
     const { needsSync, needsSyncSteps, desired } = n;
     return {
@@ -1782,10 +2250,18 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       needs_sync: needsSync,
       needs_sync_steps: needsSyncSteps,
       last_sync: {
-        user_info: aggStep(employeeNo, "userInfo", desired?.userInfoHash ?? null),
+        user_info: aggStep(
+          employeeNo,
+          "userInfo",
+          desired?.userInfoHash ?? null,
+        ),
         face: aggStep(employeeNo, "face", desired?.faceHash ?? null),
         card: aggStep(employeeNo, "card", desired?.cardHash ?? null),
-        fingerprint: aggStep(employeeNo, "fingerprint", desired?.fingerprintHash ?? null),
+        fingerprint: aggStep(
+          employeeNo,
+          "fingerprint",
+          desired?.fingerprintHash ?? null,
+        ),
       },
     };
   });
@@ -1796,7 +2272,7 @@ async function getSyncCandidatesForLocation(locationId) {
     await personnelService.getPersonsWithAccessByLocationId(locationId);
   const list = Array.isArray(rows) ? rows : [];
   const devs = await getPeopleCountingDevicesForLocation(locationId);
-  const deviceIds = devs
+  const accessDeviceIds = devs
     ? [
         ...new Set([
           ...(devs.entryDeviceIds || []),
@@ -1804,7 +2280,78 @@ async function getSyncCandidatesForLocation(locationId) {
         ]),
       ]
     : [];
-  return buildAccessSyncFieldsForPersons(list, deviceIds);
+  const cameraDeviceIds = devs ? [...(devs.cameraDeviceIds || [])] : [];
+
+  // 僅攝影機：沿用 face 彙總，其餘步驟固定 no_data（避免 UserInfo 誤判需同步）
+  if (accessDeviceIds.length === 0 && cameraDeviceIds.length > 0) {
+    const fields = await buildAccessSyncFieldsForPersons(list, cameraDeviceIds);
+    return fields.map(toCameraOnlyCandidateRow);
+  }
+
+  const fields = await buildAccessSyncFieldsForPersons(list, accessDeviceIds);
+  if (cameraDeviceIds.length === 0) return fields;
+
+  const cameraFields = await buildAccessSyncFieldsForPersons(
+    list,
+    cameraDeviceIds,
+  );
+  const camByNo = new Map(
+    cameraFields.map((r) => [
+      String(r.employee_no),
+      toCameraOnlyCandidateRow(r),
+    ]),
+  );
+  return fields.map((row) => {
+    const cam = camByNo.get(String(row.employee_no));
+    if (!cam) return row;
+    const accessFace = row.last_sync?.face || { status: "no_data", at: null };
+    const cameraFace = cam.last_sync?.face || { status: "no_data", at: null };
+    const mergedFace = mergeFaceStepStatus(accessFace, cameraFace);
+    const needsSteps = new Set(row.needs_sync_steps || []);
+    for (const s of cam.needs_sync_steps || []) needsSteps.add(s);
+    return {
+      ...row,
+      needs_sync: needsSteps.size > 0,
+      needs_sync_steps: Array.from(needsSteps),
+      last_sync: {
+        ...(row.last_sync || {}),
+        face: mergedFace,
+      },
+    };
+  });
+}
+
+function toCameraOnlyCandidateRow(row) {
+  const faceSteps = (row.needs_sync_steps || []).filter((s) => s === "face");
+  return {
+    ...row,
+    has_password: false,
+    has_card: false,
+    fingerprint_count: 0,
+    needs_sync: faceSteps.length > 0,
+    needs_sync_steps: faceSteps,
+    last_sync: {
+      user_info: { status: "no_data", at: null },
+      face: row.last_sync?.face || { status: "no_data", at: null },
+      card: { status: "no_data", at: null },
+      fingerprint: { status: "no_data", at: null },
+    },
+  };
+}
+
+function mergeFaceStepStatus(a, b) {
+  const rank = { failed: 4, pending: 3, success: 2, unchanged: 1, no_data: 0 };
+  const sa = String(a?.status || "no_data");
+  const sb = String(b?.status || "no_data");
+  const pick = (rank[sa] || 0) >= (rank[sb] || 0) ? a : b;
+  const atA = a?.at ? new Date(a.at).getTime() : null;
+  const atB = b?.at ? new Date(b.at).getTime() : null;
+  let at = pick?.at ?? null;
+  if (atA != null && atB != null)
+    at = new Date(Math.max(atA, atB)).toISOString();
+  else if (atA != null) at = a.at;
+  else if (atB != null) at = b.at;
+  return { status: pick?.status || "no_data", at };
 }
 
 function startSyncAllLocationsJob() {
@@ -1840,7 +2387,11 @@ function startSyncAllLocationsJob() {
     };
 
     try {
-      await personSyncJobStore.updateJob(jobId, { status: "running", startedAt, progress });
+      await personSyncJobStore.updateJob(jobId, {
+        status: "running",
+        startedAt,
+        progress,
+      });
 
       const locations = await getSyncableLocations();
       job.progress.total = locations.length;
@@ -1857,13 +2408,36 @@ function startSyncAllLocationsJob() {
         try {
           const subReporter = createAllLocationsItemReporter(job, loc.id);
           const { warnings } = await syncLocation(loc.id, subReporter);
-          results.push({ locationId: loc.id, locationName: loc.name, warnings });
-          for (const w of warnings || []) flatWarnings.push({ ...w, locationId: loc.id, locationName: loc.name });
+          results.push({
+            locationId: loc.id,
+            locationName: loc.name,
+            warnings,
+          });
+          for (const w of warnings || [])
+            flatWarnings.push({
+              ...w,
+              locationId: loc.id,
+              locationName: loc.name,
+            });
         } catch (err) {
           const message = toMessage(err);
-          logger.warn("同步地點失敗，跳過", { locationId: loc.id, error: message });
-          const warnings = [{ type: "sync", message, locationId: loc.id, locationName: loc.name }];
-          results.push({ locationId: loc.id, locationName: loc.name, warnings });
+          logger.warn("同步地點失敗，跳過", {
+            locationId: loc.id,
+            error: message,
+          });
+          const warnings = [
+            {
+              type: "sync",
+              message,
+              locationId: loc.id,
+              locationName: loc.name,
+            },
+          ];
+          results.push({
+            locationId: loc.id,
+            locationName: loc.name,
+            warnings,
+          });
           flatWarnings.push(...warnings);
         } finally {
           job.progress.completed += 1;
@@ -1908,7 +2482,10 @@ async function getSyncAllLocationsJob(jobId) {
   const job = await personSyncJobStore.getJob(jobId);
   if (!job) return null;
 
-  const itemsPage = await personSyncJobStore.listItems(jobId, "issues", { limit: 2000, offset: 0 });
+  const itemsPage = await personSyncJobStore.listItems(jobId, "issues", {
+    limit: 2000,
+    offset: 0,
+  });
 
   return {
     jobId: job.jobId,
@@ -1918,7 +2495,12 @@ async function getSyncAllLocationsJob(jobId) {
     finishedAt: job.finishedAt,
     // 保持既有欄位名（前端目前用 job.items）
     items: itemsPage?.items ?? [],
-    progress: job.progress || { total: 0, completed: 0, currentLocationId: null, currentLocationName: null },
+    progress: job.progress || {
+      total: 0,
+      completed: 0,
+      currentLocationId: null,
+      currentLocationName: null,
+    },
     result: job.result || null,
     error: job.error || null,
   };

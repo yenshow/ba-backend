@@ -233,7 +233,14 @@ async function ensureLocationIsSyncable(locationId) {
       INNER JOIN location_systems ls
         ON l.id = ls.location_id AND ls.system_type = 'people_counting'
       WHERE l.id = ?
-        AND (COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0)
+        AND (
+          COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+          OR (
+            COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
+            AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
+            AND COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
+          )
+        )
       LIMIT 1
     `,
     [id],
@@ -243,7 +250,7 @@ async function ensureLocationIsSyncable(locationId) {
       getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
     throwApiError(
       C.PERSONNEL_VALIDATION_FAILED,
-      `地點不可同步（需在${moduleLabel}設定門禁入口設備）`,
+      `地點不可同步（需在${moduleLabel}設定門禁入口設備，或攝影機並設為人臉辨識）`,
     );
   }
   return id;

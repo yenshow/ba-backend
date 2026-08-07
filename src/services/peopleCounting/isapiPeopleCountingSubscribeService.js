@@ -1,11 +1,11 @@
 /**
- * ISAPI 攝影機 PeopleCounting 訂閱服務
- * - 後端主動 POST subscribeEvent 建立長連線
- * - 解析 XML EventNotificationAlert（PeopleCounting）
- * - 寫入 isapi_people_counting_events 並推送 WS（前端採防抖重拉）
+ * ISAPI 攝影機佈防訂閱服務（subscribeEvent 長連線）
+ * - people_counting：訂 PeopleCounting → isapi_people_counting_events
+ * - face_recognition：訂 faceCapture + alarmResult → 僅落地有候選人的 alarmResult
  *
- * 精簡：僅落地 `statisticalMethods=realTime`（`timeRange` 靜默略過）。
- * 僅落地分區列（RegionList/Region.enter/exit → region_id IS NOT NULL）。
+ * faceCapture：部分機型需訂閱才會推人臉／比對串流；平台不解析、不寫入。
+ * alarmResult 有候選人時落地，multipart 後續 image part 寫入 picture_path。
+ * 人流僅落地 statisticalMethods=realTime 之分區列。
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
@@ -21,6 +21,10 @@ const {
 const {
   persistPeopleCountingEvent,
 } = require("./isapiPeopleCountingPersistence");
+const {
+  parseFaceContrastEventPayload,
+} = require("./isapiFaceContrastXmlParser");
+const { persistFaceContrastEvent, attachPictureToFaceContrastEvent } = require("./isapiFaceContrastPersistence");
 
 const RE_CONNECT_DELAY_MS = 10000;
 
@@ -29,36 +33,59 @@ function ensureInt(v) {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-function buildSubscribeXml(channelId) {
+function buildSubscribeXml(
+  channelId,
+  { includePeopleCounting = true, includeFaceContrast = false } = {},
+) {
   const ch = ensureInt(channelId) ?? 1;
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<SubscribeEvent version="2.0" xmlns="http://www.std-cgi.com/ver20/XMLSchema">
-  <heartbeat>30</heartbeat>
-  <channelMode>list</channelMode>
-  <eventMode>list</eventMode>
-  <EventList>
+  const events = [];
+  if (includePeopleCounting) {
+    events.push(`
     <Event>
       <type>PeopleCounting</type>
       <channels>${ch}</channels>
+    </Event>`);
+  }
+  if (includeFaceContrast) {
+    // faceCapture：現場機型需訂才會推 alarmResult；業務仍只落地有候選人的比對
+    events.push(`
+    <Event>
+      <type>faceCapture</type>
+      <channels>${ch}</channels>
     </Event>
+    <Event>
+      <type>alarmResult</type>
+      <channels>${ch}</channels>
+    </Event>`);
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<SubscribeEvent version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <heartbeat>30</heartbeat>
+  <channelMode>list</channelMode>
+  <eventMode>list</eventMode>
+  <EventList>${events.join("")}
   </EventList>
 </SubscribeEvent>`;
 }
 
 /**
  * 取得需訂閱的攝影機設定（people_counting 地點、data_source=isapi_camera）
- * @returns {Promise<Array<{ locationId:number, deviceId:number, channelId:number }>>}
+ * @returns {Promise<Array<{ locationId:number, deviceId:number, channelId:number, includePeopleCounting:boolean, includeFaceContrast:boolean, direction:'entry'|'exit'|null }>>}
  */
 async function getCameraSubscriptions() {
+  const {
+    resolvePeopleCountingCameraDevices,
+    resolveFaceCameraDirection,
+    CAMERA_MODE,
+  } = require("./peopleCountingConfig");
+
   const rows = await db.query(
     `SELECT
        ls.location_id AS location_id,
-       (ls.system_config->'camera_device_ids') AS device_ids
+       ls.system_config AS system_config
      FROM location_systems ls
      WHERE ls.system_type = 'people_counting'
-       AND (ls.system_config->>'data_source') = 'isapi_camera'
-       AND jsonb_typeof(COALESCE(ls.system_config->'camera_device_ids', '[]'::jsonb)) = 'array'
-       AND jsonb_array_length(COALESCE(ls.system_config->'camera_device_ids', '[]'::jsonb)) > 0`,
+       AND (ls.system_config->>'data_source') = 'isapi_camera'`,
     [],
   );
   const subs = [];
@@ -66,21 +93,57 @@ async function getCameraSubscriptions() {
     const locationId = ensureInt(r.location_id);
     const channelId = 1;
     if (!locationId) continue;
-
-    const deviceIds = Array.isArray(r.device_ids)
-      ? r.device_ids.map(ensureInt).filter(Boolean)
-      : [];
+    const cfg =
+      typeof r.system_config === "string"
+        ? (() => {
+            try {
+              return JSON.parse(r.system_config);
+            } catch {
+              return {};
+            }
+          })()
+        : r.system_config || {};
+    const cameras = resolvePeopleCountingCameraDevices(cfg);
+    const isFace = cameras.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
+    const includeFaceContrast = isFace;
+    const includePeopleCounting = !isFace;
+    const deviceIds = cameras.cameraDeviceIds;
 
     for (const deviceId of deviceIds) {
-      if (deviceId) subs.push({ locationId, deviceId, channelId });
+      if (!deviceId) continue;
+      const direction = isFace
+        ? resolveFaceCameraDirection(deviceId, cameras)
+        : null;
+      subs.push({
+        locationId,
+        deviceId,
+        channelId,
+        includePeopleCounting,
+        includeFaceContrast,
+        direction,
+      });
     }
   }
   // 去重：同一地點/設備/頻道只訂閱一次
   const uniq = new Map();
   for (const s of subs) {
-    uniq.set(`${s.locationId}:${s.deviceId}:${s.channelId}`, s);
+    const key = `${s.locationId}:${s.deviceId}:${s.channelId}`;
+    const prev = uniq.get(key);
+    if (!prev) {
+      uniq.set(key, s);
+      continue;
+    }
+    uniq.set(key, {
+      ...prev,
+      includePeopleCounting:
+        prev.includePeopleCounting || s.includePeopleCounting,
+      includeFaceContrast: prev.includeFaceContrast || s.includeFaceContrast,
+      direction: prev.direction || s.direction,
+    });
   }
-  return [...uniq.values()];
+  return [...uniq.values()].filter(
+    (s) => s.includePeopleCounting || s.includeFaceContrast,
+  );
 }
 
 async function getDeviceClient(deviceId) {
@@ -103,7 +166,7 @@ const CRLF = Buffer.from("\r\n");
 const CRLFCRLF = Buffer.from("\r\n\r\n");
 
 function subKey(sub) {
-  return `${sub.locationId}:${sub.deviceId}:${sub.channelId}`;
+  return `${sub.locationId}:${sub.deviceId}:${sub.channelId}:pc=${sub.includePeopleCounting ? 1 : 0}:fc=${sub.includeFaceContrast ? 1 : 0}:dir=${sub.direction || "-"}`;
 }
 
 async function consumeEventStreamIncremental(
@@ -129,17 +192,125 @@ async function consumeEventStreamIncremental(
   const sep = Buffer.from(`--${boundary}`, "utf8");
   const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
   let buffer = Buffer.alloc(0);
+  /** @type {number|null} 剛寫入的人臉比對事件，供下一 image part 補圖 */
+  let lastWrittenFaceEventId = null;
+  /** 依序處理 multipart，避免事件寫入未完成就丟附圖 */
+  let processChain = Promise.resolve();
 
   const processPart = async (headerStr, body) => {
     const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+    const name =
+      (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) || [])[1] ||
+      "";
+
+    // 附圖（multipart 順序：先 alarmResult JSON，後 image/*）
+    if (
+      /image/i.test(ct) ||
+      (/\.(jpg|jpeg|png)$/i.test(name) && lastWrittenFaceEventId != null)
+    ) {
+      if (lastWrittenFaceEventId != null) {
+        const eventId = lastWrittenFaceEventId;
+        lastWrittenFaceEventId = null;
+        try {
+          const picturePath = await attachPictureToFaceContrastEvent(
+            eventId,
+            body,
+          );
+          if (picturePath) {
+            logger.info("[ISAPI FaceContrast] 已補附圖", {
+              locationId: context.locationId,
+              deviceId: context.deviceId,
+              id: eventId,
+              picturePath,
+            });
+          }
+        } catch (err) {
+          logger.warn("[ISAPI FaceContrast] 附圖寫入失敗", {
+            locationId: context.locationId,
+            deviceId: context.deviceId,
+            id: eventId,
+            error: err?.message || String(err),
+          });
+        }
+      }
+      return;
+    }
+
     const raw = body
       .toString("utf8")
       .replace(/^\uFEFF/, "")
       .trim();
-    if (!/xml/i.test(ct) && raw.length === 0) return;
+    if (!/xml|json/i.test(ct) && raw.length === 0) return;
+
+    // 略過保活（無業務 eventType 或 heartbeat）
+    const quickType =
+      (raw.match(/"eventType"\s*:\s*"([^"]+)"/i) || [])[1] ||
+      (raw.match(/<eventType>([^<]+)<\/eventType>/i) || [])[1] ||
+      "";
+    const quickTypeLower = String(quickType).toLowerCase();
+    if (
+      !quickTypeLower ||
+      quickTypeLower === "heartbeat" ||
+      quickTypeLower === "heart beat"
+    ) {
+      return;
+    }
+
+    // 人臉比對：僅 face_recognition 落地 alarmResult（有候選人）
+    if (context.includeFaceContrast) {
+      const faceParsed = parseFaceContrastEventPayload(raw);
+      if (faceParsed?.eventTime) {
+        try {
+          const saved = await persistFaceContrastEvent({
+            locationId: context.locationId,
+            deviceId: context.deviceId,
+            deviceIp: faceParsed.deviceIp || context.deviceIp || "",
+            channelId: faceParsed.channelId ?? context.channelId ?? 1,
+            eventTime: faceParsed.eventTime,
+            eventType: faceParsed.eventType,
+            similarity: faceParsed.similarity,
+            employeeNo: faceParsed.employeeNo,
+            personName: faceParsed.personName,
+            pid: faceParsed.pid,
+            certificateNumber: faceParsed.certificateNumber,
+            matched: faceParsed.matched,
+            faceLibName: faceParsed.faceLibName,
+            direction: context.direction || null,
+          });
+          if (saved?.id != null) {
+            lastWrittenFaceEventId = Number(saved.id);
+          }
+          logger.info("[ISAPI FaceContrast] 已寫入比對事件", {
+            locationId: context.locationId,
+            deviceId: context.deviceId,
+            id: saved?.id ?? null,
+            personName: saved?.personName ?? faceParsed.personName,
+            employeeNo: saved?.employeeNo ?? faceParsed.employeeNo,
+            similarity: faceParsed.similarity,
+          });
+        } catch (err) {
+          lastWrittenFaceEventId = null;
+          logger.warn("[ISAPI FaceContrast] 寫入失敗", {
+            locationId: context.locationId,
+            deviceId: context.deviceId,
+            error: err?.message || String(err),
+          });
+        }
+        return;
+      }
+    }
+
+    if (!context.includePeopleCounting) return;
 
     const parsed = parsePeopleCountingEventXml(raw);
-    if (!parsed || !parsed.eventTime) return;
+    if (!parsed || !parsed.eventTime) {
+      logger.debug?.("[ISAPI PeopleCounting] 略過未辨識事件", {
+        deviceId: context.deviceId,
+        eventType: quickType || "(none)",
+        contentType: ct || "(unknown)",
+      });
+      return;
+    }
 
     const methodNorm = String(parsed.statisticalMethods ?? "")
       .trim()
@@ -168,6 +339,14 @@ async function consumeEventStreamIncremental(
         regionName: r.name || null,
         enter: r.enter ?? 0,
         exit: r.exit ?? 0,
+      });
+    }
+    if (regions.length > 0) {
+      logger.debug("[ISAPI PeopleCounting] 已寫入人流事件", {
+        locationId: context.locationId,
+        deviceId: context.deviceId,
+        eventTime: parsed.eventTime,
+        regionCount: regions.length,
       });
     }
   };
@@ -220,7 +399,15 @@ async function consumeEventStreamIncremental(
       if (trim) bodyEnd -= trim;
     }
     const body = buffer.slice(bodyStart, bodyEnd);
-    processPart(headerStr, body).catch(() => {});
+    processChain = processChain
+      .then(() => processPart(headerStr, body))
+      .catch((err) => {
+        logger.warn("[ISAPI PeopleCounting] 處理事件片段失敗", {
+          locationId: context.locationId,
+          deviceId: context.deviceId,
+          error: err?.message || String(err),
+        });
+      });
     buffer = buffer.slice(bodyEnd);
     return true;
   };
@@ -251,10 +438,38 @@ async function runSubscribeForCamera(sub, abortSignal) {
   if (abortSignal?.aborted) return;
   const { device, client } = await getDeviceClient(sub.deviceId);
   const deviceIp = device?.config?.host || "";
+  const includePeopleCounting = Boolean(sub.includePeopleCounting);
+  const includeFaceContrast = Boolean(sub.includeFaceContrast);
+  const direction =
+    sub.direction === "entry" || sub.direction === "exit"
+      ? sub.direction
+      : null;
+  logger.info("[ISAPI PeopleCounting] 開始佈防訂閱", {
+    locationId: sub.locationId,
+    deviceId: sub.deviceId,
+    deviceIp,
+    channelId: sub.channelId,
+    includePeopleCounting,
+    includeFaceContrast,
+    direction,
+  });
   const res = await client.requestSubscribeStream(
-    buildSubscribeXml(sub.channelId),
+    buildSubscribeXml(sub.channelId, {
+      includePeopleCounting,
+      includeFaceContrast,
+    }),
   );
   const contentType = res.headers["content-type"] || "";
+  logger.info("[ISAPI PeopleCounting] 佈防連線已建立", {
+    locationId: sub.locationId,
+    deviceId: sub.deviceId,
+    deviceIp,
+    status: res.status,
+    contentType,
+    includePeopleCounting,
+    includeFaceContrast,
+    direction,
+  });
   const stream = res.data;
   await consumeEventStreamIncremental(
     stream,
@@ -264,9 +479,17 @@ async function runSubscribeForCamera(sub, abortSignal) {
       deviceId: sub.deviceId,
       deviceIp,
       channelId: sub.channelId,
+      includePeopleCounting,
+      includeFaceContrast,
+      direction,
     },
     abortSignal,
   );
+  logger.warn("[ISAPI PeopleCounting] 佈防連線結束，將重連", {
+    locationId: sub.locationId,
+    deviceId: sub.deviceId,
+    deviceIp,
+  });
 }
 
 async function subscribeLoop(sub, abortSignal) {
@@ -278,6 +501,13 @@ async function subscribeLoop(sub, abortSignal) {
       if (abortSignal?.aborted) return;
       if (e && (e.code === "ABORTED" || String(e.message).includes("ABORTED")))
         return;
+      logger.warn("[ISAPI PeopleCounting] 佈防訂閱失敗，將重試", {
+        locationId: sub.locationId,
+        deviceId: sub.deviceId,
+        includePeopleCounting: Boolean(sub.includePeopleCounting),
+        includeFaceContrast: Boolean(sub.includeFaceContrast),
+        error: e?.message || String(e),
+      });
     }
     if (abortSignal?.aborted) return;
     await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
@@ -346,10 +576,10 @@ async function refresh() {
       start: toStart.length,
       stop: toStop.length,
     });
-  } else if (subs.length === 0 && prevKeys.size === 0) {
-    logger.info(
-      "[ISAPI PeopleCounting] 無需訂閱（尚未配置 isapi_camera 地點）",
-    );
+  } else {
+    logger.debug("[ISAPI PeopleCounting] 訂閱刷新（無變更）", {
+      count: subs.length,
+    });
   }
   return { started: true, subs: [...runningSubs] };
 }
@@ -363,5 +593,4 @@ module.exports = {
   stop,
   refresh,
   getSubscribeStatus,
-  getCameraSubscriptions,
 };

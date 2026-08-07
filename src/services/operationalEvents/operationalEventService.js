@@ -43,7 +43,10 @@ function buildListWhere(filters = {}) {
 
   // 篩選 people_counting 時一併含歷史 access_control
   const sources = parseMultiFilter(source);
-  if (sources.includes("people_counting") && !sources.includes("access_control")) {
+  if (
+    sources.includes("people_counting") &&
+    !sources.includes("access_control")
+  ) {
     sources.push("access_control");
   }
   if (sources.length === 1) {
@@ -234,9 +237,7 @@ async function listEvents(filters = {}) {
  */
 async function purgeExpiredEvents(retentionDays) {
   const days =
-    toIntOrNull(retentionDays) ??
-    config.operationalEvents?.retentionDays ??
-    90;
+    toIntOrNull(retentionDays) ?? config.operationalEvents?.retentionDays ?? 90;
   const safeDays = Math.max(days, 1);
   const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
   const result = await db.query(

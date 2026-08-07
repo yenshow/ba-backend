@@ -1,23 +1,38 @@
 /**
  * ISAPI 攝影機（isapi_camera）人流統計 Provider
- * 資料來源：isapi_people_counting_events
  *
- * 規格：
- * - 有分區資料時只使用 region 列；站點進／出／在場取「各區當日最新列」中 event_time 最後一筆者（典型單一 Area1 時與設備一致）
- * - 本版本不使用 global（region_id IS NULL），站點與單位皆以 region 列為準
- * - 在場 = enter − exit
- * - enter_delta／exit_delta 僅供 getSiteLogs 判斷進／離，不參與統計
+ * cameraMode：
+ * - people_counting：units＝設備分區（Area）進／出；logs＝PeopleCounting 分區 delta
+ * - face_recognition：units＝地點名單 person_groups；logs＝isapi_face_contrast_events；
+ *   方向由 entryCameraDeviceIds／exitCameraDeviceIds 決定
  */
 const db = require("../../../database/db");
+const personnelService = require("../../personnel/personnelService");
+const logger = require("../../../utils/logger").createLogger(
+  "ISAPI Camera PeopleCounting",
+);
 const {
   computeCumulativeStats,
+  computeTransitionStats,
   sumCumulativeParts,
+  resolvePersonPresenceFromEvents,
 } = require("../../entryExit/stats");
 const {
+  personnelPresenceFields,
+  ISO_PERSONNEL_TIME_FORMAT,
+  groupEventsByKey,
+  normalizeEmployeeNo,
+} = require("../helpers/entryExitStats");
+const {
   ENTRY_EXIT_MAX_RECORDS,
-  resolveStatsTimeRange,
 } = require("../../entryExit/resolveTimeOptions");
-const { resolvePeopleCountingStatsTimeRange, isStatsResetActive } = require("../peopleCountingConfig");
+const {
+  resolvePeopleCountingStatsTimeRange,
+  isStatsResetActive,
+  isFaceRecognitionCameraMode,
+  resolvePeopleCountingCameraDevices,
+  resolveFaceCameraDirection,
+} = require("../peopleCountingConfig");
 const C = require("../../../utils/apiErrorCodes");
 const { throwApiError } = require("../../../utils/apiErrors");
 const { ensureIntArray } = require("../../location/locationShared");
@@ -27,12 +42,10 @@ function ensureInt(v) {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
-// 保留 ensureInt 供本檔其他運算使用（若未來需要）；整數陣列正規化由共用 ensureIntArray 統一處理
-
+/** 分區名稱 → 穩定 id（人流統計模式 units） */
 function stableUnitIdFromName(name) {
   const s = String(name || "").trim();
   if (!s) return 0;
-  // djb2 hash (32-bit) → positive int
   let h = 5381;
   for (let i = 0; i < s.length; i++) {
     h = ((h << 5) + h) ^ s.charCodeAt(i);
@@ -40,16 +53,139 @@ function stableUnitIdFromName(name) {
   return (h >>> 0) % 2147483647;
 }
 
+const UNGROUPED_GROUP_ID = 0;
+const UNGROUPED_GROUP_NAME = "未分組";
+
+function groupPersonsByPersonGroup(persons) {
+  const byGroupId = new Map();
+  for (const p of persons || []) {
+    const groupId =
+      p.person_group_id != null && Number.isFinite(Number(p.person_group_id))
+        ? Number(p.person_group_id)
+        : UNGROUPED_GROUP_ID;
+    const groupName =
+      groupId === UNGROUPED_GROUP_ID
+        ? UNGROUPED_GROUP_NAME
+        : p.group_name || UNGROUPED_GROUP_NAME;
+    if (!byGroupId.has(groupId)) {
+      byGroupId.set(groupId, { id: groupId, name: groupName, list: [] });
+    }
+    byGroupId.get(groupId).list.push(p);
+  }
+  return [...byGroupId.values()].sort((a, b) => {
+    if (a.id === UNGROUPED_GROUP_ID) return 1;
+    if (b.id === UNGROUPED_GROUP_ID) return -1;
+    return String(a.name).localeCompare(String(b.name), "zh-Hant");
+  });
+}
+
+function resolvePhotoUrl(person) {
+  const faceUrl = person.face_url != null ? String(person.face_url).trim() : "";
+  if (faceUrl === "") return undefined;
+  return faceUrl.startsWith("/") ? faceUrl : `/${faceUrl}`;
+}
+
+async function buildRosterUnits(siteId, directedRows = []) {
+  try {
+    const persons =
+      await personnelService.getPersonsWithAccessByLocationId(siteId);
+    const grouped = groupPersonsByPersonGroup(persons);
+    const presenceByEmployeeNo = buildFacePresenceByEmployeeNo(directedRows);
+    return grouped.map((group) => {
+      const unitNos = new Set(
+        group.list
+          .map((p) => normalizeEmployeeNo(p.employee_no))
+          .filter(Boolean),
+      );
+      const unitEvents = (directedRows || []).filter((r) =>
+        unitNos.has(normalizeEmployeeNo(r.employee_no)),
+      );
+      const stats = computeTransitionStats(unitEvents, {
+        getKey: (r) => facePersonKey(r),
+        getDirection: (r) =>
+          r.direction === "entry" || r.direction === "exit"
+            ? r.direction
+            : null,
+        getTime: (r) => r.event_time,
+        sortByTime: false,
+      });
+      let currentCount = 0;
+      for (const p of group.list) {
+        const no = p.employee_no != null ? String(p.employee_no).trim() : "";
+        if (no && presenceByEmployeeNo.get(no)?.isInside) currentCount += 1;
+      }
+      return {
+        id: group.id,
+        name: group.name,
+        currentCount,
+        entryCount: stats.entryCount,
+        exitCount: stats.exitCount,
+        totalCount: group.list.length,
+      };
+    });
+  } catch (err) {
+    logger.warn("取得攝影機地點名單群組失敗，顯示空單位", {
+      locationId: siteId,
+      error: err?.message || String(err),
+    });
+    return [];
+  }
+}
+
+function buildRegionUnitsFromDeltaMap(byRegion) {
+  const sortedNames = [...byRegion.keys()].sort((a, b) =>
+    a.localeCompare(b, "zh-Hant"),
+  );
+  return sortedNames.map((name, idx) => {
+    const { enter, exit } = byRegion.get(name);
+    const unitStats = computeCumulativeStats(enter, exit);
+    return {
+      id: stableUnitIdFromName(name) || idx + 1,
+      name,
+      currentCount: unitStats.currentCount,
+      entryCount: unitStats.entryCount,
+      exitCount: unitStats.exitCount,
+      totalCount: Math.max(0, enter),
+    };
+  });
+}
+
+function buildRegionUnitsFromLatestRows(regionRows) {
+  const sorted = [...regionRows].sort((a, b) =>
+    String(a.region_name || "").localeCompare(
+      String(b.region_name || ""),
+      "zh-Hant",
+    ),
+  );
+  return sorted.map((r, idx) => {
+    const ent = ensureInt(r.enter) ?? 0;
+    const ex = ensureInt(r.exit) ?? 0;
+    const unitStats = computeCumulativeStats(ent, ex);
+    const name = String(r.region_name || "").trim() || "未命名區域";
+    return {
+      id: stableUnitIdFromName(name) || idx + 1,
+      name,
+      currentCount: unitStats.currentCount,
+      entryCount: unitStats.entryCount,
+      exitCount: unitStats.exitCount,
+      totalCount: Math.max(0, ent),
+    };
+  });
+}
+
 async function getSiteConfigOrThrow(siteId, config) {
-  const deviceIds = ensureIntArray(config.cameraDeviceIds);
+  const cameras = resolvePeopleCountingCameraDevices(config);
+  const deviceIds = cameras.cameraDeviceIds;
   if (deviceIds.length === 0) {
     throwApiError(
       C.PEOPLE_COUNTING_VALIDATION_FAILED,
-      "未設定攝影機設備（cameraDeviceIds）",
+      isFaceRecognitionCameraMode(config.cameraMode)
+        ? "未設定進場／出場攝影機"
+        : "未設定攝影機設備（cameraDeviceIds）",
     );
   }
   const channelId = 1;
-  return { deviceIds, channelId };
+  return { deviceIds, channelId, cameras };
 }
 
 async function getLatestRegionTotalsByName(
@@ -138,17 +274,10 @@ async function getStatsFromDeltasByRegion(
   return byRegion;
 }
 
-async function getSiteData(siteId, config) {
-  const { deviceIds, channelId } = await getSiteConfigOrThrow(siteId, config);
+async function loadRegionUnitsAndTotals(siteId, deviceIds, channelId, config) {
   const today = resolvePeopleCountingStatsTimeRange({}, config.statsResetAt);
-  // 站點統計：依「分區累計」彙總（不使用 global 列）
-  let entryCount = 0;
-  let exitCount = 0;
-  let currentCount = 0;
-
   let units = [];
-  // 正常模式：取各 region 最新一筆累計值（設備回報的絕對 enter/exit 計數，代表整個營運日）
-  // 重置模式：改用 delta 加總（因為累計值包含重置前的計數，不可直接使用）
+
   if (isStatsResetActive(config.statsResetAt)) {
     const byRegion = await getStatsFromDeltasByRegion(
       siteId,
@@ -156,21 +285,7 @@ async function getSiteData(siteId, config) {
       channelId,
       today,
     );
-    const sortedNames = [...byRegion.keys()].sort((a, b) =>
-      a.localeCompare(b, "zh-Hant"),
-    );
-    units = sortedNames.map((name, idx) => {
-      const { enter, exit } = byRegion.get(name);
-      const unitStats = computeCumulativeStats(enter, exit);
-      return {
-        id: stableUnitIdFromName(name) || idx + 1,
-        name,
-        currentCount: unitStats.currentCount,
-        entryCount: unitStats.entryCount,
-        exitCount: unitStats.exitCount,
-        totalCount: Math.max(0, enter),
-      };
-    });
+    units = buildRegionUnitsFromDeltaMap(byRegion);
   } else {
     const regionRows = await getLatestRegionTotalsByName(
       siteId,
@@ -178,49 +293,57 @@ async function getSiteData(siteId, config) {
       channelId,
       today,
     );
-
     if (regionRows.length > 0) {
-      const sorted = [...regionRows].sort((a, b) =>
-        String(a.region_name || "").localeCompare(
-          String(b.region_name || ""),
-          "zh-Hant",
-        ),
-      );
-
-      units = sorted.map((r, idx) => {
-        const ent = ensureInt(r.enter) ?? 0;
-        const ex = ensureInt(r.exit) ?? 0;
-        const unitStats = computeCumulativeStats(ent, ex);
-        const name = String(r.region_name || "").trim() || "未命名區域";
-        return {
-          id: stableUnitIdFromName(name) || idx + 1,
-          name,
-          currentCount: unitStats.currentCount,
-          entryCount: unitStats.entryCount,
-          exitCount: unitStats.exitCount,
-          totalCount: Math.max(0, ent),
-        };
-      });
+      units = buildRegionUnitsFromLatestRows(regionRows);
     }
   }
 
   const totals = sumCumulativeParts(units);
-  entryCount = totals.entryCount;
-  exitCount = totals.exitCount;
-  currentCount = totals.currentCount;
-
-  return { entryCount, exitCount, currentCount, units };
+  return { units, totals };
 }
 
-async function getSiteLogs(siteId, config, options = {}) {
-  const { deviceIds, channelId } = await getSiteConfigOrThrow(siteId, config);
-  const { start, end } = resolvePeopleCountingStatsTimeRange(
-    options,
-    config.statsResetAt,
+async function getSiteData(siteId, config) {
+  const { deviceIds, channelId, cameras } = await getSiteConfigOrThrow(
+    siteId,
+    config,
   );
-  const limit = Math.min(Math.max(Number(options.limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
-  const offset = Math.max(Number(options.offset) || 0, 0);
 
+  if (isFaceRecognitionCameraMode(config.cameraMode)) {
+    const today = resolvePeopleCountingStatsTimeRange({}, config.statsResetAt);
+    const faceRows = await loadTodayFaceContrastRows(siteId, deviceIds, today);
+    const directed = assignFaceDirections(faceRows, cameras);
+    const siteStats = computeTransitionStats(directed, {
+      getKey: (r) => facePersonKey(r),
+      getDirection: (r) =>
+        r.direction === "entry" || r.direction === "exit" ? r.direction : null,
+      getTime: (r) => r.event_time,
+      sortByTime: false,
+    });
+    const units = await buildRosterUnits(siteId, directed);
+    return {
+      entryCount: siteStats.entryCount,
+      exitCount: siteStats.exitCount,
+      currentCount: siteStats.currentCount,
+      units,
+    };
+  }
+
+  const { units: regionUnits, totals } = await loadRegionUnitsAndTotals(
+    siteId,
+    deviceIds,
+    channelId,
+    config,
+  );
+
+  return {
+    entryCount: totals.entryCount,
+    exitCount: totals.exitCount,
+    currentCount: totals.currentCount,
+    units: regionUnits,
+  };
+}
+
+async function loadDeviceNameById(deviceIds) {
   const deviceNameById = new Map();
   try {
     const deviceRows = await db.query(
@@ -228,14 +351,213 @@ async function getSiteLogs(siteId, config, options = {}) {
       [deviceIds],
     );
     for (const r of deviceRows || []) {
-      if (r?.id != null) deviceNameById.set(Number(r.id), String(r.name || "").trim());
+      if (r?.id != null) {
+        deviceNameById.set(Number(r.id), String(r.name || "").trim());
+      }
     }
   } catch {
     // ignore: fallback to IP
   }
+  return deviceNameById;
+}
 
-  // 已移除 global 寫入：logs 固定以 region 列為準
+/**
+ * 人臉辨識模式：進出紀錄改讀 isapi_face_contrast_events（欄位語意同門禁）
+ */
+async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
+  const { start, end } = resolvePeopleCountingStatsTimeRange(
+    options,
+    options.statsResetAt,
+  );
+  const limit = Math.min(
+    Math.max(Number(options.limit) || 50, 1),
+    ENTRY_EXIT_MAX_RECORDS,
+  );
+  const offset = Math.max(Number(options.offset) || 0, 0);
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+  const deviceNameById = await loadDeviceNameById(deviceIds);
+  const cameras = options.cameras || {
+    entryCameraDeviceIds: [],
+    exitCameraDeviceIds: [],
+  };
+
+  const allRows = await db.query(
+    `SELECT
+       e.id, e.device_id, e.device_ip, e.event_time, e.similarity,
+       e.employee_no, e.person_name, e.matched, e.pid, e.payload,
+       e.picture_path,
+       p.id AS person_id, p.full_name AS platform_name,
+       p.person_group_id, pg.name AS group_name
+     FROM isapi_face_contrast_events e
+     LEFT JOIN persons p
+       ON p.employee_no IS NOT NULL
+      AND e.employee_no IS NOT NULL
+      AND TRIM(p.employee_no) = TRIM(e.employee_no)
+     LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+     WHERE e.location_id = ?
+       AND e.device_id = ANY(?::int[])
+       AND e.event_time >= ?
+       AND e.event_time <= ?
+     ORDER BY e.event_time ASC, e.id ASC`,
+    [siteId, deviceIds, startIso, endIso],
+  );
+
+  const directed = assignFaceDirections(allRows || [], cameras);
+  const page = directed
+    .slice()
+    .reverse()
+    .slice(offset, offset + limit);
+
+  const logs = page.map((r) => {
+    const matched = Boolean(r.matched);
+    const deviceName =
+      deviceNameById.get(ensureInt(r.device_id)) || r.device_ip || "";
+    const personName =
+      (r.platform_name != null ? String(r.platform_name).trim() : "") ||
+      (r.person_name != null ? String(r.person_name).trim() : "") ||
+      "—";
+    const direction =
+      r.direction === "entry" || r.direction === "exit" ? r.direction : null;
+    const eventType = !matched
+      ? "failed"
+      : direction === "exit"
+        ? "exit"
+        : direction === "entry"
+          ? "entry"
+          : "failed";
+    return {
+      id: `fc-cam-${r.id}`,
+      personId: r.person_id != null ? Number(r.person_id) : null,
+      personName,
+      unitId: r.person_group_id != null ? Number(r.person_group_id) : null,
+      unitName: r.group_name != null ? String(r.group_name).trim() : "",
+      employeeId:
+        r.employee_no != null && String(r.employee_no).trim()
+          ? String(r.employee_no).trim()
+          : null,
+      eventType,
+      eventLabel:
+        eventType === "entry" ? "進入" : eventType === "exit" ? "離開" : "失敗",
+      verifyMethod: "人臉",
+      timestamp: r.event_time,
+      deviceScreenshotUrl:
+        r.picture_path != null ? String(r.picture_path).trim() : "",
+      deviceName,
+    };
+  });
+
+  return { logs };
+}
+
+function facePersonKey(r) {
+  const no =
+    r.employee_no != null && String(r.employee_no).trim()
+      ? String(r.employee_no).trim()
+      : "";
+  if (no) return no;
+  const name =
+    r.person_name != null && String(r.person_name).trim()
+      ? String(r.person_name).trim()
+      : "";
+  return name ? `name:${name}` : "";
+}
+
+function readStoredDirection(payload) {
+  const p =
+    payload && typeof payload === "object"
+      ? payload
+      : typeof payload === "string"
+        ? (() => {
+            try {
+              return JSON.parse(payload);
+            } catch {
+              return null;
+            }
+          })()
+        : null;
+  const d = p?.direction;
+  return d === "entry" || d === "exit" ? d : null;
+}
+
+/**
+ * 標註進出：優先依目前進／出場攝影機歸屬；其次用落地 payload.direction（舊交替資料）
+ */
+function assignFaceDirections(rowsAsc, cameras) {
+  return (rowsAsc || []).map((r) => {
+    if (r.matched === false) return { ...r, direction: null };
+    const byDevice = resolveFaceCameraDirection(r.device_id, cameras);
+    if (byDevice) return { ...r, direction: byDevice };
+    const stored = readStoredDirection(r.payload);
+    return { ...r, direction: stored };
+  });
+}
+
+async function loadTodayFaceContrastRows(siteId, deviceIds, eventTimeRange) {
+  const startIso = eventTimeRange.start.toISOString();
+  const endIso = eventTimeRange.end.toISOString();
+  const rows = await db.query(
+    `SELECT employee_no, person_name, matched, event_time, payload
+     FROM isapi_face_contrast_events
+     WHERE location_id = ?
+       AND device_id = ANY(?::int[])
+       AND event_time >= ?
+       AND event_time <= ?
+     ORDER BY event_time ASC, id ASC`,
+    [siteId, deviceIds, startIso, endIso],
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+function buildFacePresenceByEmployeeNo(directedRows) {
+  const byNo = groupEventsByKey(
+    (directedRows || []).filter((r) => normalizeEmployeeNo(r.employee_no)),
+    (r) => normalizeEmployeeNo(r.employee_no),
+  );
+  const map = new Map();
+  for (const [no, events] of byNo.entries()) {
+    map.set(
+      no,
+      resolvePersonPresenceFromEvents(events, {
+        getDirection: (e) =>
+          e.direction === "entry" || e.direction === "exit"
+            ? e.direction
+            : null,
+        getTime: (e) => e.event_time,
+        sortByTime: false,
+      }),
+    );
+  }
+  return map;
+}
+
+async function getSiteLogs(siteId, config, options = {}) {
+  const { deviceIds, channelId, cameras } = await getSiteConfigOrThrow(
+    siteId,
+    config,
+  );
+  if (isFaceRecognitionCameraMode(config.cameraMode)) {
+    return getFaceContrastSiteLogs(siteId, deviceIds, {
+      ...options,
+      statsResetAt: config.statsResetAt,
+      cameras,
+    });
+  }
+
+  const { start, end } = resolvePeopleCountingStatsTimeRange(
+    options,
+    config.statsResetAt,
+  );
+  const limit = Math.min(
+    Math.max(Number(options.limit) || 50, 1),
+    ENTRY_EXIT_MAX_RECORDS,
+  );
+  const offset = Math.max(Number(options.offset) || 0, 0);
+
+  const deviceNameById = await loadDeviceNameById(deviceIds);
+
   const regionFilterSql = "AND region_id IS NOT NULL";
+  const unitIdFilter = ensureInt(options.unitId);
 
   const toEvent = (row, eventType, unitName) => {
     const suffix = eventType === "entry" ? "in" : "out";
@@ -246,7 +568,10 @@ async function getSiteLogs(siteId, config, options = {}) {
       id: `pc-cam-${row.id}-${suffix}`,
       personId: -1,
       personName: "—",
-      unitId: null,
+      unitId:
+        unitIdFilter != null
+          ? unitIdFilter
+          : stableUnitIdFromName(unitName) || null,
       unitName,
       employeeId: null,
       eventType,
@@ -261,9 +586,6 @@ async function getSiteLogs(siteId, config, options = {}) {
   const events = [];
   const startIso = start.toISOString();
   const endIso = end.toISOString();
-  const unitIdFilter = ensureInt(options.unitId);
-
-  // 為了湊滿「事件數」，每次多抓一些 row（因為 row 可能展開成 0～2 個事件）
   const batchSize = Math.min(Math.max(limit * 10, 50), 1000);
   let rowOffset = offset;
 
@@ -291,7 +613,11 @@ async function getSiteLogs(siteId, config, options = {}) {
       const exitDelta = ensureInt(r.exit_delta) ?? 0;
       const unitName = String(r.region_name || "").trim() || "未命名區域";
 
-      if (unitIdFilter && stableUnitIdFromName(unitName) !== unitIdFilter) {
+      if (
+        unitIdFilter != null &&
+        unitIdFilter !== 0 &&
+        stableUnitIdFromName(unitName) !== unitIdFilter
+      ) {
         continue;
       }
 
@@ -307,8 +633,54 @@ async function getSiteLogs(siteId, config, options = {}) {
   return { logs: events.slice(0, limit) };
 }
 
-async function getUnitPersonnel(_unitId, _siteId, _config) {
-  return { personnel: [], entryCount: 0, exitCount: 0 };
+async function getUnitPersonnel(unitId, siteId, config) {
+  if (!isFaceRecognitionCameraMode(config?.cameraMode)) {
+    return { personnel: [], entryCount: 0, exitCount: 0 };
+  }
+
+  const { deviceIds, cameras } = await getSiteConfigOrThrow(siteId, config);
+  const today = resolvePeopleCountingStatsTimeRange({}, config.statsResetAt);
+  const faceRows = await loadTodayFaceContrastRows(siteId, deviceIds, today);
+  const directed = assignFaceDirections(faceRows, cameras);
+  const presenceByEmployeeNo = buildFacePresenceByEmployeeNo(directed);
+
+  const persons =
+    await personnelService.getPersonsWithAccessByLocationId(siteId);
+  const grouped = groupPersonsByPersonGroup(persons);
+  const match = grouped.find((g) => g.id === Number(unitId));
+  if (!match) return { personnel: [], entryCount: 0, exitCount: 0 };
+
+  const unitNos = new Set(
+    match.list.map((p) => normalizeEmployeeNo(p.employee_no)).filter(Boolean),
+  );
+  const unitEvents = directed.filter((r) =>
+    unitNos.has(normalizeEmployeeNo(r.employee_no)),
+  );
+  const { entryCount, exitCount } = computeTransitionStats(unitEvents, {
+    getKey: (r) => facePersonKey(r),
+    getDirection: (r) =>
+      r.direction === "entry" || r.direction === "exit" ? r.direction : null,
+    getTime: (r) => r.event_time,
+    sortByTime: false,
+  });
+
+  const personnel = match.list.map((p) => {
+    const no = normalizeEmployeeNo(p.employee_no);
+    const presence = presenceByEmployeeNo.get(no) || {
+      isInside: false,
+      lastEntryTime: null,
+      lastExitTime: null,
+    };
+    return {
+      id: p.id,
+      unitId: p.person_group_id || 0,
+      employeeId: no,
+      name: p.full_name || p.employee_no || "",
+      photoUrl: resolvePhotoUrl(p),
+      ...personnelPresenceFields(presence, ISO_PERSONNEL_TIME_FORMAT),
+    };
+  });
+  return { personnel, entryCount, exitCount };
 }
 
 module.exports = {

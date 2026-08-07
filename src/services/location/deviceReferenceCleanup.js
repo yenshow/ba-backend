@@ -19,7 +19,13 @@ const CONTROLLER_SYSTEM_TYPES = new Set([
 /** 各 system_type 在 location_systems.system_config 內的設備 ID 欄位 */
 const LOCATION_DEVICE_FIELDS = {
   people_counting: {
-    arrays: ["entry_device_ids", "exit_device_ids", "camera_device_ids"],
+    arrays: [
+      "entry_device_ids",
+      "exit_device_ids",
+      "camera_device_ids",
+      "entry_camera_device_ids",
+      "exit_camera_device_ids",
+    ],
     roles: [],
   },
   vehicle_access: {

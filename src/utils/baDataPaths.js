@@ -108,6 +108,7 @@ const ensureDirSync = (dirPath) => {
 const UPLOADS_SUBDIRS = [
   "personnel",
   "access-events",
+  "face-contrast-events",
   "vehicle-events",
   "settings",
   "multimedia",

@@ -1,7 +1,11 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { throwApiError, causeDetails, rethrowIfApiError } = require("../../utils/apiErrors");
+const {
+  throwApiError,
+  causeDetails,
+  rethrowIfApiError,
+} = require("../../utils/apiErrors");
 const {
   failLocationGet,
   failLocationCreate,
@@ -62,7 +66,7 @@ async function getLocationById(id) {
  * @returns {{ locations: Array<{ id: number, name: string, zone_name: string, entry_devices: Array<{id:number,name:string}>, exit_devices: Array<{id:number,name:string}> }> }}
  */
 async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
-  // 1) 先找可同步地點 + entry/exit device ids（JSONB）
+  // 1) 可同步地點：門禁 entry 或人流攝影機 camera_device_ids
   const rows = await db.query(
     `
       SELECT
@@ -70,12 +74,26 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
         l.name,
         z.name AS zone_name,
         COALESCE(ls.system_config->'entry_device_ids', '[]'::jsonb) AS entry_device_ids,
-        COALESCE(ls.system_config->'exit_device_ids', '[]'::jsonb) AS exit_device_ids
+        COALESCE(ls.system_config->'exit_device_ids', '[]'::jsonb) AS exit_device_ids,
+        COALESCE(ls.system_config->'camera_device_ids', '[]'::jsonb) AS camera_device_ids,
+        COALESCE(ls.system_config->'entry_camera_device_ids', '[]'::jsonb) AS entry_camera_device_ids,
+        COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb) AS exit_camera_device_ids,
+        COALESCE(ls.system_config->>'data_source', '') AS data_source,
+        COALESCE(ls.system_config->>'camera_mode', 'people_counting') AS camera_mode
       FROM locations l
       INNER JOIN zones z ON l.zone_id = z.id
       INNER JOIN location_systems ls
         ON l.id = ls.location_id AND ls.system_type = 'people_counting'
       WHERE COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+         OR (
+           COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
+           AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
+           AND (
+             COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
+             OR COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
+             OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
+           )
+         )
       ORDER BY z.name, l.name
     `,
     [],
@@ -95,30 +113,43 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
 
   const entryIdsByLoc = new Map();
   const exitIdsByLoc = new Map();
-  const allDeviceIds = new Set();
+  const cameraIdsByLoc = new Map();
+  const dataSourceByLoc = new Map();
+  const allAccessIds = new Set();
+  const allCameraIds = new Set();
 
   for (const r of rows || []) {
     const locId = Number(r.id);
     const entry = toIntList(r.entry_device_ids);
     const exit = toIntList(r.exit_device_ids);
+    const cameras = Array.from(
+      new Set([
+        ...toIntList(r.camera_device_ids),
+        ...toIntList(r.entry_camera_device_ids),
+        ...toIntList(r.exit_camera_device_ids),
+      ]),
+    );
     entryIdsByLoc.set(locId, entry);
     exitIdsByLoc.set(locId, exit);
-    for (const id of entry) allDeviceIds.add(id);
-    for (const id of exit) allDeviceIds.add(id);
+    cameraIdsByLoc.set(locId, cameras);
+    dataSourceByLoc.set(locId, String(r.data_source || "").trim());
+    for (const id of entry) allAccessIds.add(id);
+    for (const id of exit) allAccessIds.add(id);
+    for (const id of cameras) allCameraIds.add(id);
   }
 
-  // 2) 批次把 device id -> name 拉回來（只抓 access_control）
-  const deviceIdList = Array.from(allDeviceIds);
   const deviceNameById = new Map();
-  if (deviceIdList.length > 0) {
+  const loadNames = async (ids, typeCode) => {
+    const deviceIdList = Array.from(ids);
+    if (deviceIdList.length === 0) return;
     const devRows = await db.query(
       `
         SELECT id, name
         FROM devices
         WHERE id = ANY($1::int[])
-          AND type_code = 'access_control'
+          AND type_code = $2
       `,
-      [deviceIdList],
+      [deviceIdList, typeCode],
     );
     for (const d of devRows || []) {
       deviceNameById.set(
@@ -126,7 +157,9 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
         String(d.name || "").trim() || `#${d.id}`,
       );
     }
-  }
+  };
+  await loadNames(allAccessIds, "access_control");
+  await loadNames(allCameraIds, "camera");
 
   const mapDevices = (ids) =>
     (ids || []).map((id) => ({ id, name: deviceNameById.get(id) || `#${id}` }));
@@ -135,12 +168,15 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
     const id = Number(r.id);
     const entryIds = entryIdsByLoc.get(id) || [];
     const exitIds = exitIdsByLoc.get(id) || [];
+    const cameraIds = cameraIdsByLoc.get(id) || [];
     return {
       id,
       name: r.name,
       zone_name: r.zone_name,
+      data_source: dataSourceByLoc.get(id) || "",
       entry_devices: mapDevices(entryIds),
       exit_devices: mapDevices(exitIds),
+      camera_devices: mapDevices(cameraIds),
     };
   });
 
@@ -295,13 +331,7 @@ async function updateLocation(id, locationData, userId, options = {}) {
     // 使用事務更新地點和系統
     let locationDeleted = false;
     await db.transaction(async (query) => {
-      await updateLocationWithSystems(
-        query,
-        id,
-        locationData,
-        userId,
-        options,
-      );
+      await updateLocationWithSystems(query, id, locationData, userId, options);
 
       // 檢查地點是否已被刪除（因為變成無系統）
       const locationCheck = await query(

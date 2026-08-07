@@ -15,6 +15,7 @@ const EVENT_PERMISSION_CODES = {
   "alert:daily_rollover": "system.alert_log",
   "people-counting:access-control:event": "system.people_counting",
   "people-counting:isapi-camera:event": "system.people_counting",
+  "people-counting:isapi-camera:face-contrast": "system.people_counting",
   "people-counting:stats-reset": "system.people_counting",
   "yscp:event:acs": "system.people_counting",
   "yscp:event:vehicle": "system.vehicle_access",

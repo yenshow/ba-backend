@@ -390,6 +390,43 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // ISAPI 攝影機人臉比對（alarmResult）事件
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS isapi_face_contrast_events (
+        id BIGSERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        device_ip VARCHAR(255),
+        channel_id INTEGER NOT NULL DEFAULT 1,
+        event_time TIMESTAMPTZ NOT NULL,
+        event_type VARCHAR(64) NOT NULL DEFAULT 'alarmResult',
+        similarity DOUBLE PRECISION,
+        employee_no VARCHAR(64),
+        person_name VARCHAR(255),
+        pid VARCHAR(64),
+        certificate_number VARCHAR(128),
+        matched BOOLEAN NOT NULL DEFAULT TRUE,
+        payload JSONB,
+        picture_path TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_face_contrast_events_location_time
+      ON isapi_face_contrast_events(location_id, event_time DESC);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_face_contrast_events_device_time
+      ON isapi_face_contrast_events(device_id, event_time DESC);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_isapi_face_contrast_events_employee
+      ON isapi_face_contrast_events(employee_no);
+    `);
+    schemaLogger.info("isapi_face_contrast_events 表已建立", {
+      module: "initSchema",
+    });
+
     // 車輛進出過車記錄（YSCP 同步 + ISAPI ANPR 落地）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS vehicle_passageway_logs (
