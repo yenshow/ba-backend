@@ -11,11 +11,16 @@ const { throwApiError } = require("../../utils/apiErrors");
 const API_BASE = (config.mediaMTX?.apiBaseUrl ?? "http://127.0.0.1:9997").replace(/\/$/, "");
 const TIMEOUT_MS = config.mediaMTX?.timeoutMs ?? 10000;
 
+/** 與 mediamtx.yml pathDefaults 對齊（API replace 需顯式帶上） */
+const PATH_DEFAULTS = {
+  sourceOnDemand: true,
+  rtspTransport: "tcp",
+};
+
 /** @returns {{ webrtcUrl: string, webrtcPort: number }} */
 function buildWebrtcPlayback(pathName) {
-  const whepPath = `/${pathName}/whep`;
   return {
-    webrtcUrl: whepPath,
+    webrtcUrl: `/${pathName}/whep`,
     webrtcPort: config.mediaMTX?.webrtcPort ?? 8889,
   };
 }
@@ -26,23 +31,20 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-/**
- * MediaMTX 的 /v3/config 變更會觸發 reload。
- * 多視窗/多分割同時啟動多台時，若並發呼叫 add/remove path，
- * 會造成同一秒連續 reload，進而中斷剛建立的 WebRTC session。
- * 因此把 config 變更統一排隊（全域序列化）。
- */
+/** /v3/config 變更會 reload；序列化避免並發打斷 WebRTC */
 let configMutationQueue = Promise.resolve();
 const enqueueConfigMutation = (fn) => {
-  const run = async () => await fn();
-  const next = configMutationQueue.then(run, run);
-  // 防止 rejected 讓 queue 中斷
+  const next = configMutationQueue.then(fn, fn);
   configMutationQueue = next.catch(() => {});
   return next;
 };
 
+const maskRtsp = (rtspUrl) => String(rtspUrl || "").replace(/:[^:@]+@/, ":***@");
+
+const apiErrMsg = (err) =>
+  err?.response?.data?.message ?? err?.response?.data?.error ?? err?.message ?? String(err);
+
 /**
- * 由 deviceId 產生 MediaMTX path 名稱（唯一、URL 安全）
  * @param {number} deviceId
  * @returns {string}
  */
@@ -51,59 +53,62 @@ function pathNameFromDeviceId(deviceId) {
 }
 
 /**
- * 新增 path（MediaMTX 向攝影機拉 RTSP）
- * @param {string} pathName - path 名稱（例：device-14）
- * @param {string} rtspUrl - 完整 RTSP URL（H.264 建議）
- * @returns {Promise<{ webrtcUrl: string }>}
+ * 新增或更新 path（已存在則 replace）
+ * @param {string} pathName
+ * @param {string} rtspUrl
+ * @returns {Promise<{ webrtcUrl: string, webrtcPort: number }>}
  */
 async function addPath(pathName, rtspUrl) {
-  const url = `/v3/config/paths/add/${encodeURIComponent(pathName)}`;
-  const body = {
-    source: rtspUrl,
-    sourceOnDemand: true,
-  };
-  const doAdd = async () => {
-    await api.post(url, body);
-    logger.info("MediaMTX path 已新增", { pathName, rtspUrl: rtspUrl.replace(/:[^:@]+@/, ":***@") });
-  };
+  const enc = encodeURIComponent(pathName);
+  const body = { source: rtspUrl, ...PATH_DEFAULTS };
+  const masked = maskRtsp(rtspUrl);
 
   await enqueueConfigMutation(async () => {
     try {
-      await doAdd();
+      await api.post(`/v3/config/paths/add/${enc}`, body);
+      logger.info("MediaMTX path 已新增", { pathName, rtspUrl: masked });
+      return;
     } catch (err) {
       const status = err.response?.status;
-      const data = err.response?.data;
-      const msg = data?.message ?? data?.error ?? err.message;
-      const detail = typeof data === "object" ? JSON.stringify(data) : String(data);
+      const msg = apiErrMsg(err);
+      const alreadyExists = status === 400 && /already exists/i.test(String(msg));
+
+      if (alreadyExists) {
+        try {
+          await api.post(`/v3/config/paths/replace/${enc}`, body);
+          logger.info("MediaMTX path 已更新", { pathName, rtspUrl: masked });
+          return;
+        } catch (replaceErr) {
+          logger.error("MediaMTX replace path 失敗", { pathName, error: apiErrMsg(replaceErr) });
+          throwApiError(
+            C.MEDIAMTX_ADD_PATH_REJECTED,
+            `MediaMTX 更新既有 path 失敗。詳情: ${apiErrMsg(replaceErr)}`,
+          );
+        }
+      }
+
       logger.error("MediaMTX 新增 path 失敗", {
         pathName,
         status,
         message: msg,
-        responseBody: detail,
+        responseBody:
+          typeof err.response?.data === "object"
+            ? JSON.stringify(err.response.data)
+            : String(err.response?.data ?? ""),
       });
-      if (status === 400) {
-        try {
-          await api.delete(`/v3/config/paths/delete/${encodeURIComponent(pathName)}`);
-          logger.info("MediaMTX 已移除既有 path，重試新增", { pathName });
-          await doAdd();
-        } catch (retryErr) {
-          const retryMsg =
-            retryErr.response?.data?.message ?? retryErr.response?.data?.error ?? retryErr.message;
-          throwApiError(
-            C.MEDIAMTX_ADD_PATH_REJECTED,
-            `MediaMTX 拒絕此設定 (400)。請檢查 RTSP URL 是否正確、路徑是否完整（海康威視常見：/Streaming/Channels/101 或 /102），以及帳密是否正確。詳情: ${retryMsg}`,
-          );
-        }
-      } else {
-        throwApiError(C.MEDIAMTX_ADD_PATH_FAILED, `MediaMTX 新增 path 失敗: ${msg}`);
-      }
+      throwApiError(
+        status === 400 ? C.MEDIAMTX_ADD_PATH_REJECTED : C.MEDIAMTX_ADD_PATH_FAILED,
+        status === 400
+          ? `MediaMTX 拒絕此設定 (400)。請檢查 RTSP URL（監看建議子碼流，海康常為 /Streaming/Channels/102）與帳密。詳情: ${msg}`
+          : `MediaMTX 新增 path 失敗: ${msg}`,
+      );
     }
   });
+
   return buildWebrtcPlayback(pathName);
 }
 
 /**
- * 移除 path
  * @param {string} pathName
  */
 async function removePath(pathName) {
@@ -117,7 +122,7 @@ async function removePath(pathName) {
         logger.debug("MediaMTX path 不存在，略過移除", { pathName });
         return;
       }
-      const msg = err.response?.data?.message ?? err.message;
+      const msg = apiErrMsg(err);
       logger.error("MediaMTX 移除 path 失敗", { pathName, error: msg });
       throwApiError(C.MEDIAMTX_REMOVE_PATH_FAILED, `MediaMTX 移除 path 失敗: ${msg}`);
     }
@@ -125,7 +130,6 @@ async function removePath(pathName) {
 }
 
 /**
- * 列出目前 path（用於查詢是否在播）
  * @returns {Promise<Array<{ name: string }>>}
  */
 async function listPaths() {
@@ -134,13 +138,13 @@ async function listPaths() {
     const items = res.data?.items ?? [];
     return items.map((p) => ({ name: p.name ?? p }));
   } catch (err) {
-    const msg = err.response?.data?.message ?? err.message;
-    logger.warn("MediaMTX 取得 path 列表失敗", { error: msg });
+    logger.warn("MediaMTX 取得 path 列表失敗", { error: apiErrMsg(err) });
     return [];
   }
 }
 
 module.exports = {
+  PATH_DEFAULTS,
   pathNameFromDeviceId,
   addPath,
   removePath,

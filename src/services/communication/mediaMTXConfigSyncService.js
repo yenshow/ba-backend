@@ -37,12 +37,11 @@ const yamlQuote = (v) => {
 };
 
 const buildPathsYaml = (items) => {
-  const lines = [];
-  lines.push("paths:");
+  const lines = ["paths:"];
   for (const it of items) {
+    // sourceOnDemand / rtspTransport 由 base pathDefaults 繼承，勿在此重複
     lines.push(`  ${it.pathName}:`);
     lines.push(`    source: ${yamlQuote(it.rtspUrl)}`);
-    lines.push("    sourceOnDemand: true");
   }
   if (items.length === 0) lines.push("  {}");
   return lines.join("\n");

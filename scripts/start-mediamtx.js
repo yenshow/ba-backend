@@ -1,10 +1,10 @@
 /**
  * 在本機直接啟動 MediaMTX（開發用）
- * 可執行檔需放在 mediamtx/bin/mediamtx.exe（Windows）或 mediamtx/bin/mediamtx（Linux/macOS）
- * 出貨由 WinSW `{Product}-MediaMTX` 服務啟動本腳本；本機開發：`npm run mediamtx`
+ * 可執行檔：mediamtx/bin/mediamtx(.exe)
+ * 出貨：WinSW `{Product}-MediaMTX` → 本腳本；開發：`npm run mediamtx`
  */
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const {
   getMediamtxDir,
@@ -14,10 +14,11 @@ const {
 const rootDir = path.resolve(__dirname, "..");
 const mediamtxDir = getMediamtxDir();
 const generatedConfigPath = getMediamtxGeneratedConfigPath();
-
-const isWindows = process.platform === "win32";
-const exeName = isWindows ? "mediamtx.exe" : "mediamtx";
-const binPath = path.join(mediamtxDir, "bin", exeName);
+const binPath = path.join(
+  mediamtxDir,
+  "bin",
+  process.platform === "win32" ? "mediamtx.exe" : "mediamtx",
+);
 
 if (!fs.existsSync(binPath)) {
   console.error(`找不到 MediaMTX 可執行檔: ${binPath}`);
@@ -26,25 +27,17 @@ if (!fs.existsSync(binPath)) {
   process.exit(1);
 }
 
-// 統一作法：啟動前一律由 DB 產生完整設定檔
-try {
-  // eslint-disable-next-line global-require
-  const { spawnSync } = require("child_process");
-  const generatorPath = path.join(rootDir, "scripts", "generate-mediamtx-config.js");
-  const res = spawnSync(process.execPath, [generatorPath], {
-    cwd: rootDir,
-    stdio: "inherit",
-    windowsHide: true,
-    env: process.env,
-  });
-  if (res.status !== 0) {
-    console.error("產生 mediamtx.generated.yml 失敗，無法啟動 MediaMTX");
-    process.exit(res.status || 1);
-  }
-} catch (e) {
-  console.error("產生 mediamtx.generated.yml 失敗:", e?.message || e);
-  process.exit(1);
+const gen = spawnSync(
+  process.execPath,
+  [path.join(rootDir, "scripts", "generate-mediamtx-config.js")],
+  { cwd: rootDir, stdio: "inherit", windowsHide: true, env: process.env },
+);
+if (gen.status !== 0) {
+  console.error("產生 mediamtx.generated.yml 失敗，無法啟動 MediaMTX");
+  process.exit(gen.status || 1);
 }
+
+fs.mkdirSync(path.join(mediamtxDir, "logs"), { recursive: true });
 
 const child = spawn(binPath, [generatedConfigPath], {
   cwd: mediamtxDir,
@@ -62,9 +55,5 @@ child.on("exit", (code, signal) => {
   if (signal) process.exit(1);
 });
 
-process.on("SIGINT", () => {
-  child.kill("SIGINT");
-});
-process.on("SIGTERM", () => {
-  child.kill("SIGTERM");
-});
+process.on("SIGINT", () => child.kill("SIGINT"));
+process.on("SIGTERM", () => child.kill("SIGTERM"));
