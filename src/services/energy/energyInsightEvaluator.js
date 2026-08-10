@@ -178,6 +178,7 @@ async function evaluateEnergyInsights() {
       (latest || []).map((r) => [r.device_id, r.device_name || `設備 #${r.device_id}`]),
     );
     for (const [deviceId, energy] of byDevice.entries()) {
+      if (!(energy > 0)) continue;
       const pct = percentOf(energy, todayEnergy);
       if (pct >= sharePct) {
         const name = nameById.get(deviceId) || `設備 #${deviceId}`;

@@ -17,7 +17,7 @@ const { isValidEnergyParameterKey } = require("../../constants/energyParameterCa
 
 const lastRawWriteByDevice = new Map();
 
-async function readMeterValues(enabledValues, deviceConfig) {
+async function readMeterValues(enabledValues, deviceConfig, meta = {}) {
   const deviceValues = {};
   const registerTypes = [
     { type: "holding", batchType: "holding" },
@@ -61,6 +61,11 @@ async function readMeterValues(enabledValues, deviceConfig) {
       modbusData = first.data;
     } catch (err) {
       logger.warn("讀取暫存器失敗", {
+        deviceId: meta.deviceId,
+        deviceName: meta.deviceName,
+        host: deviceConfig.host,
+        port: deviceConfig.port,
+        unitId: deviceConfig.unitId,
         error: err.message,
         registerType,
         minAddress,
@@ -163,7 +168,10 @@ async function checkEnergyMeters() {
     let data = {};
     let online = false;
     try {
-      data = await readMeterValues(energyValues, deviceConfig);
+      data = await readMeterValues(energyValues, deviceConfig, {
+        deviceId: device.id,
+        deviceName: device.name,
+      });
       online = Object.keys(data).length > 0;
     } catch (err) {
       logger.warn("表計讀取失敗", { deviceId: device.id, error: err.message });

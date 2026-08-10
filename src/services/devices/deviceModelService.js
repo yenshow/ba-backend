@@ -22,9 +22,13 @@ const {
 const {
   isValidEnergyParameterKey,
   listEnergyParameterKeys,
+  getEnergyParameter,
   METER_KINDS,
   MODBUS_DATA_TYPES,
 } = require("../../constants/energyParameterCatalog");
+const {
+  invalidateDeviceLoggingConfig,
+} = require("./deviceLoggingConfig");
 
 const deviceModelLogger = logger.createLogger("deviceModelService");
 
@@ -122,6 +126,18 @@ function validateSensorParametersConfig(config) {
     }
   }
 
+  if (
+    config.meterKind &&
+    config.registerType != null &&
+    config.registerType !== "holding" &&
+    config.registerType !== "input"
+  ) {
+    throwApiError(
+      C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
+      "表計型號功能碼須為 holding（FC03）或 input（FC04）",
+    );
+  }
+
   if (config.sensorParameters) {
     if (!Array.isArray(config.sensorParameters)) {
       throwApiError(
@@ -149,6 +165,20 @@ function validateSensorParametersConfig(config) {
         throwApiError(
           C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
           `無效的參數類型: ${param.type}。有效類型: ${validParameterTypes.join(", ")}`,
+        );
+      }
+      if (config.meterKind) {
+        const energyDef = getEnergyParameter(param.type);
+        if (!energyDef || !energyDef.meterKinds.includes(config.meterKind)) {
+          throwApiError(
+            C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
+            `參數 ${param.type} 不適用於 meterKind=${config.meterKind}`,
+          );
+        }
+      } else if (isValidEnergyParameterKey(param.type)) {
+        throwApiError(
+          C.DEVICE_MODEL_SENSOR_PARAMETERS_INVALID,
+          `能源參數 ${param.type} 須先設定 meterKind（electricity／water）`,
         );
       }
       if (!param.modbusConfig) {
@@ -422,6 +452,13 @@ async function updateDeviceModel(id, data, userId) {
       `UPDATE device_models SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       params,
     );
+
+    const modelDevices = await db.query("SELECT id FROM devices WHERE model_id = ?", [
+      id,
+    ]);
+    for (const row of modelDevices || []) {
+      invalidateDeviceLoggingConfig(row.id);
+    }
 
     const models = await db.query(
       `

@@ -225,11 +225,28 @@ function parseDeviceConfig(raw) {
 }
 
 /**
- * 載入納入設備的今日電量（by device）與裝置中繼資料
+ * 載入納入**電表**的今日電量（by device）與裝置中繼資料。
+ * 水表（meterKind=water）不進分佈／排行／明細。
  */
 async function loadTodayDeviceEnergy(ids) {
+  const devices =
+    ids.length === 0
+      ? []
+      : await db.query(
+          `SELECT d.id, d.name, d.location, d.config, dm.config AS model_config
+           FROM devices d
+           LEFT JOIN device_models dm ON dm.id = d.model_id
+           WHERE d.id = ANY($1::int[])`,
+          [ids],
+        );
+
+  const electricityDevices = (devices || []).filter(
+    (d) => parseDeviceConfig(d.model_config).meterKind === "electricity",
+  );
+  const electricityIds = electricityDevices.map((d) => d.id);
+
   const dayStart = startOfLocalDayUtc();
-  const { rows } = await loadAgg(ids, "hour", dayStart, new Date());
+  const { rows } = await loadAgg(electricityIds, "hour", dayStart, new Date());
 
   const byDevice = new Map();
   for (const r of rows) {
@@ -240,16 +257,8 @@ async function loadTodayDeviceEnergy(ids) {
     );
   }
 
-  const devices =
-    ids.length === 0
-      ? []
-      : await db.query(
-          `SELECT id, name, location, config FROM devices WHERE id = ANY($1::int[])`,
-          [ids],
-        );
-
   const deviceMeta = new Map();
-  for (const d of devices || []) {
+  for (const d of electricityDevices) {
     const cfg = parseDeviceConfig(d.config);
     const systemKey = normalizeEnergyUsageSystemKey(cfg.energy_usage_system);
     deviceMeta.set(d.id, {
@@ -264,7 +273,7 @@ async function loadTodayDeviceEnergy(ids) {
 
   // 有彙總但設備已被刪／不在查詢結果：仍保留用量
   for (const [id, energy] of byDevice.entries()) {
-    if (deviceMeta.has(id)) continue;
+    if (deviceMeta.has(id) || !(energy > 0)) continue;
     const systemKey = DEFAULT_USAGE_SYSTEM_KEY;
     deviceMeta.set(id, {
       deviceId: id,

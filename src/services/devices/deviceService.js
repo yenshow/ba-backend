@@ -30,6 +30,9 @@ const {
 const {
   removeDeviceReferences,
 } = require("../location/deviceReferenceCleanup");
+const {
+  invalidateDeviceLoggingConfig,
+} = require("./deviceLoggingConfig");
 
 const deviceLogger = logger.createLogger("deviceService");
 
@@ -533,6 +536,7 @@ async function createDevice(deviceData, userId) {
 
     // 取得建立的設備
     const deviceResult = await getDeviceById(result[0].id);
+    invalidateDeviceLoggingConfig(result[0].id);
 
     // 攝影機：自動套用到 MediaMTX（立即更新 + 產生 generated 檔供下次啟動）
     try {
@@ -814,6 +818,8 @@ async function updateDevice(id, deviceData, userId) {
       params,
     );
 
+    invalidateDeviceLoggingConfig(id);
+
     // 取得更新後的設備
     const updatedDevice = await getDeviceById(id);
 
@@ -893,6 +899,7 @@ async function deleteDevice(id, userId = null) {
     }
 
     await db.query("DELETE FROM devices WHERE id = ?", [id]);
+    invalidateDeviceLoggingConfig(id);
 
     // 攝影機：刪除後更新 generated 檔（runtime 不主動 removePath，避免 reload）
     try {

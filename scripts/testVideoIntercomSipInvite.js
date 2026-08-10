@@ -10,7 +10,7 @@
  *   node scripts/testVideoIntercomSipInvite.js
  *   node scripts/testVideoIntercomSipInvite.js --host 192.168.2.78 --to 1001
  *
- * 詳見：docs/40-systems/video-intercom-main-station.md §10
+ * 詳見：docs/40-systems/video-intercom-main-station.md §3
  */
 
 /* eslint-disable no-console */
@@ -317,7 +317,7 @@ const run = async () => {
   printSection("直打室內機 SIP（不經主機）");
   console.log(`目標：${config.sipHost}:${config.sipPort}`);
   console.log(`From：${config.sipUser} → To：${config.targetUser}`);
-  console.log("前提：室內已開標準／相容 SIP，VoIP 號碼已填（見文件 §10）\n");
+  console.log("前提：室內已開標準／相容 SIP，VoIP 號碼已填（見文件 §3）\n");
 
   const probe = new SipProbe(config);
   let inviteResult = "none";

@@ -13,6 +13,18 @@ const loggingCfgLogger = logger.createLogger("deviceLoggingConfig");
 const configCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+/** 無 deviceId 時清全部；設備／型號更新後應呼叫，避免 monitor 繼續用舊暫存器 map */
+function invalidateDeviceLoggingConfig(deviceId) {
+  if (deviceId == null || deviceId === "") {
+    configCache.clear();
+    return;
+  }
+  configCache.delete(deviceId);
+  const n = Number(deviceId);
+  if (Number.isFinite(n)) configCache.delete(n);
+  configCache.delete(String(deviceId));
+}
+
 function _buildLoggingValuesFromSensorParameters(sensorParameters, defaultRegisterType) {
   if (!sensorParameters || !Array.isArray(sensorParameters)) return [];
   const registerType = defaultRegisterType || "holding";
@@ -157,6 +169,7 @@ function applyConversion(rawValue, conversion, dataType = "uint16") {
 
 module.exports = {
   getDeviceLoggingConfig,
+  invalidateDeviceLoggingConfig,
   applyConversion,
   decodeRegisterValue,
 };
