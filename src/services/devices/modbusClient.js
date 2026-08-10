@@ -354,36 +354,16 @@ class ModbusClient extends EventEmitter {
     }
   }
 
-  /** FC06：寫入單一 holding register */
+  /** FC16：寫入單一 holding register */
   async writeRegister(address, value, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
-    const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入暫存器。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.writeRegister(address, value),
-        this.timeout,
-        timeoutMsg,
-        C.MODBUS_WRITE_TIMEOUT,
-      );
-      const echoed = response?.value;
-      if (echoed === undefined) {
-        return response != null;
-      }
-      return Number(echoed) === Number(value);
-    } catch (error) {
-      if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
-        throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);
-      }
-      this.handleOperationError(error, client, deviceConfig, "write");
-    }
+    return this.writeRegisters(address, [value], deviceConfig);
   }
 
-  /** FC16：寫入多個 holding registers */
+  /** FC16：寫入 holding registers */
   async writeRegisters(address, values, deviceConfig) {
     const client = await this.ensureConnection(deviceConfig);
     this.checkConnection(client, deviceConfig);
-    const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入多個暫存器。設備可能無回應或連接已斷開。`;
+    const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入暫存器。設備可能無回應或連接已斷開。`;
     try {
       const response = await this.withTimeout(
         client.writeRegisters(address, values),
