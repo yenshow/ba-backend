@@ -5,7 +5,9 @@
  * 參數直接改下方 CONFIG，無需設定環境變數。
  */
 const { invokeBridge } = require("../src/services/ladderSdk/sdkBridgeClient");
-const { enrichLadderCardName } = require("../src/services/ladderSdk/sdkCardService");
+const {
+  enrichLadderCardName,
+} = require("../src/services/ladderSdk/sdkCardService");
 
 // ===== 本機測試設定（直接改這裡）=====
 const CONFIG = {
@@ -24,7 +26,7 @@ const CONFIG = {
   cardFloorMode: "byte", // "byte" | "bitmap"
   gatewayIndex: 1,
   controlCommand: 1, // 0 關、1 開、2 常開、3 常閉、4 恢復、5 訪客呼梯、6 住戶呼梯
-  doorLimit: 10, // door.list 筆數上限，0 = 依設備能力全部
+  doorLimit: 20, // door.list 筆數上限，0 = 依設備能力全部
   doorIndex: 1,
   doorName: "Floor 01",
   doorOpenDuration: 5,
@@ -122,7 +124,9 @@ const run = async () => {
   if (action === "card.list" && Array.isArray(result?.cards)) {
     result = {
       ...result,
-      cards: await Promise.all(result.cards.map((card) => enrichLadderCardName(card))),
+      cards: await Promise.all(
+        result.cards.map((card) => enrichLadderCardName(card)),
+      ),
     };
   } else if (action === "card.get" && result) {
     result = await enrichLadderCardName(result);

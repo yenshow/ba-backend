@@ -408,7 +408,6 @@ const cmdExport = async (argv) => {
     const payload = {
       eventType,
       name: ruleName,
-      description: `腳本測試規則 (${eventType})`,
       filenamePrefix: `BaExportTest_${eventType}`,
       dateFormat: "yyyyMMdd",
       timeFormat: "HHmmss",

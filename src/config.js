@@ -125,10 +125,11 @@ const jwt = {
 
 /**
  * API 全站限流（每 IP 滑動窗口）
+ * RATE_LIMIT_MAX / RATE_LIMIT_WINDOW_MS 可覆寫；壓測可暫時提高 max。
  */
 const rateLimit = {
-  windowMs: 15 * 60 * 1000,
-  max: 1000,
+  windowMs: toNumber(getEnv("RATE_LIMIT_WINDOW_MS"), 15 * 60 * 1000),
+  max: toNumber(getEnv("RATE_LIMIT_MAX"), 1000),
 };
 
 /**

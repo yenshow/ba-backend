@@ -20,12 +20,17 @@ const C = require("../utils/apiErrorCodes");
 const {
   parseZoneIdsQuery,
 } = require("../services/snapshotStatus/modbusSnapshotHelpers");
+const {
+  resolveStatusSnapshot,
+  resolveZoneStatusSnapshot,
+} = require("../services/monitoring/resolveStatusSnapshot");
 
 /**
  * @param {object} config
  * @param {string} config.permissionCode 例如 system.lighting
  * @param {string} config.locationType 例如 lighting、air_circulation
  * @param {string} config.alertSource 傳入 systemAlert.* 的來源鍵
+ * @param {string} config.systemKey 快取鍵（與 backgroundMonitor / monitoringSnapshotCache 對齊）
  * @param {{ getStatusSnapshot: Function, getZoneStatusSnapshot: Function }} config.statusService
  * @param {number} [config.createZoneHttpStatus] POST /zones 成功狀態碼（預設 200）
  * @param {boolean} [config.manualErrorRequiresMessage=false] 煙霧警報：POST errors 需 body.message
@@ -35,10 +40,17 @@ function createSnapshotSystemRouter(config) {
     permissionCode,
     locationType,
     alertSource,
+    systemKey,
     statusService,
     createZoneHttpStatus,
     manualErrorRequiresMessage = false,
   } = config;
+
+  if (!systemKey) {
+    throw new Error(
+      `createSnapshotSystemRouter: systemKey 必填（permissionCode=${permissionCode}）`,
+    );
+  }
 
   const router = express.Router();
   router.use(authenticate, requirePermission(permissionCode));
@@ -109,8 +121,11 @@ function createSnapshotSystemRouter(config) {
     disableHttpCache,
     asyncHandler(async (req, res) => {
       const zoneIds = parseZoneIdsQuery(req.query.zoneIds);
-      const result = await statusService.getStatusSnapshot({
+      // Push-first：預設讀 monitoringSnapshotCache；?noCache=true／force 才觸發 Modbus
+      const result = await resolveStatusSnapshot(systemKey, statusService, {
         zoneIds,
+        noCache: req.query.noCache,
+        force: req.query.force,
       });
       res.sendSuccess(result);
     }),
@@ -122,9 +137,14 @@ function createSnapshotSystemRouter(config) {
     validateIntegers("id"),
     asyncHandler(async (req, res) => {
       const { id } = req.params;
-      const result = await statusService.getZoneStatusSnapshot(
-        parseInt(id, 10),
-        {},
+      const result = await resolveZoneStatusSnapshot(
+        systemKey,
+        statusService,
+        id,
+        {
+          noCache: req.query.noCache,
+          force: req.query.force,
+        },
       );
       res.sendSuccess(result);
     }),

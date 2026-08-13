@@ -122,7 +122,6 @@ async function listRules(eventType) {
       id: r.id,
       eventType: r.event_type,
       name: r.name,
-      description: r.description ?? "",
       filenamePrefix: r.filename_prefix,
       dateFormat: r.date_format,
       timeFormat: r.time_format,
@@ -207,7 +206,6 @@ function validateRulePayload(payload, options = {}) {
   return {
     eventType,
     name,
-    description: String(payload.description ?? ""),
     enabled: payload.enabled !== false,
     filenamePrefix,
     dateFormat,
@@ -245,7 +243,6 @@ async function upsertRule(ruleId, payload) {
     const params = [
       normalized.eventType,
       normalized.name,
-      normalized.description || null,
       normalized.enabled,
       normalized.filenamePrefix,
       normalized.dateFormat,
@@ -266,9 +263,9 @@ async function upsertRule(ruleId, payload) {
       const rows = await q(
         `
           INSERT INTO record_export_rules
-            (event_type, name, description, enabled, filename_prefix, date_format, time_format, output_format, export_time, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
+            (event_type, name, enabled, filename_prefix, date_format, time_format, output_format, export_time, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
           VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            (?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
           RETURNING id
         `,
         params,
@@ -279,7 +276,7 @@ async function upsertRule(ruleId, payload) {
       await q(
         `
           UPDATE record_export_rules
-          SET event_type = ?, name = ?, description = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, export_time = ?::time,
+          SET event_type = ?, name = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, export_time = ?::time,
               storage_type = ?, local_dir = ?, sftp_host = ?, sftp_port = ?, sftp_username = ?, sftp_password_enc = ?, sftp_remote_dir = ?,
               filter_json = ?::jsonb, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?

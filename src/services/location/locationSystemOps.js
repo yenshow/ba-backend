@@ -267,22 +267,11 @@ function buildSystemConfig(systemType, config) {
 
     case "elevator": {
       const {
-        normalizeLogDisplayColumns,
-        toStoredLogDisplayColumns,
-      } = require("../elevator/logDisplayColumns");
-      const {
         validateElevatorLocationConfig,
         toStoredConfig,
       } = require("../elevator/elevatorFloorModel");
       const validated = validateElevatorLocationConfig(config);
-      const stored = toStoredConfig(validated);
-      const cols = toStoredLogDisplayColumns(
-        normalizeLogDisplayColumns(validated.logDisplayColumns),
-      );
-      if (cols.length > 0) {
-        stored.log_display_columns = cols;
-      }
-      return stored;
+      return toStoredConfig(validated);
     }
 
     case "vehicle_access": {
@@ -743,9 +732,6 @@ async function createLocationWithSystems(
             systemConfig.callDevice = location.callDevice;
           if (location.floorDetection !== undefined)
             systemConfig.floorDetection = location.floorDetection;
-          if (location.logDisplayColumns !== undefined) {
-            systemConfig.logDisplayColumns = location.logDisplayColumns;
-          }
           if (location.callCommandType !== undefined) {
             systemConfig.callCommandType = location.callCommandType;
           }

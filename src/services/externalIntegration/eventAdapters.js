@@ -709,7 +709,7 @@ function vehicleRowToEvent(row) {
 
 const vehicleAdapter = {
   eventType: "vehicle",
-  label: "車輛通行",
+  label: "車輛進出",
   sourceTable: "vehicle_passageway_logs",
   timeColumn: "trigger_time",
   catalog: VEHICLE_CATALOG,
@@ -847,7 +847,7 @@ async function fetchYscpRows({
 
 const peopleCountingAdapter = {
   eventType: "people_counting",
-  label: "人流",
+  label: "人流紀錄",
   sourceTable: "people_counting_logs",
   timeColumn: "swip_card_rev_time",
   catalog: PEOPLE_COUNTING_CATALOG,
@@ -948,7 +948,7 @@ function alertsBuildExtra(filter) {
 
 const alertsAdapter = {
   eventType: "alerts",
-  label: "警報",
+  label: "警報事件",
   sourceTable: "alerts",
   timeColumn: "updated_at",
   catalog: ALERTS_CATALOG,
@@ -1035,7 +1035,7 @@ function environmentRowToEvent(row) {
 
 const environmentAdapter = {
   eventType: "environment",
-  label: "環境讀數",
+  label: "環境數值",
   sourceTable: "environment_readings",
   timeColumn: "recorded_at",
   catalog: ENVIRONMENT_CATALOG,

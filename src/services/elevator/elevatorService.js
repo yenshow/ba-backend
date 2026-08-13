@@ -10,7 +10,6 @@ const {
   rethrowIfApiError,
   causeDetails,
 } = require("../../utils/apiErrors");
-const { normalizeLogDisplayColumns } = require("./logDisplayColumns");
 const {
   getElevatorConfigFromLocation,
   mapElevatorLogsFloorDisplay,
@@ -60,7 +59,6 @@ function getElevatorConfig(location) {
     callDevice: config.callDevice,
     floorDetection: config.floorDetection,
     callCommandType: config.callCommandType ?? "visitor",
-    logDisplayColumns: normalizeLogDisplayColumns(config.logDisplayColumns),
   };
 }
 

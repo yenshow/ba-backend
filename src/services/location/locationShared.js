@@ -410,9 +410,6 @@ function formatSystem(system) {
 
     case "elevator": {
       const {
-        normalizeLogDisplayColumns,
-      } = require("../elevator/logDisplayColumns");
-      const {
         normalizeElevatorLocationConfig,
       } = require("../elevator/elevatorFloorModel");
       const normalized = normalizeElevatorLocationConfig(config);
@@ -437,9 +434,6 @@ function formatSystem(system) {
           floorDetection: normalized.floorDetection ?? undefined,
           accessDeviceIds: normalized.accessDeviceIds,
           callCommandType: normalized.callCommandType,
-          logDisplayColumns: normalizeLogDisplayColumns(
-            normalized.logDisplayColumns,
-          ),
         },
       };
     }

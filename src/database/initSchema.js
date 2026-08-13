@@ -1351,7 +1351,6 @@ async function initSchema() {
         )),
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         name TEXT NOT NULL,
-        description TEXT,
         filename_prefix TEXT NOT NULL,
         date_format TEXT NOT NULL,
         time_format TEXT NOT NULL,

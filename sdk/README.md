@@ -143,7 +143,7 @@ Node `sdkControlService` 字串對照：
 | `normally_closed` | 3 | 梯控常閉 |
 | `visitor_call` | 5 | 呼梯（訪客） |
 
-電梯監控：梯控操作走 `ladder_device` + `ladder_gateway`；呼梯走 `call_device` + `call_gateway`；僅 `visitor_call` 會觸發平台運行態動畫。
+電梯監控：梯控操作走 `ladder_device` + `ladder_gateway`（可一次多層）；呼梯走 `call_device` + `call_gateway`（僅單層）；僅 `visitor_call` 會觸發平台運行態動畫。平台對 `open`／`manual` 會依該層門參數 `openDuration` 秒數再送 `close`（設備遠端開門不會自己斷）。
 
 ### 佈防（`HcNetSdkBridge.exe --arming`）
 

@@ -106,7 +106,7 @@ router.delete(
 
 /**
  * POST /api/ladder-sdk/devices/:deviceId/control
- * Body: { gatewayIndex?, command, locationId?, targetLogicalIndex? }
+ * Body: { gatewayIndex?, gatewayIndexes?, command, locationId?, targetLogicalIndex? }
  */
 router.post(
   "/devices/:deviceId/control",

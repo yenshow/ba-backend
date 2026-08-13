@@ -126,7 +126,6 @@ function normalizeElevatorLocationConfig(config = {}) {
     callCommandType: normalizeCallCommandType(
       config.callCommandType ?? config.call_command_type,
     ),
-    logDisplayColumns: config.logDisplayColumns ?? config.log_display_columns,
   };
 }
 
@@ -363,9 +362,6 @@ function toStoredConfig(validated) {
         ? { point_end: validated.floorDetection.pointEnd }
         : {}),
     };
-  }
-  if (validated.logDisplayColumns) {
-    result.log_display_columns = validated.logDisplayColumns;
   }
   if (validated.callCommandType) {
     result.call_command_type = validated.callCommandType;

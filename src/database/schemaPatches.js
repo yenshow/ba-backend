@@ -162,7 +162,6 @@ async function ensureExternalIntegrationTables(pool) {
       event_type VARCHAR(32) NOT NULL DEFAULT 'access_control',
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       name TEXT NOT NULL,
-      description TEXT,
       filename_prefix TEXT NOT NULL,
       date_format TEXT NOT NULL,
       time_format TEXT NOT NULL,
@@ -183,6 +182,10 @@ async function ensureExternalIntegrationTables(pool) {
   await pool.query(`
     ALTER TABLE record_export_rules
       ADD COLUMN IF NOT EXISTS filter_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    ALTER TABLE record_export_rules
+      DROP COLUMN IF EXISTS description
   `);
   await pool.query(`
     DO $$
