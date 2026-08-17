@@ -188,16 +188,19 @@ async function deletePersonGroup(id) {
       "SELECT id FROM person_groups WHERE parent_id = ?",
       [id],
     );
-    const groupIds = [id, ...(children || []).map((r) => r.id)];
-    const refs = await db.query(
-      `SELECT id FROM persons WHERE person_group_id IN (${groupIds.map(() => "?").join(",")}) LIMIT 1`,
-      groupIds,
-    );
-    if (refs && refs.length > 0) {
-      throwApiError(
-        C.PERSONNEL_VALIDATION_FAILED,
-        "該主群組或子群組下尚有人員，無法刪除",
+    const childIds = (children || []).map((r) => r.id);
+    // 僅擋子群組尚有人員；直接掛在主群組屬非法，DELETE 時由 FK ON DELETE SET NULL 清掉
+    if (childIds.length > 0) {
+      const refs = await db.query(
+        `SELECT id FROM persons WHERE person_group_id IN (${childIds.map(() => "?").join(",")}) LIMIT 1`,
+        childIds,
       );
+      if (refs && refs.length > 0) {
+        throwApiError(
+          C.PERSONNEL_VALIDATION_FAILED,
+          "該主群組下的子群組尚有人員，無法刪除",
+        );
+      }
     }
     await db.query("DELETE FROM person_groups WHERE id = ?", [id]);
     return { success: true };
@@ -353,7 +356,10 @@ async function getChildGroupIdsByMainGroupId(mainGroupId) {
 async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
   const group = await ensurePersonGroupExists(personGroupId);
   if (group.parent_id == null) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組不可直接設定成員，請操作子群組");
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      "主群組不可直接設定成員，請操作子群組",
+    );
   }
   const id = group.id;
 

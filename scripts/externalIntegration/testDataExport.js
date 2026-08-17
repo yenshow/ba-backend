@@ -199,20 +199,38 @@ const cmdSetup = async (argv) => {
   console.log(`✓ [${eventType}] 已寫入對接設定（cursor 已清空）`);
 };
 
+const CHILD_GROUP_NAME = `${GROUP_NAME}_CHILD`;
+
 const cmdSeedAccess = async (count) => {
-  let groupId;
+  let mainGroupId;
   const existingGroup = await db.query(
-    "SELECT id FROM person_groups WHERE name = ? LIMIT 1",
+    "SELECT id FROM person_groups WHERE name = ? AND parent_id IS NULL LIMIT 1",
     [GROUP_NAME],
   );
   if (existingGroup?.[0]?.id) {
-    groupId = Number(existingGroup[0].id);
+    mainGroupId = Number(existingGroup[0].id);
   } else {
     const rows = await db.query(
-      "INSERT INTO person_groups (name) VALUES (?) RETURNING id",
+      "INSERT INTO person_groups (name, parent_id) VALUES (?, NULL) RETURNING id",
       [GROUP_NAME],
     );
-    groupId = Number(rows[0].id);
+    mainGroupId = Number(rows[0].id);
+  }
+
+  // 人員只能歸屬子群組；勿把 person_group_id 直接掛在主群組
+  let childGroupId;
+  const existingChild = await db.query(
+    "SELECT id FROM person_groups WHERE name = ? AND parent_id = ? LIMIT 1",
+    [CHILD_GROUP_NAME, mainGroupId],
+  );
+  if (existingChild?.[0]?.id) {
+    childGroupId = Number(existingChild[0].id);
+  } else {
+    const rows = await db.query(
+      "INSERT INTO person_groups (name, parent_id) VALUES (?, ?) RETURNING id",
+      [CHILD_GROUP_NAME, mainGroupId],
+    );
+    childGroupId = Number(rows[0].id);
   }
 
   for (let i = 1; i <= count; i += 1) {
@@ -225,13 +243,13 @@ const cmdSeedAccess = async (count) => {
     if (existing?.[0]?.id) {
       await db.query(
         "UPDATE persons SET full_name = ?, person_group_id = ?, status = 'active' WHERE id = ?",
-        [fullName, groupId, existing[0].id],
+        [fullName, childGroupId, existing[0].id],
       );
     } else {
       await db.query(
         `INSERT INTO persons (employee_no, full_name, person_group_id, status)
          VALUES (?, ?, ?, 'active')`,
-        [employeeNo, fullName, groupId],
+        [employeeNo, fullName, childGroupId],
       );
     }
 
@@ -252,8 +270,10 @@ const cmdSeedAccess = async (count) => {
     );
   }
 
-  console.log(`✓ [access_control] 群組 id=${groupId}；已種子 ${count} 人／事件`);
-  return { groupId };
+  console.log(
+    `✓ [access_control] 主群組 id=${mainGroupId}／子群組 id=${childGroupId}；已種子 ${count} 人／事件`,
+  );
+  return { groupId: mainGroupId, childGroupId };
 };
 
 const cmdSeedEnergy = async (count) => {

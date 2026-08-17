@@ -10,7 +10,7 @@
  *   node scripts/testVideoIntercomSipInvite.js
  *   node scripts/testVideoIntercomSipInvite.js --host 192.168.2.78 --to 1001
  *
- * 詳見：docs/40-systems/video-intercom-main-station.md §3
+ * 詳見：docs/40-systems/video-intercom-main-station.md（層 2 振鈴）
  */
 
 /* eslint-disable no-console */

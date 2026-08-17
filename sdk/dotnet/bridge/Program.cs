@@ -91,6 +91,7 @@ static BridgeResponse HandleRequest(BridgeRequest request)
         "door.get" => HandleDoorGet(session, request.Payload),
         "door.set" => HandleDoorSet(session, request.Payload),
         "isapi.request" => HandleIsapiRequest(session, request.Payload),
+        "ability.probe" => HandleAbilityProbe(session, request.Payload),
         _ => new BridgeResponse(false, "UNKNOWN_ACTION", $"不支援的 action: {request.Action}"),
     };
 }
@@ -259,6 +260,127 @@ static BridgeResponse HandleIsapiRequest(SdkDeviceSession session, JsonElement? 
         statusBody = string.IsNullOrWhiteSpace(result.StatusBody) ? null : result.StatusBody,
         body = string.IsNullOrWhiteSpace(result.Body) ? null : result.Body,
     });
+}
+
+static BridgeResponse HandleAbilityProbe(SdkDeviceSession session, JsonElement? payload)
+{
+    var sdkResults = new List<object>();
+    var isapiResults = new List<object>();
+    var root = GetPayloadRoot(payload);
+
+    if (root is JsonElement obj &&
+        obj.TryGetProperty("sdkAbilities", out var sdkArr) &&
+        sdkArr.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var item in sdkArr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var name = ReadString(item, "name") ?? "unnamed";
+            var abilityType = ReadAbilityType(item);
+            var inXml = ReadString(item, "inXml");
+            var result = SdkAbilityHelper.Query(session.UserId, abilityType, inXml);
+            sdkResults.Add(new
+            {
+                name,
+                abilityType,
+                ok = result.Ok,
+                errorCode = result.Ok ? (uint?)null : result.ErrorCode,
+                error = result.Ok ? null : SdkErrorHelper.Explain(result.ErrorCode),
+                xml = string.IsNullOrWhiteSpace(result.Xml) ? null : result.Xml,
+            });
+        }
+    }
+
+    if (root is JsonElement isapiRoot &&
+        isapiRoot.TryGetProperty("isapiPaths", out var isapiArr) &&
+        isapiArr.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var item in isapiArr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var name = ReadString(item, "name") ?? "unnamed";
+            var method = ReadString(item, "method") ?? "GET";
+            var path = ReadString(item, "path");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            var timeoutMs = ReadInt(item, "timeoutMs", 15000);
+            var result = SdkStdXmlService.Request(session.UserId, method, path!, null, timeoutMs);
+            var message = result.Ok
+                ? null
+                : result.StatusString
+                  ?? result.SubStatusCode
+                  ?? SdkErrorHelper.Explain(result.ErrorCode);
+
+            isapiResults.Add(new
+            {
+                name,
+                method,
+                path,
+                ok = result.Ok,
+                errorCode = result.Ok ? (uint?)null : result.ErrorCode,
+                error = message,
+                statusString = result.StatusString,
+                subStatusCode = result.SubStatusCode,
+                statusBody = string.IsNullOrWhiteSpace(result.StatusBody) ? null : result.StatusBody,
+                body = string.IsNullOrWhiteSpace(result.Body) ? null : result.Body,
+            });
+        }
+    }
+
+    return new BridgeResponse(true, null, null, new
+    {
+        sdk = sdkResults,
+        isapi = isapiResults,
+    });
+}
+
+static uint ReadAbilityType(JsonElement item)
+{
+    if (!item.TryGetProperty("abilityType", out var value))
+    {
+        return 0;
+    }
+
+    if (value.ValueKind == JsonValueKind.Number && value.TryGetUInt32(out var numeric))
+    {
+        return numeric;
+    }
+
+    if (value.ValueKind == JsonValueKind.String)
+    {
+        var raw = value.GetString();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return 0;
+        }
+
+        if (raw.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return Convert.ToUInt32(raw, 16);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        return uint.TryParse(raw, out var parsed) ? parsed : 0;
+    }
+
+    return 0;
 }
 
 static BridgeResponse HandleDoorSet(SdkDeviceSession session, JsonElement? payload)

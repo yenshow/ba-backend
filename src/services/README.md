@@ -2,35 +2,36 @@
 
 後端業務邏輯層；HTTP 入口見 `src/routes/`。新增 service 請依 **領域** 放入對應子資料夾，**勿**再建立 `systems/` 總包目錄。
 
-## 目錄一覽（約 162 檔 `.js`）
+## 目錄一覽
 
-| 資料夾 | 檔案數 | 職責 |
-|--------|--------|------|
-| `platform/` | 4 | `userService`、`settingsService`、`runtimeConfig*`（**不含** `moduleRegistry`；見 `src/access/registry.js`） |
-| `license/` | 5 | 授權狀態、配額、平台線上啟用、`effectiveFeaturesCache` |
-| `location/` | 6 | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
-| `elevator/` | 7 | 電梯地點、運行態、樓層授權、梯控同步 job |
-| `ladderSdk/` | 10 | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
-| `snapshotStatus/` | 9 | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
-| `environment/` | 6 | 環境讀數、衍生指標、彙總排程 |
-| `energy/` | 5 | 能源讀數、設定、差分彙總／TOU、Dashboard |
-| `peopleCounting/` | 13 | 人流 API、sync、providers；含 ISAPI 攝影機訂閱（`isapiPeopleCounting*`）、臉庫 client（`isapiCameraFdLibService`）、人臉比對落地（`isapiFaceContrast*`） |
-| `vehicleAccess/` | 14 | 車輛進出 API、ISAPI 訂閱／持久化／設備代理、車牌同步、helpers |
-| `entryExit/` | 4 | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
-| `devices/` | 10 | 設備 CRUD、Modbus、`modbusDiDoConfig` |
-| `monitoring/` | 11 | `backgroundMonitor`（固定分層間隔）、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
-| `alerts/` | 10 | 警報 CRUD、規則、Email、聯動 |
-| `operationalEvents/` | 4 | `service` 查寫／`copy` 文案／`hooks` 控制寫入·抑制·電梯投影／`retentionScheduler` |
-| `backup/` | 8 | 備份排程與各系統報表格式 |
-| `accessControl/` | 4 | 門禁 ISAPI 業務、Digest 客戶端、佈防訂閱／事件寫入、validity helpers |
-| `isapi/` | 1 | **佈防訂閱中心** `isapiSubscribeHub`（`licenseRuntimeService` reconcile） |
-| `externalData/` | 14 | 外部 DB handler 與車輛群組彙總 |
-| `communication/` | 2 | MediaMTX 串流（對應 license `surveillance`） |
-| `personnel/` | 11 | 人員、匯入、人臉、同步 job |
-| `yscp/` | 5 | YSCP Artemis 客戶端、事件訂閱、Runtime、人員／事件接收 |
-| `websocket/` | 2 | WebSocket 推播、`wsEventPermissions` |
-| `multimedia/` | 1 | 多媒體儀表板 |
-| `notifications/` | 1 | SMTP mailer |
+| 資料夾 | 職責 |
+|--------|------|
+| `platform/` | `userService`、`settingsService`、`runtimeConfig*`（**不含** `moduleRegistry`；見 `src/access/registry.js`） |
+| `license/` | 授權狀態、配額、平台線上啟用、`effectiveFeaturesCache` |
+| `location/` | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
+| `elevator/` | 電梯地點、運行態、樓層授權、梯控同步 job |
+| `ladderSdk/` | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
+| `snapshotStatus/` | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
+| `environment/` | 環境讀數、衍生指標、彙總排程 |
+| `energy/` | 能源讀數、設定、差分彙總／TOU、Dashboard、契約／Insight 評估 |
+| `peopleCounting/` | 人流 API、sync、providers；ISAPI 攝影機訂閱、臉庫、人臉比對落地 |
+| `vehicleAccess/` | 車輛進出 API、ISAPI 訂閱／持久化／設備代理、車牌同步 |
+| `entryExit/` | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
+| `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測 |
+| `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
+| `alerts/` | 警報 CRUD、規則、Email、聯動（含門禁連動） |
+| `operationalEvents/` | 查寫／文案／hooks／retention |
+| `backup/` | 備份排程與各系統報表格式 |
+| `accessControl/` | 門禁 ISAPI 業務、Digest、佈防訂閱／事件寫入 |
+| `isapi/` | 佈防訂閱中心 `isapiSubscribeHub` |
+| `externalData/` | YSCP／外部 DB handler 與車輛群組彙總 |
+| `externalIntegration/` | 資料庫對接／記錄轉存（`externalSync`、`recordExport`） |
+| `communication/` | MediaMTX 串流（license `surveillance`） |
+| `personnel/` | 人員、匯入、人臉、同步 job |
+| `yscp/` | YSCP Artemis 客戶端、事件訂閱、Runtime |
+| `websocket/` | WebSocket 推播、`wsEventPermissions` |
+| `multimedia/` | 多媒體儀表板 |
+| `notifications/` | SMTP mailer |
 
 ## 路由 → Service 對照（常用）
 
@@ -49,6 +50,7 @@
 | `operationalEventRoutes` | `operationalEvents/*` |
 | `accessControlRoutes` | `accessControl/accessControlService` |
 | `externalDataRoutes` | `externalData/*` |
+| `externalSyncRoutes` / `recordExportRoutes` | `externalIntegration/*` |
 | `personnelRoutes` | `personnel/*` |
 | `elevatorRoutes` | `elevator/*`、`elevatorFloorSyncJobService` |
 | `ladderSdkRoutes` | `ladderSdk/*` |
@@ -70,7 +72,7 @@
 |------|----------|
 | 有 `getStatusSnapshot` 的 Modbus 基礎設施 | `snapshotStatus/<name>StatusService.js` + 在 `monitoring/snapshotTaskRegistry.js` 註冊 |
 | 區域／地點設定延伸 | 改 `location/locationService.js` 的 `formatSystem` |
-| 獨立 feature（環境、人流、車輛） | `environment/`、`peopleCounting/`、`vehicleAccess/` 或新開同層資料夾 |
+| 獨立 feature（環境、人流、車輛、能源） | `environment/`、`peopleCounting/`、`vehicleAccess/`、`energy/` 或新開同層資料夾 |
 | 跨 feature 共用（進出統計、營運日） | `entryExit/`（路由：`routes/entryExitRoutes.js`） |
 | 平台／授權 | `platform/`、`license/` |
 

@@ -404,7 +404,7 @@ internal static class HcNetSdkNative
     public static extern bool NET_DVR_GetDeviceAbility(
         int lUserID,
         uint dwAbilityType,
-        byte[] pInBuf,
+        byte[]? pInBuf,
         uint dwInLength,
         byte[] pOutBuf,
         uint dwOutLength);
@@ -873,21 +873,23 @@ internal static class SdkCardHelper
     }
 }
 
+internal readonly record struct AbilityQueryResult(bool Ok, string Xml, uint ErrorCode);
+
 internal static class SdkAbilityHelper
 {
-    public static string? QueryAcsAbilityXml(int userId)
+    public static AbilityQueryResult Query(int userId, uint abilityType, string? inXml)
     {
-        var input = Encoding.UTF8.GetBytes("<AcsAbility version='2.0'></AcsAbility>");
+        var input = string.IsNullOrEmpty(inXml) ? null : Encoding.UTF8.GetBytes(inXml);
         var output = new byte[256 * 1024];
         if (!HcNetSdkNative.NET_DVR_GetDeviceAbility(
                 userId,
-                HcNetSdkNative.AcsAbility,
+                abilityType,
                 input,
-                (uint)input.Length,
+                (uint)(input?.Length ?? 0),
                 output,
                 (uint)output.Length))
         {
-            return null;
+            return new AbilityQueryResult(false, string.Empty, HcNetSdkNative.NET_DVR_GetLastError());
         }
 
         var length = Array.IndexOf(output, (byte)0);
@@ -896,7 +898,40 @@ internal static class SdkAbilityHelper
             length = output.Length;
         }
 
-        return Encoding.UTF8.GetString(output, 0, length).Trim('\0');
+        var xml = DecodeAbilityText(output, length);
+        return new AbilityQueryResult(true, xml, 0);
+    }
+
+    public static string? QueryAcsAbilityXml(int userId)
+    {
+        var result = Query(
+            userId,
+            HcNetSdkNative.AcsAbility,
+            "<AcsAbility version='2.0'></AcsAbility>");
+        return result.Ok ? result.Xml : null;
+    }
+
+    private static string DecodeAbilityText(byte[] buffer, int length)
+    {
+        if (length <= 0)
+        {
+            return string.Empty;
+        }
+
+        var utf8 = Encoding.UTF8.GetString(buffer, 0, length).Trim('\0').Trim();
+        if (!utf8.Contains('\uFFFD'))
+        {
+            return utf8;
+        }
+
+        try
+        {
+            return Encoding.GetEncoding(936).GetString(buffer, 0, length).Trim('\0').Trim();
+        }
+        catch
+        {
+            return utf8;
+        }
     }
 }
 
@@ -921,9 +956,12 @@ internal static class SdkErrorHelper
     {
         1 => "使用者名稱或密碼錯誤",
         7 => "連線設備失敗（設備離線或網路不通）",
+        11 => "收發資料錯誤（NET_DVR_NETWORK_ERRORDATA）",
+        17 => "參數錯誤（NET_DVR_PARAMETER_ERROR）",
         23 => "設備不支援此功能（NET_DVR_NOSUPPORT）",
         29 => "設備操作失敗（操作無效／參數錯誤）",
         109 => "載入報警元件失敗（請確認 HCNetSDKCom\\HCAlarm.dll 已複製）",
+        1000 => "XML 能力不支援（XML_ABILITY_NOTSUPPORT）",
         1924 => "佈防資源已滿",
         _ => $"HCNetSDK 錯誤碼 {code}",
     };
