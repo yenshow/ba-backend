@@ -594,6 +594,13 @@ const getEffectiveLicensedFeatures = async () => {
   return filterEffectiveFeatures(features);
 };
 
+/** 執行期 Feature Gate（含 open_all 放寬） */
+const isRuntimeFeatureLicensed = async (featureKey) => {
+  const license = await getLicenseState();
+  if (license?.activationMethod === "open_all") return true;
+  return hasLicensedFeature(license?.features, featureKey);
+};
+
 module.exports = {
   SETTINGS_KEYS,
   FEATURE_KEYS_CENTRAL,
@@ -609,4 +616,5 @@ module.exports = {
   filterEffectiveFeatures,
   getEffectiveLicensedFeatures,
   hasLicensedFeature,
+  isRuntimeFeatureLicensed,
 };

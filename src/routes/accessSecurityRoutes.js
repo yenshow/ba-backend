@@ -32,6 +32,19 @@ router.get(
   }),
 );
 
+router.get(
+  "/zones/:id/logs/latest",
+  disableHttpCache,
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const zoneId = parseInt(req.params.id, 10);
+    const result = await accessSecurityService.getZoneLogsLatest(zoneId, {
+      limit: 5,
+    });
+    res.sendSuccess(result);
+  }),
+);
+
 router.post(
   "/locations/:id/ring",
   requirePermission("system.access_security.ring"),

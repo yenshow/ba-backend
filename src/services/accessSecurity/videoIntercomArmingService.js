@@ -7,9 +7,10 @@ const { spawnArmingProcess } = require("../ladderSdk/sdkBridgeClient");
 const { resolveSdkCredentials } = require("../ladderSdk/sdkLadderDeviceService");
 const deviceService = require("../devices/deviceService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
-const {
-  resolveLocationByVoipOrHost,
-} = require("./accessSecurityLocationLookup");
+
+/** 延遲載入，避免與 accessSecurityService 循環引用 */
+const resolveLocationByVoipOrHost = (...args) =>
+  require("./accessSecurityService").resolveLocationByVoipOrHost(...args);
 
 const RE_CONNECT_DELAY_MS = 10_000;
 

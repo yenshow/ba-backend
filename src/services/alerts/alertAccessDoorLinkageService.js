@@ -7,6 +7,7 @@ const accessControlService = require("../accessControl/accessControlService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
+const licenseService = require("../license/licenseService");
 
 const logger = createLogger("alertAccessDoorLinkage");
 const ALWAYS_OPEN_CMD = "alwaysOpen";
@@ -106,6 +107,9 @@ async function listAccessDevices() {
 }
 
 async function processAccessDoorLinkagesForNewAlert(alert) {
+  const licensed = await licenseService.isRuntimeFeatureLicensed("people_counting");
+  if (!licensed) return;
+
   const rid = alert?.rule_id != null ? Number(alert.rule_id) : null;
   if (!Number.isInteger(rid) || rid <= 0) return;
 

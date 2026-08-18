@@ -7,10 +7,12 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
 const { alertIndoorDevice } = require("../accessSecurity/sipInviteService");
-const {
-  resolveLocationByIndoorDeviceId,
-} = require("../accessSecurity/accessSecurityLocationLookup");
 const operationalEventService = require("../operationalEvents/operationalEventService");
+const licenseService = require("../license/licenseService");
+
+/** 延遲載入，避免與 accessSecurityService 循環引用 */
+const resolveLocationByIndoorDeviceId = (...args) =>
+  require("../accessSecurity/accessSecurityService").resolveLocationByIndoorDeviceId(...args);
 
 const logger = createLogger("alertSipRingLinkage");
 const MAX_DEVICE_IDS = 100;
@@ -120,6 +122,9 @@ async function loadIndoorRingTargets(selectedIds) {
 }
 
 async function processSipRingLinkagesForNewAlert(alert) {
+  const licensed = await licenseService.isRuntimeFeatureLicensed("access_security");
+  if (!licensed) return;
+
   const rid = alert?.rule_id != null ? Number(alert.rule_id) : null;
   if (!Number.isInteger(rid) || rid <= 0) return;
 

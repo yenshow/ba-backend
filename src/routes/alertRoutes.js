@@ -31,6 +31,8 @@ const {
   listAlertThresholdParameterKeys,
 } = require("../constants/environmentParameterCatalog");
 
+const licenseService = require("../services/license/licenseService");
+
 const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold", "di", "do"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
 const ALLOWED_RULE_ALERT_TYPES = ["offline", "threshold", "di", "do"];
@@ -46,6 +48,46 @@ const ALLOWED_MESSAGE_TEMPLATE_KEYS = [
 
 /** 閾值條件運算子（不支援 = / ==） */
 const ALLOWED_THRESHOLD_OPERATORS = [">", ">=", "<", "<="];
+
+const filterLinkageByLicense = async (linkage, featureKey) => {
+  if (!linkage) return null;
+  return (await licenseService.isRuntimeFeatureLicensed(featureKey)) ? linkage : null;
+};
+
+const assertLinkageLicensedForUpsert = async (linkage, featureKey) => {
+  if (!linkage || linkage.enabled !== true) return;
+  const licensed = await licenseService.isRuntimeFeatureLicensed(featureKey);
+  if (!licensed) {
+    throwApiError(C.FEATURE_NOT_LICENSED, `未授權功能：${featureKey}`, {
+      details: { feature: featureKey },
+    });
+  }
+};
+
+async function getFilteredIntegrationsForRule(ruleId) {
+  const [doLinkage, cameraRaw, accessRaw, sipRaw, emailSubscription] =
+    await Promise.all([
+      alertLinkageService.getSingleLinkageByRuleId(ruleId),
+      alertCameraLinkageService.getByRuleId(ruleId),
+      alertAccessDoorLinkageService.getByRuleId(ruleId),
+      alertSipRingLinkageService.getByRuleId(ruleId),
+      alertEmailSubscriptionService.getByRuleId(ruleId),
+    ]);
+
+  const [cameraLinkage, accessDoorLinkage, sipRingLinkage] = await Promise.all([
+    filterLinkageByLicense(cameraRaw, "surveillance"),
+    filterLinkageByLicense(accessRaw, "people_counting"),
+    filterLinkageByLicense(sipRaw, "access_security"),
+  ]);
+
+  return {
+    doLinkage,
+    cameraLinkage,
+    accessDoorLinkage,
+    sipRingLinkage,
+    emailSubscription,
+  };
+}
 
 function validateRuleIntegrationsPayload(body) {
   const b = body || {};
@@ -628,17 +670,23 @@ router.post(
     for (const c of cameraLinkages || []) {
       const rid = c?.rule_id != null ? Number(c.rule_id) : null;
       if (!rid || !result[rid]) continue;
-      result[rid].cameraLinkage = c;
+      result[rid].cameraLinkage = await filterLinkageByLicense(c, "surveillance");
     }
     for (const a of accessDoorLinkages || []) {
       const rid = a?.rule_id != null ? Number(a.rule_id) : null;
       if (!rid || !result[rid]) continue;
-      result[rid].accessDoorLinkage = a;
+      result[rid].accessDoorLinkage = await filterLinkageByLicense(
+        a,
+        "people_counting",
+      );
     }
     for (const s of sipRingLinkages || []) {
       const rid = s?.rule_id != null ? Number(s.rule_id) : null;
       if (!rid || !result[rid]) continue;
-      result[rid].sipRingLinkage = s;
+      result[rid].sipRingLinkage = await filterLinkageByLicense(
+        s,
+        "access_security",
+      );
     }
     for (const e of emailSubs || []) {
       const rid = e?.rule_id != null ? Number(e.rule_id) : null;
@@ -677,21 +725,7 @@ router.get(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const ruleId = Number(req.params.id);
-    const doLinkage =
-      await alertLinkageService.getSingleLinkageByRuleId(ruleId);
-    const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
-    const accessDoorLinkage =
-      await alertAccessDoorLinkageService.getByRuleId(ruleId);
-    const sipRingLinkage = await alertSipRingLinkageService.getByRuleId(ruleId);
-    const emailSubscription =
-      await alertEmailSubscriptionService.getByRuleId(ruleId);
-    res.sendSuccess({
-      doLinkage,
-      cameraLinkage,
-      accessDoorLinkage,
-      sipRingLinkage,
-      emailSubscription,
-    });
+    res.sendSuccess(await getFilteredIntegrationsForRule(ruleId));
   }),
 );
 
@@ -728,6 +762,7 @@ router.put(
       if (!body.cameraLinkage) {
         await alertCameraLinkageService.deleteForRule(ruleId);
       } else {
+        await assertLinkageLicensedForUpsert(body.cameraLinkage, "surveillance");
         await alertCameraLinkageService.upsertForRule(
           ruleId,
           body.cameraLinkage,
@@ -741,6 +776,10 @@ router.put(
       if (!body.accessDoorLinkage) {
         await alertAccessDoorLinkageService.deleteForRule(ruleId);
       } else {
+        await assertLinkageLicensedForUpsert(
+          body.accessDoorLinkage,
+          "people_counting",
+        );
         await alertAccessDoorLinkageService.upsertForRule(
           ruleId,
           body.accessDoorLinkage,
@@ -754,6 +793,7 @@ router.put(
       if (!body.sipRingLinkage) {
         await alertSipRingLinkageService.deleteForRule(ruleId);
       } else {
+        await assertLinkageLicensedForUpsert(body.sipRingLinkage, "access_security");
         await alertSipRingLinkageService.upsertForRule(
           ruleId,
           body.sipRingLinkage,
@@ -775,21 +815,7 @@ router.put(
       }
     }
 
-    const doLinkage =
-      await alertLinkageService.getSingleLinkageByRuleId(ruleId);
-    const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
-    const accessDoorLinkage =
-      await alertAccessDoorLinkageService.getByRuleId(ruleId);
-    const sipRingLinkage = await alertSipRingLinkageService.getByRuleId(ruleId);
-    const emailSubscription =
-      await alertEmailSubscriptionService.getByRuleId(ruleId);
-    res.sendSuccess({
-      doLinkage,
-      cameraLinkage,
-      accessDoorLinkage,
-      sipRingLinkage,
-      emailSubscription,
-    });
+    res.sendSuccess(await getFilteredIntegrationsForRule(ruleId));
   }),
 );
 

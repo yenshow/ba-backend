@@ -5,14 +5,98 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError, createApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
-const {
-  resolveAccessSecurityFloor,
-} = require("../../utils/accessSecurityFloor");
 const { alertIndoorDevice } = require("./sipInviteService");
 const videoIntercomArmingService = require("./videoIntercomArmingService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 
 const logger = createLogger("accessSecurity");
+
+const INTERCOM_MONITOR_SOURCES = Object.freeze([
+  "access_security_ring",
+  "alert_linkage",
+]);
+
+const UNCLASSIFIED_FLOOR = "未分類";
+const FLOOR_NAME_RE = /^(\d+F|B\d+F?|R\d+F?|RF|G)(?:[-_]?(.*))?$/i;
+
+const parseAccessSecurityUnitName = (name) => {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return { floor: UNCLASSIFIED_FLOOR, unitName: "" };
+  const match = FLOOR_NAME_RE.exec(trimmed);
+  if (!match) return { floor: UNCLASSIFIED_FLOOR, unitName: trimmed };
+  const floor = String(match[1] || "").trim().toUpperCase();
+  const rest = String(match[2] || "").trim();
+  return {
+    floor: floor || UNCLASSIFIED_FLOOR,
+    unitName: rest || trimmed,
+  };
+};
+
+const resolveAccessSecurityFloor = (floorFromConfig, locationName) => {
+  const fromConfig = String(floorFromConfig || "").trim();
+  if (fromConfig && fromConfig !== UNCLASSIFIED_FLOOR) return fromConfig;
+  return parseAccessSecurityUnitName(locationName).floor || UNCLASSIFIED_FLOOR;
+};
+
+const toPositiveInt = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+async function resolveLocationByIndoorDeviceId(deviceId) {
+  const id = toPositiveInt(deviceId);
+  if (!id) return null;
+
+  const rows = await db.query(
+    `
+    SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
+    FROM location_systems ls
+    INNER JOIN locations l ON l.id = ls.location_id
+    WHERE ls.system_type = 'access_security'
+      AND NULLIF(ls.system_config->>'indoor_device_id', '')::int = ?
+    LIMIT 1
+    `,
+    [id],
+  );
+  const row = rows?.[0];
+  if (!row?.location_id) return null;
+  return {
+    locationId: Number(row.location_id),
+    systemId: row.system_id != null ? Number(row.system_id) : null,
+    locationName: row.location_name || null,
+  };
+}
+
+async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
+  const voip = String(voipNumber || "").trim();
+  const ip = String(host || "").trim();
+  if (!voip && !ip) return null;
+
+  const rows = await db.query(
+    `
+    SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
+    FROM location_systems ls
+    INNER JOIN locations l ON l.id = ls.location_id
+    INNER JOIN devices d
+      ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
+    WHERE ls.system_type = 'access_security'
+      AND d.type_code = 'video_intercom'
+      AND (
+        (? <> '' AND (d.config->>'voipNumber') = ?)
+        OR (? <> '' AND (d.config->>'host') = ?)
+      )
+    LIMIT 1
+    `,
+    [voip, voip, ip, ip],
+  );
+  const row = rows?.[0];
+  if (!row?.location_id) return null;
+  return {
+    locationId: Number(row.location_id),
+    systemId: row.system_id != null ? Number(row.system_id) : null,
+    locationName: row.location_name || null,
+  };
+}
 
 const parseConfig = (raw) => {
   if (!raw) return {};
@@ -35,7 +119,6 @@ async function getSites() {
       ls.id AS system_id,
       d.id AS indoor_device_id,
       d.name AS indoor_device_name,
-      d.config AS indoor_config,
       ls.system_config AS system_config
     FROM location_systems ls
     INNER JOIN locations l ON l.id = ls.location_id
@@ -58,7 +141,6 @@ async function getSites() {
         locations: [],
       });
     }
-    const indoorCfg = parseConfig(row.indoor_config);
     const systemCfg = parseConfig(row.system_config);
     const floor = resolveAccessSecurityFloor(systemCfg.floor, row.location_name);
     const manageId = Number(systemCfg.manage_device_id);
@@ -77,8 +159,6 @@ async function getSites() {
       systemId: Number(row.system_id),
       indoorDeviceId: row.indoor_device_id != null ? Number(row.indoor_device_id) : null,
       indoorDeviceName: row.indoor_device_name || null,
-      voipNumber: indoorCfg.voipNumber || null,
-      host: indoorCfg.host || null,
       floor: floor || null,
     });
   }
@@ -208,9 +288,71 @@ async function ringLocation(locationId, { actorUserId = null } = {}) {
   };
 }
 
+async function getZoneLogsLatest(zoneId, { limit = 5 } = {}) {
+  const zid = Number(zoneId);
+  if (!Number.isFinite(zid) || zid <= 0) {
+    throwApiError(C.LOCATION_NOT_FOUND, "區域不存在");
+  }
+
+  const zoneRows = await db.query(`SELECT id FROM zones WHERE id = $1`, [zid]);
+  if (!zoneRows?.length) {
+    throwApiError(C.LOCATION_NOT_FOUND, "區域不存在");
+  }
+
+  const lim = Math.min(Math.max(Number(limit) || 5, 1), 50);
+  const sources = INTERCOM_MONITOR_SOURCES;
+
+  const logs = await db.query(
+    `
+    SELECT
+      oe.id, oe.occurred_at, oe.source, oe.event_kind,
+      oe.location_id, oe.system_id, oe.device_id,
+      oe.summary, oe.payload,
+      d.name AS device_name,
+      l.name AS location_name,
+      z.name AS zone_name
+    FROM operational_events oe
+    LEFT JOIN devices d ON oe.device_id = d.id
+    LEFT JOIN locations l ON oe.location_id = l.id
+    LEFT JOIN zones z ON l.zone_id = z.id
+    WHERE oe.event_kind = 'intercom'
+      AND oe.source IN (?, ?)
+      AND (
+        oe.location_id IN (
+          SELECT l2.id
+          FROM locations l2
+          INNER JOIN location_systems ls
+            ON ls.location_id = l2.id AND ls.system_type = 'access_security'
+          WHERE l2.zone_id = ?
+        )
+        OR oe.system_id IN (
+          SELECT ls.id
+          FROM location_systems ls
+          INNER JOIN locations l2 ON l2.id = ls.location_id
+          WHERE l2.zone_id = ? AND ls.system_type = 'access_security'
+        )
+        OR oe.device_id IN (
+          SELECT NULLIF(ls.system_config->>'indoor_device_id', '')::int
+          FROM location_systems ls
+          INNER JOIN locations l2 ON l2.id = ls.location_id
+          WHERE l2.zone_id = ? AND ls.system_type = 'access_security'
+        )
+      )
+    ORDER BY oe.occurred_at DESC, oe.id DESC
+    LIMIT ?
+    `,
+    [sources[0], sources[1], zid, zid, zid, lim],
+  );
+
+  return { logs: logs || [] };
+}
+
 module.exports = {
   getSites,
   getMainStations,
   resolveIndoorDeviceForLocation,
   ringLocation,
+  getZoneLogsLatest,
+  resolveLocationByIndoorDeviceId,
+  resolveLocationByVoipOrHost,
 };

@@ -347,12 +347,16 @@ function buildSystemConfig(systemType, config) {
       }
       const manageRaw = config.manageDeviceId ?? config.manage_device_id ?? null;
       const manageDeviceId = Number(manageRaw);
+      if (!Number.isFinite(manageDeviceId) || manageDeviceId <= 0) {
+        throwApiError(
+          C.LOCATION_DEVICE_NOT_FOUND,
+          "門禁保全區域必須綁定管理中心主機",
+        );
+      }
       return {
         indoor_device_id: indoorDeviceId,
         floor,
-        ...(Number.isFinite(manageDeviceId) && manageDeviceId > 0
-          ? { manage_device_id: manageDeviceId }
-          : {}),
+        manage_device_id: manageDeviceId,
       };
     }
 
@@ -517,37 +521,42 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
   }
 
   const manageDeviceId = Number(systemConfig?.manage_device_id);
-  if (Number.isFinite(manageDeviceId) && manageDeviceId > 0) {
-    const manageRows = await query(
-      `SELECT id, type_code, config FROM devices WHERE id = $1`,
-      [manageDeviceId],
+  if (!Number.isFinite(manageDeviceId) || manageDeviceId <= 0) {
+    throwApiError(
+      C.LOCATION_DEVICE_NOT_FOUND,
+      "門禁保全區域必須綁定管理中心主機",
     );
-    if (!manageRows?.length) {
-      throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "綁定的管理中心主機不存在");
-    }
-    const manageDevice = manageRows[0];
-    if (manageDevice.type_code !== "video_intercom") {
-      throwApiError(
-        C.LOCATION_DEVICE_NOT_CONTROLLER,
-        "管理中心主機必須為視訊對講設備（video_intercom）",
-      );
-    }
-    const manageCfg =
-      typeof manageDevice.config === "string"
-        ? (() => {
-            try {
-              return JSON.parse(manageDevice.config);
-            } catch {
-              return {};
-            }
-          })()
-        : manageDevice.config || {};
-    if (String(manageCfg.unitType || "").trim() !== "manage") {
-      throwApiError(
-        C.LOCATION_DEVICE_NOT_CONTROLLER,
-        "區域僅可綁定 unitType=manage 的管理中心主機",
-      );
-    }
+  }
+
+  const manageRows = await query(
+    `SELECT id, type_code, config FROM devices WHERE id = $1`,
+    [manageDeviceId],
+  );
+  if (!manageRows?.length) {
+    throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "綁定的管理中心主機不存在");
+  }
+  const manageDevice = manageRows[0];
+  if (manageDevice.type_code !== "video_intercom") {
+    throwApiError(
+      C.LOCATION_DEVICE_NOT_CONTROLLER,
+      "管理中心主機必須為視訊對講設備（video_intercom）",
+    );
+  }
+  const manageCfg =
+    typeof manageDevice.config === "string"
+      ? (() => {
+          try {
+            return JSON.parse(manageDevice.config);
+          } catch {
+            return {};
+          }
+        })()
+      : manageDevice.config || {};
+  if (String(manageCfg.unitType || "").trim() !== "manage") {
+    throwApiError(
+      C.LOCATION_DEVICE_NOT_CONTROLLER,
+      "區域僅可綁定 unitType=manage 的管理中心主機",
+    );
   }
 }
 
