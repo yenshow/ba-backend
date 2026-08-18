@@ -42,7 +42,7 @@ const LOCATION_DEVICE_FIELDS = {
   access_security: {
     arrays: [],
     roles: [],
-    scalars: ["indoor_device_id"],
+    scalars: ["indoor_device_id", "manage_device_id"],
   },
 };
 

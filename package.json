@@ -21,6 +21,7 @@
     "probe:video-intercom": "node scripts/probeVideoIntercom.js",
     "scan:video-intercom-indoor": "node scripts/scanVideoIntercomIndoor.js",
     "test:video-intercom-sip": "node scripts/testVideoIntercomSipInvite.js",
+    "test:video-intercom-voip-write": "node scripts/testVideoIntercomVoipWrite.js",
     "db:init": "node src/database/initSchema.js",
     "db:sync-perms": "node src/access/syncDefinitions.js",
     "gen:perm": "node scripts/generate-permission-codes.mjs",

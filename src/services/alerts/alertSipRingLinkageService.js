@@ -7,6 +7,9 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
 const { alertIndoorDevice } = require("../accessSecurity/sipInviteService");
+const {
+  resolveLocationByIndoorDeviceId,
+} = require("../accessSecurity/accessSecurityLocationLookup");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 
 const logger = createLogger("alertSipRingLinkage");
@@ -158,14 +161,26 @@ async function processSipRingLinkagesForNewAlert(alert) {
           source: "alert_linkage",
         });
         const actionLabel = invite.played ? "警報語音廣播" : "警報振鈴";
+        let indoorPlace = null;
+        try {
+          indoorPlace = await resolveLocationByIndoorDeviceId(device.id);
+        } catch (lookupErr) {
+          logger.warn("警報語音廣播對照戶別失敗", {
+            deviceId: device.id,
+            error: lookupErr?.message || String(lookupErr),
+          });
+        }
+        const placeLabel =
+          indoorPlace?.locationName || device.name || device.id;
         await operationalEventService.recordEvent({
           source: "alert_linkage",
           event_kind: "intercom",
-          location_id: alert?.location_id ?? null,
+          location_id: indoorPlace?.locationId ?? alert?.location_id ?? null,
+          system_id: indoorPlace?.systemId ?? null,
           device_id: Number(device.id),
           summary: invite.ok
-            ? `${actionLabel} ${device.name || device.id}（${invite.result}）`
-            : `${actionLabel}失敗 ${device.name || device.id}（${invite.result}）`,
+            ? `${actionLabel} ${placeLabel}`
+            : `${actionLabel}失敗 ${placeLabel}`,
           payload: {
             layer: 2,
             fromAlertLinkage: true,

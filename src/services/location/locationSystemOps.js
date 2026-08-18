@@ -341,7 +341,19 @@ function buildSystemConfig(systemType, config) {
           "門禁保全地點必須綁定一台室內機",
         );
       }
-      return { indoor_device_id: indoorDeviceId };
+      const floor = String(config.floor ?? "").trim();
+      if (!floor) {
+        throwApiError(C.LOCATION_NAME_REQUIRED, "門禁保全戶別必須指定樓層");
+      }
+      const manageRaw = config.manageDeviceId ?? config.manage_device_id ?? null;
+      const manageDeviceId = Number(manageRaw);
+      return {
+        indoor_device_id: indoorDeviceId,
+        floor,
+        ...(Number.isFinite(manageDeviceId) && manageDeviceId > 0
+          ? { manage_device_id: manageDeviceId }
+          : {}),
+      };
     }
 
     default:
@@ -502,6 +514,40 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
       "此室內機已綁定其他門禁保全地點",
       { details: { locationId: dup[0].location_id, systemId: dup[0].id } },
     );
+  }
+
+  const manageDeviceId = Number(systemConfig?.manage_device_id);
+  if (Number.isFinite(manageDeviceId) && manageDeviceId > 0) {
+    const manageRows = await query(
+      `SELECT id, type_code, config FROM devices WHERE id = $1`,
+      [manageDeviceId],
+    );
+    if (!manageRows?.length) {
+      throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "綁定的管理中心主機不存在");
+    }
+    const manageDevice = manageRows[0];
+    if (manageDevice.type_code !== "video_intercom") {
+      throwApiError(
+        C.LOCATION_DEVICE_NOT_CONTROLLER,
+        "管理中心主機必須為視訊對講設備（video_intercom）",
+      );
+    }
+    const manageCfg =
+      typeof manageDevice.config === "string"
+        ? (() => {
+            try {
+              return JSON.parse(manageDevice.config);
+            } catch {
+              return {};
+            }
+          })()
+        : manageDevice.config || {};
+    if (String(manageCfg.unitType || "").trim() !== "manage") {
+      throwApiError(
+        C.LOCATION_DEVICE_NOT_CONTROLLER,
+        "區域僅可綁定 unitType=manage 的管理中心主機",
+      );
+    }
   }
 }
 
@@ -823,6 +869,10 @@ async function createLocationWithSystems(
             systemConfig.indoorDeviceId = location.indoorDeviceId;
           } else if (deviceId !== undefined) {
             systemConfig.indoorDeviceId = deviceId;
+          }
+          if (location.floor !== undefined) systemConfig.floor = location.floor;
+          if (location.manageDeviceId !== undefined) {
+            systemConfig.manageDeviceId = location.manageDeviceId;
           }
           break;
         case "vehicle_access":

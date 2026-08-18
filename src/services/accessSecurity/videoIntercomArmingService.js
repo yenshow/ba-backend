@@ -7,6 +7,9 @@ const { spawnArmingProcess } = require("../ladderSdk/sdkBridgeClient");
 const { resolveSdkCredentials } = require("../ladderSdk/sdkLadderDeviceService");
 const deviceService = require("../devices/deviceService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
+const {
+  resolveLocationByVoipOrHost,
+} = require("./accessSecurityLocationLookup");
 
 const RE_CONNECT_DELAY_MS = 10_000;
 
@@ -25,28 +28,17 @@ const isDeviceGenerationCurrent = (deviceId, generation) =>
 
 const resolveLocationIdForPayload = async (payload) => {
   // 嘗試從事件 payload 找室內機 IP／號碼對應地點（最佳努力）
-  const roomNo =
-    payload?.roomNo ||
-    payload?.roomNumber ||
-    payload?.unitNumber ||
-    payload?.voipNumber ||
-    null;
-  if (!roomNo) return null;
-
-  const rows = await db.query(
-    `
-    SELECT ls.location_id
-    FROM location_systems ls
-    INNER JOIN devices d
-      ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
-    WHERE ls.system_type = 'access_security'
-      AND d.type_code = 'video_intercom'
-      AND (d.config->>'voipNumber') = $1
-    LIMIT 1
-    `,
-    [String(roomNo)],
-  );
-  return rows?.[0]?.location_id != null ? Number(rows[0].location_id) : null;
+  const hit = await resolveLocationByVoipOrHost({
+    voipNumber:
+      payload?.roomNo ||
+      payload?.roomNumber ||
+      payload?.unitNumber ||
+      payload?.voipNumber ||
+      payload?.deviceNumber ||
+      null,
+    host: payload?.sourceIp || payload?.host || null,
+  });
+  return hit?.locationId ?? null;
 };
 
 const handleEvent = async (deviceId, device, message) => {

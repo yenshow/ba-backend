@@ -482,6 +482,8 @@ function formatSystem(system) {
 
     case "access_security": {
       const indoorId = Number(config.indoor_device_id);
+      const floor = String(config.floor || "").trim();
+      const manageId = Number(config.manage_device_id);
       return {
         ...baseSystem,
         config: {
@@ -489,6 +491,10 @@ function formatSystem(system) {
             Number.isFinite(indoorId) && indoorId > 0 ? indoorId : undefined,
           deviceId:
             Number.isFinite(indoorId) && indoorId > 0 ? indoorId : undefined,
+          ...(floor ? { floor } : {}),
+          ...(Number.isFinite(manageId) && manageId > 0
+            ? { manageDeviceId: manageId }
+            : {}),
         },
       };
     }

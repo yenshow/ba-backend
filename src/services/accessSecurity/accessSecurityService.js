@@ -5,6 +5,9 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError, createApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
+const {
+  resolveAccessSecurityFloor,
+} = require("../../utils/accessSecurityFloor");
 const { alertIndoorDevice } = require("./sipInviteService");
 const videoIntercomArmingService = require("./videoIntercomArmingService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
@@ -32,7 +35,8 @@ async function getSites() {
       ls.id AS system_id,
       d.id AS indoor_device_id,
       d.name AS indoor_device_name,
-      d.config AS indoor_config
+      d.config AS indoor_config,
+      ls.system_config AS system_config
     FROM location_systems ls
     INNER JOIN locations l ON l.id = ls.location_id
     INNER JOIN zones z ON z.id = l.zone_id
@@ -50,11 +54,24 @@ async function getSites() {
       zoneMap.set(zoneId, {
         id: zoneId,
         name: row.zone_name,
+        manageDeviceId: null,
         locations: [],
       });
     }
     const indoorCfg = parseConfig(row.indoor_config);
-    zoneMap.get(zoneId).locations.push({
+    const systemCfg = parseConfig(row.system_config);
+    const floor = resolveAccessSecurityFloor(systemCfg.floor, row.location_name);
+    const manageId = Number(systemCfg.manage_device_id);
+    const zone = zoneMap.get(zoneId);
+    if (!zone) continue;
+    if (
+      zone.manageDeviceId == null &&
+      Number.isFinite(manageId) &&
+      manageId > 0
+    ) {
+      zone.manageDeviceId = manageId;
+    }
+    zone.locations.push({
       id: Number(row.location_id),
       name: row.location_name,
       systemId: Number(row.system_id),
@@ -62,6 +79,7 @@ async function getSites() {
       indoorDeviceName: row.indoor_device_name || null,
       voipNumber: indoorCfg.voipNumber || null,
       host: indoorCfg.host || null,
+      floor: floor || null,
     });
   }
 
@@ -171,10 +189,10 @@ async function ringLocation(locationId, { actorUserId = null } = {}) {
     system_id: systemId,
     device_id: Number(device.id),
     summary: inviteResult.played
-      ? `手動語音廣播 ${locationName || lid}（${inviteResult.result}）`
+      ? `手動語音廣播 ${locationName || lid}`
       : inviteResult.ok
-        ? `手動振鈴 ${locationName || lid}（${inviteResult.result}）`
-        : `手動振鈴失敗 ${locationName || lid}（${inviteResult.result}）`,
+        ? `手動振鈴 ${locationName || lid}`
+        : `手動振鈴失敗 ${locationName || lid}`,
     actor_user_id: actorUserId,
     payload: {
       layer: 2,
