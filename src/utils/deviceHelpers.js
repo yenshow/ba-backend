@@ -147,6 +147,48 @@ const validateDeviceConfig = (config, typeCode) => {
       }
       break;
 
+    case "video_intercom": {
+      const unitType = String(config.unitType || "").trim();
+      if (!["manage", "indoor", "outdoor"].includes(unitType)) {
+        deviceConfigInvalid(
+          "video_intercom 型號需設定 unitType（manage｜indoor｜outdoor）",
+        );
+      }
+      if (!config.host || typeof config.host !== "string") {
+        deviceConfigInvalid("video_intercom 類型需要 host (string)");
+      }
+      if (!config.username || typeof config.username !== "string") {
+        deviceConfigInvalid("video_intercom 類型需要 username (string)");
+      }
+      if (!config.password || typeof config.password !== "string") {
+        deviceConfigInvalid("video_intercom 類型需要 password (string)");
+      }
+      if (config.port !== undefined && config.port !== null) {
+        const p = Number(config.port);
+        if (Number.isNaN(p) || p < 1 || p > 65535) {
+          deviceConfigInvalid(
+            "video_intercom 類型的 port 必須為 1–65535 的數字",
+          );
+        }
+      }
+      if (unitType === "indoor") {
+        const voip = String(config.voipNumber || "").trim();
+        if (!voip) {
+          deviceConfigInvalid("video_intercom 室內機需要 voipNumber");
+        }
+        const sipPort =
+          config.sipPort === undefined || config.sipPort === null
+            ? 5060
+            : Number(config.sipPort);
+        if (Number.isNaN(sipPort) || sipPort < 1 || sipPort > 65535) {
+          deviceConfigInvalid(
+            "video_intercom 的 sipPort 必須為 1–65535 的數字",
+          );
+        }
+      }
+      break;
+    }
+
     default:
       deviceConfigInvalid(`未知的設備類型: ${typeCode}`);
   }

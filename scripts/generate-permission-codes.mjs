@@ -35,6 +35,7 @@ const MODULE_PERM_KEYS = {
   "system.fire": "fire",
   "system.emergency_rescue": "emergencyRescue",
   "system.smoke_alarm": "smokeAlarm",
+  "system.access_security": "accessSecurity",
   "system.multimedia": "multimedia",
 };
 

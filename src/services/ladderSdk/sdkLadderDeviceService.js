@@ -43,9 +43,25 @@ const resolveSdkCredentials = (device) => {
     };
   }
 
+  if (device.type_code === "video_intercom") {
+    if (!cfg.host || !cfg.username || !cfg.password) {
+      throw createApiError(
+        C.LADDER_SDK_CONFIG_INCOMPLETE,
+        "對講設備連線設定不完整（需要 host / username / password）",
+      );
+    }
+    const port = Number(cfg.port ?? cfg.sdk_port ?? cfg.sdkPort);
+    return {
+      host: cfg.host,
+      port: Number.isFinite(port) && port > 0 ? port : 8000,
+      username: cfg.username,
+      password: cfg.password,
+    };
+  }
+
   throw createApiError(
     C.LADDER_SDK_NOT_DEVICE,
-    "該設備不支援 HCNetSDK 梯控（需 controller+hcnet_sdk 或 access_control）",
+    "該設備不支援 HCNetSDK（需 controller+hcnet_sdk、access_control 或 video_intercom）",
   );
 };
 

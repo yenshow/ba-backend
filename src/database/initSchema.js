@@ -187,7 +187,7 @@ async function initSchema() {
 				config JSONB,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				CONSTRAINT ck_device_models_type_code CHECK (type_code IN ('camera','sensor','controller','access_control'))
+				CONSTRAINT ck_device_models_type_code CHECK (type_code IN ('camera','sensor','controller','access_control','video_intercom'))
 			)
 		`);
 
@@ -230,7 +230,7 @@ async function initSchema() {
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				CONSTRAINT fk_devices_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
 				CONSTRAINT fk_devices_model FOREIGN KEY (model_id) REFERENCES device_models(id) ON DELETE RESTRICT,
-				CONSTRAINT ck_devices_type_code CHECK (type_code IN ('camera','sensor','controller','access_control'))
+				CONSTRAINT ck_devices_type_code CHECK (type_code IN ('camera','sensor','controller','access_control','video_intercom'))
 			)
 		`);
 
@@ -301,7 +301,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -634,7 +634,7 @@ async function initSchema() {
         event_kind VARCHAR(32) NOT NULL
           CHECK (event_kind IN (
             'control_write', 'state_change',
-            'access', 'vehicle', 'elevator'
+            'access', 'vehicle', 'elevator', 'intercom'
           )),
         location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         system_id INTEGER REFERENCES location_systems(id) ON DELETE SET NULL,
@@ -755,6 +755,28 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_access_door_linkages_rule_id ON alert_access_door_linkages(rule_id);
     `);
     schemaLogger.info("alert_access_door_linkages 表已建立（門禁連動）", {
+      module: "initSchema",
+    });
+
+    // ========== 警報 SIP 室內振鈴連動（門禁保全層 2）==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_sip_ring_linkages (
+        id SERIAL PRIMARY KEY,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rule_id)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_sip_ring_linkages");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_sip_ring_linkages_enabled ON alert_sip_ring_linkages(enabled);
+      CREATE INDEX IF NOT EXISTS idx_alert_sip_ring_linkages_rule_id ON alert_sip_ring_linkages(rule_id);
+    `);
+    schemaLogger.info("alert_sip_ring_linkages 表已建立（SIP 室內振鈴連動）", {
       module: "initSchema",
     });
 

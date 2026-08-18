@@ -9,6 +9,10 @@ const alertAccessDoorLinkageService = require("../services/alerts/alertAccessDoo
 const {
   MAX_DEVICE_IDS: ACCESS_DOOR_LINKAGE_MAX_DEVICE_IDS,
 } = alertAccessDoorLinkageService;
+const alertSipRingLinkageService = require("../services/alerts/alertSipRingLinkageService");
+const {
+  MAX_DEVICE_IDS: SIP_RING_LINKAGE_MAX_DEVICE_IDS,
+} = alertSipRingLinkageService;
 const alertEmailSubscriptionService = require("../services/alerts/alertEmailSubscriptionService");
 const db = require("../database/db");
 const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
@@ -128,6 +132,33 @@ function validateRuleIntegrationsPayload(body) {
         }
         if (unique.length > ACCESS_DOOR_LINKAGE_MAX_DEVICE_IDS) {
           return `accessDoorLinkage.device_ids 最多 ${ACCESS_DOOR_LINKAGE_MAX_DEVICE_IDS} 台`;
+        }
+      }
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(b, "sipRingLinkage")) {
+    if (b.sipRingLinkage && typeof b.sipRingLinkage !== "object") {
+      return "sipRingLinkage 需為物件或 null";
+    }
+    if (b.sipRingLinkage) {
+      const a = b.sipRingLinkage || {};
+      if (a.enabled !== undefined && typeof a.enabled !== "boolean") {
+        return "sipRingLinkage.enabled 需為布林值";
+      }
+      if (a.device_ids !== undefined) {
+        if (!Array.isArray(a.device_ids)) {
+          return "sipRingLinkage.device_ids 需為陣列";
+        }
+        const ids = a.device_ids
+          .map((v) => Number(v))
+          .filter((n) => Number.isInteger(n) && n > 0);
+        const unique = [...new Set(ids)];
+        if (unique.length !== ids.length) {
+          return "sipRingLinkage.device_ids 不可重複";
+        }
+        if (unique.length > SIP_RING_LINKAGE_MAX_DEVICE_IDS) {
+          return `sipRingLinkage.device_ids 最多 ${SIP_RING_LINKAGE_MAX_DEVICE_IDS} 台`;
         }
       }
     }
@@ -569,11 +600,12 @@ router.post(
       return res.sendSuccess({});
     }
 
-    const [doLinkages, cameraLinkages, accessDoorLinkages, emailSubs] =
+    const [doLinkages, cameraLinkages, accessDoorLinkages, sipRingLinkages, emailSubs] =
       await Promise.all([
         alertLinkageService.getLatestLinkagesByRuleIds(ids),
         alertCameraLinkageService.getByRuleIds(ids),
         alertAccessDoorLinkageService.getByRuleIds(ids),
+        alertSipRingLinkageService.getByRuleIds(ids),
         alertEmailSubscriptionService.getByRuleIds(ids),
       ]);
 
@@ -583,6 +615,7 @@ router.post(
         doLinkage: null,
         cameraLinkage: null,
         accessDoorLinkage: null,
+        sipRingLinkage: null,
         emailSubscription: null,
       };
     }
@@ -601,6 +634,11 @@ router.post(
       const rid = a?.rule_id != null ? Number(a.rule_id) : null;
       if (!rid || !result[rid]) continue;
       result[rid].accessDoorLinkage = a;
+    }
+    for (const s of sipRingLinkages || []) {
+      const rid = s?.rule_id != null ? Number(s.rule_id) : null;
+      if (!rid || !result[rid]) continue;
+      result[rid].sipRingLinkage = s;
     }
     for (const e of emailSubs || []) {
       const rid = e?.rule_id != null ? Number(e.rule_id) : null;
@@ -631,7 +669,7 @@ router.post(
   }),
 );
 
-// 取得單一規則的整合設定（連動 DO / 攝影機 / 門禁全開 / Email）
+// 取得單一規則的整合設定（連動 DO / 攝影機 / 門禁全開 / SIP 語音廣播 / Email）
 router.get(
   "/rules/:id/integrations",
   requirePermission("system.alert_log"),
@@ -644,12 +682,14 @@ router.get(
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
     const accessDoorLinkage =
       await alertAccessDoorLinkageService.getByRuleId(ruleId);
+    const sipRingLinkage = await alertSipRingLinkageService.getByRuleId(ruleId);
     const emailSubscription =
       await alertEmailSubscriptionService.getByRuleId(ruleId);
     res.sendSuccess({
       doLinkage,
       cameraLinkage,
       accessDoorLinkage,
+      sipRingLinkage,
       emailSubscription,
     });
   }),
@@ -709,6 +749,19 @@ router.put(
       }
     }
 
+    // SIP 室內語音廣播連動（device_ids 空＝全部室內機）
+    if (Object.prototype.hasOwnProperty.call(body, "sipRingLinkage")) {
+      if (!body.sipRingLinkage) {
+        await alertSipRingLinkageService.deleteForRule(ruleId);
+      } else {
+        await alertSipRingLinkageService.upsertForRule(
+          ruleId,
+          body.sipRingLinkage,
+          userId,
+        );
+      }
+    }
+
     // Email subscription (upsert)
     if (Object.prototype.hasOwnProperty.call(body, "emailSubscription")) {
       if (!body.emailSubscription) {
@@ -727,12 +780,14 @@ router.put(
     const cameraLinkage = await alertCameraLinkageService.getByRuleId(ruleId);
     const accessDoorLinkage =
       await alertAccessDoorLinkageService.getByRuleId(ruleId);
+    const sipRingLinkage = await alertSipRingLinkageService.getByRuleId(ruleId);
     const emailSubscription =
       await alertEmailSubscriptionService.getByRuleId(ruleId);
     res.sendSuccess({
       doLinkage,
       cameraLinkage,
       accessDoorLinkage,
+      sipRingLinkage,
       emailSubscription,
     });
   }),

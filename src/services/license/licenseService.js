@@ -34,6 +34,7 @@ const FEATURE_KEYS_CENTRAL = [
   "surveillance",
   "vehicle_access",
   "multimedia",
+  "access_security",
 ];
 
 /**

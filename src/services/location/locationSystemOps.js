@@ -328,6 +328,22 @@ function buildSystemConfig(systemType, config) {
       };
     }
 
+    case "access_security": {
+      const raw =
+        config.indoorDeviceId ??
+        config.indoor_device_id ??
+        config.deviceId ??
+        null;
+      const indoorDeviceId = Number(raw);
+      if (!Number.isFinite(indoorDeviceId) || indoorDeviceId <= 0) {
+        throwApiError(
+          C.LOCATION_DEVICE_NOT_FOUND,
+          "門禁保全地點必須綁定一台室內機",
+        );
+      }
+      return { indoor_device_id: indoorDeviceId };
+    }
+
     default:
       return config || {};
   }
@@ -432,6 +448,63 @@ async function assertControllerQuotaWithinLimit({
   }
 }
 
+async function validateAccessSecurityConfig(query, systemConfig, { excludeSystemId = null } = {}) {
+  const indoorDeviceId = Number(systemConfig?.indoor_device_id);
+  if (!Number.isFinite(indoorDeviceId) || indoorDeviceId <= 0) {
+    throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "門禁保全地點必須綁定一台室內機");
+  }
+
+  const deviceRows = await query(
+    `SELECT id, type_code, config FROM devices WHERE id = $1`,
+    [indoorDeviceId],
+  );
+  if (!deviceRows?.length) {
+    throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "綁定的室內機不存在");
+  }
+  const device = deviceRows[0];
+  if (device.type_code !== "video_intercom") {
+    throwApiError(
+      C.LOCATION_DEVICE_NOT_CONTROLLER,
+      "門禁保全僅可綁定視訊對講室內機（video_intercom）",
+    );
+  }
+  const cfg =
+    typeof device.config === "string"
+      ? (() => {
+          try {
+            return JSON.parse(device.config);
+          } catch {
+            return {};
+          }
+        })()
+      : device.config || {};
+  if (String(cfg.unitType || "").trim() !== "indoor") {
+    throwApiError(
+      C.LOCATION_DEVICE_NOT_CONTROLLER,
+      "門禁保全地點僅可綁定 unitType=indoor 的室內機",
+    );
+  }
+
+  const dup = await query(
+    `
+    SELECT ls.id, ls.location_id
+    FROM location_systems ls
+    WHERE ls.system_type = 'access_security'
+      AND (ls.system_config->>'indoor_device_id')::int = $1
+      AND ($2::int IS NULL OR ls.id <> $2::int)
+    LIMIT 1
+    `,
+    [indoorDeviceId, excludeSystemId != null ? Number(excludeSystemId) : null],
+  );
+  if (dup?.length) {
+    throwApiError(
+      C.LOCATION_DEVICE_NOT_CONTROLLER,
+      "此室內機已綁定其他門禁保全地點",
+      { details: { locationId: dup[0].location_id, systemId: dup[0].id } },
+    );
+  }
+}
+
 /**
  * 建立系統（用於事務內部）
  */
@@ -455,6 +528,9 @@ async function createSystem(query, locationId, system) {
   if (systemType === "vehicle_access") {
     systemConfig = applyVehicleAccessEpochOnSave(systemConfig, null);
     await validateVehicleAccessConfig(systemConfig);
+  }
+  if (systemType === "access_security") {
+    await validateAccessSecurityConfig(query, systemConfig);
   }
   await validatePeopleCountingSystemIfNeeded(
     query,
@@ -572,6 +648,11 @@ async function updateSystem(query, systemId, system) {
       currentSystemType === "vehicle_access" ? currentSystemConfig : null,
     );
     await validateVehicleAccessConfig(systemConfig);
+  }
+  if (targetSystemType === "access_security") {
+    await validateAccessSecurityConfig(query, systemConfig, {
+      excludeSystemId: systemId,
+    });
   }
   if (vaLocationId != null) {
     await validatePeopleCountingSystemIfNeeded(
@@ -737,6 +818,13 @@ async function createLocationWithSystems(
           }
           break;
         }
+        case "access_security":
+          if (location.indoorDeviceId !== undefined) {
+            systemConfig.indoorDeviceId = location.indoorDeviceId;
+          } else if (deviceId !== undefined) {
+            systemConfig.indoorDeviceId = deviceId;
+          }
+          break;
         case "vehicle_access":
           if (entryLaneId !== undefined) systemConfig.entryLaneId = entryLaneId;
           if (exitLaneId !== undefined) systemConfig.exitLaneId = exitLaneId;

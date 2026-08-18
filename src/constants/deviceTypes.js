@@ -3,6 +3,7 @@ const FIXED_DEVICE_TYPES = [
   { name: "感測器", code: "sensor" },
   { name: "控制器", code: "controller" },
   { name: "門禁設備", code: "access_control" },
+  { name: "視訊對講", code: "video_intercom" },
 ];
 
 const FIXED_DEVICE_TYPE_CODES = new Set(FIXED_DEVICE_TYPES.map((t) => t.code));

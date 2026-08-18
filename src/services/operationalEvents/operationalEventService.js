@@ -15,6 +15,7 @@ const EVENT_KINDS = Object.freeze([
   "access",
   "vehicle",
   "elevator",
+  "intercom",
 ]);
 
 const toIntOrNull = (v) => {
@@ -37,7 +38,7 @@ function parseMultiFilter(value) {
 }
 
 function buildListWhere(filters = {}) {
-  const { source, event_kind, start_date, end_date } = filters;
+  const { source, event_kind, start_date, end_date, location_id } = filters;
   let where = "WHERE 1=1";
   const params = [];
 
@@ -74,6 +75,12 @@ function buildListWhere(filters = {}) {
   if (end_date) {
     where += " AND oe.occurred_at < ?::timestamptz";
     params.push(end_date);
+  }
+
+  const locationId = Number(location_id);
+  if (Number.isInteger(locationId) && locationId > 0) {
+    where += " AND oe.location_id = ?";
+    params.push(locationId);
   }
 
   return { where, params };

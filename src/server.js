@@ -33,6 +33,7 @@ const energyRoutes = require("./routes/energyRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const elevatorRoutes = require("./routes/elevatorRoutes");
+const accessSecurityRoutes = require("./routes/accessSecurityRoutes");
 const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const operationalEventRoutes = require("./routes/operationalEventRoutes");
@@ -179,6 +180,11 @@ app.use(
   requireFeature("elevator"),
   elevatorRoutes,
 ); // 電梯系統
+app.use(
+  "/api/access-security",
+  requireFeature("access_security"),
+  accessSecurityRoutes,
+); // 門禁保全（VIS）
 app.use(
   "/api/vehicle-access",
   requireFeature("vehicle_access"),

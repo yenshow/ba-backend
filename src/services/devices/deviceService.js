@@ -36,6 +36,23 @@ const {
 
 const deviceLogger = logger.createLogger("deviceService");
 
+/** 視訊對講 unitType 由型號 config 決定，設備表單不另選角色 */
+function applyVideoIntercomModelDefaults(config, modelConfig, modelPort) {
+  const unitType = String(modelConfig?.unitType || "").trim();
+  if (unitType) {
+    config.unitType = unitType;
+  }
+  if (config.port === undefined || config.port === null) {
+    config.port = modelPort ?? 8000;
+  }
+  if (
+    unitType === "indoor" &&
+    (config.sipPort === undefined || config.sipPort === null)
+  ) {
+    config.sipPort = modelConfig?.sipPort ?? 5060;
+  }
+}
+
 async function applyControllerConnectionConfig({
   config,
   modelConfig,
@@ -413,6 +430,9 @@ async function createDevice(deviceData, userId) {
     if (typeCode === "controller") {
       ensureControllerHcnetProtocol(config, modelConfig);
     }
+    if (typeCode === "video_intercom") {
+      applyVideoIntercomModelDefaults(config, modelConfig, modelPort);
+    }
 
     // 驗證配置
     validateDeviceConfig(config, typeCode);
@@ -561,6 +581,18 @@ async function createDevice(deviceData, userId) {
       userId,
     });
 
+    if (String(deviceResult?.device?.type_code || "") === "video_intercom") {
+      try {
+        const licenseRuntimeService = require("../license/licenseRuntimeService");
+        await licenseRuntimeService.reconcileIntercomArmingAfterDeviceChange();
+      } catch (e) {
+        deviceLogger.warn("對講佈防 reconcile 失敗（createDevice）", {
+          deviceId: deviceResult?.device?.id,
+          error: e?.message || String(e),
+        });
+      }
+    }
+
     return deviceResult;
   } catch (error) {
     rethrowIfApiError(error);
@@ -669,6 +701,9 @@ async function updateDevice(id, deviceData, userId) {
 
       if (typeCode === "controller") {
         ensureControllerHcnetProtocol(config, modelConfig);
+      }
+      if (typeCode === "video_intercom") {
+        applyVideoIntercomModelDefaults(config, modelConfig, modelPort);
       }
 
       // 驗證配置
@@ -856,6 +891,21 @@ async function updateDevice(id, deviceData, userId) {
       userId,
     });
 
+    if (
+      String(updatedDevice?.device?.type_code || "") === "video_intercom" ||
+      String(existingDevice?.type_code || "") === "video_intercom"
+    ) {
+      try {
+        const licenseRuntimeService = require("../license/licenseRuntimeService");
+        await licenseRuntimeService.reconcileIntercomArmingAfterDeviceChange();
+      } catch (e) {
+        deviceLogger.warn("對講佈防 reconcile 失敗（updateDevice）", {
+          deviceId: updatedDevice?.device?.id,
+          error: e?.message || String(e),
+        });
+      }
+    }
+
     return updatedDevice;
   } catch (error) {
     rethrowIfApiError(error);
@@ -886,6 +936,7 @@ async function deleteDevice(id, userId = null) {
     }
 
     const isCamera = String(devices[0]?.type_code || "").toLowerCase() === "camera";
+    const isVideoIntercom = String(devices[0]?.type_code || "") === "video_intercom";
 
     // 先自地點設定／警報聯動移除引用，並刷新 ISAPI／梯控訂閱（避免訂閱已刪設備 ID）
     try {
@@ -912,6 +963,18 @@ async function deleteDevice(id, userId = null) {
         error: e?.message || String(e),
         module: "deviceService",
       });
+    }
+
+    if (isVideoIntercom) {
+      try {
+        const licenseRuntimeService = require("../license/licenseRuntimeService");
+        await licenseRuntimeService.reconcileIntercomArmingAfterDeviceChange();
+      } catch (e) {
+        deviceLogger.warn("對講佈防 reconcile 失敗（deleteDevice）", {
+          deviceId: id,
+          error: e?.message || String(e),
+        });
+      }
     }
 
     // 推送 WebSocket 事件：設備刪除

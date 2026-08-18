@@ -229,7 +229,7 @@ async function modbusHealthCheck(deviceConfig) {
   return true;
 }
 
-async function isapiHealthCheck(deviceConfig) {
+async function isapiHealthCheck(deviceConfig, { defaultPort = 80 } = {}) {
   const host = String(deviceConfig?.host || "").trim();
   if (!host) {
     throw createApiError(
@@ -239,7 +239,7 @@ async function isapiHealthCheck(deviceConfig) {
   }
   const client = createIsapiClient({
     host,
-    port: deviceConfig?.port ?? 80,
+    port: deviceConfig?.port ?? defaultPort,
     username: deviceConfig?.username || "admin",
     password: deviceConfig?.password || "",
   });
@@ -250,6 +250,50 @@ async function isapiHealthCheck(deviceConfig) {
     headers: {},
     // isapiClient 內部有 timeout，但這裡再用 Promise.race 保護更直覺
   });
+  return true;
+}
+
+/** VIS 對講：8000 為 HCNetSDK 通道，需走 Bridge ISAPI（非 HTTP isapiClient） */
+async function videoIntercomSdkHealthCheck(deviceConfig, modelPort) {
+  const host = String(deviceConfig?.host || "").trim();
+  if (!host) {
+    throw createApiError(
+      C.DEVICE_CONNECTIVITY_ISAPI_CONFIG_INCOMPLETE,
+      "對講設備配置不完整（host）",
+    );
+  }
+  const rawPort = deviceConfig?.port ?? modelPort ?? 8000;
+  const port = Number(rawPort) || 8000;
+  const { invokeBridge } = require("../ladderSdk/sdkBridgeClient");
+  const result = await invokeBridge(
+    {
+      action: "ability.probe",
+      device: {
+        host,
+        port,
+        username: deviceConfig?.username || "admin",
+        password: deviceConfig?.password || "",
+      },
+      payload: {
+        isapiPaths: [
+          {
+            name: "deviceInfo",
+            method: "GET",
+            path: "/ISAPI/System/deviceInfo",
+            timeoutMs: CONNECTIVITY_TIMEOUT_MS,
+          },
+        ],
+      },
+    },
+    { timeoutMs: CONNECTIVITY_TIMEOUT_MS + 15_000 },
+  );
+  const item = Array.isArray(result?.isapi) ? result.isapi[0] : null;
+  if (!item?.ok) {
+    throw createApiError(
+      C.LADDER_SDK_ERROR,
+      item?.error || item?.subStatusCode || "對講 SDK 健康檢查失敗",
+    );
+  }
   return true;
 }
 
@@ -301,9 +345,8 @@ async function checkSingleDeviceConnectivity(deviceRow) {
   }
 
   if (typeCode === "access_control") {
-    // ISAPI 連線成功
     const p = Promise.race([
-      isapiHealthCheck(cfg),
+      isapiHealthCheck(cfg, { defaultPort: 80 }),
       new Promise((_, reject) =>
         setTimeout(
           () =>
@@ -311,6 +354,23 @@ async function checkSingleDeviceConnectivity(deviceRow) {
               createApiError(C.DEVICE_CONNECTIVITY_ISAPI_TIMEOUT, "ISAPI 連線超時"),
             ),
           CONNECTIVITY_TIMEOUT_MS,
+        ),
+      ),
+    ]);
+    await p;
+    return { deviceId, ok: true, nextStatus: "online" };
+  }
+
+  if (typeCode === "video_intercom") {
+    const p = Promise.race([
+      videoIntercomSdkHealthCheck(cfg, modelPort),
+      new Promise((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              createApiError(C.DEVICE_CONNECTIVITY_ISAPI_TIMEOUT, "對講 SDK 連線超時"),
+            ),
+          CONNECTIVITY_TIMEOUT_MS + 15_000,
         ),
       ),
     ]);

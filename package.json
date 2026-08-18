@@ -19,6 +19,7 @@
     "test:sdk-ladder-events": "powershell -ExecutionPolicy Bypass -File sdk/scripts/run-bridge.ps1 -Arming",
     "listen:video-intercom": "node scripts/listenVideoIntercomMainStation.js",
     "probe:video-intercom": "node scripts/probeVideoIntercom.js",
+    "scan:video-intercom-indoor": "node scripts/scanVideoIntercomIndoor.js",
     "test:video-intercom-sip": "node scripts/testVideoIntercomSipInvite.js",
     "db:init": "node src/database/initSchema.js",
     "db:sync-perms": "node src/access/syncDefinitions.js",
@@ -53,16 +54,16 @@
     "form-data": "^4.0.5",
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.2",
-    "mssql": "^11.0.0",
     "modbus-serial": "^8.0.23",
-    "mysql2": "^3.14.3",
     "morgan": "^1.10.1",
+    "mssql": "^11.0.0",
     "multer": "^2.0.2",
+    "mysql2": "^3.14.3",
     "nodemailer": "^8.0.5",
     "pg": "^8.11.3",
-    "ssh2-sftp-client": "^12.1.1",
     "sharp": "^0.34.3",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "ssh2-sftp-client": "^12.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"

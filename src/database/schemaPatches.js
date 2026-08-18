@@ -5,7 +5,7 @@ const logger = require("../utils/logger").createLogger("schemaPatches");
 const {
   isValidSensorParameterKey,
 } = require("../constants/environmentParameterCatalog");
-const { syncDeviceModelCatalog } = require("./syncDeviceModelCatalog");
+const { syncDeviceModelCatalog, repairDeviceModelCatalogConfig } = require("./syncDeviceModelCatalog");
 
 /** 與 initSchema `alert_source`、alertService.ALERT_SOURCES 對齊 */
 const ALERT_SOURCE_ENUM_VALUES = [
@@ -302,7 +302,7 @@ async function ensureOperationalEventsTable(pool) {
       event_kind VARCHAR(32) NOT NULL
         CHECK (event_kind IN (
           'control_write', 'state_change',
-          'access', 'vehicle', 'elevator'
+          'access', 'vehicle', 'elevator', 'intercom'
         )),
       location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
       system_id INTEGER REFERENCES location_systems(id) ON DELETE SET NULL,
@@ -372,7 +372,7 @@ async function ensureOperationalEventsTable(pool) {
         ADD CONSTRAINT operational_events_event_kind_check
         CHECK (event_kind IN (
           'control_write', 'state_change',
-          'access', 'vehicle', 'elevator'
+          'access', 'vehicle', 'elevator', 'intercom'
         ));
     END
     $do$;
@@ -516,6 +516,95 @@ async function ensureEnergyTables(pool) {
   `);
 }
 
+/** 既有庫：設備／型號 type_code 加 video_intercom */
+async function ensureVideoIntercomTypeCode(pool) {
+  await pool.query(`
+    DO $do$
+    DECLARE
+      r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT c.conname, t.relname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'public'
+          AND t.relname IN ('devices', 'device_models')
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) LIKE '%type_code%'
+      LOOP
+        EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', r.relname, r.conname);
+      END LOOP;
+
+      IF to_regclass('public.devices') IS NOT NULL THEN
+        ALTER TABLE devices
+          ADD CONSTRAINT ck_devices_type_code
+          CHECK (type_code IN ('camera','sensor','controller','access_control','video_intercom'));
+      END IF;
+      IF to_regclass('public.device_models') IS NOT NULL THEN
+        ALTER TABLE device_models
+          ADD CONSTRAINT ck_device_models_type_code
+          CHECK (type_code IN ('camera','sensor','controller','access_control','video_intercom'));
+      END IF;
+    END
+    $do$;
+  `);
+}
+
+/** 既有庫：location_systems.system_type 加 access_security */
+async function ensureAccessSecurityLocationSystemType(pool) {
+  await pool.query(`
+    DO $do$
+    DECLARE
+      r RECORD;
+    BEGIN
+      IF to_regclass('public.location_systems') IS NULL THEN
+        RETURN;
+      END IF;
+      FOR r IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'public'
+          AND t.relname = 'location_systems'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) LIKE '%system_type%'
+      LOOP
+        EXECUTE format('ALTER TABLE location_systems DROP CONSTRAINT %I', r.conname);
+      END LOOP;
+      ALTER TABLE location_systems
+        ADD CONSTRAINT location_systems_system_type_check
+        CHECK (system_type IN (
+          'environment', 'lighting', 'hvac', 'air_circulation',
+          'people_counting', 'vehicle_access', 'drainage', 'power',
+          'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security'
+        ));
+    END
+    $do$;
+  `);
+}
+
+/** 既有庫：警報 SIP 室內振鈴連動表 */
+async function ensureAlertSipRingLinkagesTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS alert_sip_ring_linkages (
+      id SERIAL PRIMARY KEY,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+      device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(rule_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_alert_sip_ring_linkages_enabled ON alert_sip_ring_linkages(enabled);
+    CREATE INDEX IF NOT EXISTS idx_alert_sip_ring_linkages_rule_id ON alert_sip_ring_linkages(rule_id);
+  `);
+}
+
 /** 既有庫：警報門禁連動補 device_ids（空陣列＝全部門禁） */
 async function ensureAlertAccessDoorDeviceIds(pool) {
   await pool.query(`
@@ -584,14 +673,19 @@ async function applySchemaPatches(pool) {
   await ensureEnergyTables(pool);
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
+  await ensureVideoIntercomTypeCode(pool);
+  await ensureAccessSecurityLocationSystemType(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
+  await ensureAlertSipRingLinkagesTable(pool);
   await ensureIsapiFaceContrastEventsTable(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
   const deviceModelSync = await syncDeviceModelCatalog(pool);
+  const deviceModelRepair = await repairDeviceModelCatalogConfig(pool);
   logger.info("schema patches 已套用", {
     module: "schemaPatches",
     migratedSensorModels,
     ...deviceModelSync,
+    ...deviceModelRepair,
   });
 }
 
@@ -602,7 +696,10 @@ module.exports = {
   ensureEnergyTables,
   ensureExternalIntegrationTables,
   ensureOperationalEventsTable,
+  ensureVideoIntercomTypeCode,
+  ensureAccessSecurityLocationSystemType,
   ensureAlertAccessDoorDeviceIds,
+  ensureAlertSipRingLinkagesTable,
   ensureIsapiFaceContrastEventsTable,
   migrateLegacySensorModelConfigs,
   applySchemaPatches,

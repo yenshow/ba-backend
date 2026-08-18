@@ -16,17 +16,6 @@ const {
 /** 無 catalog 權限碼的預留模組（僅 UI／導覽） */
 const EXTRA_MODULES = [
   {
-    id: 16,
-    name: "門禁保全系統",
-    icon: "security",
-    description: "門禁與保全系統管理",
-    category: "security",
-    routePrefix: "/security/access-control",
-    featureKey: null,
-    permissionCode: null,
-    enabled: false,
-  },
-  {
     id: 19,
     name: "訪客系統",
     icon: "visitor",

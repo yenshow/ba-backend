@@ -27,14 +27,22 @@ const LOCATION_DEVICE_FIELDS = {
       "exit_camera_device_ids",
     ],
     roles: [],
+    scalars: [],
   },
   vehicle_access: {
     arrays: ["entry_camera_device_ids", "exit_camera_device_ids"],
     roles: [],
+    scalars: [],
   },
   elevator: {
     arrays: ["access_device_ids"],
     roles: ["ladder_device", "call_device", "floor_detection"],
+    scalars: [],
+  },
+  access_security: {
+    arrays: [],
+    roles: [],
+    scalars: ["indoor_device_id"],
   },
 };
 
@@ -68,9 +76,9 @@ const getLocationDeviceFields = (systemType) => {
     return LOCATION_DEVICE_FIELDS[systemType];
   }
   if (CONTROLLER_SYSTEM_TYPES.has(systemType)) {
-    return { arrays: ["device_ids"], roles: [] };
+    return { arrays: ["device_ids"], roles: [], scalars: [] };
   }
-  return { arrays: [], roles: [] };
+  return { arrays: [], roles: [], scalars: [] };
 };
 
 const stripFromIntArray = (arr, removeIds) => {
@@ -102,9 +110,16 @@ const stripElevatorRole = (config, fieldName, removeIds) => {
   return true;
 };
 
+const stripScalarDeviceId = (config, fieldName, removeIds) => {
+  if (!Object.prototype.hasOwnProperty.call(config, fieldName)) return false;
+  if (!removeIds.has(parsePositiveInt(config[fieldName]))) return false;
+  delete config[fieldName];
+  return true;
+};
+
 const stripDeviceIdsFromSystemConfig = (systemType, rawConfig, removeIds) => {
   const config = parseJsonConfig(rawConfig);
-  const { arrays, roles } = getLocationDeviceFields(systemType);
+  const { arrays, roles, scalars } = getLocationDeviceFields(systemType);
   let changed = false;
 
   for (const fieldName of arrays) {
@@ -112,6 +127,9 @@ const stripDeviceIdsFromSystemConfig = (systemType, rawConfig, removeIds) => {
   }
   for (const fieldName of roles) {
     if (stripElevatorRole(config, fieldName, removeIds)) changed = true;
+  }
+  for (const fieldName of scalars || []) {
+    if (stripScalarDeviceId(config, fieldName, removeIds)) changed = true;
   }
 
   return { config, changed };
@@ -161,32 +179,30 @@ async function removeDeviceIdsFromLocationSystems(deviceIds) {
   };
 }
 
-async function removeDeviceFromAlertCameraLinkages(deviceId) {
+async function removeDeviceFromAlertIdArrayTable(tableName, columnName, deviceId) {
   const id = parsePositiveInt(deviceId);
   if (!id) {
     return { updatedCount: 0 };
   }
 
   const rows = await db.query(
-    `SELECT id, camera_device_ids
-     FROM alert_camera_linkages
-     WHERE ? = ANY(camera_device_ids)`,
+    `SELECT id, ${columnName}
+     FROM ${tableName}
+     WHERE ? = ANY(${columnName})`,
     [id],
   );
 
   let updatedCount = 0;
   for (const row of rows || []) {
-    const current = Array.isArray(row.camera_device_ids)
-      ? row.camera_device_ids
-      : [];
+    const current = Array.isArray(row[columnName]) ? row[columnName] : [];
     const next = current
       .map((value) => Number(value))
       .filter((n) => Number.isFinite(n) && n > 0 && n !== id);
     if (next.length === current.length) continue;
 
     await db.query(
-      `UPDATE alert_camera_linkages
-       SET camera_device_ids = ?, updated_at = CURRENT_TIMESTAMP
+      `UPDATE ${tableName}
+       SET ${columnName} = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [next, row.id],
     );
@@ -196,18 +212,41 @@ async function removeDeviceFromAlertCameraLinkages(deviceId) {
   return { updatedCount };
 }
 
+async function removeDeviceFromAlertCameraLinkages(deviceId) {
+  return removeDeviceFromAlertIdArrayTable(
+    "alert_camera_linkages",
+    "camera_device_ids",
+    deviceId,
+  );
+}
+
+async function removeDeviceFromAlertSipRingLinkages(deviceId) {
+  return removeDeviceFromAlertIdArrayTable(
+    "alert_sip_ring_linkages",
+    "device_ids",
+    deviceId,
+  );
+}
+
 /**
  * 刪除設備前：清理地點／警報引用並刷新訂閱。
  */
 async function removeDeviceReferences(deviceId) {
   const locationSystems = await removeDeviceIdsFromLocationSystems(deviceId);
   const alertCameraLinkages = await removeDeviceFromAlertCameraLinkages(deviceId);
+  const alertSipRingLinkages =
+    await removeDeviceFromAlertSipRingLinkages(deviceId);
 
-  if (locationSystems.updatedCount > 0 || alertCameraLinkages.updatedCount > 0) {
+  if (
+    locationSystems.updatedCount > 0 ||
+    alertCameraLinkages.updatedCount > 0 ||
+    alertSipRingLinkages.updatedCount > 0
+  ) {
     logger.info("已移除已刪設備之地點／警報引用", {
       deviceId,
       locationSystemsUpdated: locationSystems.updatedCount,
       alertCameraLinkagesUpdated: alertCameraLinkages.updatedCount,
+      alertSipRingLinkagesUpdated: alertSipRingLinkages.updatedCount,
       affectedSystemTypes: [
         ...new Set(locationSystems.affectedRows.map((row) => row.systemType)),
       ],
@@ -215,11 +254,12 @@ async function removeDeviceReferences(deviceId) {
   }
 
   require("./locationShared").refreshAfterLocationOrZoneDelete(logger);
-  return { locationSystems, alertCameraLinkages };
+  return { locationSystems, alertCameraLinkages, alertSipRingLinkages };
 }
 
 module.exports = {
   removeDeviceIdsFromLocationSystems,
   removeDeviceFromAlertCameraLinkages,
+  removeDeviceFromAlertSipRingLinkages,
   removeDeviceReferences,
 };

@@ -7,8 +7,8 @@
  *
  *   node scripts/listenVideoIntercomMainStation.js --host 192.168.2.27
  *
- * 外撥請用：testVideoIntercomSipInvite.js（直打室內 SIP）
- * 詳見：docs/40-systems/video-intercom-main-station.md（層 1 listen）
+ * 外撥請用：testVideoIntercomSipInvite.js（直打室內 SIP，接聽後播音檔）
+ * 詳見：docs/40-systems/access-security.md（層 1）；探測附錄 video-intercom-main-station.md
  */
 
 /* eslint-disable no-console */

@@ -6,9 +6,29 @@
  */
 const { getDeviceTypeName } = require("./deviceTypes");
 
+/** @param {string} name */
+const visIndoorModel = (name) => ({
+  name,
+  typeCode: "video_intercom",
+  port: 8000,
+  description: "VIS 室內機",
+  config: { unitType: "indoor", sipPort: 5060 },
+});
+
 const DEVICE_MODEL_CATALOG = [
   { name: "YS AC-02F", typeCode: "access_control" },
   { name: "YS AC-07", typeCode: "access_control" },
+  {
+    name: "YS 9503",
+    typeCode: "video_intercom",
+    port: 8000,
+    description: "VIS 管理中心主機",
+    config: { unitType: "manage" },
+  },
+  visIndoorModel("YS-KH6350-WTE1"),
+  visIndoorModel("YS-9510-WTE1"),
+  visIndoorModel("YS-8520-WTE1"),
+  visIndoorModel("YS-KH8380-WTE1"),
   {
     name: "YS-K2210",
     typeCode: "controller",
@@ -82,7 +102,12 @@ const DEVICE_MODEL_CATALOG = [
         },
         {
           type: "active_power",
-          modbusConfig: { address: 10, length: 1, dataType: "uint16", transform: "value / 10" },
+          modbusConfig: {
+            address: 10,
+            length: 1,
+            dataType: "uint16",
+            transform: "value / 10",
+          },
         },
       ],
     },

@@ -19,7 +19,8 @@
 | `entryExit/` | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測 |
 | `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
-| `alerts/` | 警報 CRUD、規則、Email、聯動（含門禁連動） |
+| `alerts/` | 警報 CRUD、規則、Email、聯動（DO／攝影機／門禁全開／SIP 語音廣播） |
+| `accessSecurity/` | 門禁保全：戶別、層 1 listen、層 2 SIP 語音廣播（`sipInviteService`／`g711Audio`／`rtpSender`） |
 | `operationalEvents/` | 查寫／文案／hooks／retention |
 | `backup/` | 備份排程與各系統報表格式 |
 | `accessControl/` | 門禁 ISAPI 業務、Digest、佈防訂閱／事件寫入 |
@@ -46,7 +47,8 @@
 | `peopleCountingRoutes` | `peopleCounting/peopleCountingService`、`entryExit/resolveTimeOptions` |
 | `lighting`～`smokeAlarm` Routes（狀態 API） | `snapshotStatus/*StatusService` + `location/locationService` |
 | `deviceRoutes` / `modbusRoutes` | `devices/*` |
-| `alertRoutes` | `alerts/*` |
+| `alertRoutes` | `alerts/*`（含 `alertSipRingLinkageService`） |
+| `accessSecurityRoutes` | `accessSecurity/*` |
 | `operationalEventRoutes` | `operationalEvents/*` |
 | `accessControlRoutes` | `accessControl/accessControlService` |
 | `externalDataRoutes` | `externalData/*` |

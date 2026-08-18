@@ -346,9 +346,26 @@ const CENTRAL_MODULES = [
     },
   },
   {
+    code: "system.access_security",
+    name: "門禁保全系統",
+    sort_order: 29,
+    children: [
+      ...LOCATION_MUTATION_CHILDREN,
+      { code: "ring", name: "室內語音廣播", sort_order: 4 },
+    ],
+    ui: {
+      id: 16,
+      icon: "security",
+      description: "視訊對講保全（組網對講與室內語音廣播）",
+      category: "security",
+      routePrefix: "/security/access-control",
+      featureKey: "access_security",
+    },
+  },
+  {
     code: "system.multimedia",
     name: "多媒體資訊",
-    sort_order: 29,
+    sort_order: 30,
     children: [{ code: "settings.update", name: "設定編輯", sort_order: 1 }],
     ui: {
       id: 21,
@@ -381,6 +398,7 @@ const LOCATION_TYPE_MODULE = {
   emergency_rescue: "system.emergency_rescue",
   smoke_alarm: "system.smoke_alarm",
   elevator: "system.elevator",
+  access_security: "system.access_security",
 };
 
 const normalizeProfile = (profile) =>

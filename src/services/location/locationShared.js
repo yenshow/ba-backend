@@ -31,6 +31,7 @@ const VALID_LOCATION_SYSTEM_TYPES = [
   "emergency_rescue",
   "smoke_alarm",
   "elevator",
+  "access_security",
 ];
 
 function assertValidSystemType(systemType) {
@@ -475,6 +476,19 @@ function formatSystem(system) {
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),
+        },
+      };
+    }
+
+    case "access_security": {
+      const indoorId = Number(config.indoor_device_id);
+      return {
+        ...baseSystem,
+        config: {
+          indoorDeviceId:
+            Number.isFinite(indoorId) && indoorId > 0 ? indoorId : undefined,
+          deviceId:
+            Number.isFinite(indoorId) && indoorId > 0 ? indoorId : undefined,
         },
       };
     }

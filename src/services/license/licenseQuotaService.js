@@ -12,6 +12,7 @@ const DEVICE_TYPE_CODE_TO_FEATURE = {
   camera: "surveillance",
   sensor: "environment",
   access_control: "people_counting",
+  video_intercom: "access_security",
 };
 
 const CONTROLLER_SYSTEM_TYPES = new Set([

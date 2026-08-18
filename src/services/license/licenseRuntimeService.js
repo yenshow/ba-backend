@@ -18,9 +18,11 @@ const {
 } = require("../energy/energyAggregationScheduler");
 const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const sdkArmingService = require("../ladderSdk/sdkArmingService");
+const videoIntercomArmingService = require("../accessSecurity/videoIntercomArmingService");
 const { setCachedEffectiveFeatures } = require("./effectiveFeaturesCache");
 
 let elevatorArmed = false;
+let intercomArmed = false;
 
 const reconcileElevatorSdk = async (features) => {
   const licensed = licenseService.hasLicensedFeature(features, "elevator");
@@ -38,6 +40,38 @@ const reconcileElevatorSdk = async (features) => {
       elevatorArmed = true;
     } catch (error) {
       logger.warn("梯控 SDK 佈防啟動失敗", {
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  return { armed: true };
+};
+
+const reconcileIntercomSdk = async (features) => {
+  const licensed = licenseService.hasLicensedFeature(features, "access_security");
+  if (!licensed) {
+    if (intercomArmed) {
+      videoIntercomArmingService.stop();
+      intercomArmed = false;
+    }
+    return { armed: false };
+  }
+
+  if (!intercomArmed) {
+    try {
+      await videoIntercomArmingService.start();
+      intercomArmed = true;
+    } catch (error) {
+      logger.warn("對講主機佈防啟動失敗", {
+        error: error?.message || String(error),
+      });
+    }
+  } else {
+    try {
+      await videoIntercomArmingService.reconcile();
+    } catch (error) {
+      logger.warn("對講主機佈防刷新失敗", {
         error: error?.message || String(error),
       });
     }
@@ -73,6 +107,7 @@ const reconcileBackgroundServices = async ({
 
   const isapi = await isapiSubscribeHub.reconcile({ licensedFeatures: features });
   const elevator = await reconcileElevatorSdk(features);
+  const intercom = await reconcileIntercomSdk(features);
 
   logger.info("背景服務 reconcile 完成", {
     reason,
@@ -81,6 +116,7 @@ const reconcileBackgroundServices = async ({
     energy: energyOn ? "on" : "off",
     isapi: isapi.profileKeys || [],
     elevator: elevator.armed ? "on" : "off",
+    intercom: intercom.armed ? "on" : "off",
   });
 
   if (monitoring.startedNow && monitoring.taskNames.length > 0) {
@@ -101,6 +137,7 @@ const reconcileBackgroundServices = async ({
     environment: environmentOn,
     isapi,
     elevator,
+    intercom,
   };
 };
 
@@ -111,6 +148,8 @@ const stopLicensedBackgroundServices = async () => {
   isapiSubscribeHub.stop();
   sdkArmingService.stop();
   elevatorArmed = false;
+  videoIntercomArmingService.stop();
+  intercomArmed = false;
   setCachedEffectiveFeatures([]);
 };
 
@@ -130,8 +169,25 @@ const reconcileElevatorArmingAfterLocationChange = async () => {
   }
 };
 
+/** 對講主機設備變更後 reconcile 佈防（僅在已授權啟動時） */
+const reconcileIntercomArmingAfterDeviceChange = async () => {
+  if (!intercomArmed) {
+    return { armed: false, skipped: true };
+  }
+  try {
+    const result = await videoIntercomArmingService.reconcile();
+    return { armed: true, ...result };
+  } catch (error) {
+    logger.warn("對講佈防刷新失敗", {
+      error: error?.message || String(error),
+    });
+    return { armed: true, error: error?.message || String(error) };
+  }
+};
+
 module.exports = {
   reconcileBackgroundServices,
   stopLicensedBackgroundServices,
   reconcileElevatorArmingAfterLocationChange,
+  reconcileIntercomArmingAfterDeviceChange,
 };
