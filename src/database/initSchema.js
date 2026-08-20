@@ -780,6 +780,28 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // ========== 警報電梯呼梯連動（visitor_call 至 1F；location_ids 空＝全部電梯地點）==========
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS alert_elevator_call_linkages (
+        id SERIAL PRIMARY KEY,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        location_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rule_id)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "alert_elevator_call_linkages");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_alert_elevator_call_linkages_enabled ON alert_elevator_call_linkages(enabled);
+      CREATE INDEX IF NOT EXISTS idx_alert_elevator_call_linkages_rule_id ON alert_elevator_call_linkages(rule_id);
+    `);
+    schemaLogger.info("alert_elevator_call_linkages 表已建立（電梯呼梯連動）", {
+      module: "initSchema",
+    });
+
     // ========== 警報外部通知（Email / SMTP，每規則獨立）==========
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_email_subscriptions (

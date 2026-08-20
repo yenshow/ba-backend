@@ -27,7 +27,10 @@ const LOCATION_DEVICE_FIELDS = {
       "exit_camera_device_ids",
     ],
     roles: [],
-    scalars: [],
+    scalars: [
+      "entry_event_camera_device_id",
+      "exit_event_camera_device_id",
+    ],
   },
   vehicle_access: {
     arrays: ["entry_camera_device_ids", "exit_camera_device_ids"],

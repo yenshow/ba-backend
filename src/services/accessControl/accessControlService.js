@@ -14,6 +14,9 @@ const {
 const {
   loadPlaceContextByAccessDeviceId,
 } = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  emitAccessControlEventFromPlaceContext,
+} = require("../peopleCounting/accessEventCameraResolver");
 
 const ISAPI_PATHS = {
   userInfoSearch: "/ISAPI/AccessControl/UserInfo/Search?format=json",
@@ -685,6 +688,12 @@ async function controlRemoteDoor(deviceId, options = {}) {
       responseType: "text",
     });
     recordOe(true);
+    if (!fromAlertLinkage && (cmd === "open" || cmd === "alwaysOpen")) {
+      emitAccessControlEventFromPlaceContext(placeCtx, {
+        source: "manual",
+        deviceId,
+      });
+    }
     return { success: true, doorNo, cmd };
   } catch (err) {
     recordOe(false, err?.message || String(err));

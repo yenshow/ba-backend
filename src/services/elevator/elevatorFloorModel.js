@@ -434,10 +434,22 @@ const findFloorByDiAddress = (floors, address) => {
   return { index: index + 1, floor: floors[index] };
 };
 
+const findFloorByLabel = (floors, label) => {
+  const want = String(label || "")
+    .trim()
+    .toUpperCase();
+  if (!want || !Array.isArray(floors) || floors.length === 0) return null;
+  const index = floors.findIndex(
+    (f) => String(f.label || "").trim().toUpperCase() === want,
+  );
+  if (index < 0) return null;
+  return { index: index + 1, floor: floors[index] };
+};
+
 const resolveDefaultDisplayFloor = (floors) => {
   if (!floors.length) return null;
-  const oneF = floors.find((f) => f.label.trim().toUpperCase() === "1F");
-  const target = oneF ?? floors[0];
+  const oneF = findFloorByLabel(floors, "1F");
+  const target = oneF?.floor ?? floors[0];
   const index = floors.indexOf(target) + 1;
   return { index, label: target.label };
 };
@@ -551,6 +563,7 @@ module.exports = {
   buildPersonFloorAccessView,
   findFloorByLadderGateway,
   findFloorByDiAddress,
+  findFloorByLabel,
   resolveDefaultDisplayFloor,
   formatElevatorLogFloor,
   mapElevatorLogsFloorDisplay,

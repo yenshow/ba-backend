@@ -359,6 +359,7 @@ function formatSystem(system) {
       } = require("../peopleCounting/logDisplayColumns");
       const {
         parsePeopleCountingConfigFields,
+        parseOptionalEventCameraDeviceId,
         CAMERA_MODE,
       } = require("../peopleCounting/peopleCountingConfig");
       const cameras = parsePeopleCountingConfigFields(config);
@@ -405,6 +406,12 @@ function formatSystem(system) {
             config.log_display_columns,
           ),
           statsResetAt: config.stats_reset_at ?? undefined,
+          entryEventCameraDeviceId: parseOptionalEventCameraDeviceId(
+            config.entry_event_camera_device_id,
+          ),
+          exitEventCameraDeviceId: parseOptionalEventCameraDeviceId(
+            config.exit_event_camera_device_id,
+          ),
         },
       };
     }

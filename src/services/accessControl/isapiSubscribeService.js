@@ -25,6 +25,9 @@ const {
 const {
   resolveOperationalAccessSemantics,
 } = require("../peopleCounting/accessControlLogLabels");
+const {
+  emitAccessControlEventFromPlaceContext,
+} = require("../peopleCounting/accessEventCameraResolver");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件 */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -76,7 +79,14 @@ async function persistIsapiEvent(options) {
     ],
   );
   const id = rows?.[0]?.id ?? null;
-  websocketService.emitIsapiAccessEvent();
+  const placeCtx = deviceId
+    ? await loadPlaceContextByAccessDeviceId(deviceId)
+    : { placeLabel: null, locationId: null, systemId: null, deviceRole: null };
+  emitAccessControlEventFromPlaceContext(placeCtx, {
+    source: "isapi",
+    deviceId: deviceId || null,
+    isapiPayload: payload,
+  });
   if (id != null) {
     const ac = payload || {};
     const personName =
@@ -85,9 +95,6 @@ async function persistIsapiEvent(options) {
       ac.employeeNoString ||
       ac.cardNo ||
       "";
-    const placeCtx = deviceId
-      ? await loadPlaceContextByAccessDeviceId(deviceId)
-      : { placeLabel: null, locationId: null, systemId: null, deviceRole: null };
     const action = resolveOperationalAccessSemantics(ac, {
       deviceRole: placeCtx.deviceRole,
     });

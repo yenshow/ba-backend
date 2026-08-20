@@ -585,6 +585,26 @@ async function ensureAccessSecurityLocationSystemType(pool) {
   `);
 }
 
+/** 既有庫：警報電梯呼梯連動表（location_ids 空＝全部電梯地點） */
+async function ensureAlertElevatorCallLinkagesTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS alert_elevator_call_linkages (
+      id SERIAL PRIMARY KEY,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+      location_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(rule_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_alert_elevator_call_linkages_enabled ON alert_elevator_call_linkages(enabled);
+    CREATE INDEX IF NOT EXISTS idx_alert_elevator_call_linkages_rule_id ON alert_elevator_call_linkages(rule_id);
+  `);
+}
+
 /** 既有庫：警報 SIP 室內振鈴連動表 */
 async function ensureAlertSipRingLinkagesTable(pool) {
   await pool.query(`
@@ -677,6 +697,7 @@ async function applySchemaPatches(pool) {
   await ensureAccessSecurityLocationSystemType(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
   await ensureAlertSipRingLinkagesTable(pool);
+  await ensureAlertElevatorCallLinkagesTable(pool);
   await ensureIsapiFaceContrastEventsTable(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
   const deviceModelSync = await syncDeviceModelCatalog(pool);
@@ -700,6 +721,7 @@ module.exports = {
   ensureAccessSecurityLocationSystemType,
   ensureAlertAccessDoorDeviceIds,
   ensureAlertSipRingLinkagesTable,
+  ensureAlertElevatorCallLinkagesTable,
   ensureIsapiFaceContrastEventsTable,
   migrateLegacySensorModelConfigs,
   applySchemaPatches,

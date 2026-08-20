@@ -559,13 +559,45 @@ function emitEnvironmentReading(data) {
   });
 }
 
-/** 門禁事件寫入後推送，前端人流統計頁監聽 people-counting:access-control:event 並重新載入 */
-function emitIsapiAccessEvent() {
-  safeEmit(
-    "people-counting:access-control:event",
-    { source: "isapi", timestamp: new Date().toISOString() },
-    { logMessage: "門禁事件已寫入" },
-  );
+/** 門禁事件寫入／手動開門後推送；前端監聽 people-counting:access-control:event */
+function emitIsapiAccessEvent(context) {
+  const ctx = context && typeof context === "object" ? context : {};
+  const payload = {
+    source: ctx.source === "manual" ? "manual" : "isapi",
+    timestamp: new Date().toISOString(),
+  };
+  const locationId =
+    ctx.locationId != null && Number.isFinite(Number(ctx.locationId))
+      ? Math.trunc(Number(ctx.locationId))
+      : null;
+  const deviceId =
+    ctx.deviceId != null && Number.isFinite(Number(ctx.deviceId))
+      ? Math.trunc(Number(ctx.deviceId))
+      : null;
+  const deviceRole =
+    ctx.deviceRole === "entry" || ctx.deviceRole === "exit"
+      ? ctx.deviceRole
+      : undefined;
+  const eventCameraDeviceId =
+    ctx.eventCameraDeviceId != null &&
+    Number.isFinite(Number(ctx.eventCameraDeviceId)) &&
+    Number(ctx.eventCameraDeviceId) > 0
+      ? Math.trunc(Number(ctx.eventCameraDeviceId))
+      : undefined;
+
+  if (locationId != null) payload.locationId = locationId;
+  if (deviceId != null) payload.deviceId = deviceId;
+  if (deviceRole) payload.deviceRole = deviceRole;
+  if (eventCameraDeviceId != null) payload.eventCameraDeviceId = eventCameraDeviceId;
+  if (ctx.zoneName) payload.zoneName = String(ctx.zoneName).trim();
+  if (ctx.locationName) payload.locationName = String(ctx.locationName).trim();
+  if (ctx.eventLabel) payload.eventLabel = String(ctx.eventLabel).trim();
+
+  safeEmit("people-counting:access-control:event", payload, {
+    logMessage: payload.eventCameraDeviceId
+      ? `門禁事件（攝影機 ${payload.eventCameraDeviceId}）`
+      : "門禁事件已寫入",
+  });
 }
 
 /** 營運事件寫入後推送；首頁／營運事件頁監聽後即時更新 */

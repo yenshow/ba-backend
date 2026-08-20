@@ -13,6 +13,10 @@ const alertSipRingLinkageService = require("../services/alerts/alertSipRingLinka
 const {
   MAX_DEVICE_IDS: SIP_RING_LINKAGE_MAX_DEVICE_IDS,
 } = alertSipRingLinkageService;
+const alertElevatorCallLinkageService = require("../services/alerts/alertElevatorCallLinkageService");
+const {
+  MAX_LOCATION_IDS: ELEVATOR_CALL_LINKAGE_MAX_LOCATION_IDS,
+} = alertElevatorCallLinkageService;
 const alertEmailSubscriptionService = require("../services/alerts/alertEmailSubscriptionService");
 const db = require("../database/db");
 const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
@@ -65,26 +69,30 @@ const assertLinkageLicensedForUpsert = async (linkage, featureKey) => {
 };
 
 async function getFilteredIntegrationsForRule(ruleId) {
-  const [doLinkage, cameraRaw, accessRaw, sipRaw, emailSubscription] =
+  const [doLinkage, cameraRaw, accessRaw, sipRaw, elevatorRaw, emailSubscription] =
     await Promise.all([
       alertLinkageService.getSingleLinkageByRuleId(ruleId),
       alertCameraLinkageService.getByRuleId(ruleId),
       alertAccessDoorLinkageService.getByRuleId(ruleId),
       alertSipRingLinkageService.getByRuleId(ruleId),
+      alertElevatorCallLinkageService.getByRuleId(ruleId),
       alertEmailSubscriptionService.getByRuleId(ruleId),
     ]);
 
-  const [cameraLinkage, accessDoorLinkage, sipRingLinkage] = await Promise.all([
-    filterLinkageByLicense(cameraRaw, "surveillance"),
-    filterLinkageByLicense(accessRaw, "people_counting"),
-    filterLinkageByLicense(sipRaw, "access_security"),
-  ]);
+  const [cameraLinkage, accessDoorLinkage, sipRingLinkage, elevatorCallLinkage] =
+    await Promise.all([
+      filterLinkageByLicense(cameraRaw, "surveillance"),
+      filterLinkageByLicense(accessRaw, "people_counting"),
+      filterLinkageByLicense(sipRaw, "access_security"),
+      filterLinkageByLicense(elevatorRaw, "elevator"),
+    ]);
 
   return {
     doLinkage,
     cameraLinkage,
     accessDoorLinkage,
     sipRingLinkage,
+    elevatorCallLinkage,
     emailSubscription,
   };
 }
@@ -201,6 +209,33 @@ function validateRuleIntegrationsPayload(body) {
         }
         if (unique.length > SIP_RING_LINKAGE_MAX_DEVICE_IDS) {
           return `sipRingLinkage.device_ids 最多 ${SIP_RING_LINKAGE_MAX_DEVICE_IDS} 台`;
+        }
+      }
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(b, "elevatorCallLinkage")) {
+    if (b.elevatorCallLinkage && typeof b.elevatorCallLinkage !== "object") {
+      return "elevatorCallLinkage 需為物件或 null";
+    }
+    if (b.elevatorCallLinkage) {
+      const a = b.elevatorCallLinkage || {};
+      if (a.enabled !== undefined && typeof a.enabled !== "boolean") {
+        return "elevatorCallLinkage.enabled 需為布林值";
+      }
+      if (a.location_ids !== undefined) {
+        if (!Array.isArray(a.location_ids)) {
+          return "elevatorCallLinkage.location_ids 需為陣列";
+        }
+        const ids = a.location_ids
+          .map((v) => Number(v))
+          .filter((n) => Number.isInteger(n) && n > 0);
+        const unique = [...new Set(ids)];
+        if (unique.length !== ids.length) {
+          return "elevatorCallLinkage.location_ids 不可重複";
+        }
+        if (unique.length > ELEVATOR_CALL_LINKAGE_MAX_LOCATION_IDS) {
+          return `elevatorCallLinkage.location_ids 最多 ${ELEVATOR_CALL_LINKAGE_MAX_LOCATION_IDS} 筆`;
         }
       }
     }
@@ -642,12 +677,19 @@ router.post(
       return res.sendSuccess({});
     }
 
-    const [doLinkages, cameraLinkages, accessDoorLinkages, sipRingLinkages, emailSubs] =
-      await Promise.all([
+    const [
+      doLinkages,
+      cameraLinkages,
+      accessDoorLinkages,
+      sipRingLinkages,
+      elevatorCallLinkages,
+      emailSubs,
+    ] = await Promise.all([
         alertLinkageService.getLatestLinkagesByRuleIds(ids),
         alertCameraLinkageService.getByRuleIds(ids),
         alertAccessDoorLinkageService.getByRuleIds(ids),
         alertSipRingLinkageService.getByRuleIds(ids),
+        alertElevatorCallLinkageService.getByRuleIds(ids),
         alertEmailSubscriptionService.getByRuleIds(ids),
       ]);
 
@@ -658,6 +700,7 @@ router.post(
         cameraLinkage: null,
         accessDoorLinkage: null,
         sipRingLinkage: null,
+        elevatorCallLinkage: null,
         emailSubscription: null,
       };
     }
@@ -686,6 +729,14 @@ router.post(
       result[rid].sipRingLinkage = await filterLinkageByLicense(
         s,
         "access_security",
+      );
+    }
+    for (const e of elevatorCallLinkages || []) {
+      const rid = e?.rule_id != null ? Number(e.rule_id) : null;
+      if (!rid || !result[rid]) continue;
+      result[rid].elevatorCallLinkage = await filterLinkageByLicense(
+        e,
+        "elevator",
       );
     }
     for (const e of emailSubs || []) {
@@ -717,7 +768,7 @@ router.post(
   }),
 );
 
-// 取得單一規則的整合設定（連動 DO / 攝影機 / 門禁全開 / SIP 語音廣播 / Email）
+// 取得單一規則的整合設定（連動 DO / 攝影機 / 門禁全開 / SIP 語音廣播 / 電梯呼梯 / Email）
 router.get(
   "/rules/:id/integrations",
   requirePermission("system.alert_log"),
@@ -797,6 +848,20 @@ router.put(
         await alertSipRingLinkageService.upsertForRule(
           ruleId,
           body.sipRingLinkage,
+          userId,
+        );
+      }
+    }
+
+    // 電梯呼梯至 1F（location_ids 空＝全部電梯地點）
+    if (Object.prototype.hasOwnProperty.call(body, "elevatorCallLinkage")) {
+      if (!body.elevatorCallLinkage) {
+        await alertElevatorCallLinkageService.deleteForRule(ruleId);
+      } else {
+        await assertLinkageLicensedForUpsert(body.elevatorCallLinkage, "elevator");
+        await alertElevatorCallLinkageService.upsertForRule(
+          ruleId,
+          body.elevatorCallLinkage,
           userId,
         );
       }

@@ -223,10 +223,12 @@ const controlGatewayForElevatorRequest = async (
       gatewayIndex,
       command,
     });
-    void recordPlatformCallElevator({
-      deviceId: Number(deviceId),
-      gatewayIndex,
-    }).catch(() => {});
+    if (!options.skipPlatformCallAudit) {
+      void recordPlatformCallElevator({
+        deviceId: Number(deviceId),
+        gatewayIndex,
+      }).catch(() => {});
+    }
     if (!callContext) return bridgeResult;
     return {
       ...bridgeResult,

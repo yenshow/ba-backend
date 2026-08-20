@@ -26,6 +26,9 @@ const {
   validatePeopleCountingSystemConfig,
 } = require("../peopleCounting/peopleCountingValidation");
 const {
+  parseOptionalEventCameraDeviceId,
+} = require("../peopleCounting/peopleCountingConfig");
+const {
   getPrimaryControllerDeviceId,
 } = require("./controllerBindingUtils");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
@@ -92,6 +95,12 @@ function peopleCountingRowConfigToMergeInput(raw) {
     cameraMode: c.camera_mode,
     accessControlGroups: c.access_control_groups,
     statsResetAt: c.stats_reset_at ?? c.statsResetAt,
+    entryEventCameraDeviceId: parseOptionalEventCameraDeviceId(
+      c.entry_event_camera_device_id,
+    ),
+    exitEventCameraDeviceId: parseOptionalEventCameraDeviceId(
+      c.exit_event_camera_device_id,
+    ),
   };
 }
 
@@ -229,6 +238,12 @@ function buildSystemConfig(systemType, config) {
       } = require("../peopleCounting/peopleCountingConfig");
       const resetFields = parsePeopleCountingConfigFields(config);
       const isFace = resetFields.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
+      const entryEventCam = parseOptionalEventCameraDeviceId(
+        config.entryEventCameraDeviceId,
+      );
+      const exitEventCam = parseOptionalEventCameraDeviceId(
+        config.exitEventCameraDeviceId,
+      );
       return {
         person_group_ids: config.personGroupIds || [],
         entry_door_ids: Array.isArray(config.entryDoorIds)
@@ -262,6 +277,12 @@ function buildSystemConfig(systemType, config) {
           return cols.length > 0 ? cols : undefined;
         })(),
         stats_reset_at: resetFields.statsResetAt ?? config.statsResetAt ?? undefined,
+        ...(entryEventCam !== undefined
+          ? { entry_event_camera_device_id: entryEventCam }
+          : {}),
+        ...(exitEventCam !== undefined
+          ? { exit_event_camera_device_id: exitEventCam }
+          : {}),
       };
     }
 

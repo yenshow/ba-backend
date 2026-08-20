@@ -83,10 +83,21 @@ function resolveOperationalAccessSemantics(payload, { deviceRole } = {}) {
   return "門禁事件";
 }
 
+/** 門禁事件調閱跳窗文案（進入／離開／失敗） */
+function resolveAccessEventPopupLabel(payload, { deviceRole } = {}) {
+  const sub = extractSubEventType(payload);
+  if (sub != null && (FAIL_SUBS.has(sub) || sub === 2078 || sub === 2079)) {
+    return "失敗";
+  }
+  if (deviceRole === "exit") return "離開";
+  return "進入";
+}
+
 module.exports = {
   extractSubEventType,
   resolveAccessControlEvent,
   resolveVerifyMethodLabel,
   resolveOperationalAccessSemantics,
+  resolveAccessEventPopupLabel,
   yscpEventLabel,
 };

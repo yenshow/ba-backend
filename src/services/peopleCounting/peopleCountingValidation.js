@@ -5,6 +5,19 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
 const { ensureIntArray } = require("../location/locationShared");
+
+const optionalPositiveDeviceId = (value, label) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throwApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      `${label}須為有效設備 ID`,
+    );
+  }
+  return Math.trunc(n);
+};
 const {
   normalizeCameraMode,
   CAMERA_MODE,
@@ -29,6 +42,8 @@ function validateLocationData(locationData, isUpdate = false) {
     entryCameraDeviceIds,
     exitCameraDeviceIds,
     cameraMode,
+    entryEventCameraDeviceId,
+    exitEventCameraDeviceId,
   } = locationData;
 
   if (!name?.trim()) {
@@ -175,6 +190,14 @@ function validateLocationData(locationData, isUpdate = false) {
           );
         }
       }
+      optionalPositiveDeviceId(
+        entryEventCameraDeviceId,
+        "入口事件調閱攝影機",
+      );
+      optionalPositiveDeviceId(
+        exitEventCameraDeviceId,
+        "出口事件調閱攝影機",
+      );
     }
     if (effectiveDataSource === "isapi_camera") {
       const mode = normalizeCameraMode(cameraMode);
@@ -268,6 +291,8 @@ function validatePeopleCountingSystemConfig(systemConfig, context) {
       exitCameraDeviceIds: ensureIntArray(cfg.exit_camera_device_ids),
       preferRegion: cfg.prefer_region,
       cameraMode: normalizeCameraMode(cfg.camera_mode),
+      entryEventCameraDeviceId: cfg.entry_event_camera_device_id,
+      exitEventCameraDeviceId: cfg.exit_event_camera_device_id,
     },
     context.isUpdate === true,
   );

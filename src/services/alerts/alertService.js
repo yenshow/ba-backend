@@ -5,6 +5,7 @@ const websocketService = require("../websocket/websocketService");
 const alertLinkageService = require("./alertLinkageService");
 const alertAccessDoorLinkageService = require("./alertAccessDoorLinkageService");
 const alertSipRingLinkageService = require("./alertSipRingLinkageService");
+const alertElevatorCallLinkageService = require("./alertElevatorCallLinkageService");
 const { notifyNewAlertByEmail } = require("./alertEmailNotifier");
 const logger = require("../../utils/logger");
 const { getDeviceTypeName } = require("../../constants/deviceTypes");
@@ -896,6 +897,13 @@ async function createAlert(alertData) {
           .catch((err) => {
             alertLogger.warn(
               `[alertService] SIP 語音廣播連動失敗 | alertId=${enrichedAlert?.id} | ${err?.message || String(err)}`,
+            );
+          });
+        alertElevatorCallLinkageService
+          .processElevatorCallLinkagesForNewAlert(enrichedAlert)
+          .catch((err) => {
+            alertLogger.warn(
+              `[alertService] 電梯呼梯連動失敗 | alertId=${enrichedAlert?.id} | ${err?.message || String(err)}`,
             );
           });
       });
