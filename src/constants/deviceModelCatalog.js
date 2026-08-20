@@ -137,7 +137,7 @@ const DEVICE_MODEL_CATALOG = [
     typeCode: "camera",
     description: "通用 RTSP 攝影機",
     config: {
-      rtsp_url_template: "rtsp://{username}:{password}@{ip}/stream2",
+      rtsp_url_template: "rtsp://{username}:{password}@{ip}:554/stream2",
     },
   },
   {

@@ -1,7 +1,5 @@
-#!/usr/bin/env node
-
 /**
- * 可攜式 PostgreSQL 啟動（Windows 部署／精靈共用）
+ * 可攜式 PostgreSQL 啟動／停止（Windows 部署／精靈共用；由 portable-postgres.js 呼叫）
  */
 
 const fs = require("fs");

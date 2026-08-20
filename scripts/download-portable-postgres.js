@@ -319,7 +319,7 @@ async function main() {
   repairWindowsPostgresRuntimeAcl();
   startPortablePostgres();
   setupDatabase();
-  // ① 內已 bootstrap；postmaster 留給 ② 使用。② 成功後由精靈 stop-portable-postgres 再交 SCM。
+  // ① 內已 bootstrap；postmaster 留給 ② 使用。② 成功後由精靈 portable-postgres.js stop 再交 SCM。
 }
 
 if (require.main === module) {

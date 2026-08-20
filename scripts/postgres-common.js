@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * PostgreSQL 可攜式安裝共用模組（Windows 打包／部署）
  * 提供路徑、配置讀取等共用功能

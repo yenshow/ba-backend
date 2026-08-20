@@ -3,8 +3,11 @@
  *
  * Runbook：docs/10-setting/troubleshooting-isapi-events.md
  *
- * 用法：修改 SCRIPT_CONFIG 後執行（測人臉時請先停掉後端佈防，避免搶連線）
- *   node scripts/isapiSubscribeProde.js
+ * 用法（測人臉時請先停掉後端佈防，避免搶連線）：
+ *   node scripts/isapiSubscribeProbe.js
+ *   npm run probe:isapi
+ *
+ * 現場參數優先用環境變數覆寫 SCRIPT_CONFIG（見 runbook §2.3）。
  *
  * fullDump=true：業務事件印完整 JSON／XML（預設省略 modelData base64）
  * omitModelData=false：連 modelData 也印出（輸出會很長）
@@ -51,6 +54,45 @@ const ensureInt = (v) => {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 };
 
+const envText = (name) => {
+  const raw = process.env[name];
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  return trimmed === "" ? null : trimmed;
+};
+
+const applyEnvOverrides = (defaults) => {
+  const next = { ...defaults };
+  const host = envText("ISAPI_HOST");
+  const username = envText("ISAPI_USERNAME");
+  const password = envText("ISAPI_PASSWORD");
+  const subscribeMode = envText("ISAPI_SUBSCRIBE_MODE");
+  const eventTypes = envText("ISAPI_EVENT_TYPES");
+  const port = ensureInt(process.env.ISAPI_PORT);
+  const channelId = ensureInt(process.env.ISAPI_CHANNEL_ID);
+  const exitAfterMs = ensureInt(process.env.ISAPI_EXIT_AFTER_MS);
+
+  if (host) next.host = host;
+  if (port != null) next.port = port;
+  if (username) next.username = username;
+  if (password) next.password = password;
+  if (subscribeMode) next.subscribeMode = subscribeMode;
+  if (channelId != null) next.channelId = channelId;
+  if (eventTypes) {
+    next.eventTypes = eventTypes
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (exitAfterMs != null) next.exitAfterMs = exitAfterMs;
+  if (envText("ISAPI_PROBE_SHOW_KEEPALIVE") === "1") {
+    next.showKeepAlive = true;
+  }
+  return next;
+};
+
+const CONFIG = applyEnvOverrides(SCRIPT_CONFIG);
+
 const toPreviewText = (buf, maxLen = 800) => {
   const raw = Buffer.isBuffer(buf) ? buf.toString("utf8") : String(buf || "");
   const s = raw.replace(/^\uFEFF/, "").trim();
@@ -95,7 +137,7 @@ const buildSubscribeXmlList = ({
   channelId,
   eventTypes,
   heartbeat,
-  xmlns = SCRIPT_CONFIG.xmlNs,
+  xmlns = CONFIG.xmlNs,
 }) => {
   const ch = ensureInt(channelId);
   const includeChannels = ch != null;
@@ -123,15 +165,15 @@ const buildSubscribeXmlList = ({
 };
 
 const buildSubscribeXml = () => {
-  const mode = String(SCRIPT_CONFIG.subscribeMode || "all")
+  const mode = String(CONFIG.subscribeMode || "all")
     .trim()
     .toLowerCase();
   if (mode !== "list") return SUBSCRIBE_XML_ALL;
   return buildSubscribeXmlList({
-    channelId: SCRIPT_CONFIG.channelId,
-    eventTypes: SCRIPT_CONFIG.eventTypes,
-    heartbeat: ensureInt(SCRIPT_CONFIG.heartbeat) ?? (mode === "list" ? 6 : 30),
-    xmlns: String(SCRIPT_CONFIG.xmlNs || "").trim() || SCRIPT_CONFIG.xmlNs,
+    channelId: CONFIG.channelId,
+    eventTypes: CONFIG.eventTypes,
+    heartbeat: ensureInt(CONFIG.heartbeat) ?? (mode === "list" ? 6 : 30),
+    xmlns: String(CONFIG.xmlNs || "").trim() || CONFIG.xmlNs,
   });
 };
 
@@ -303,11 +345,11 @@ const main = async () => {
     showKeepAlive,
     fullDump,
     omitModelData,
-  } = SCRIPT_CONFIG;
-  const port = ensureInt(SCRIPT_CONFIG.port) ?? 80;
+  } = CONFIG;
+  const port = ensureInt(CONFIG.port) ?? 80;
 
   if (!String(password ?? "").trim()) {
-    throw new Error("請於 SCRIPT_CONFIG 填入 password。");
+    throw new Error("請於 SCRIPT_CONFIG 或 ISAPI_PASSWORD 填入 password。");
   }
 
   const xmlBody = buildSubscribeXml();
@@ -398,7 +440,7 @@ const main = async () => {
 
 main().catch((err) => {
   console.error("[ISAPI Probe] failed:", err?.message || String(err));
-  if (/HTTP 500/.test(err?.message) && SCRIPT_CONFIG.subscribeMode === "list") {
+  if (/HTTP 500/.test(err?.message) && CONFIG.subscribeMode === "list") {
     console.error(
       '[ISAPI Probe] 提示：list 模式 500 可改 subscribeMode=all；PeopleCounting 用 eventTypes=["PeopleCounting"]、channelId=1。',
     );

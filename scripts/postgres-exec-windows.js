@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * Windows 子程序執行輔助（UTF-8 日誌、執行期資料目錄 ACL）
  */

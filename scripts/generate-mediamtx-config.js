@@ -4,18 +4,23 @@
  * 使用情境：
  * - 本專案統一以 DB devices(camera) 產生 `mediamtx.generated.yml` 作為啟動設定
  * - 必須在啟動前把所有攝影機 paths 預先寫入 config，WHEP 才能成功
+ * - `start-mediamtx.js` require 本模組；亦可 `npm run mediamtx:generate`
  */
-async function main() {
+async function generateMediaMtxConfig() {
   // eslint-disable-next-line global-require
   const sync = require("../src/services/communication/mediaMTXConfigSyncService");
   const { pathsCount } = await sync.generateConfigFile();
   console.log(`已產生 mediamtx\\mediamtx.generated.yml（paths=${pathsCount}）`);
+  return { pathsCount };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error("產生 MediaMTX 設定失敗:", err?.message || err);
-    process.exit(1);
-  });
+module.exports = { generateMediaMtxConfig };
 
+if (require.main === module) {
+  generateMediaMtxConfig()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error("產生 MediaMTX 設定失敗:", err?.message || err);
+      process.exit(1);
+    });
+}
