@@ -16,6 +16,9 @@ const { getUploadsDir, formatUploadTimestampForFilename } = require("../../utils
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryVehicle } = require("../operationalEvents/operationalEventCopy");
 const { formatPlaceLabel } = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  emitVehicleBarrierCameraEventFromPlaceContext,
+} = require("./vehicleBarrierCameraResolver");
 
 async function resolveDeviceDisplayName(deviceId) {
   if (!deviceId) return null;
@@ -96,6 +99,10 @@ async function persistAnprEvent(options) {
   });
 
   const ids = [];
+  /** @type {typeof locationTargets[number]|null} */
+  let primaryInserted = null;
+  /** @type {number[]} */
+  const insertedLocationIds = [];
   for (const target of locationTargets) {
     const policy = await getLocationIngestPolicy(target.locationId);
     if (
@@ -134,6 +141,8 @@ async function persistAnprEvent(options) {
     const id = rows?.[0]?.id;
     if (id != null) {
       ids.push(id);
+      insertedLocationIds.push(target.locationId);
+      if (!primaryInserted) primaryInserted = target;
       void operationalEventService.recordEvent({
         source: "vehicle_access",
         event_kind: "vehicle",
@@ -156,12 +165,23 @@ async function persistAnprEvent(options) {
     }
   }
 
-  if (ids.length > 0) {
-    websocketService.emitVehicleAccessIsapiEvent({
-      deviceId,
-      locationIds: locationTargets.map((t) => t.locationId),
-      eventTime: parsed.dateTime,
-    });
+  if (ids.length > 0 && primaryInserted) {
+    const deviceRole =
+      Number(primaryInserted.laneType) === 2 ? "exit" : "entry";
+    emitVehicleBarrierCameraEventFromPlaceContext(
+      {
+        locationId: primaryInserted.locationId ?? null,
+        zoneName: primaryInserted.zoneName ?? null,
+        locationName: primaryInserted.locationName ?? null,
+        deviceRole,
+      },
+      {
+        source: "isapi_camera",
+        deviceId,
+        locationIds: insertedLocationIds,
+        eventTime: parsed.dateTime,
+      },
+    );
   }
 
   return { inserted: ids.length > 0, ids };

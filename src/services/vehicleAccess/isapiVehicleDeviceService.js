@@ -13,6 +13,12 @@ const {
   normalizeListTypeToApi,
   normalizeListTypeToDevice,
 } = require("./isapiVehicleXmlParser");
+const {
+  loadPlaceContextByVehicleCameraDeviceId,
+} = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  emitVehicleBarrierCameraEventFromPlaceContext,
+} = require("./vehicleBarrierCameraResolver");
 
 const VALID_CTRL_MODES = new Set(["open", "close", "lock", "unlock"]);
 const VALID_OPERATION_TYPES = new Set(["add", "modify"]);
@@ -430,6 +436,16 @@ async function controlBarrierGate(deviceId, options = {}) {
     channelId,
     ctrlMode,
   });
+
+  if (ctrlMode === "open") {
+    const placeCtx = await loadPlaceContextByVehicleCameraDeviceId(deviceId);
+    if (placeCtx?.locationId) {
+      emitVehicleBarrierCameraEventFromPlaceContext(placeCtx, {
+        source: "manual",
+        deviceId,
+      });
+    }
+  }
 
   return { success: true, channelId, ctrlMode };
 }

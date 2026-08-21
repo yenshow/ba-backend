@@ -172,10 +172,82 @@ async function loadPlaceContextByAccessDeviceId(deviceId) {
   return pickPlaceFromRow(rows?.[0]);
 }
 
+/**
+ * 車牌／柵欄攝影機 → vehicle_access 地點（entry／exit_camera_device_ids）
+ * @returns {Promise<ReturnType<typeof pickPlaceFromRow>>}
+ */
+async function loadPlaceContextByVehicleCameraDeviceId(deviceId) {
+  const id = toPositiveInt(deviceId);
+  if (!id) {
+    return {
+      systemId: null,
+      locationId: null,
+      zoneName: null,
+      locationName: null,
+      placeLabel: null,
+      systemConfig: null,
+      deviceRole: null,
+    };
+  }
+
+  const rows = await db.query(
+    `
+    SELECT
+      ls.id AS system_id,
+      ls.location_id,
+      ls.system_config,
+      l.name AS location_name,
+      z.name AS zone_name,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(
+            COALESCE(ls.system_config->'entry_camera_device_ids', '[]'::jsonb)
+          ) AS x(id)
+          WHERE x.id::int = ?
+        ) THEN 'entry'
+        WHEN EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(
+            COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb)
+          ) AS x(id)
+          WHERE x.id::int = ?
+        ) THEN 'exit'
+        ELSE NULL
+      END AS device_role
+    FROM location_systems ls
+    LEFT JOIN locations l ON ls.location_id = l.id
+    LEFT JOIN zones z ON l.zone_id = z.id
+    WHERE ls.system_type = 'vehicle_access'
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(
+            COALESCE(ls.system_config->'entry_camera_device_ids', '[]'::jsonb)
+          ) AS x(id)
+          WHERE x.id::int = ?
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(
+            COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb)
+          ) AS x(id)
+          WHERE x.id::int = ?
+        )
+      )
+    ORDER BY ls.id
+    LIMIT 1
+    `,
+    [id, id, id, id],
+  );
+  return pickPlaceFromRow(rows?.[0]);
+}
+
 module.exports = {
   toPositiveInt,
   formatPlaceLabel,
   loadPlaceContextByLocationId,
   loadSystemPlaceContext,
   loadPlaceContextByAccessDeviceId,
+  loadPlaceContextByVehicleCameraDeviceId,
 };

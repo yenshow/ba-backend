@@ -668,17 +668,58 @@ function emitLadderSdkEvent(data) {
   );
 }
 
-/** 車輛 ISAPI ANPR 事件寫入後推送 */
+/** 車輛 ISAPI ANPR／手動開閘後推送；eventCameraDeviceId 有值時前端跳圖 */
 function emitVehicleAccessIsapiEvent(data) {
-  safeEmit(
-    "vehicle-access:isapi-camera:event",
-    {
-      ...(data || {}),
-      source: "isapi_camera",
-      timestamp: new Date().toISOString(),
-    },
-    { logMessage: "車輛 ANPR 事件已寫入" },
-  );
+  const ctx = data && typeof data === "object" ? data : {};
+  const source = ctx.source === "manual" ? "manual" : "isapi_camera";
+  const payload = {
+    source,
+    timestamp: new Date().toISOString(),
+  };
+
+  const locationId =
+    ctx.locationId != null && Number.isFinite(Number(ctx.locationId))
+      ? Math.trunc(Number(ctx.locationId))
+      : null;
+  const deviceId =
+    ctx.deviceId != null && Number.isFinite(Number(ctx.deviceId))
+      ? Math.trunc(Number(ctx.deviceId))
+      : null;
+  const deviceRole =
+    ctx.deviceRole === "entry" || ctx.deviceRole === "exit"
+      ? ctx.deviceRole
+      : undefined;
+  const eventCameraDeviceId =
+    ctx.eventCameraDeviceId != null &&
+    Number.isFinite(Number(ctx.eventCameraDeviceId)) &&
+    Number(ctx.eventCameraDeviceId) > 0
+      ? Math.trunc(Number(ctx.eventCameraDeviceId))
+      : undefined;
+
+  if (locationId != null) payload.locationId = locationId;
+  if (Array.isArray(ctx.locationIds) && ctx.locationIds.length > 0) {
+    payload.locationIds = ctx.locationIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.trunc(id));
+  }
+  if (deviceId != null) payload.deviceId = deviceId;
+  if (deviceRole) payload.deviceRole = deviceRole;
+  if (eventCameraDeviceId != null) {
+    payload.eventCameraDeviceId = eventCameraDeviceId;
+  }
+  if (ctx.zoneName) payload.zoneName = String(ctx.zoneName).trim();
+  if (ctx.locationName) payload.locationName = String(ctx.locationName).trim();
+  if (ctx.eventLabel) payload.eventLabel = String(ctx.eventLabel).trim();
+  if (ctx.eventTime != null && String(ctx.eventTime).trim() !== "") {
+    payload.eventTime = ctx.eventTime;
+  }
+
+  safeEmit("vehicle-access:isapi-camera:event", payload, {
+    logMessage: payload.eventCameraDeviceId
+      ? `車輛事件（攝影機 ${payload.eventCameraDeviceId}）`
+      : "車輛 ANPR 事件已寫入",
+  });
 }
 
 function emitPermissionsUpdated(userId) {
