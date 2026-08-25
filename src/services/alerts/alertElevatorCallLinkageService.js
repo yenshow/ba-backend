@@ -149,7 +149,7 @@ const recordCallOe = ({
     location_id: locationId,
     system_id: systemId,
     device_id: deviceId,
-    summary: formatBusinessSummary({
+    message: formatBusinessSummary({
       placeLabel,
       action: success ? "訪客呼梯" : "訪客呼梯失敗",
       detail: TARGET_FLOOR_LABEL,

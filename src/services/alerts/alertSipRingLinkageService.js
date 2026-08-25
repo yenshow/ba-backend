@@ -183,7 +183,7 @@ async function processSipRingLinkagesForNewAlert(alert) {
           location_id: indoorPlace?.locationId ?? alert?.location_id ?? null,
           system_id: indoorPlace?.systemId ?? null,
           device_id: Number(device.id),
-          summary: invite.ok
+          message: invite.ok
             ? `${actionLabel} ${placeLabel}`
             : `${actionLabel}失敗 ${placeLabel}`,
           payload: {

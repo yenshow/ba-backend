@@ -101,11 +101,11 @@ async function persistIsapiEvent(options) {
     void operationalEventService.recordEvent({
       source: "people_counting",
       event_kind: "access",
-      occurred_at: eventTime || new Date().toISOString(),
+      created_at: eventTime || new Date().toISOString(),
       location_id: placeCtx.locationId,
       system_id: placeCtx.systemId,
       device_id: deviceId || null,
-      summary: summaryAccessEvent({
+      message: summaryAccessEvent({
         personName,
         placeLabel: placeCtx.placeLabel,
         action,

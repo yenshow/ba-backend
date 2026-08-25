@@ -16,10 +16,10 @@ function transformOperationalEventsToReportFormat(rows) {
       payloadSummary = "";
     }
     return {
-      發生時間: formatDateTimeZhTW(r.occurred_at),
+      發生時間: formatDateTimeZhTW(r.created_at),
       來源: r.source ?? "",
       事件類型: r.event_kind ?? "",
-      摘要: r.summary ?? "",
+      摘要: r.message ?? "",
       區域: r.zone_name ?? "",
       地點: r.location_name ?? "",
       設備: r.device_name ?? "",

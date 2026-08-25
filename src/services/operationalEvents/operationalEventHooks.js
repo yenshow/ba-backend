@@ -293,7 +293,7 @@ async function recordControlWriteEvent({
     // new_value 欄位為 BOOLEAN；AO 數值改放 payload，此處留 null
     new_value: isHolding ? null : Boolean(value),
     bit_key: bitKey,
-    summary:
+    message:
       summary ||
       summaryControlWrite({
         source: controlScope,

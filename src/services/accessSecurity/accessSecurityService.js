@@ -268,7 +268,7 @@ async function ringLocation(locationId, { actorUserId = null } = {}) {
     location_id: lid,
     system_id: systemId,
     device_id: Number(device.id),
-    summary: inviteResult.played
+    message: inviteResult.played
       ? `手動語音廣播 ${locationName || lid}`
       : inviteResult.ok
         ? `手動振鈴 ${locationName || lid}`
@@ -305,9 +305,9 @@ async function getZoneLogsLatest(zoneId, { limit = 5 } = {}) {
   const logs = await db.query(
     `
     SELECT
-      oe.id, oe.occurred_at, oe.source, oe.event_kind,
+      oe.id, oe.created_at, oe.source, oe.event_kind,
       oe.location_id, oe.system_id, oe.device_id,
-      oe.summary, oe.payload,
+      oe.message, oe.payload,
       d.name AS device_name,
       l.name AS location_name,
       z.name AS zone_name
@@ -338,7 +338,7 @@ async function getZoneLogsLatest(zoneId, { limit = 5 } = {}) {
           WHERE l2.zone_id = ? AND ls.system_type = 'access_security'
         )
       )
-    ORDER BY oe.occurred_at DESC, oe.id DESC
+    ORDER BY oe.created_at DESC, oe.id DESC
     LIMIT ?
     `,
     [sources[0], sources[1], zid, zid, zid, lim],

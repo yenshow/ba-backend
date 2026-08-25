@@ -304,7 +304,7 @@ const cmdSeedOperational = async (count) => {
   for (let i = 1; i <= count; i += 1) {
     await db.query(
       `INSERT INTO operational_events (
-         occurred_at, source, event_kind, summary, payload
+         created_at, source, event_kind, message, payload
        ) VALUES (
          CURRENT_TIMESTAMP, 'system', 'control_write', ?, ?::jsonb
        )`,

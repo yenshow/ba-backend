@@ -381,8 +381,8 @@ async function getOperationalEventsForBackup(beforeDate) {
      LEFT JOIN locations l ON l.id = e.location_id
      LEFT JOIN zones z ON z.id = l.zone_id
      LEFT JOIN users u ON u.id = e.actor_user_id
-     WHERE e.occurred_at < $1
-     ORDER BY e.occurred_at ASC`,
+     WHERE e.created_at < $1
+     ORDER BY e.created_at ASC`,
     [beforeDate],
   );
   return rows || [];

@@ -327,17 +327,17 @@ async function runBackup() {
       );
     }
 
-    const opDelete = buildDeleteSql("operational_events", "occurred_at");
+    const opDelete = buildDeleteSql("operational_events", "created_at");
     const operationalResult = await runBackupJob("營運事件", async () =>
       backupService.backupTableDual({
         tableName: "operational_events",
         rows: await backupService.getOperationalEventsForBackup(
           archiveBeforeDate,
         ),
-        dateField: "occurred_at",
+        dateField: "created_at",
         category: "operationalEvents",
         csvTransform: transformOperationalEventsToReportFormat,
-        selectColdTimestampsSql: `SELECT occurred_at FROM operational_events WHERE occurred_at < $1`,
+        selectColdTimestampsSql: `SELECT created_at FROM operational_events WHERE created_at < $1`,
         selectColdParams: [deleteBeforeDate],
         ...opDelete,
       }),

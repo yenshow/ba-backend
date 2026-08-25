@@ -151,10 +151,10 @@ async function persistPeopleCountingEvent(options) {
       void operationalEventService.recordEvent({
         source: "people_counting",
         event_kind: "access",
-        occurred_at: eventTime,
+        created_at: eventTime,
         location_id: locationId,
         device_id: deviceId,
-        summary: summaryPeopleCounting({
+        message: summaryPeopleCounting({
           regionName,
           enterDelta,
           exitDelta,

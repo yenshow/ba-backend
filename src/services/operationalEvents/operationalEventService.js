@@ -69,11 +69,11 @@ function buildListWhere(filters = {}) {
 
   // 半開區間 [start, end)：end 為次日 00:00 ISO；cast timestamptz 避免 TIMESTAMP 無時區誤切
   if (start_date) {
-    where += " AND oe.occurred_at >= ?::timestamptz";
+    where += " AND oe.created_at >= ?::timestamptz";
     params.push(start_date);
   }
   if (end_date) {
-    where += " AND oe.occurred_at < ?::timestamptz";
+    where += " AND oe.created_at < ?::timestamptz";
     params.push(end_date);
   }
 
@@ -104,13 +104,13 @@ async function recordEvent(input = {}) {
       return null;
     }
 
-    const summary =
-      String(input.summary || "").trim() || `${source} ${eventKind}`;
+    const message =
+      String(input.message || "").trim() || `${source} ${eventKind}`;
 
     // 一律寫入 ISO（與門禁／人流一致），避免 TIMESTAMP + CURRENT_TIMESTAMP 在時區下被「今天」篩掉
-    const occurredAt =
-      input.occurred_at != null && String(input.occurred_at).trim() !== ""
-        ? String(input.occurred_at)
+    const createdAt =
+      input.created_at != null && String(input.created_at).trim() !== ""
+        ? String(input.created_at)
         : new Date().toISOString();
 
     let payload = null;
@@ -124,10 +124,10 @@ async function recordEvent(input = {}) {
     const rows = await db.query(
       `
       INSERT INTO operational_events (
-        occurred_at, source, event_kind,
+        created_at, source, event_kind,
         location_id, system_id, device_id,
         bit_key, address, old_value, new_value,
-        summary, actor_user_id,
+        message, actor_user_id,
         ref_table, ref_id, payload
       ) VALUES (
         ?::timestamptz, ?, ?,
@@ -136,10 +136,10 @@ async function recordEvent(input = {}) {
         ?, ?,
         ?, ?, ?::jsonb
       )
-      RETURNING id, occurred_at
+      RETURNING id, created_at
       `,
       [
-        occurredAt,
+        createdAt,
         source,
         eventKind,
         toIntOrNull(input.location_id),
@@ -149,7 +149,7 @@ async function recordEvent(input = {}) {
         toIntOrNull(input.address),
         toBoolOrNull(input.old_value),
         toBoolOrNull(input.new_value),
-        summary,
+        message,
         toIntOrNull(input.actor_user_id),
         input.ref_table != null ? String(input.ref_table) : null,
         toIntOrNull(input.ref_id),
@@ -163,10 +163,10 @@ async function recordEvent(input = {}) {
         id,
         source,
         event_kind: eventKind,
-        summary,
-        occurred_at:
-          row.occurred_at != null
-            ? new Date(row.occurred_at).toISOString()
+        message,
+        created_at:
+          row.created_at != null
+            ? new Date(row.created_at).toISOString()
             : new Date().toISOString(),
       });
     }
@@ -197,11 +197,11 @@ async function listEvents(filters = {}) {
     db.query(
       `
       SELECT
-        oe.id, oe.occurred_at, oe.source, oe.event_kind,
+        oe.id, oe.created_at, oe.source, oe.event_kind,
         oe.location_id, oe.system_id, oe.device_id,
         oe.bit_key, oe.address, oe.old_value, oe.new_value,
-        oe.summary, oe.actor_user_id,
-        oe.ref_table, oe.ref_id, oe.payload, oe.created_at,
+        oe.message, oe.actor_user_id,
+        oe.ref_table, oe.ref_id, oe.payload,
         d.name AS device_name,
         l.name AS location_name,
         z.name AS zone_name,
@@ -212,7 +212,7 @@ async function listEvents(filters = {}) {
       LEFT JOIN zones z ON l.zone_id = z.id
       LEFT JOIN users u ON oe.actor_user_id = u.id
       ${where}
-      ORDER BY oe.occurred_at DESC, oe.id DESC
+      ORDER BY oe.created_at DESC, oe.id DESC
       LIMIT ? OFFSET ?
       `,
       [...params, lim, off],
@@ -248,7 +248,7 @@ async function purgeExpiredEvents(retentionDays) {
   const safeDays = Math.max(days, 1);
   const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
   const result = await db.query(
-    `DELETE FROM operational_events WHERE occurred_at < ?`,
+    `DELETE FROM operational_events WHERE created_at < ?`,
     [cutoff.toISOString()],
   );
   const deleted = result?.rowCount ?? 0;

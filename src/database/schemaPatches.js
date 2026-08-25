@@ -297,7 +297,7 @@ async function ensureOperationalEventsTable(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS operational_events (
       id BIGSERIAL PRIMARY KEY,
-      occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       source VARCHAR(64) NOT NULL,
       event_kind VARCHAR(32) NOT NULL
         CHECK (event_kind IN (
@@ -311,21 +311,12 @@ async function ensureOperationalEventsTable(pool) {
       address INTEGER,
       old_value BOOLEAN,
       new_value BOOLEAN,
-      summary TEXT NOT NULL,
+      message TEXT NOT NULL,
       actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
       ref_table VARCHAR(64),
       ref_id BIGINT,
-      payload JSONB,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      payload JSONB
     )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_operational_events_occurred
-      ON operational_events(occurred_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_operational_events_source_occurred
-      ON operational_events(source, occurred_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_operational_events_kind_occurred
-      ON operational_events(event_kind, occurred_at DESC);
   `);
 
   // 既有庫：移除 linkage_write／alert_id 相容殘留
@@ -376,6 +367,47 @@ async function ensureOperationalEventsTable(pool) {
         ));
     END
     $do$;
+  `);
+
+  // 既有庫：occurred_at → created_at（刪原寫入時間欄）；summary → message
+  await pool.query(`
+    DO $do$
+    BEGIN
+      IF to_regclass('public.operational_events') IS NULL THEN
+        RETURN;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'operational_events'
+          AND column_name = 'occurred_at'
+      ) THEN
+        DROP INDEX IF EXISTS idx_operational_events_occurred;
+        DROP INDEX IF EXISTS idx_operational_events_source_occurred;
+        DROP INDEX IF EXISTS idx_operational_events_kind_occurred;
+        ALTER TABLE operational_events DROP COLUMN IF EXISTS created_at;
+        ALTER TABLE operational_events RENAME COLUMN occurred_at TO created_at;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'operational_events'
+          AND column_name = 'summary'
+      ) THEN
+        ALTER TABLE operational_events RENAME COLUMN summary TO message;
+      END IF;
+    END
+    $do$;
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_operational_events_created
+      ON operational_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_source_created
+      ON operational_events(source, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_events_kind_created
+      ON operational_events(event_kind, created_at DESC);
   `);
 }
 

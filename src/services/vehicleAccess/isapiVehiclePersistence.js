@@ -146,10 +146,10 @@ async function persistAnprEvent(options) {
       void operationalEventService.recordEvent({
         source: "vehicle_access",
         event_kind: "vehicle",
-        occurred_at: parsed.dateTime,
+        created_at: parsed.dateTime,
         location_id: target.locationId,
         device_id: deviceId,
-        summary: summaryVehicle({
+        message: summaryVehicle({
           plate,
           laneType: target.laneType,
           placeLabel: formatPlaceLabel(target.zoneName, target.locationName),

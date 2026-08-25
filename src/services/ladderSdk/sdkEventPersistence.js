@@ -111,11 +111,11 @@ const persistLadderSdkEvent = async (options) => {
   void operationalEventService.recordEvent({
     source: "elevator",
     event_kind: "elevator",
-    occurred_at: resolvedEventTime,
+    created_at: resolvedEventTime,
     location_id: elevCtx?.locationId ?? null,
     system_id: elevCtx?.systemId ?? null,
     device_id: deviceIdN,
-    summary: summaryElevator({
+    message: summaryElevator({
       eventName,
       major: majorN,
       minor: minorN,

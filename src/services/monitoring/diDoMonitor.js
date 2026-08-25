@@ -226,7 +226,7 @@ function recordStateEdge(point, bitValue, deviceConfig = null) {
     address: point.address,
     old_value: prev,
     new_value: bitValue,
-    summary: summaryStateChange({
+    message: summaryStateChange({
       source: point.systemType,
       bitKey: point.bitKey,
       address: point.address,

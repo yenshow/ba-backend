@@ -530,7 +530,7 @@ const energyAdapter = {
 // --- 營運事件（operational）---
 
 const OPERATIONAL_SELECT = `
-  SELECT e.id, e.occurred_at, e.source, e.event_kind, e.summary,
+  SELECT e.id, e.created_at, e.source, e.event_kind, e.message,
          e.device_id, e.bit_key, e.address, e.old_value, e.new_value,
          e.payload, e.location_id,
          d.name AS device_name, l.name AS location_name, z.name AS zone_name
@@ -570,10 +570,10 @@ function mapOperationalValue(evt, fieldKey, fieldConfig) {
 function operationalRowToEvent(row) {
   return {
     id: row.id,
-    timestamp: row.occurred_at,
+    timestamp: row.created_at,
     source: row.source ?? "",
     eventKind: row.event_kind ?? "",
-    summary: row.summary ?? "",
+    summary: row.message ?? "",
     zoneName: row.zone_name ?? "",
     locationName: row.location_name ?? "",
     deviceName: row.device_name ?? "",
@@ -605,7 +605,7 @@ const operationalAdapter = {
   eventType: "operational",
   label: "營運事件",
   sourceTable: "operational_events",
-  timeColumn: "occurred_at",
+  timeColumn: "created_at",
   catalog: OPERATIONAL_CATALOG,
   filterSchema: {
     kind: "operational",
@@ -620,7 +620,7 @@ const operationalAdapter = {
   async fetchForSync({ cursorTsText, cursorEventId, limit }) {
     const { rows, lastFetchedEventId } = await fetchRowsAfterCursor({
       selectSql: OPERATIONAL_SELECT,
-      timeColumn: "e.occurred_at",
+      timeColumn: "e.created_at",
       idColumn: "e.id",
       cursorTsText,
       cursorEventId,
@@ -632,7 +632,7 @@ const operationalAdapter = {
     const { extraWhere, extraParams } = operationalBuildExtra(filter || {});
     const rows = await fetchRowsInWindow({
       selectSql: OPERATIONAL_SELECT,
-      timeColumn: "e.occurred_at",
+      timeColumn: "e.created_at",
       idColumn: "e.id",
       startTime,
       endTime,

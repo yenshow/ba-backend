@@ -54,12 +54,12 @@ const handleEvent = async (deviceId, device, message) => {
 
   try {
     await operationalEventService.recordEvent({
-      occurred_at: eventTime,
+      created_at: eventTime,
       source: "video_intercom",
       event_kind: "intercom",
       location_id: locationId,
       device_id: deviceId,
-      summary: `對講組網事件：${eventName}`,
+      message: `對講組網事件：${eventName}`,
       payload: {
         layer: 1,
         ...message,

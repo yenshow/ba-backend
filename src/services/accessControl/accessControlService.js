@@ -645,7 +645,7 @@ async function controlRemoteDoor(deviceId, options = {}) {
       bit_key: `access_door:${cmd}`,
       new_value: success ? true : null,
       actor_user_id: oe.actorUserId ?? null,
-      summary: summaryAccessDoorControlWrite({
+      message: summaryAccessDoorControlWrite({
         deviceName,
         cmd,
         success,
