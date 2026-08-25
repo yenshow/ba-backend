@@ -1329,6 +1329,7 @@ async function initSchema() {
         target_table TEXT NOT NULL,
         cursor_ts TIMESTAMPTZ,
         cursor_event_id BIGINT,
+        options_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(event_type)
@@ -1399,6 +1400,8 @@ async function initSchema() {
         time_format TEXT NOT NULL,
         output_format VARCHAR(8) NOT NULL CHECK (output_format IN ('csv','txt')),
         export_time TIME NOT NULL,
+        schedule_freq VARCHAR(16) NOT NULL DEFAULT 'daily' CHECK (schedule_freq IN ('daily','weekly','monthly')),
+        schedule_day INTEGER NULL,
         storage_type VARCHAR(8) NOT NULL CHECK (storage_type IN ('local','sftp')),
         local_dir TEXT,
         sftp_host TEXT,

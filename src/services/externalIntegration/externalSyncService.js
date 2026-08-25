@@ -6,6 +6,22 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const { getAdapter, requireEventType, listEventTypes } = require("./eventTypeRegistry");
+const { parseGrain } = require("./eventAdapters");
+
+function parseOptionsJson(rawOptions) {
+  if (rawOptions != null && typeof rawOptions === "object" && !Array.isArray(rawOptions)) {
+    return { ...rawOptions };
+  }
+  if (typeof rawOptions === "string" && rawOptions.trim()) {
+    try {
+      const parsed = JSON.parse(rawOptions);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  return {};
+}
 
 function normalizeDbType(raw) {
   const v = String(raw ?? "").trim().toLowerCase();
@@ -194,6 +210,7 @@ function mapConfigRow(config, mapRows) {
       format: r.format ?? "",
     };
   }
+  const options = parseOptionsJson(config.options_json);
   return {
     id: config.id,
     eventType: config.event_type,
@@ -206,6 +223,7 @@ function mapConfigRow(config, mapRows) {
     password: "",
     targetTable: config.target_table,
     mappings,
+    options,
     updatedAt: config.updated_at,
   };
 }
@@ -261,6 +279,14 @@ async function upsertConfig(payload) {
   const targetTable = requireNonEmpty(payload.targetTable, "第三方資料庫表格名稱");
   validateMappings(adapter, payload.mappings);
 
+  let optionsJson = parseOptionsJson(payload.options);
+  const hasGrainField = Boolean(
+    adapter.filterSchema?.fields?.some((f) => f.key === "grain"),
+  );
+  if (hasGrainField) {
+    optionsJson.grain = parseGrain(optionsJson.grain);
+  }
+
   const existingRows = await db.query(
     "SELECT password_enc FROM external_sync_configs WHERE event_type = ? LIMIT 1",
     [eventType],
@@ -279,9 +305,9 @@ async function upsertConfig(payload) {
     const upsertRows = await q(
       `
         INSERT INTO external_sync_configs
-          (event_type, push_time, db_type, host, port, database_name, username, password_enc, target_table)
+          (event_type, push_time, db_type, host, port, database_name, username, password_enc, target_table, options_json)
         VALUES
-          (?, ?::time, ?, ?, ?, ?, ?, ?, ?)
+          (?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
         ON CONFLICT (event_type) DO UPDATE
         SET push_time = EXCLUDED.push_time,
             db_type = EXCLUDED.db_type,
@@ -291,6 +317,7 @@ async function upsertConfig(payload) {
             username = EXCLUDED.username,
             password_enc = EXCLUDED.password_enc,
             target_table = EXCLUDED.target_table,
+            options_json = EXCLUDED.options_json,
             updated_at = CURRENT_TIMESTAMP
         RETURNING id
       `,
@@ -304,6 +331,7 @@ async function upsertConfig(payload) {
         username,
         passwordEnc,
         targetTable,
+        JSON.stringify(optionsJson),
       ],
     );
     const configId = upsertRows?.[0]?.id;
@@ -362,10 +390,12 @@ async function runExternalSyncOnce(eventType = "access_control") {
 
   let conn = null;
   try {
-    const { events: rawEvents, lastFetchedEventId } = await adapter.fetchForSync({
+    const options = parseOptionsJson(cfg.options_json);
+    const { events: rawEvents } = await adapter.fetchForSync({
       cursorTsText: cfg.cursor_ts_text,
       cursorEventId: cfg.cursor_event_id,
       limit: 5000,
+      options,
     });
     const events =
       adapter.eventType === "access_control"
@@ -387,18 +417,21 @@ async function runExternalSyncOnce(eventType = "access_control") {
     });
     await insertRows(conn, cfg.target_table, columns, dataRows);
 
-    if (lastFetchedEventId) {
-      const table = adapter.sourceTable;
-      const timeCol = adapter.timeColumn;
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table) || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(timeCol)) {
-        throw new Error("adapter sourceTable/timeColumn 不合法");
-      }
+    // 以「本批最後一筆事件」寫游標（支援多表合併／彙總列，勿回查單一 sourceTable）
+    const cursorSource =
+      events.length > 0 ? events[events.length - 1] : rawEvents[rawEvents.length - 1];
+    if (cursorSource?.timestamp != null && cursorSource?.id != null) {
+      const cursorId = Number(cursorSource.id);
       await db.query(
         `UPDATE external_sync_configs
-         SET cursor_ts = (SELECT ${timeCol} FROM ${table} WHERE id = ?),
+         SET cursor_ts = ?::timestamptz,
              cursor_event_id = ?
          WHERE id = ?`,
-        [lastFetchedEventId, lastFetchedEventId, cfg.id],
+        [
+          new Date(cursorSource.timestamp).toISOString(),
+          Number.isFinite(cursorId) ? cursorId : null,
+          cfg.id,
+        ],
       );
     }
 

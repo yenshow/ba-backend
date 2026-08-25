@@ -5,8 +5,6 @@ const { DateTime } = require("luxon");
 const db = require("../../database/db");
 const deviceService = require("../devices/deviceService");
 const logger = require("../../utils/logger").createLogger("eventAdapters");
-const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrors");
 const {
   extractSubEventType,
   resolveAccessControlEvent,
@@ -107,7 +105,7 @@ async function fetchRowsInWindow({
   extraParams = [],
 }) {
   const lim = clampLimit(limit);
-  let whereSql = `${timeColumn} >= ?::timestamptz AND ${timeColumn} <= ?::timestamptz`;
+  let whereSql = `${timeColumn} >= ?::timestamptz AND ${timeColumn} < ?::timestamptz`;
   const params = [
     new Date(startTime).toISOString(),
     new Date(endTime).toISOString(),
@@ -146,6 +144,21 @@ function parseStringList(raw) {
   ];
 }
 
+/** @returns {'raw'|'hourly'} */
+function parseGrain(raw) {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "raw" || v === "hourly") return v;
+  return "hourly";
+}
+
+const GRAIN_FILTER_FIELD = {
+  key: "grain",
+  type: "string",
+  label: "粒度（raw=原始／hourly=每小時，預設 hourly）",
+  enum: ["raw", "hourly"],
+  required: false,
+};
+
 // --- 門禁（access_control）---
 
 const ACCESS_CONTROL_FIELD_CATALOG = [
@@ -158,10 +171,23 @@ const ACCESS_CONTROL_FIELD_CATALOG = [
   { key: "eventDate", label: "進出日期", requiresFormat: true },
   { key: "eventTime", label: "進出時間", requiresFormat: true },
   { key: "cardNo", label: "卡號" },
+  { key: "direction", label: "進出方向" },
+  { key: "verifyMethod", label: "驗證方式" },
 ];
+
+const DIRECTION_LABEL = {
+  entry: "進入",
+  exit: "離開",
+  failed: "失敗",
+};
 
 const getAccessControlFieldByKey = (key) =>
   ACCESS_CONTROL_FIELD_CATALOG.find((f) => f.key === key) ?? null;
+
+function formatDirectionLabel(eventType) {
+  if (eventType == null || eventType === "") return "";
+  return DIRECTION_LABEL[eventType] || String(eventType);
+}
 
 function mapAccessControlEventToFieldValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "employeeId") return evt.employeeId ?? "";
@@ -170,6 +196,8 @@ function mapAccessControlEventToFieldValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "deviceName") return evt.deviceName ?? "";
   if (fieldKey === "deviceScreenshot") return evt.deviceScreenshotUrl ?? "";
   if (fieldKey === "cardNo") return evt.cardNo ?? "";
+  if (fieldKey === "direction") return formatDirectionLabel(evt.eventType);
+  if (fieldKey === "verifyMethod") return evt.verifyMethod ?? "";
 
   const dt = evt.timestamp
     ? DateTime.fromJSDate(new Date(evt.timestamp)).setZone("Asia/Taipei")
@@ -209,6 +237,21 @@ function collectDeviceIdsFromConfig(config) {
   return { entry, exit };
 }
 
+function collectCameraIdsFromConfig(config) {
+  const entry = [];
+  const exit = [];
+  const raw = config && typeof config === "object" ? config : {};
+  for (const id of raw.entry_camera_device_ids || []) {
+    const n = Number(id);
+    if (Number.isFinite(n) && n > 0) entry.push(n);
+  }
+  for (const id of raw.exit_camera_device_ids || []) {
+    const n = Number(id);
+    if (Number.isFinite(n) && n > 0) exit.push(n);
+  }
+  return { entry, exit };
+}
+
 async function loadAccessControlDeviceContext() {
   if (acDeviceContextCache && Date.now() - acDeviceContextCachedAt < AC_DEVICE_CACHE_MS) {
     return acDeviceContextCache;
@@ -216,7 +259,10 @@ async function loadAccessControlDeviceContext() {
 
   const entryIps = new Set();
   const exitIps = new Set();
+  const entryCameraIds = new Set();
+  const exitCameraIds = new Set();
   const ipToDeviceName = new Map();
+  const deviceIdToName = new Map();
 
   const rows = await db.query(
     `SELECT system_config FROM location_systems WHERE system_type = 'people_counting'`,
@@ -229,30 +275,47 @@ async function loadAccessControlDeviceContext() {
     const { entry, exit } = collectDeviceIdsFromConfig(row.system_config);
     for (const id of entry) allEntryIds.add(id);
     for (const id of exit) allExitIds.add(id);
+    const cams = collectCameraIdsFromConfig(row.system_config);
+    for (const id of cams.entry) entryCameraIds.add(id);
+    for (const id of cams.exit) exitCameraIds.add(id);
   }
 
-  const addDevice = async (deviceId, isEntry) => {
+  const addDevice = async (deviceId, role) => {
     try {
       const { device } = await deviceService.getDeviceById(deviceId);
       const ip = normalizeDeviceHost(device?.config?.host);
-      if (!ip) return;
-      ipToDeviceName.set(ip, device?.name || ip);
-      if (isEntry) entryIps.add(ip);
-      else exitIps.add(ip);
+      const name = device?.name || ip || String(deviceId);
+      deviceIdToName.set(deviceId, name);
+      if (ip) {
+        ipToDeviceName.set(ip, name);
+        if (role === "entry") entryIps.add(ip);
+        else if (role === "exit") exitIps.add(ip);
+      }
     } catch (err) {
-      logger.warn("取得門禁設備 IP 失敗，略過", {
+      logger.warn("取得門禁／攝影機設備失敗，略過", {
         deviceId,
         error: err?.message || String(err),
       });
     }
   };
 
-  for (const id of allEntryIds) await addDevice(id, true);
+  for (const id of allEntryIds) await addDevice(id, "entry");
   for (const id of allExitIds) {
-    if (!allEntryIds.has(id)) await addDevice(id, false);
+    if (!allEntryIds.has(id)) await addDevice(id, "exit");
+  }
+  for (const id of entryCameraIds) await addDevice(id, "entry");
+  for (const id of exitCameraIds) {
+    if (!entryCameraIds.has(id)) await addDevice(id, "exit");
   }
 
-  acDeviceContextCache = { entryIps, exitIps, ipToDeviceName };
+  acDeviceContextCache = {
+    entryIps,
+    exitIps,
+    entryCameraIds,
+    exitCameraIds,
+    ipToDeviceName,
+    deviceIdToName,
+  };
   acDeviceContextCachedAt = Date.now();
   return acDeviceContextCache;
 }
@@ -282,9 +345,37 @@ const ACCESS_CONTROL_EVENT_SELECT = `
   ) plc ON TRUE
 `;
 
+const FACE_CONTRAST_EVENT_SELECT = `
+  SELECT
+    e.id,
+    e.device_id,
+    e.device_ip,
+    e.event_time,
+    e.payload,
+    e.picture_path,
+    e.employee_no AS event_employee_no,
+    e.person_name AS event_person_name,
+    e.matched,
+    p.id AS person_id,
+    p.employee_no,
+    p.full_name,
+    pg.name AS unit_name,
+    d.name AS device_name
+  FROM isapi_face_contrast_events e
+  LEFT JOIN persons p
+    ON p.employee_no IS NOT NULL
+   AND e.employee_no IS NOT NULL
+   AND TRIM(p.employee_no) = TRIM(e.employee_no)
+  LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+  LEFT JOIN devices d ON d.id = e.device_id
+`;
+
 function buildAccessControlEventDto(row, ctx) {
-  const payload = typeof row.payload === "object" ? row.payload : {};
-  const employeeId = (row.employee_no ?? normalizeEmployeeNo(payload) ?? "").toString().trim();
+  const payload =
+    row.payload != null && typeof row.payload === "object" ? row.payload : {};
+  const employeeId = normalizeEmployeeNo(
+    row.employee_no || payload.employeeNoString || payload.employeeNo || "",
+  );
   const personNameRaw = (row.full_name ?? payload.personName ?? "").toString().trim();
   const devicePersonName =
     payload.personName != null ? String(payload.personName).trim() : "";
@@ -308,6 +399,7 @@ function buildAccessControlEventDto(row, ctx) {
 
   return {
     id: row.id,
+    sourceKind: "door",
     employeeId: employeeId || null,
     personName,
     unitName: row.unit_name != null ? String(row.unit_name).trim() : "",
@@ -315,6 +407,53 @@ function buildAccessControlEventDto(row, ctx) {
     eventType,
     verifyMethod,
     cardNo,
+    deviceName,
+    deviceScreenshotUrl: row.picture_path != null ? String(row.picture_path) : "",
+  };
+}
+
+function resolveFaceDirection(row, ctx) {
+  const payload =
+    row.payload != null && typeof row.payload === "object" ? row.payload : {};
+  if (payload.direction === "entry" || payload.direction === "exit") {
+    return payload.direction;
+  }
+  const deviceId = Number(row.device_id);
+  if (Number.isFinite(deviceId) && deviceId > 0) {
+    if (ctx.entryCameraIds?.has(deviceId)) return "entry";
+    if (ctx.exitCameraIds?.has(deviceId)) return "exit";
+  }
+  const ip = row.device_ip != null ? String(row.device_ip) : "";
+  if (ip && ctx.entryIps?.has(ip)) return "entry";
+  if (ip && ctx.exitIps?.has(ip)) return "exit";
+  return row.matched === false ? "failed" : "entry";
+}
+
+function buildFaceContrastEventDto(row, ctx) {
+  const employeeId = normalizeEmployeeNo(
+    row.employee_no || row.event_employee_no || "",
+  );
+  const personName =
+    (row.full_name != null && String(row.full_name).trim()) ||
+    (row.event_person_name != null && String(row.event_person_name).trim()) ||
+    "—";
+  const deviceId = Number(row.device_id);
+  const deviceName =
+    (row.device_name != null && String(row.device_name).trim()) ||
+    (Number.isFinite(deviceId) ? ctx.deviceIdToName?.get(deviceId) : "") ||
+    (row.device_ip != null ? String(row.device_ip) : "") ||
+    "";
+
+  return {
+    id: row.id,
+    sourceKind: "face",
+    employeeId: employeeId || null,
+    personName,
+    unitName: row.unit_name != null ? String(row.unit_name).trim() : "",
+    timestamp: row.event_time,
+    eventType: resolveFaceDirection(row, ctx),
+    verifyMethod: "人臉",
+    cardNo: "",
     deviceName,
     deviceScreenshotUrl: row.picture_path != null ? String(row.picture_path) : "",
   };
@@ -336,106 +475,132 @@ async function resolveGroupIdsWithChildren(groupIds) {
   return [...all];
 }
 
-async function fetchAccessControlEventsAfterCursor(cursor = {}, limit = 5000) {
-  const ctx = await loadAccessControlDeviceContext();
-  const endIso = new Date().toISOString();
-  const lim = clampLimit(limit);
-
-  const cursorTsText = String(cursor?.cursorTsText ?? "").trim() || null;
-  const cursorEventId = Number(cursor?.cursorEventId);
-  const hasEventId = Number.isFinite(cursorEventId) && cursorEventId > 0;
-
-  let whereSql;
-  let params;
-  if (!cursorTsText) {
-    whereSql = `e.event_time > ?::timestamptz AND e.event_time <= ?::timestamptz`;
-    params = [new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), endIso];
-  } else if (hasEventId) {
-    whereSql = `(e.event_time > ?::timestamptz OR (e.event_time = ?::timestamptz AND e.id > ?))
-       AND e.event_time <= ?::timestamptz`;
-    params = [cursorTsText, cursorTsText, cursorEventId, endIso];
-  } else {
-    whereSql = `e.event_time > ?::timestamptz AND e.event_time <= ?::timestamptz`;
-    params = [cursorTsText, endIso];
+/** 多表合併時僅用時間下界，避免門禁／人臉 id 空間衝突 */
+function buildAccessTimeWindow({ cursorTsText, startTime, endTime }) {
+  const endIso =
+    endTime != null
+      ? new Date(endTime).toISOString()
+      : new Date().toISOString();
+  if (startTime != null && endTime != null) {
+    return {
+      whereSql: `event_time_col >= ?::timestamptz AND event_time_col < ?::timestamptz`,
+      params: [new Date(startTime).toISOString(), endIso],
+    };
   }
+  const cursor = String(cursorTsText ?? "").trim() || null;
+  if (!cursor) {
+    return {
+      whereSql: `event_time_col > ?::timestamptz AND event_time_col <= ?::timestamptz`,
+      params: [new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), endIso],
+    };
+  }
+  return {
+    whereSql: `event_time_col > ?::timestamptz AND event_time_col <= ?::timestamptz`,
+    params: [cursor, endIso],
+  };
+}
 
-  const rows = await db.query(
-    `${ACCESS_CONTROL_EVENT_SELECT}
-     WHERE ${whereSql}
-     ORDER BY e.event_time ASC, e.id ASC
-     LIMIT ?`,
-    [...params, lim],
-  );
+function replaceEventTimeCol(sql, columnExpr) {
+  return sql.replaceAll("event_time_col", columnExpr);
+}
 
-  const events = (rows || []).map((row) => buildAccessControlEventDto(row, ctx));
-  const last = rows?.length ? rows[rows.length - 1] : null;
+async function fetchMergedAccessEvents({
+  cursorTsText,
+  startTime,
+  endTime,
+  limit,
+  groupIds = [],
+}) {
+  const ctx = await loadAccessControlDeviceContext();
+  const lim = clampLimit(limit);
+  const { whereSql, params } = buildAccessTimeWindow({
+    cursorTsText,
+    startTime,
+    endTime,
+  });
+
+  const groupIdsAll =
+    groupIds.length > 0 ? await resolveGroupIdsWithChildren(groupIds) : [];
+  const groupSql =
+    groupIdsAll.length > 0
+      ? ` AND p.person_group_id IN (${groupIdsAll.map(() => "?").join(",")})`
+      : "";
+  const groupParams = groupIdsAll;
+  const timeWhere = `${replaceEventTimeCol(whereSql, "e.event_time")}${groupSql}`;
+
+  const [doorRows, faceRows] = await Promise.all([
+    db.query(
+      `${ACCESS_CONTROL_EVENT_SELECT}
+       WHERE ${timeWhere}
+       ORDER BY e.event_time ASC, e.id ASC
+       LIMIT ?`,
+      [...params, ...groupParams, lim],
+    ),
+    db.query(
+      `${FACE_CONTRAST_EVENT_SELECT}
+       WHERE ${timeWhere}
+       ORDER BY e.event_time ASC, e.id ASC
+       LIMIT ?`,
+      [...params, ...groupParams, lim],
+    ),
+  ]);
+
+  const merged = [
+    ...(doorRows || []).map((row) => buildAccessControlEventDto(row, ctx)),
+    ...(faceRows || []).map((row) => buildFaceContrastEventDto(row, ctx)),
+  ];
+  merged.sort((a, b) => {
+    const ta = new Date(a.timestamp).getTime();
+    const tb = new Date(b.timestamp).getTime();
+    if (ta !== tb) return ta - tb;
+    const sa = a.sourceKind === "door" ? 0 : 1;
+    const sb = b.sourceKind === "door" ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return Number(a.id) - Number(b.id);
+  });
+  const events = merged.slice(0, lim);
+  const last = events.length ? events[events.length - 1] : null;
   return {
     events,
     lastFetchedEventId: last?.id != null ? Number(last.id) : null,
   };
 }
 
-async function fetchAccessControlEventsForGroups({ groupIds, startTime, endTime, limit = 5000 }) {
-  const groupIdsAll = await resolveGroupIdsWithChildren(groupIds);
-  if (groupIdsAll.length === 0) return [];
-
-  const ctx = await loadAccessControlDeviceContext();
-  const placeholders = groupIdsAll.map(() => "?").join(",");
-  const lim = clampLimit(limit);
-
-  const rows = await db.query(
-    `${ACCESS_CONTROL_EVENT_SELECT}
-     WHERE p.person_group_id IN (${placeholders})
-       AND e.event_time >= ? AND e.event_time <= ?
-     ORDER BY e.event_time ASC, e.id ASC
-     LIMIT ?`,
-    [...groupIdsAll, startTime.toISOString(), endTime.toISOString(), lim],
-  );
-
-  return (rows || []).map((row) => buildAccessControlEventDto(row, ctx));
-}
-
 const accessControlAdapter = {
   eventType: "access_control",
-  label: "門禁／刷卡",
+  label: "門禁管理／進出",
   sourceTable: "isapi_access_events",
   timeColumn: "event_time",
   catalog: ACCESS_CONTROL_FIELD_CATALOG,
   filterSchema: {
     kind: "person_groups",
-    required: true,
-    fields: [{ key: "groupIds", type: "number[]", label: "人員群組", required: true }],
+    required: false,
+    fields: [
+      {
+        key: "groupIds",
+        type: "number[]",
+        label: "人員群組（選填，空白=全部）",
+        required: false,
+      },
+    ],
   },
   getFieldByKey: getAccessControlFieldByKey,
   mapValue: mapAccessControlEventToFieldValue,
-  async fetchForSync({ cursorTsText, cursorEventId, limit }) {
-    return fetchAccessControlEventsAfterCursor(
-      { cursorTsText, cursorEventId },
-      limit,
-    );
+  async fetchForSync({ cursorTsText, limit }) {
+    return fetchMergedAccessEvents({ cursorTsText, limit });
   },
   async fetchForExport({ filter, startTime, endTime, limit }) {
     const groupIds = parseIdList(filter?.groupIds);
-    if (groupIds.length === 0) {
-      throwApiError(C.VALIDATION_CUSTOM, "部門（人員群組）至少需選擇一項", {
-        statusCode: 400,
-      });
-    }
-    return fetchAccessControlEventsForGroups({
-      groupIds,
+    const { events } = await fetchMergedAccessEvents({
       startTime,
       endTime,
       limit,
+      groupIds,
     });
+    return events;
   },
   validateFilter(filter) {
-    const groupIds = parseIdList(filter?.groupIds);
-    if (groupIds.length === 0) {
-      throwApiError(C.VALIDATION_CUSTOM, "部門（人員群組）至少需選擇一項", {
-        statusCode: 400,
-      });
-    }
-    return { groupIds };
+    return { groupIds: parseIdList(filter?.groupIds) };
   },
 };
 
@@ -445,6 +610,24 @@ const ENERGY_SELECT = `
   SELECT er.id, er.device_id, er.recorded_at, er.data, d.name AS device_name
   FROM energy_readings er
   INNER JOIN devices d ON d.id = er.device_id
+`;
+
+const ENERGY_HOURLY_SELECT = `
+  SELECT a.id, a.device_id, a.bucket_at AS recorded_at,
+         jsonb_build_object(
+           'delta_energy_kwh', a.delta_energy_kwh,
+           'delta_water_m3', a.delta_water_m3,
+           'tou_peak_kwh', a.tou_peak_kwh,
+           'tou_semi_peak_kwh', a.tou_semi_peak_kwh,
+           'tou_off_peak_kwh', a.tou_off_peak_kwh,
+           'max_power_kw', a.max_power_kw,
+           'max_demand_kw', a.max_demand_kw,
+           'bucket_type', a.bucket_type,
+           'data', COALESCE(a.data, '{}'::jsonb)
+         ) AS data,
+         d.name AS device_name
+  FROM energy_usage_aggregated a
+  INNER JOIN devices d ON d.id = a.device_id
 `;
 
 const ENERGY_CATALOG = [
@@ -474,12 +657,67 @@ function energyRowToEvent(row) {
   };
 }
 
-function energyDeviceFilterSql(deviceIds) {
+function energyDeviceFilterSql(deviceIds, column = "er.device_id") {
   if (!deviceIds.length) return { extraWhere: "", extraParams: [] };
   const placeholders = deviceIds.map(() => "?").join(",");
   return {
-    extraWhere: `er.device_id IN (${placeholders})`,
+    extraWhere: `${column} IN (${placeholders})`,
     extraParams: deviceIds,
+  };
+}
+
+async function fetchEnergyEvents({
+  grain,
+  cursorTsText,
+  cursorEventId,
+  limit,
+  deviceIds = [],
+  startTime,
+  endTime,
+}) {
+  const useHourly = grain !== "raw";
+  const selectSql = useHourly ? ENERGY_HOURLY_SELECT : ENERGY_SELECT;
+  const timeColumn = useHourly ? "a.bucket_at" : "er.recorded_at";
+  const idColumn = useHourly ? "a.id" : "er.id";
+  const deviceCol = useHourly ? "a.device_id" : "er.device_id";
+  const { extraWhere: deviceWhere, extraParams } = energyDeviceFilterSql(
+    deviceIds,
+    deviceCol,
+  );
+  const hourWhere = useHourly
+    ? deviceWhere
+      ? `${deviceWhere} AND a.bucket_type = 'hour'`
+      : `a.bucket_type = 'hour'`
+    : deviceWhere;
+  const hourParams = extraParams;
+
+  if (startTime != null && endTime != null) {
+    const rows = await fetchRowsInWindow({
+      selectSql,
+      timeColumn,
+      idColumn,
+      startTime,
+      endTime,
+      limit,
+      extraWhere: hourWhere,
+      extraParams: hourParams,
+    });
+    return rows.map(energyRowToEvent);
+  }
+
+  const { rows, lastFetchedEventId } = await fetchRowsAfterCursor({
+    selectSql,
+    timeColumn,
+    idColumn,
+    cursorTsText,
+    cursorEventId,
+    limit,
+    extraWhere: hourWhere,
+    extraParams: hourParams,
+  });
+  return {
+    events: rows.map(energyRowToEvent),
+    lastFetchedEventId,
   };
 }
 
@@ -492,38 +730,38 @@ const energyAdapter = {
   filterSchema: {
     kind: "devices",
     required: false,
-    fields: [{ key: "deviceIds", type: "number[]", label: "設備（空白=全部）" }],
+    fields: [
+      { key: "deviceIds", type: "number[]", label: "設備（空白=全部）" },
+      GRAIN_FILTER_FIELD,
+    ],
   },
   getFieldByKey: getEnergyFieldByKey,
   mapValue: mapEnergyValue,
-  async fetchForSync({ cursorTsText, cursorEventId, limit }) {
-    const { rows, lastFetchedEventId } = await fetchRowsAfterCursor({
-      selectSql: ENERGY_SELECT,
-      timeColumn: "er.recorded_at",
-      idColumn: "er.id",
+  async fetchForSync({ cursorTsText, cursorEventId, limit, options }) {
+    const grain = parseGrain(options?.grain);
+    return fetchEnergyEvents({
+      grain,
       cursorTsText,
       cursorEventId,
       limit,
     });
-    return { events: rows.map(energyRowToEvent), lastFetchedEventId };
   },
   async fetchForExport({ filter, startTime, endTime, limit }) {
     const deviceIds = parseIdList(filter?.deviceIds);
-    const { extraWhere, extraParams } = energyDeviceFilterSql(deviceIds);
-    const rows = await fetchRowsInWindow({
-      selectSql: ENERGY_SELECT,
-      timeColumn: "er.recorded_at",
-      idColumn: "er.id",
+    const grain = parseGrain(filter?.grain);
+    return fetchEnergyEvents({
+      grain,
+      deviceIds,
       startTime,
       endTime,
       limit,
-      extraWhere,
-      extraParams,
     });
-    return rows.map(energyRowToEvent);
   },
   validateFilter(filter) {
-    return { deviceIds: parseIdList(filter?.deviceIds) };
+    return {
+      deviceIds: parseIdList(filter?.deviceIds),
+      grain: parseGrain(filter?.grain),
+    };
   },
 };
 
@@ -847,7 +1085,7 @@ async function fetchYscpRows({
 
 const peopleCountingAdapter = {
   eventType: "people_counting",
-  label: "人流紀錄",
+  label: "人流紀錄（YSCP）",
   sourceTable: "people_counting_logs",
   timeColumn: "swip_card_rev_time",
   catalog: PEOPLE_COUNTING_CATALOG,
@@ -1003,6 +1241,14 @@ const ENVIRONMENT_SELECT = `
   INNER JOIN zones z ON l.zone_id = z.id
 `;
 
+const ENVIRONMENT_HOURLY_SELECT = `
+  SELECT a.id, a.location_id, a.bucket_at AS recorded_at, a.data,
+         l.name AS location_name, z.name AS zone_name
+  FROM environment_readings_aggregated a
+  INNER JOIN locations l ON a.location_id = l.id
+  INNER JOIN zones z ON l.zone_id = z.id
+`;
+
 const ENVIRONMENT_CATALOG = [
   { key: "locationId", label: "地點 ID", required: true },
   { key: "zoneName", label: "區域" },
@@ -1033,6 +1279,60 @@ function environmentRowToEvent(row) {
   };
 }
 
+async function fetchEnvironmentEvents({
+  grain,
+  cursorTsText,
+  cursorEventId,
+  limit,
+  locationIds = [],
+  startTime,
+  endTime,
+}) {
+  const useHourly = grain !== "raw";
+  const selectSql = useHourly ? ENVIRONMENT_HOURLY_SELECT : ENVIRONMENT_SELECT;
+  const timeColumn = useHourly ? "a.bucket_at" : "er.recorded_at";
+  const idColumn = useHourly ? "a.id" : "er.id";
+  const locCol = useHourly ? "a.location_id" : "er.location_id";
+  const locWhere = locationIds.length
+    ? `${locCol} IN (${locationIds.map(() => "?").join(",")})`
+    : "";
+  const hourWhere = useHourly
+    ? locWhere
+      ? `${locWhere} AND a.bucket_type = 'hour'`
+      : `a.bucket_type = 'hour'`
+    : locWhere;
+  const locParams = locationIds;
+
+  if (startTime != null && endTime != null) {
+    const rows = await fetchRowsInWindow({
+      selectSql,
+      timeColumn,
+      idColumn,
+      startTime,
+      endTime,
+      limit,
+      extraWhere: hourWhere,
+      extraParams: locParams,
+    });
+    return rows.map(environmentRowToEvent);
+  }
+
+  const { rows, lastFetchedEventId } = await fetchRowsAfterCursor({
+    selectSql,
+    timeColumn,
+    idColumn,
+    cursorTsText,
+    cursorEventId,
+    limit,
+    extraWhere: hourWhere,
+    extraParams: locParams,
+  });
+  return {
+    events: rows.map(environmentRowToEvent),
+    lastFetchedEventId,
+  };
+}
+
 const environmentAdapter = {
   eventType: "environment",
   label: "環境數值",
@@ -1042,40 +1342,38 @@ const environmentAdapter = {
   filterSchema: {
     kind: "locations",
     required: false,
-    fields: [{ key: "locationIds", type: "number[]", label: "地點（空白=全部）" }],
+    fields: [
+      { key: "locationIds", type: "number[]", label: "地點（空白=全部）" },
+      GRAIN_FILTER_FIELD,
+    ],
   },
   getFieldByKey: getEnvironmentFieldByKey,
   mapValue: mapEnvironmentValue,
-  async fetchForSync({ cursorTsText, cursorEventId, limit }) {
-    const { rows, lastFetchedEventId } = await fetchRowsAfterCursor({
-      selectSql: ENVIRONMENT_SELECT,
-      timeColumn: "er.recorded_at",
-      idColumn: "er.id",
+  async fetchForSync({ cursorTsText, cursorEventId, limit, options }) {
+    const grain = parseGrain(options?.grain);
+    return fetchEnvironmentEvents({
+      grain,
       cursorTsText,
       cursorEventId,
       limit,
     });
-    return { events: rows.map(environmentRowToEvent), lastFetchedEventId };
   },
   async fetchForExport({ filter, startTime, endTime, limit }) {
     const locationIds = parseIdList(filter?.locationIds);
-    const extraWhere = locationIds.length
-      ? `er.location_id IN (${locationIds.map(() => "?").join(",")})`
-      : "";
-    const rows = await fetchRowsInWindow({
-      selectSql: ENVIRONMENT_SELECT,
-      timeColumn: "er.recorded_at",
-      idColumn: "er.id",
+    const grain = parseGrain(filter?.grain);
+    return fetchEnvironmentEvents({
+      grain,
+      locationIds,
       startTime,
       endTime,
       limit,
-      extraWhere,
-      extraParams: locationIds,
     });
-    return rows.map(environmentRowToEvent);
   },
   validateFilter(filter) {
-    return { locationIds: parseIdList(filter?.locationIds) };
+    return {
+      locationIds: parseIdList(filter?.locationIds),
+      grain: parseGrain(filter?.grain),
+    };
   },
 };
 
@@ -1091,4 +1389,5 @@ const ADAPTERS = {
 
 module.exports = {
   ADAPTERS,
+  parseGrain,
 };

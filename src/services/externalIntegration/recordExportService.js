@@ -7,6 +7,11 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const { getAdapter, requireEventType } = require("./eventTypeRegistry");
+const {
+  normalizeScheduleFreq,
+  normalizeScheduleDay,
+  resolveExportWindow,
+} = require("./exportSchedule");
 
 const CSV_BOM = "\uFEFF";
 
@@ -127,6 +132,8 @@ async function listRules(eventType) {
       timeFormat: r.time_format,
       outputFormat: r.output_format,
       exportTime: String(r.export_time).slice(0, 5),
+      scheduleFreq: normalizeScheduleFreq(r.schedule_freq) || "daily",
+      scheduleDay: r.schedule_day != null ? Number(r.schedule_day) : null,
       storageType: r.storage_type,
       localDir: r.local_dir ?? "",
       sftp:
@@ -156,6 +163,23 @@ function validateRulePayload(payload, options = {}) {
   const dateFormat = requireNonEmpty(payload.dateFormat, "檔名日期格式");
   const timeFormat = requireNonEmpty(payload.timeFormat, "檔名時間格式");
   const exportTime = requireTimeHHmm(payload.exportTime, "匯出時間");
+  const scheduleFreq = normalizeScheduleFreq(payload.scheduleFreq ?? "daily");
+  if (!scheduleFreq) {
+    throwApiError(C.VALIDATION_CUSTOM, "排程頻率必須為 daily／weekly／monthly", {
+      statusCode: 400,
+    });
+  }
+  const scheduleDay = normalizeScheduleDay(scheduleFreq, payload.scheduleDay);
+  if (scheduleFreq === "weekly" && scheduleDay == null) {
+    throwApiError(C.VALIDATION_CUSTOM, "每週排程須指定星期（1=一…7=日）", {
+      statusCode: 400,
+    });
+  }
+  if (scheduleFreq === "monthly" && scheduleDay == null) {
+    throwApiError(C.VALIDATION_CUSTOM, "每月排程須指定日期（1–31）", {
+      statusCode: 400,
+    });
+  }
   const outputFormat = normalizeOutputFormat(payload.outputFormat);
   const storageType = normalizeStorageType(payload.storageType);
 
@@ -212,6 +236,8 @@ function validateRulePayload(payload, options = {}) {
     timeFormat,
     outputFormat,
     exportTime,
+    scheduleFreq,
+    scheduleDay,
     storageType,
     localDir,
     sftp,
@@ -249,6 +275,8 @@ async function upsertRule(ruleId, payload) {
       normalized.timeFormat,
       normalized.outputFormat,
       normalized.exportTime,
+      normalized.scheduleFreq,
+      normalized.scheduleDay,
       normalized.storageType,
       normalized.storageType === "local" ? normalized.localDir : null,
       normalized.storageType === "sftp" ? normalized.sftp.host : null,
@@ -263,9 +291,9 @@ async function upsertRule(ruleId, payload) {
       const rows = await q(
         `
           INSERT INTO record_export_rules
-            (event_type, name, enabled, filename_prefix, date_format, time_format, output_format, export_time, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
+            (event_type, name, enabled, filename_prefix, date_format, time_format, output_format, export_time, schedule_freq, schedule_day, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
           VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            (?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
           RETURNING id
         `,
         params,
@@ -277,6 +305,7 @@ async function upsertRule(ruleId, payload) {
         `
           UPDATE record_export_rules
           SET event_type = ?, name = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, export_time = ?::time,
+              schedule_freq = ?, schedule_day = ?,
               storage_type = ?, local_dir = ?, sftp_host = ?, sftp_port = ?, sftp_username = ?, sftp_password_enc = ?, sftp_remote_dir = ?,
               filter_json = ?::jsonb, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
@@ -420,8 +449,11 @@ async function runRecordExportRule(ruleId) {
   }
 
   const now = new Date();
-  const startTime = DateTime.fromJSDate(now).setZone("Asia/Taipei").startOf("day");
-  const endTime = DateTime.fromJSDate(now).setZone("Asia/Taipei");
+  const { start, end } = resolveExportWindow({
+    scheduleFreq: rule.schedule_freq,
+    scheduleDay: rule.schedule_day,
+    now,
+  });
 
   const logRows = await db.query(
     "INSERT INTO record_export_run_logs (rule_id, success, row_count, file_paths) VALUES (?, FALSE, 0, ARRAY[]::TEXT[]) RETURNING id",
@@ -432,8 +464,8 @@ async function runRecordExportRule(ruleId) {
   try {
     const events = await adapter.fetchForExport({
       filter,
-      startTime: startTime.toJSDate(),
-      endTime: endTime.toJSDate(),
+      startTime: start,
+      endTime: end,
     });
 
     const headers = fieldConfigs.map(

@@ -3,21 +3,13 @@ const logger = require("../../utils/logger");
 const db = require("../../database/db");
 const recordExportService = require("./recordExportService");
 const { runExternalSyncOnce } = require("./externalSyncService");
+const {
+  computeNextDailyRunAt,
+  computeNextExportRunAt,
+  normalizeScheduleFreq,
+} = require("./exportSchedule");
 
-function computeNextRunAt(timeHHmm, zone = "Asia/Taipei") {
-  const [hh, mm] = String(timeHHmm || "00:00")
-    .trim()
-    .split(":")
-    .map((v) => Number(v));
-  const now = DateTime.now().setZone(zone);
-  let next = now.set({ hour: hh || 0, minute: mm || 0, second: 0, millisecond: 0 });
-  if (next <= now.plus({ seconds: 1 })) {
-    next = next.plus({ days: 1 });
-  }
-  return next;
-}
-
-function createFixedDailyScheduler({ logger: schedLogger, loadJobs }) {
+function createFixedScheduler({ logger: schedLogger, loadJobs }) {
   const timers = new Map();
   let stopped = false;
 
@@ -47,7 +39,7 @@ function createFixedDailyScheduler({ logger: schedLogger, loadJobs }) {
     const nowMs = DateTime.now().setZone(zone).toMillis();
 
     for (const job of jobs) {
-      const next = computeNextRunAt(job.timeHHmm, zone);
+      const next = job.nextAt;
       const delayMs = Math.max(1000, next.toMillis() - nowMs);
       schedLogger?.info?.("已排程任務", {
         key: job.key,
@@ -93,7 +85,7 @@ let externalSyncHandle = null;
 let recordExportHandle = null;
 
 function startExternalSync() {
-  const scheduler = createFixedDailyScheduler({
+  const scheduler = createFixedScheduler({
     logger: externalSyncLogger,
     loadJobs: async () => {
       const rows = await db.query(
@@ -111,7 +103,7 @@ function startExternalSync() {
 
       return [...byTime.entries()].map(([timeHHmm, eventTypes]) => ({
         key: `external-sync-${timeHHmm}`,
-        timeHHmm,
+        nextAt: computeNextDailyRunAt(timeHHmm),
         run: async () => {
           for (const eventType of eventTypes) {
             try {
@@ -133,27 +125,43 @@ function startExternalSync() {
 }
 
 function startRecordExport() {
-  const scheduler = createFixedDailyScheduler({
+  const scheduler = createFixedScheduler({
     logger: recordExportLogger,
     loadJobs: async () => {
       const rules = await db.query(
-        "SELECT id, export_time FROM record_export_rules WHERE enabled = TRUE ORDER BY id ASC",
+        `SELECT id, export_time, schedule_freq, schedule_day
+         FROM record_export_rules WHERE enabled = TRUE ORDER BY id ASC`,
         [],
       );
       if (!rules?.length) return [];
 
-      const byTime = new Map();
+      const byKey = new Map();
       for (const rule of rules) {
         const time = String(rule.export_time).slice(0, 5);
-        if (!byTime.has(time)) byTime.set(time, []);
-        byTime.get(time).push(rule.id);
+        const freq = normalizeScheduleFreq(rule.schedule_freq) || "daily";
+        const day = rule.schedule_day != null ? Number(rule.schedule_day) : 0;
+        const key = `record-export-${freq}-${day || 0}-${time}`;
+        if (!byKey.has(key)) {
+          byKey.set(key, {
+            key,
+            freq,
+            day: rule.schedule_day,
+            timeHHmm: time,
+            ruleIds: [],
+          });
+        }
+        byKey.get(key).ruleIds.push(rule.id);
       }
 
-      return [...byTime.entries()].map(([timeHHmm, ruleIds]) => ({
-        key: `record-export-${timeHHmm}`,
-        timeHHmm,
+      return [...byKey.values()].map((group) => ({
+        key: group.key,
+        nextAt: computeNextExportRunAt({
+          scheduleFreq: group.freq,
+          scheduleDay: group.day,
+          timeHHmm: group.timeHHmm,
+        }),
         run: async () => {
-          for (const ruleId of ruleIds) {
+          for (const ruleId of group.ruleIds) {
             try {
               await recordExportService.runRecordExportRule(ruleId);
             } catch (err) {

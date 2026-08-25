@@ -41,6 +41,7 @@
     "test:data-export:seed": "node scripts/externalIntegration/testDataExport.js seed",
     "test:data-export:sync-now": "node scripts/externalIntegration/testDataExport.js sync",
     "test:data-export:export-now": "node scripts/externalIntegration/testDataExport.js export",
+    "test:data-export:sample-all": "node scripts/externalIntegration/sampleAllEventExports.js",
     "mediamtx": "node scripts/start-mediamtx.js",
     "mediamtx:generate": "node scripts/generate-mediamtx-config.js"
   },

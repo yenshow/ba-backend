@@ -94,6 +94,10 @@ async function ensureExternalIntegrationTables(pool) {
       ADD COLUMN IF NOT EXISTS cursor_event_id BIGINT
   `);
   await pool.query(`
+    ALTER TABLE external_sync_configs
+      ADD COLUMN IF NOT EXISTS options_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
     DO $$
     DECLARE cname text;
     BEGIN
@@ -167,6 +171,8 @@ async function ensureExternalIntegrationTables(pool) {
       time_format TEXT NOT NULL,
       output_format VARCHAR(8) NOT NULL CHECK (output_format IN ('csv','txt')),
       export_time TIME NOT NULL,
+      schedule_freq VARCHAR(16) NOT NULL DEFAULT 'daily',
+      schedule_day INTEGER NULL,
       storage_type VARCHAR(8) NOT NULL CHECK (storage_type IN ('local','sftp')),
       local_dir TEXT,
       sftp_host TEXT,
@@ -182,6 +188,24 @@ async function ensureExternalIntegrationTables(pool) {
   await pool.query(`
     ALTER TABLE record_export_rules
       ADD COLUMN IF NOT EXISTS filter_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    ALTER TABLE record_export_rules
+      ADD COLUMN IF NOT EXISTS schedule_freq VARCHAR(16) NOT NULL DEFAULT 'daily'
+  `);
+  await pool.query(`
+    ALTER TABLE record_export_rules
+      ADD COLUMN IF NOT EXISTS schedule_day INTEGER NULL
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      ALTER TABLE record_export_rules
+        ADD CONSTRAINT record_export_rules_schedule_freq_check
+        CHECK (schedule_freq IN ('daily','weekly','monthly'));
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END $$;
   `);
   await pool.query(`
     ALTER TABLE record_export_rules
