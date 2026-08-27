@@ -33,6 +33,8 @@
     "postgres:stop": "node scripts/portable-postgres.js stop",
     "probe:isapi": "node scripts/isapiSubscribeProbe.js",
     "test:security:safe-url": "node tests/security/safeUrl.test.js",
+    "test:operational-event-copy": "node tests/operationalEvents/operationalEventCopy.test.js",
+    "test:alert-copy": "node tests/alerts/alertCopy.test.js",
     "yscp:resubscribe": "node scripts/yscpResubscribe.js",
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",

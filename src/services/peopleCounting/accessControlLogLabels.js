@@ -51,11 +51,42 @@ function resolveAccessControlEvent(sub, entryIps, exitIps, deviceIp) {
   };
 }
 
-function resolveVerifyMethodLabel(payload) {
+function resolveVerifyMethodKey(payload) {
   const sub = extractSubEventType(payload);
   if (sub == null) return null;
-  const key = VERIFY_KEY_BY_SUB[sub];
-  return key ? VERIFY_LABEL[key] : null;
+  if (sub === 2077 || sub === 2078 || sub === 2079) return "alcohol";
+  return VERIFY_KEY_BY_SUB[sub] || null;
+}
+
+function resolveVerifyMethodLabel(payload) {
+  const key = resolveVerifyMethodKey(payload);
+  if (!key || key === "alcohol") return key === "alcohol" ? "酒精" : null;
+  return VERIFY_LABEL[key] || null;
+}
+
+function trimOrNull(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
+/** 營運事件 payload.result：pass／fail */
+function resolveOperationalAccessResult(payload) {
+  const sub = extractSubEventType(payload);
+  if (sub != null && FAIL_SUBS.has(sub)) return "fail";
+  // 2078 飲酒、2079 醉酒；2077 酒精檢測正常仍為 pass
+  if (sub === 2078 || sub === 2079) return "fail";
+  return "pass";
+}
+
+/** 門禁 ISAPI payload 身分欄（message 與 payload 共用） */
+function extractAccessEventIdentity(payload) {
+  const ac = payload || {};
+  return {
+    personName: trimOrNull(ac.personName ?? ac.name),
+    employeeNo: trimOrNull(ac.employeeNoString ?? ac.employeeNo),
+    cardNo: trimOrNull(ac.cardNo),
+  };
 }
 
 function yscpEventLabel(eventType) {
@@ -95,8 +126,11 @@ function resolveAccessEventPopupLabel(payload, { deviceRole } = {}) {
 
 module.exports = {
   extractSubEventType,
+  extractAccessEventIdentity,
   resolveAccessControlEvent,
+  resolveVerifyMethodKey,
   resolveVerifyMethodLabel,
+  resolveOperationalAccessResult,
   resolveOperationalAccessSemantics,
   resolveAccessEventPopupLabel,
   yscpEventLabel,

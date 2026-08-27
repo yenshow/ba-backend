@@ -9,6 +9,7 @@ const db = require("../../database/db");
 const operationalEventService = require("./operationalEventService");
 const {
   summaryControlWrite,
+  summaryLinkageWrite,
   resolvePointLabel,
 } = require("./operationalEventCopy");
 const {
@@ -283,6 +284,30 @@ async function recordControlWriteEvent({
       ? { values }
       : { value: Boolean(value) };
 
+  const linkageExecutionType =
+    payloadExtra && typeof payloadExtra === "object"
+      ? payloadExtra.executionType
+      : null;
+  const defaultMessage =
+    controlScope === "alert_linkage" && linkageExecutionType != null
+      ? summaryLinkageWrite({
+          address,
+          value: Boolean(value),
+          executionType: linkageExecutionType,
+          placeLabel: placeCtx.placeLabel,
+        })
+      : summaryControlWrite({
+          source: controlScope,
+          address,
+          bitKey,
+          value: displayValue,
+          registerType: isHolding ? "holding" : "coil",
+          placeLabel: placeCtx.placeLabel,
+          pointKey: pointMeta.pointKey,
+          pointLabel: pointMeta.pointLabel,
+          ...(batchCount != null && batchCount > 1 ? { batchCount } : {}),
+        });
+
   return operationalEventService.recordEvent({
     source: controlScope,
     event_kind: "control_write",
@@ -293,19 +318,7 @@ async function recordControlWriteEvent({
     // new_value 欄位為 BOOLEAN；AO 數值改放 payload，此處留 null
     new_value: isHolding ? null : Boolean(value),
     bit_key: bitKey,
-    message:
-      summary ||
-      summaryControlWrite({
-        source: controlScope,
-        address,
-        bitKey,
-        value: displayValue,
-        registerType: isHolding ? "holding" : "coil",
-        placeLabel: placeCtx.placeLabel,
-        pointKey: pointMeta.pointKey,
-        pointLabel: pointMeta.pointLabel,
-        ...(batchCount != null && batchCount > 1 ? { batchCount } : {}),
-      }),
+    message: summary || defaultMessage,
     actor_user_id: actorUserId,
     ref_table: refTable,
     ref_id: refId,

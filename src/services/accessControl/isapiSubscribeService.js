@@ -24,6 +24,10 @@ const {
 } = require("../operationalEvents/operationalEventPlaceContext");
 const {
   resolveOperationalAccessSemantics,
+  resolveVerifyMethodKey,
+  resolveOperationalAccessResult,
+  extractSubEventType,
+  extractAccessEventIdentity,
 } = require("../peopleCounting/accessControlLogLabels");
 const {
   emitAccessControlEventFromPlaceContext,
@@ -89,12 +93,8 @@ async function persistIsapiEvent(options) {
   });
   if (id != null) {
     const ac = payload || {};
-    const personName =
-      ac.personName ||
-      ac.name ||
-      ac.employeeNoString ||
-      ac.cardNo ||
-      "";
+    const { personName, employeeNo, cardNo } = extractAccessEventIdentity(ac);
+    const subEventType = extractSubEventType(ac) ?? ac.subEventType;
     const action = resolveOperationalAccessSemantics(ac, {
       deviceRole: placeCtx.deviceRole,
     });
@@ -107,18 +107,25 @@ async function persistIsapiEvent(options) {
       device_id: deviceId || null,
       message: summaryAccessEvent({
         personName,
+        employeeNo,
         placeLabel: placeCtx.placeLabel,
         action,
       }),
       ref_table: "isapi_access_events",
       ref_id: id,
       payload: {
+        accessKind: "door",
         deviceIp,
         deviceId: deviceId || null,
         eventType,
         majorEventType: ac.majorEventType,
-        subEventType: ac.subEventType,
+        subEventType,
         deviceRole: placeCtx.deviceRole,
+        personName,
+        employeeNo,
+        cardNo,
+        verifyMethod: resolveVerifyMethodKey(ac),
+        result: resolveOperationalAccessResult(ac),
       },
     });
   }

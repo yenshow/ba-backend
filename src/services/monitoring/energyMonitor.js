@@ -115,14 +115,11 @@ async function checkEnergyMeters() {
 
   if (includeIds.length === 0) {
     await energyAlertEvaluator.syncContractDemandAlerts({
-      stages: config.load_shed_stages,
       demandKw: null,
       contractKw: config.contract_capacity_kw,
       hasSample: false,
     });
     await energyAlertEvaluator.syncMeterStaleAlerts({
-      enabled: false,
-      staleMinutes: config.meter_stale_minutes,
       latestByDeviceId: new Map(),
       includeDeviceIds: [],
     });
@@ -189,12 +186,9 @@ async function checkEnergyMeters() {
 
         if (typeof data.active_energy === "number") {
           await energyAlertEvaluator.evaluateReadingJump({
-            enabled: config.reading_jump_enabled,
             deviceId: device.id,
             deviceName: device.name,
             activeEnergy: data.active_energy,
-            multiplier: config.reading_jump_multiplier,
-            minKwh: config.reading_jump_min_kwh,
           });
         }
       }
@@ -206,14 +200,12 @@ async function checkEnergyMeters() {
         totalDemand += data.demand;
         hasDemand = true;
       }
-    } else if (config.reading_jump_enabled) {
+    } else {
       await energyAlertEvaluator.evaluateReadingJump({
-        enabled: false,
         deviceId: device.id,
         deviceName: device.name,
         activeEnergy: null,
-        multiplier: config.reading_jump_multiplier,
-        minKwh: config.reading_jump_min_kwh,
+        resolveWhenNoSample: true,
       });
     }
 
@@ -237,15 +229,12 @@ async function checkEnergyMeters() {
   const demandKw = hasDemand ? totalDemand : hasPowerSample ? totalPower : null;
 
   await energyAlertEvaluator.syncContractDemandAlerts({
-    stages: config.load_shed_stages,
     demandKw,
     contractKw: config.contract_capacity_kw,
     hasSample,
   });
 
   await energyAlertEvaluator.syncMeterStaleAlerts({
-    enabled: config.meter_stale_enabled,
-    staleMinutes: config.meter_stale_minutes,
     latestByDeviceId,
     includeDeviceIds: includeIds,
   });

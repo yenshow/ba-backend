@@ -305,6 +305,7 @@ router.put(
         siteId,
         channelId: req.body?.channelId ?? req.query.channelId,
         ctrlMode: req.body?.ctrlMode,
+        actorUserId: req.user?.id ?? null,
       },
     );
     res.sendSuccess(result);

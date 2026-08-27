@@ -1,5 +1,5 @@
 /**
- * 七種 eventType 實際匯出欄位取樣（對接／轉存同源 catalog）
+ * 六種 eventType 實際匯出欄位取樣（對接／轉存同源 catalog）
  *
  *   cd ba-backend
  *   npm run test:data-export:sample-all
@@ -26,9 +26,7 @@ const {
 /** @type {Record<string, string>} */
 const EXPECTED = {
   access_control:
-    "門禁管理模組全量：門禁設備＋人臉攝影機逐筆（非進出統計；含進出方向／驗證方式）。",
-  people_counting:
-    "僅 YSCP people_counting_logs；考勤／門禁請用 access_control。",
+    "門禁管理模組全量：門禁設備＋人臉攝影機逐筆；含出入口 ID、進出方向／驗證方式；各類型另附可自訂表頭的空白欄。",
   vehicle: "過車逐筆（車牌／時間／地點）；非進出／群組統計表。",
   energy: "預設小時彙總（energy_usage_aggregated）；grain=raw 為原始讀數。",
   environment: "預設小時平均（environment_readings_aggregated）；grain=raw 為原始讀數。",
@@ -37,15 +35,9 @@ const EXPECTED = {
 };
 
 const DEFAULT_FORMATS = {
-  eventDateTime: "yyyy-MM-dd HH:mm:ss",
-  eventDate: "yyyy-MM-dd",
-  eventTime: "HH:mm:ss",
-  eventTime_as_datetime: "yyyy-MM-dd HH:mm:ss",
-  recordedAt: "yyyy-MM-dd HH:mm:ss",
-  occurredAt: "yyyy-MM-dd HH:mm:ss",
-  triggerTime: "yyyy-MM-dd HH:mm:ss",
-  createdAt: "yyyy-MM-dd HH:mm:ss",
-  updatedAt: "yyyy-MM-dd HH:mm:ss",
+  datetime: "yyyy-MM-dd HH:mm:ss",
+  date: "yyyy-MM-dd",
+  time: "HH:mm:ss",
 };
 
 const takeFlag = (argv, name) => {
@@ -64,10 +56,9 @@ const escapeCsv = (value) => {
 
 const resolveFormat = (field) => {
   if (!field.requiresFormat) return undefined;
-  if (field.key === "eventTime" && field.label === "事件時間") {
-    return DEFAULT_FORMATS.eventTime_as_datetime;
-  }
-  return DEFAULT_FORMATS[field.key] || "yyyy-MM-dd HH:mm:ss";
+  if (field.formatKind === "date") return DEFAULT_FORMATS.date;
+  if (field.formatKind === "time") return DEFAULT_FORMATS.time;
+  return DEFAULT_FORMATS.datetime;
 };
 
 const fetchEvents = async (adapter, { days, limit }) => {
@@ -216,7 +207,7 @@ const writeSummary = (outDir, results, { days, limit }) => {
   lines.push("## 與完整報表對照（簡）", "");
   lines.push("| 系統 | 完整報表常有 | 本取樣／對接轉存 |");
   lines.push("|------|--------------|------------------|");
-  lines.push("| 門禁／人流 UI | 進出統計＋群組統計＋明細 | 門禁＋人臉明細用 `access_control`；`people_counting` 僅 YSCP |");
+  lines.push("| 門禁／人流 UI | 進出統計＋群組統計＋明細 | 門禁＋人臉明細用 `access_control` |");
   lines.push("| 車輛 | 統計＋群組＋過車紀錄 | 僅過車明細 `vehicle` |");
   lines.push("| 能源 | 小時／日彙總＋原始 | 預設小時彙總；`grain=raw` 才讀 `energy_readings` |");
   lines.push("| 環境 | 時間桶平均＋明細 | 預設小時平均；`grain=raw` 才讀 `environment_readings` |");

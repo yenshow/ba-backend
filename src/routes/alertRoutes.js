@@ -40,15 +40,19 @@ const licenseService = require("../services/license/licenseService");
 const ALLOWED_ALERT_TYPES = ["offline", "error", "threshold", "di", "do"];
 const ALLOWED_SEVERITIES = ["warning", "error", "critical"];
 const ALLOWED_RULE_ALERT_TYPES = ["offline", "threshold", "di", "do"];
-const ALLOWED_RULE_SEVERITIES = ["warning", "critical"];
-const ALLOWED_CONDITION_TYPES = ["threshold", "error_count", "bit_state"];
-const ALLOWED_TARGET_TYPES = ["system", "location", "zone"];
-const ALLOWED_MESSAGE_TEMPLATE_KEYS = [
-  "rule.threshold.v1",
-  "rule.offline.v1",
-  "rule.di.v1",
-  "rule.do.v1",
+const ALLOWED_RULE_SEVERITIES = ["warning", "error", "critical"];
+const ALLOWED_CONDITION_TYPES = [
+  "threshold",
+  "error_count",
+  "bit_state",
+  "energy_contract_stage",
+  "energy_meter_stale",
+  "energy_reading_jump",
 ];
+const ALLOWED_TARGET_TYPES = ["system", "location", "zone"];
+const {
+  ALLOWED_MESSAGE_TEMPLATE_KEYS,
+} = require("../services/alerts/alertCopy");
 
 /** 閾值條件運算子（不支援 = / ==） */
 const ALLOWED_THRESHOLD_OPERATORS = [">", ">=", "<", "<="];
@@ -511,8 +515,37 @@ function validateRulePayload(payload, { allowPartial = false } = {}) {
   if (opStr !== "" && !opOk) {
     return `threshold 的 operator 不合法，${allowedOpHint}`;
   }
-  if (!allowPartial && condition_type === "threshold" && !opOk) {
+  if (!allowPartial && condition_type === "threshold" && source !== "energy" && !opOk) {
     return `threshold 規則需提供 operator，且 ${allowedOpHint}`;
+  }
+
+  if (condition_type === "energy_contract_stage") {
+    const level = Number(condition_config?.level);
+    const pct = Number(condition_config?.threshold_pct);
+    if (!Number.isInteger(level) || level < 1 || level > 3) {
+      return "energy_contract_stage 需提供 level（1～3）";
+    }
+    if (!Number.isFinite(pct) || pct < 1 || pct > 100) {
+      return "energy_contract_stage 需提供 threshold_pct（1～100）";
+    }
+  }
+
+  if (condition_type === "energy_meter_stale") {
+    const mins = Number(condition_config?.stale_minutes);
+    if (!Number.isFinite(mins) || mins < 1) {
+      return "energy_meter_stale 需提供 stale_minutes（>= 1）";
+    }
+  }
+
+  if (condition_type === "energy_reading_jump") {
+    const mult = Number(condition_config?.multiplier);
+    const minKwh = Number(condition_config?.min_kwh);
+    if (!Number.isFinite(mult) || mult < 1) {
+      return "energy_reading_jump 需提供 multiplier（>= 1）";
+    }
+    if (!Number.isFinite(minKwh) || minKwh < 0) {
+      return "energy_reading_jump 需提供 min_kwh（>= 0）";
+    }
   }
 
   const effectiveConditionType =
@@ -756,6 +789,13 @@ router.post(
   "/rules",
   requirePermission("system.alert_log.alert.create"),
   asyncHandler(async (req, res) => {
+    if (String(req.body?.source || "").trim() === "energy") {
+      throwApiError(
+        C.ALERT_VALIDATION_FAILED,
+        "能源 Incident 門檻請至能源參數設定維護；規則由系統預設建立，不可由此新增",
+      );
+    }
+
     const validationError = validateRulePayload(req.body, {
       allowPartial: false,
     });
@@ -982,17 +1022,34 @@ router.put(
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const validationError = validateRulePayload(req.body, {
+    const ruleId = parseInt(id, 10);
+    const existingRows = await db.query(
+      "SELECT source FROM alert_rules WHERE id = ? LIMIT 1",
+      [ruleId],
+    );
+    const existingSource = existingRows?.[0]?.source;
+
+    // 能源門檻 SSOT 在能源參數設定；警示紀錄僅可改啟用／嚴重度／名稱／後綴等
+    let updates = { ...(req.body || {}) };
+    if (String(existingSource || "") === "energy") {
+      delete updates.source;
+      delete updates.alert_type;
+      delete updates.condition_type;
+      delete updates.condition_config;
+      delete updates.dimension_key;
+      delete updates.message_template_key;
+      delete updates.message_template_custom;
+      delete updates.message_template;
+    }
+
+    const validationError = validateRulePayload(updates, {
       allowPartial: true,
     });
     if (validationError) {
       throwApiError(C.ALERT_VALIDATION_FAILED, validationError);
     }
 
-    const rule = await alertRuleService.updateAlertRule(
-      parseInt(id),
-      req.body,
-    );
+    const rule = await alertRuleService.updateAlertRule(ruleId, updates);
     res.sendSuccess({ rule });
   }),
 );

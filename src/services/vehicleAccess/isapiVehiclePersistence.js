@@ -153,6 +153,7 @@ async function persistAnprEvent(options) {
           plate,
           laneType: target.laneType,
           placeLabel: formatPlaceLabel(target.zoneName, target.locationName),
+          allowResult,
         }),
         ref_table: "vehicle_passageway_logs",
         ref_id: id,
@@ -160,6 +161,12 @@ async function persistAnprEvent(options) {
           licensePlate: plate || null,
           laneType: target.laneType,
           allowResult,
+          result:
+            allowResult === 0
+              ? "deny"
+              : allowResult === 1
+                ? "allow"
+                : null,
         },
       });
     }

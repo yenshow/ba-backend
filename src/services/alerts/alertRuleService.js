@@ -10,24 +10,18 @@ const { throwApiError } = require("../../utils/apiErrors");
 
 const ruleLogger = logger.createLogger("alertRuleService");
 
-/** 與前端約定：規則訊息以 canonical 模板 + 變數渲染（觸發時由 renderRuleMessage 統一處理） */
-const MESSAGE_TEMPLATE_KEYS = {
-  THRESHOLD_V1: "rule.threshold.v1",
-  OFFLINE_V1: "rule.offline.v1",
-  DI_V1: "rule.di.v1",
-  DO_V1: "rule.do.v1",
-  CUSTOM: "custom",
-};
-
-/** Canonical 與自訂模板皆應以 `{location_label}` 為唯一來源前綴占位（執行時會正規化舊版双占位／舊 source 占位） */
-const CANONICAL_TEMPLATES = {
-  [MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1]:
-    "{location_label} {parameter_name} {operator} {threshold}{unit}（當前 {current_value}{unit}）",
-  [MESSAGE_TEMPLATE_KEYS.OFFLINE_V1]:
-    "{location_label} 連續 {error_count} 次無法連接",
-  [MESSAGE_TEMPLATE_KEYS.DI_V1]: "{location_label} DI {di_address} 觸發",
-  [MESSAGE_TEMPLATE_KEYS.DO_V1]: "{location_label} DO {do_address} 觸發",
-};
+const {
+  MESSAGE_TEMPLATE_KEYS,
+  inferDefaultTemplateKey,
+  getThresholdOperatorDisplayLabel,
+  formatZoneDashLocation,
+  normalizeAlertRuleTemplate,
+  resolveRuleTemplate,
+  resolvePersistedTemplateFields,
+  formatMessage,
+  resolveSourceLabel,
+  formatDeviceFallbackName,
+} = require("./alertCopy");
 
 const LOCATION_SYSTEM_SOURCES = new Set([
   "environment",
@@ -45,27 +39,6 @@ const LOCATION_SYSTEM_SOURCES = new Set([
 const {
   getParameterDisplayName: getCatalogParameterDisplayName,
 } = require("../../constants/environmentParameterCatalog");
-
-function inferDefaultTemplateKey(alertType) {
-  if (alertType === "threshold") return MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
-  if (alertType === "offline") return MESSAGE_TEMPLATE_KEYS.OFFLINE_V1;
-  if (alertType === "di") return MESSAGE_TEMPLATE_KEYS.DI_V1;
-  if (alertType === "do") return MESSAGE_TEMPLATE_KEYS.DO_V1;
-  /** incident 用 error；舊排水規則可能仍為 error，無 canonical，改以 message_template 為準 */
-  return null;
-}
-
-function getCanonicalTemplateString(key) {
-  return CANONICAL_TEMPLATES[key] || "";
-}
-
-/** 訊息模板 {operator}：僅「超過／低於」（與前端列表、預覽一致） */
-function getThresholdOperatorDisplayLabel(operator) {
-  const op = String(operator ?? "").trim();
-  if (op === ">" || op === ">=") return "超過";
-  if (op === "<" || op === "<=") return "低於";
-  return "";
-}
 
 /**
  * 依 location_systems.id（即警報的 source_id）解析區域／地點名稱
@@ -88,16 +61,6 @@ async function getZoneLocationPairByLocationSystemId(locationSystemId) {
     zone_name: r?.[0]?.zone_name || "",
     location_name: r?.[0]?.location_name || "",
   };
-}
-
-/** 「區域 - 地點」；缺其一則只顯示有名稱的一方 */
-function formatZoneDashLocation(zoneName, locationName) {
-  const z = String(zoneName || "").trim();
-  const l = String(locationName || "").trim();
-  if (z && l) return `${z} - ${l}`;
-  if (l) return l;
-  if (z) return z;
-  return "";
 }
 
 async function getTargetLabels(targetType, targetId) {
@@ -145,44 +108,17 @@ function extractIoAddress(rule) {
   return m ? m[2] : "1";
 }
 
-function resolveRuleTemplate(rule) {
-  const key = rule.message_template_key;
-  if (key && CANONICAL_TEMPLATES[key]) {
-    return CANONICAL_TEMPLATES[key];
-  }
-  if (rule.message_template) {
-    return rule.message_template;
-  }
-  const fb = inferDefaultTemplateKey(rule.alert_type);
-  return fb ? CANONICAL_TEMPLATES[fb] || "" : "";
-}
-
-/**
- * 舊版模板升级为單一 `{location_label}`，避免再注入 source_display_name／source_name
- */
-function normalizeAlertRuleTemplate(template) {
-  if (template == null || typeof template !== "string") return template;
-  return template
-    .replace(
-      /\{source_display_name\}\{zone_location_suffix\}/g,
-      "{location_label}",
-    )
-    .replace(/\{source_name\}\{zone_location_suffix\}/g, "{location_label}")
-    .replace(/\{source_display_name\}/g, "{location_label}")
-    .replace(/\{source_name\}/g, "{location_label}");
-}
-
 async function resolveSourceDisplayNameForRule(rule, sourceId) {
   if (sourceId == null || !Number.isFinite(Number(sourceId))) {
     return "";
   }
-  if (rule.source === "device") {
+  if (rule.source === "device" || rule.source === "energy") {
     const r = await db.query("SELECT name FROM devices WHERE id = ? LIMIT 1", [
       sourceId,
     ]);
-    return r?.[0]?.name || `device:${sourceId}`;
+    return formatDeviceFallbackName(sourceId, r?.[0]?.name);
   }
-  return `${rule.source}:${sourceId}`;
+  return resolveSourceLabel(rule.source);
 }
 
 /**
@@ -211,7 +147,7 @@ async function resolveMessageLocationPrefix(rule, runtimeVars) {
     }
     const zoneSuffix = await computeZoneLocationSuffix(rule);
     if (!displayName) {
-      displayName = `${rule.source}:${sid}`;
+      displayName = resolveSourceLabel(rule.source);
     }
     return { displayName, zoneLocationSuffix: zoneSuffix };
   }
@@ -266,6 +202,30 @@ async function buildRuleMessageRenderContext(rule, runtimeVars = {}) {
     current_value: currentVal,
     error_count:
       runtimeVars.error_count != null ? String(runtimeVars.error_count) : "",
+    level:
+      runtimeVars.level != null
+        ? String(runtimeVars.level)
+        : cfg.level != null
+          ? String(cfg.level)
+          : "",
+    demand_kw:
+      runtimeVars.demand_kw != null ? String(runtimeVars.demand_kw) : "",
+    contract_kw:
+      runtimeVars.contract_kw != null ? String(runtimeVars.contract_kw) : "",
+    threshold_pct:
+      runtimeVars.threshold_pct != null
+        ? String(runtimeVars.threshold_pct)
+        : cfg.threshold_pct != null
+          ? String(cfg.threshold_pct)
+          : "",
+    stale_minutes:
+      runtimeVars.stale_minutes != null
+        ? String(runtimeVars.stale_minutes)
+        : cfg.stale_minutes != null
+          ? String(cfg.stale_minutes)
+          : "",
+    delta_kwh:
+      runtimeVars.delta_kwh != null ? String(runtimeVars.delta_kwh) : "",
   };
 
   const template = normalizeAlertRuleTemplate(resolveRuleTemplate(rule));
@@ -318,7 +278,7 @@ async function previewRuleMessage(payload) {
     condition_config: payload.condition_config || {},
     message_template_key:
       payload.message_template_key ||
-      inferDefaultTemplateKey(payload.alert_type) ||
+      inferDefaultTemplateKey(payload.alert_type, conditionType) ||
       MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1,
     message_template_custom: Boolean(payload.message_template_custom),
     message_template: payload.message_template || null,
@@ -340,22 +300,6 @@ async function previewRuleMessage(payload) {
         : "5",
   };
   return formatRuleMessageFromContext(ruleLike, sampleVars);
-}
-
-function resolvePersistedTemplateFields(payload) {
-  const alertType = payload.alert_type;
-  // 訊息模板固定：一律使用 canonical（不允許 custom 全文）
-  let key =
-    inferDefaultTemplateKey(alertType) || MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
-  if (!CANONICAL_TEMPLATES[key]) {
-    key = MESSAGE_TEMPLATE_KEYS.THRESHOLD_V1;
-  }
-  const messageTemplate = key ? getCanonicalTemplateString(key) : "";
-  return {
-    message_template_key: key,
-    message_template_custom: false,
-    message_template: messageTemplate,
-  };
 }
 
 /**
@@ -382,6 +326,15 @@ function clearThresholdRulesCache(source = null) {
     thresholdRulesCache.delete(source);
   } else {
     thresholdRulesCache.clear();
+  }
+}
+
+function clearEnergyRulesCacheIfNeeded(source) {
+  if (source !== "energy") return;
+  try {
+    require("../energy/energyAlertEvaluator").clearEnergyRulesCache();
+  } catch (_) {
+    /* optional during tests */
   }
 }
 
@@ -530,6 +483,17 @@ function deriveRuleDimensionKey({
     return "offline:default";
   }
 
+  if (conditionType === "energy_contract_stage") {
+    const level = normalizeRuleDimensionValue(config.level);
+    return level ? `contract_stage_${level}` : "contract_stage:default";
+  }
+  if (conditionType === "energy_meter_stale") {
+    return "meter_stale";
+  }
+  if (conditionType === "energy_reading_jump") {
+    return "reading_jump";
+  }
+
   if (
     (alertType === "di" || alertType === "do") &&
     conditionType === "bit_state"
@@ -660,6 +624,9 @@ async function createAlertRule(payload) {
 
   if (rule.alert_type === "threshold") {
     clearThresholdRulesCache(rule.source);
+  }
+  if (rule.source === "energy") {
+    clearEnergyRulesCacheIfNeeded(rule.source);
   }
 
   return rule;
@@ -814,6 +781,10 @@ async function updateAlertRule(id, updates) {
       clearThresholdRulesCache(updatedRule.source);
     }
   }
+  clearEnergyRulesCacheIfNeeded(existingRule.source);
+  if (updatedRule.source !== existingRule.source) {
+    clearEnergyRulesCacheIfNeeded(updatedRule.source);
+  }
 
   return updatedRule;
 }
@@ -836,6 +807,7 @@ async function deleteAlertRule(id) {
   if (deletedRule.alert_type === "threshold") {
     clearThresholdRulesCache(deletedRule.source);
   }
+  clearEnergyRulesCacheIfNeeded(deletedRule.source);
 
   return deletedRule;
 }
@@ -874,28 +846,6 @@ function evaluateThreshold(config, value) {
       });
       return false;
   }
-}
-
-/**
- * 格式化訊息模板
- * @param {string} template - 訊息模板
- * @param {Object} variables - 變數對象
- * @returns {string} 格式化後的訊息
- */
-function formatMessage(template, variables) {
-  if (!template) {
-    return "";
-  }
-
-  let message = template;
-
-  // 替換所有變數 {variable_name}
-  for (const [key, value] of Object.entries(variables)) {
-    const regex = new RegExp(`\\{${key}\\}`, "g");
-    message = message.replace(regex, String(value));
-  }
-
-  return message;
 }
 
 /**

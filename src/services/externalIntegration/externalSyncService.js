@@ -6,7 +6,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const { getAdapter, requireEventType, listEventTypes } = require("./eventTypeRegistry");
-const { parseGrain } = require("./eventAdapters");
+const { normalizeOptionsGrain } = require("./eventAdapters");
 
 function parseOptionsJson(rawOptions) {
   if (rawOptions != null && typeof rawOptions === "object" && !Array.isArray(rawOptions)) {
@@ -279,13 +279,10 @@ async function upsertConfig(payload) {
   const targetTable = requireNonEmpty(payload.targetTable, "第三方資料庫表格名稱");
   validateMappings(adapter, payload.mappings);
 
-  let optionsJson = parseOptionsJson(payload.options);
-  const hasGrainField = Boolean(
-    adapter.filterSchema?.fields?.some((f) => f.key === "grain"),
+  let optionsJson = normalizeOptionsGrain(
+    adapter,
+    parseOptionsJson(payload.options),
   );
-  if (hasGrainField) {
-    optionsJson.grain = parseGrain(optionsJson.grain);
-  }
 
   const existingRows = await db.query(
     "SELECT password_enc FROM external_sync_configs WHERE event_type = ? LIMIT 1",
@@ -391,7 +388,10 @@ async function runExternalSyncOnce(eventType = "access_control") {
   let conn = null;
   try {
     const options = parseOptionsJson(cfg.options_json);
-    const { events: rawEvents } = await adapter.fetchForSync({
+    const {
+      events: rawEvents,
+      cursorEvent: adapterCursorEvent,
+    } = await adapter.fetchForSync({
       cursorTsText: cfg.cursor_ts_text,
       cursorEventId: cfg.cursor_event_id,
       limit: 5000,
@@ -417,9 +417,10 @@ async function runExternalSyncOnce(eventType = "access_control") {
     });
     await insertRows(conn, cfg.target_table, columns, dataRows);
 
-    // 以「本批最後一筆事件」寫游標（支援多表合併／彙總列，勿回查單一 sourceTable）
+    // 優先用 adapter 指定游標（考勤彙整可能扣住不完整日）；否則用本批最後一筆
     const cursorSource =
-      events.length > 0 ? events[events.length - 1] : rawEvents[rawEvents.length - 1];
+      adapterCursorEvent ||
+      (events.length > 0 ? events[events.length - 1] : rawEvents[rawEvents.length - 1]);
     if (cursorSource?.timestamp != null && cursorSource?.id != null) {
       const cursorId = Number(cursorSource.id);
       await db.query(

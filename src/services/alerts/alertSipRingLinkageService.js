@@ -8,6 +8,7 @@ const { throwApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
 const { alertIndoorDevice } = require("../accessSecurity/sipInviteService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryIntercom } = require("../operationalEvents/operationalEventCopy");
 const licenseService = require("../license/licenseService");
 
 /** 延遲載入，避免與 accessSecurityService 循環引用 */
@@ -176,16 +177,17 @@ async function processSipRingLinkagesForNewAlert(alert) {
           });
         }
         const placeLabel =
-          indoorPlace?.locationName || device.name || device.id;
+          indoorPlace?.locationName || device.name || String(device.id);
         await operationalEventService.recordEvent({
           source: "alert_linkage",
           event_kind: "intercom",
           location_id: indoorPlace?.locationId ?? alert?.location_id ?? null,
           system_id: indoorPlace?.systemId ?? null,
           device_id: Number(device.id),
-          message: invite.ok
-            ? `${actionLabel} ${placeLabel}`
-            : `${actionLabel}失敗 ${placeLabel}`,
+          message: summaryIntercom({
+            placeLabel,
+            action: invite.ok ? actionLabel : `${actionLabel}失敗`,
+          }),
           payload: {
             layer: 2,
             fromAlertLinkage: true,

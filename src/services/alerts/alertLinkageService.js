@@ -4,7 +4,6 @@ const modbusBatchService = require("../devices/modbusBatchService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
-const { summaryLinkageWrite } = require("../operationalEvents/operationalEventCopy");
 const {
   recordControlWriteEvent,
   markCoilControlWrite,
@@ -149,11 +148,6 @@ async function writeDo({
         address: doAddress,
         value: Boolean(doValue),
         actorUserId: createdBy,
-        summary: summaryLinkageWrite({
-          address: doAddress,
-          value: Boolean(doValue),
-          executionType,
-        }),
         refTable: "alert_linkage_executions",
         refId: execId,
         payloadExtra: {

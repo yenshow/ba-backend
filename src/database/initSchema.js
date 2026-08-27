@@ -5,6 +5,7 @@ const logger = require("../utils/logger");
 const schemaLogger = logger.createLogger("initSchema");
 const syncDefinitions = require("../access/syncDefinitions");
 const { syncDeviceModelCatalog } = require("./syncDeviceModelCatalog");
+const { syncEnergyAlertRuleCatalog } = require("./syncEnergyAlertRuleCatalog");
 
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
@@ -94,7 +95,10 @@ async function initSchema() {
     for (const [name, values] of enums)
       await createEnum(targetPool, name, values);
 
-    const { ensureAlertSourceEnumValues } = require("./schemaPatches");
+    const {
+      ensureAlertSourceEnumValues,
+      ensureAlertRulesMessageTemplateColumns,
+    } = require("./schemaPatches");
     await ensureAlertSourceEnumValues(targetPool);
 
     // 建立 users 表（不含 email；討論決策：email 已自系統移除）
@@ -583,6 +587,8 @@ async function initSchema() {
         target_id INTEGER,
 				condition_type VARCHAR(50),
 				condition_config JSONB,
+				message_template_key VARCHAR(120),
+				message_template_custom BOOLEAN DEFAULT FALSE,
 				message_template TEXT,
         message_suffix TEXT,
 				enabled BOOLEAN DEFAULT TRUE,
@@ -598,10 +604,19 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_alert_rules_dimension_key ON alert_rules(source, alert_type, dimension_key);
 		`);
 
+    // 既有庫：CREATE IF NOT EXISTS 不會補欄，須在 energy catalog sync 前補齊
+    await ensureAlertRulesMessageTemplateColumns(targetPool);
+
     await createUpdatedAtTrigger(targetPool, "alert_rules");
 
     schemaLogger.info("alert_rules 表已建立（警報規則參照表）", {
       module: "initSchema",
+    });
+
+    const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(targetPool);
+    schemaLogger.info("energy alert_rules catalog 已同步", {
+      module: "initSchema",
+      ...energyAlertRuleSync,
     });
 
     // 建立警報事件表（事件流）
@@ -1317,7 +1332,7 @@ async function initSchema() {
       CREATE TABLE IF NOT EXISTS external_sync_configs (
         id SERIAL PRIMARY KEY,
         event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN (
-          'access_control','energy','operational','vehicle','people_counting','alerts','environment'
+          'access_control','energy','operational','vehicle','alerts','environment'
         )),
         push_time TIME NOT NULL,
         db_type VARCHAR(16) NOT NULL CHECK (db_type IN ('postgres','sqlserver','mysql')),
@@ -1391,7 +1406,7 @@ async function initSchema() {
       CREATE TABLE IF NOT EXISTS record_export_rules (
         id SERIAL PRIMARY KEY,
         event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN (
-          'access_control','energy','operational','vehicle','people_counting','alerts','environment'
+          'access_control','energy','operational','vehicle','alerts','environment'
         )),
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         name TEXT NOT NULL,

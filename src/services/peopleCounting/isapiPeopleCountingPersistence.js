@@ -163,6 +163,7 @@ async function persistPeopleCountingEvent(options) {
         ref_table: "isapi_people_counting_events",
         ref_id: id,
         payload: {
+          accessKind: "camera",
           enter: enterNum,
           exit: exitNum,
           enterDelta,

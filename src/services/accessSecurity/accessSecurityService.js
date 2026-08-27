@@ -8,6 +8,7 @@ const { createLogger } = require("../../utils/logger");
 const { alertIndoorDevice } = require("./sipInviteService");
 const videoIntercomArmingService = require("./videoIntercomArmingService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
+const { summaryIntercom } = require("../operationalEvents/operationalEventCopy");
 
 const logger = createLogger("accessSecurity");
 
@@ -268,11 +269,14 @@ async function ringLocation(locationId, { actorUserId = null } = {}) {
     location_id: lid,
     system_id: systemId,
     device_id: Number(device.id),
-    message: inviteResult.played
-      ? `手動語音廣播 ${locationName || lid}`
-      : inviteResult.ok
-        ? `手動振鈴 ${locationName || lid}`
-        : `手動振鈴失敗 ${locationName || lid}`,
+    message: summaryIntercom({
+      placeLabel: locationName || String(lid),
+      action: inviteResult.played
+        ? "手動語音廣播"
+        : inviteResult.ok
+          ? "手動振鈴"
+          : "手動振鈴失敗",
+    }),
     actor_user_id: actorUserId,
     payload: {
       layer: 2,

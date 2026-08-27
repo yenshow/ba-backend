@@ -1,6 +1,5 @@
 const crypto = require("crypto");
 const fs = require("fs");
-const path = require("path");
 
 const PERSONNEL_FACE_MAX_BYTES = 512 * 1024; // 與前端一致（設備限制）
 
@@ -9,8 +8,6 @@ function formatPersonnelFaceMaxSizeLabel() {
 }
 const PERSONNEL_FACE_ALLOWED_MIME = new Set(["image/jpeg", "image/jpg"]);
 
-const PERSONNEL_IMPORT_IMAGE_SEP = "+_";
-
 function sanitizePersonnelPart(value) {
   return String(value == null ? "" : value)
     .trim()
@@ -18,12 +15,12 @@ function sanitizePersonnelPart(value) {
     .replace(/\s+/g, "");
 }
 
-/** zip 對照與落地檔名基底：`姓名+_工號` */
+/** zip 對照與落地檔名基底：`姓名_工號` */
 function buildPersonnelImportImageBasename(fullName, employeeNo) {
   const namePart = sanitizePersonnelPart(fullName);
   const noPart = sanitizePersonnelPart(employeeNo);
   if (!namePart || !noPart) return null;
-  return `${namePart}${PERSONNEL_IMPORT_IMAGE_SEP}${noPart}`;
+  return `${namePart}_${noPart}`;
 }
 
 function buildPersonnelFilename(fullName, employeeNo, ext) {

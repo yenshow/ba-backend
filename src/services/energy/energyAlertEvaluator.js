@@ -1,8 +1,14 @@
 /**
- * 能源 Incident 內建偵測器（寫入平台 alerts）
+ * 能源 Incident 偵測器（alert_rules 驅動；寫入平台 alerts）
  */
 const alertService = require("../alerts/alertService");
+const alertRuleService = require("../alerts/alertRuleService");
 const energySettingsService = require("./energySettingsService");
+const {
+  summaryEnergyContractStage,
+  summaryEnergyMeterStale,
+  summaryEnergyReadingJump,
+} = require("../alerts/alertCopy");
 const logger = require("../../utils/logger").createLogger("energyAlertEvaluator");
 
 const STATION_SOURCE_ID = energySettingsService.SETTINGS_ID;
@@ -23,14 +29,27 @@ const CONTRACT_STAGE_DIMS = [
   DIM_CONTRACT_STAGE_3,
 ];
 
-const STAGE_SEVERITY = {
-  1: alertService.SEVERITIES.WARNING,
-  2: alertService.SEVERITIES.ERROR,
-  3: alertService.SEVERITIES.CRITICAL,
-};
-
 const lastActiveEnergyByDevice = new Map();
 const recentDeltasByDevice = new Map();
+
+let cachedEnergyRules = null;
+let cachedEnergyRulesAt = 0;
+const ENERGY_RULES_CACHE_MS = 1_000;
+
+async function getEnergyRules() {
+  const now = Date.now();
+  if (cachedEnergyRules && now - cachedEnergyRulesAt < ENERGY_RULES_CACHE_MS) {
+    return cachedEnergyRules;
+  }
+  cachedEnergyRules = await alertRuleService.getAllRulesForSource("energy", true);
+  cachedEnergyRulesAt = now;
+  return cachedEnergyRules || [];
+}
+
+function clearEnergyRulesCache() {
+  cachedEnergyRules = null;
+  cachedEnergyRulesAt = 0;
+}
 
 async function resolveEnergyAlertQuietly(sourceId, alertType, dimensionKey) {
   try {
@@ -77,23 +96,39 @@ async function resolveAllContractStageAlerts() {
   await resolveLegacyContractAlerts();
 }
 
+async function renderEnergyRuleMessage(rule, runtimeVars, fallbackBuilder) {
+  try {
+    const message = await alertRuleService.renderRuleMessage(rule, runtimeVars);
+    if (message) return message;
+  } catch (err) {
+    logger.warn("能源警報訊息渲染失敗", {
+      ruleId: rule.id,
+      error: err?.message || String(err),
+    });
+  }
+  return fallbackBuilder ? fallbackBuilder() : "";
+}
+
+function findContractStageRule(rules, level) {
+  return rules.find(
+    (r) =>
+      r.condition_type === "energy_contract_stage" &&
+      r.enabled !== false &&
+      Number(r.condition_config?.level) === level,
+  );
+}
+
 /**
  * 契約分級告警（1／2／3）：僅保留最高觸發級一筆
  */
-async function syncContractDemandAlerts({
-  stages,
-  demandKw,
-  contractKw,
-  hasSample,
-}) {
+async function syncContractDemandAlerts({ demandKw, contractKw, hasSample }) {
+  const rules = await getEnergyRules();
+  const contractRules = rules.filter(
+    (r) => r.condition_type === "energy_contract_stage",
+  );
   const contract = Number(contractKw) || 0;
-  const normalized =
-    Array.isArray(stages) && stages.length > 0
-      ? stages
-      : energySettingsService.DEFAULT_LOAD_SHED_STAGES;
 
-  const anyEnabled = normalized.some((s) => s.enabled !== false);
-  if (contract <= 0 || !anyEnabled) {
+  if (!contractRules.length || contract <= 0) {
     await resolveAllContractStageAlerts();
     return;
   }
@@ -104,15 +139,16 @@ async function syncContractDemandAlerts({
   }
 
   const demand = Number(demandKw);
+  const enabledRules = contractRules.filter((r) => r.enabled !== false);
 
   let activeLevel = null;
-  for (let i = normalized.length - 1; i >= 0; i--) {
-    const stage = normalized[i];
-    if (stage.enabled === false) continue;
-    const pct = Number(stage.threshold_pct) || 0;
+  for (let level = 3; level >= 1; level--) {
+    const rule = findContractStageRule(enabledRules, level);
+    if (!rule) continue;
+    const pct = Number(rule.condition_config?.threshold_pct) || 0;
     if (pct <= 0) continue;
     if (demand >= (contract * pct) / 100) {
-      activeLevel = Number(stage.level);
+      activeLevel = level;
       break;
     }
   }
@@ -121,7 +157,8 @@ async function syncContractDemandAlerts({
 
   for (let level = 1; level <= 3; level++) {
     const dim = CONTRACT_STAGE_DIMS[level - 1];
-    if (activeLevel !== level) {
+    const rule = findContractStageRule(contractRules, level);
+    if (activeLevel !== level || !rule || rule.enabled === false) {
       await resolveEnergyAlertQuietly(
         STATION_SOURCE_ID,
         alertService.ALERT_TYPES.THRESHOLD,
@@ -129,35 +166,57 @@ async function syncContractDemandAlerts({
       );
       continue;
     }
-    const stage = normalized.find((s) => Number(s.level) === level);
-    const pct = Number(stage?.threshold_pct) || 0;
+
+    const pct = Number(rule.condition_config?.threshold_pct) || 0;
+    const message = await renderEnergyRuleMessage(
+      rule,
+      {
+        source_id: STATION_SOURCE_ID,
+        level,
+        demand_kw: demand.toFixed(1),
+        contract_kw: contract.toFixed(1),
+        threshold_pct: String(Math.round(pct)),
+      },
+      () =>
+        summaryEnergyContractStage({
+          level,
+          demandKw: demand,
+          contractKw: contract,
+          thresholdPct: pct,
+        }),
+    );
+
     await alertService.createAlert({
       source: alertService.ALERT_SOURCES.ENERGY,
       source_id: STATION_SOURCE_ID,
       alert_type: alertService.ALERT_TYPES.THRESHOLD,
-      severity: STAGE_SEVERITY[level] || alertService.SEVERITIES.WARNING,
+      severity: rule.severity || alertService.SEVERITIES.WARNING,
       dimension_key: dim,
-      message: `契約 ${level} 級：即時功率／需量 ${demand.toFixed(1)} kW 已達契約容量 ${contract.toFixed(1)} kW 的 ${pct}%`,
+      message,
+      rule_id: rule.id,
     });
   }
 }
 
 /**
  * 表計讀數逾時（納入設備）
- * @param {{ enabled: boolean, staleMinutes: number, latestByDeviceId: Map<number, { recordedAt: Date, deviceName: string }>, includeDeviceIds: number[] }} opts
  */
 async function syncMeterStaleAlerts({
-  enabled,
-  staleMinutes,
   latestByDeviceId,
   includeDeviceIds,
 }) {
+  const rules = await getEnergyRules();
+  const staleRule = rules.find((r) => r.condition_type === "energy_meter_stale");
   const ids = includeDeviceIds || [];
-  const staleMs = Math.max(1, Number(staleMinutes) || 15) * 60 * 1000;
+  const staleMinutes = Math.max(
+    1,
+    Number(staleRule?.condition_config?.stale_minutes) || 15,
+  );
+  const staleMs = staleMinutes * 60 * 1000;
   const now = Date.now();
 
   for (const deviceId of ids) {
-    if (!enabled) {
+    if (!staleRule || staleRule.enabled === false) {
       await resolveEnergyAlertQuietly(
         deviceId,
         alertService.ALERT_TYPES.OFFLINE,
@@ -173,15 +232,30 @@ async function syncMeterStaleAlerts({
       now - new Date(latest.recordedAt).getTime() > staleMs;
 
     if (isStale) {
-      const name = latest?.deviceName || `設備 #${deviceId}`;
-      const mins = Math.max(1, Number(staleMinutes) || 15);
+      const name = latest?.deviceName;
+      const message = await renderEnergyRuleMessage(
+        staleRule,
+        {
+          source_id: deviceId,
+          source_display_name: name,
+          stale_minutes: String(staleMinutes),
+        },
+        () =>
+          summaryEnergyMeterStale({
+            deviceName: name,
+            deviceId,
+            staleMinutes,
+          }),
+      );
+
       await alertService.createAlert({
         source: alertService.ALERT_SOURCES.ENERGY,
         source_id: deviceId,
         alert_type: alertService.ALERT_TYPES.OFFLINE,
-        severity: alertService.SEVERITIES.CRITICAL,
+        severity: staleRule.severity || alertService.SEVERITIES.CRITICAL,
         dimension_key: DIM_METER_STALE,
-        message: `${name}：通訊逾時，最近 ${mins} 分鐘無讀數`,
+        message,
+        rule_id: staleRule.id,
       });
     } else {
       await resolveEnergyAlertQuietly(
@@ -206,14 +280,15 @@ function median(values) {
  * 累積量單次差分跳動
  */
 async function evaluateReadingJump({
-  enabled,
   deviceId,
   deviceName,
   activeEnergy,
-  multiplier,
-  minKwh,
+  resolveWhenNoSample = false,
 }) {
-  if (!enabled) {
+  const rules = await getEnergyRules();
+  const jumpRule = rules.find((r) => r.condition_type === "energy_reading_jump");
+
+  if (!jumpRule || jumpRule.enabled === false) {
     await resolveEnergyAlertQuietly(
       deviceId,
       alertService.ALERT_TYPES.THRESHOLD,
@@ -223,8 +298,18 @@ async function evaluateReadingJump({
   }
 
   if (!Number.isFinite(Number(activeEnergy))) {
+    if (resolveWhenNoSample) {
+      await resolveEnergyAlertQuietly(
+        deviceId,
+        alertService.ALERT_TYPES.THRESHOLD,
+        DIM_READING_JUMP,
+      );
+    }
     return;
   }
+
+  const multiplier = Number(jumpRule.condition_config?.multiplier) || 3;
+  const minKwh = Number(jumpRule.condition_config?.min_kwh) || 10;
 
   const energy = Number(activeEnergy);
   const prev = lastActiveEnergyByDevice.get(deviceId);
@@ -248,20 +333,33 @@ async function evaluateReadingJump({
   const baseline = median(deltas);
   recentDeltasByDevice.set(deviceId, [...deltas, delta].slice(-8));
 
-  const mult = Number(multiplier) || 3;
-  const minJump = Number(minKwh) || 10;
-  const threshold =
-    baseline > 0 ? baseline * mult : minJump;
-  const isJump = delta >= Math.max(minJump, threshold) && deltas.length >= 2;
+  const threshold = baseline > 0 ? baseline * multiplier : minKwh;
+  const isJump = delta >= Math.max(minKwh, threshold) && deltas.length >= 2;
 
   if (isJump) {
+    const message = await renderEnergyRuleMessage(
+      jumpRule,
+      {
+        source_id: deviceId,
+        source_display_name: deviceName,
+        delta_kwh: delta.toFixed(1),
+      },
+      () =>
+        summaryEnergyReadingJump({
+          deviceName,
+          deviceId,
+          deltaKwh: delta,
+        }),
+    );
+
     await alertService.createAlert({
       source: alertService.ALERT_SOURCES.ENERGY,
       source_id: deviceId,
       alert_type: alertService.ALERT_TYPES.THRESHOLD,
-      severity: alertService.SEVERITIES.WARNING,
+      severity: jumpRule.severity || alertService.SEVERITIES.WARNING,
       dimension_key: DIM_READING_JUMP,
-      message: `${deviceName || `設備 #${deviceId}`}：讀數跳動異常（單次 +${delta.toFixed(1)} kWh）`,
+      message,
+      rule_id: jumpRule.id,
     });
   } else {
     await resolveEnergyAlertQuietly(
@@ -295,6 +393,7 @@ module.exports = {
   DIM_CONTRACT_STAGE_3,
   DIM_METER_STALE,
   DIM_READING_JUMP,
+  clearEnergyRulesCache,
   resolveEnergyAlertQuietly,
   resolveAllContractStageAlerts,
   syncContractDemandAlerts,

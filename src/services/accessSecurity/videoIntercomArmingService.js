@@ -7,6 +7,12 @@ const { spawnArmingProcess } = require("../ladderSdk/sdkBridgeClient");
 const { resolveSdkCredentials } = require("../ladderSdk/sdkLadderDeviceService");
 const deviceService = require("../devices/deviceService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
+const {
+  summaryIntercom,
+} = require("../operationalEvents/operationalEventCopy");
+const {
+  loadPlaceContextByLocationId,
+} = require("../operationalEvents/operationalEventPlaceContext");
 
 /** 延遲載入，避免與 accessSecurityService 循環引用 */
 const resolveLocationByVoipOrHost = (...args) =>
@@ -44,10 +50,14 @@ const resolveLocationIdForPayload = async (payload) => {
 
 const handleEvent = async (deviceId, device, message) => {
   const eventTime = message.timestamp || new Date().toISOString();
-  const eventName = message.eventName || message.type || "intercom";
   let locationId = null;
+  let placeLabel = null;
   try {
     locationId = await resolveLocationIdForPayload(message);
+    if (locationId != null) {
+      const placeCtx = await loadPlaceContextByLocationId(locationId);
+      placeLabel = placeCtx.placeLabel;
+    }
   } catch {
     /* ignore */
   }
@@ -59,7 +69,7 @@ const handleEvent = async (deviceId, device, message) => {
       event_kind: "intercom",
       location_id: locationId,
       device_id: deviceId,
-      message: `對講組網事件：${eventName}`,
+      message: summaryIntercom({ placeLabel, message }),
       payload: {
         layer: 1,
         ...message,

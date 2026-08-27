@@ -1,14 +1,12 @@
 /**
  * 能源設定（單列 id=1）
+ * Incident 門檻：表單 UX 在此；執行期 SSOT 為 alert_rules（PUT 時 upsert）
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 
 const SETTINGS_ID = 1;
-
-/** 新安裝預設無分級；由使用者按需新增（最多 3） */
-const DEFAULT_LOAD_SHED_STAGES = [];
 
 const STAGE_DEFAULT_PCT = { 1: 80, 2: 90, 3: 100 };
 
@@ -36,7 +34,7 @@ const DEFAULT_CONFIG = {
     off_peak: { rate: 0, windows: [] },
   },
   water_tariff: { rate: 0 },
-  load_shed_stages: DEFAULT_LOAD_SHED_STAGES,
+  load_shed_stages: [],
 };
 
 function clampPct(value, fallback) {
@@ -69,23 +67,31 @@ function normalizeStage(raw, level, fallbackPct, fallbackEnabled) {
   };
 }
 
+/** 固定補齊 1～3 級（與 energy alert_rules catalog 對齊） */
+function normalizeLoadShedStagesToThree(stages) {
+  const byLevel = new Map();
+  for (const s of Array.isArray(stages) ? stages : []) {
+    const level = parseInt(s?.level, 10);
+    if (level >= 1 && level <= 3 && !byLevel.has(level)) {
+      byLevel.set(
+        level,
+        normalizeStage(s, level, STAGE_DEFAULT_PCT[level], true),
+      );
+    }
+  }
+  return [1, 2, 3].map((level) =>
+    byLevel.has(level)
+      ? byLevel.get(level)
+      : normalizeStage(null, level, STAGE_DEFAULT_PCT[level], true),
+  );
+}
+
 /**
- * 0～3 階按需；不強制補齊。陣列鍵存在時以內容為準（含空陣列）。
- * 舊資料無陣列時由 demand_warning_* / demand_alert_* 遷移。
+ * 寫入／正規化分級；無陣列時由舊 demand_warning_*／demand_alert_* 遷移
  */
 function normalizeLoadShedStages(src) {
   if (Array.isArray(src.load_shed_stages)) {
-    const byLevel = new Map();
-    for (const s of src.load_shed_stages) {
-      const level = parseInt(s?.level, 10);
-      if (level >= 1 && level <= 3 && !byLevel.has(level)) {
-        byLevel.set(
-          level,
-          normalizeStage(s, level, STAGE_DEFAULT_PCT[level], true),
-        );
-      }
-    }
-    return [1, 2, 3].filter((l) => byLevel.has(l)).map((l) => byLevel.get(l));
+    return normalizeLoadShedStagesToThree(src.load_shed_stages);
   }
 
   const warnEnabled = boolDefault(src.demand_warning_enabled, true);
@@ -99,7 +105,7 @@ function normalizeLoadShedStages(src) {
     const level = warnEnabled ? 3 : 1;
     migrated.push(normalizeStage(null, level, 100, true));
   }
-  return migrated;
+  return normalizeLoadShedStagesToThree(migrated);
 }
 
 function normalizeConfig(raw) {
@@ -109,9 +115,10 @@ function normalizeConfig(raw) {
         .map((id) => parseInt(id, 10))
         .filter((n) => Number.isFinite(n) && n > 0)
     : [];
-  const et = src.electricity_tariff && typeof src.electricity_tariff === "object"
-    ? src.electricity_tariff
-    : {};
+  const et =
+    src.electricity_tariff && typeof src.electricity_tariff === "object"
+      ? src.electricity_tariff
+      : {};
   const band = (key) => {
     const b = et[key] && typeof et[key] === "object" ? et[key] : {};
     return {
@@ -157,6 +164,145 @@ function normalizeConfig(raw) {
   };
 }
 
+function parseConditionConfig(raw) {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) || {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" ? raw : {};
+}
+
+/**
+ * GET：Incident 門檻以 alert_rules 為準覆寫回應（表單／dashboard UX）
+ */
+async function mergeIncidentThresholdsFromAlertRules(config) {
+  const alertRuleService = require("../alerts/alertRuleService");
+  const rules = await alertRuleService.getAllRulesForSource("energy", false);
+  if (!rules.length) {
+    return {
+      ...config,
+      load_shed_stages: normalizeLoadShedStagesToThree(config.load_shed_stages),
+    };
+  }
+
+  const byDim = new Map(rules.map((r) => [String(r.dimension_key || ""), r]));
+
+  const stages = [1, 2, 3].map((level) => {
+    const rule = byDim.get(`contract_stage_${level}`);
+    if (!rule) {
+      return normalizeStage(null, level, STAGE_DEFAULT_PCT[level], false);
+    }
+    const cfg = parseConditionConfig(rule.condition_config);
+    return normalizeStage(
+      {
+        enabled: rule.enabled !== false,
+        threshold_pct: cfg.threshold_pct,
+      },
+      level,
+      STAGE_DEFAULT_PCT[level],
+      rule.enabled !== false,
+    );
+  });
+
+  const stale = byDim.get("meter_stale");
+  const jump = byDim.get("reading_jump");
+  const staleCfg = parseConditionConfig(stale?.condition_config);
+  const jumpCfg = parseConditionConfig(jump?.condition_config);
+
+  return {
+    ...config,
+    load_shed_stages: stages,
+    meter_stale_enabled: stale
+      ? stale.enabled !== false
+      : config.meter_stale_enabled,
+    meter_stale_minutes: stale
+      ? clampPositiveInt(staleCfg.stale_minutes, config.meter_stale_minutes || 15)
+      : config.meter_stale_minutes,
+    reading_jump_enabled: jump
+      ? jump.enabled !== false
+      : config.reading_jump_enabled,
+    reading_jump_multiplier: jump
+      ? Number.isFinite(Number(jumpCfg.multiplier))
+        ? Math.max(1.5, Number(jumpCfg.multiplier))
+        : config.reading_jump_multiplier
+      : config.reading_jump_multiplier,
+    reading_jump_min_kwh: jump
+      ? Number.isFinite(Number(jumpCfg.min_kwh))
+        ? Math.max(0, Number(jumpCfg.min_kwh))
+        : config.reading_jump_min_kwh
+      : config.reading_jump_min_kwh,
+  };
+}
+
+/**
+ * PUT：將表單 Incident 門檻 upsert 到 alert_rules（執行期 SSOT）
+ */
+async function upsertEnergyIncidentAlertRules(config) {
+  const alertRuleService = require("../alerts/alertRuleService");
+  const {
+    listEnergyAlertRules,
+  } = require("../../constants/energyAlertRuleCatalog");
+  const catalog = listEnergyAlertRules();
+  const existing = await alertRuleService.getAllRulesForSource("energy", false);
+  const byDim = new Map(
+    (existing || []).map((r) => [String(r.dimension_key || ""), r]),
+  );
+  const stageByLevel = new Map(
+    (config.load_shed_stages || []).map((s) => [Number(s.level), s]),
+  );
+
+  // config 已由 normalizeConfig 正規化；此處只映射至 alert_rules
+  for (const template of catalog) {
+    let enabled = template.enabled !== false;
+    let conditionConfig = { ...(template.condition_config || {}) };
+
+    if (template.condition_type === "energy_contract_stage") {
+      const level = Number(template.condition_config?.level);
+      const stage = stageByLevel.get(level);
+      enabled = stage ? stage.enabled !== false : false;
+      conditionConfig = {
+        level,
+        threshold_pct:
+          stage?.threshold_pct ?? STAGE_DEFAULT_PCT[level] ?? 80,
+      };
+    } else if (template.condition_type === "energy_meter_stale") {
+      enabled = config.meter_stale_enabled !== false;
+      conditionConfig = { stale_minutes: config.meter_stale_minutes };
+    } else if (template.condition_type === "energy_reading_jump") {
+      enabled = config.reading_jump_enabled !== false;
+      conditionConfig = {
+        multiplier: config.reading_jump_multiplier,
+        min_kwh: config.reading_jump_min_kwh,
+      };
+    }
+
+    const existingRule = byDim.get(template.dimension_key);
+    if (existingRule) {
+      await alertRuleService.updateAlertRule(existingRule.id, {
+        enabled,
+        condition_type: template.condition_type,
+        condition_config: conditionConfig,
+      });
+    } else {
+      await alertRuleService.createAlertRule({
+        source: template.source,
+        alert_type: template.alert_type,
+        severity: template.severity,
+        name: template.name,
+        dimension_key: template.dimension_key,
+        condition_type: template.condition_type,
+        condition_config: conditionConfig,
+        message_template_key: template.message_template_key,
+        enabled,
+      });
+    }
+  }
+}
+
 async function getSettings() {
   const rows = await db.query(
     `SELECT id, config, updated_at FROM energy_settings WHERE id = $1`,
@@ -168,14 +314,19 @@ async function getSettings() {
        ON CONFLICT (id) DO NOTHING`,
       [SETTINGS_ID, JSON.stringify(DEFAULT_CONFIG)],
     );
-    return { id: SETTINGS_ID, config: normalizeConfig(DEFAULT_CONFIG), updatedAt: null };
+    const base = normalizeConfig(DEFAULT_CONFIG);
+    return {
+      id: SETTINGS_ID,
+      config: await mergeIncidentThresholdsFromAlertRules(base),
+      updatedAt: null,
+    };
   }
   const row = rows[0];
   const config =
     typeof row.config === "string" ? JSON.parse(row.config || "{}") : row.config;
   return {
     id: row.id,
-    config: normalizeConfig(config),
+    config: await mergeIncidentThresholdsFromAlertRules(normalizeConfig(config)),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
   };
 }
@@ -197,21 +348,23 @@ async function updateSettings(payload) {
     [SETTINGS_ID, JSON.stringify(next)],
   );
   const row = rows[0];
+
+  await upsertEnergyIncidentAlertRules(next);
+
   if (removedIds.length > 0) {
     const energyAlertEvaluator = require("./energyAlertEvaluator");
     await energyAlertEvaluator.disableAllDeviceEnergyAlerts(removedIds);
   }
+
   return {
     id: row.id,
-    config: normalizeConfig(row.config),
+    config: await mergeIncidentThresholdsFromAlertRules(next),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
   };
 }
 
 module.exports = {
   SETTINGS_ID,
-  DEFAULT_LOAD_SHED_STAGES,
-  STAGE_DEFAULT_PCT,
   getSettings,
   updateSettings,
 };

@@ -6,6 +6,10 @@ const {
   isValidSensorParameterKey,
 } = require("../constants/environmentParameterCatalog");
 const { syncDeviceModelCatalog, repairDeviceModelCatalogConfig } = require("./syncDeviceModelCatalog");
+const {
+  syncEnergyAlertRuleCatalog,
+  migrateEnergySettingsToAlertRules,
+} = require("./syncEnergyAlertRuleCatalog");
 
 /** 與 initSchema `alert_source`、alertService.ALERT_SOURCES 對齊 */
 const ALERT_SOURCE_ENUM_VALUES = [
@@ -67,8 +71,16 @@ async function createUpdatedAtTrigger(pool, tableName) {
 
 async function ensureExternalIntegrationTables(pool) {
   const EVENT_TYPE_CHECK = `(
-    'access_control','energy','operational','vehicle','people_counting','alerts','environment'
+    'access_control','energy','operational','vehicle','alerts','environment'
   )`;
+
+  // 移除已廢棄的 YSCP 人流匯出類型（對接／轉存）
+  await pool.query(`
+    DELETE FROM external_sync_configs WHERE event_type = 'people_counting'
+  `);
+  await pool.query(`
+    DELETE FROM record_export_rules WHERE event_type = 'people_counting'
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_sync_configs (
@@ -99,22 +111,24 @@ async function ensureExternalIntegrationTables(pool) {
   `);
   await pool.query(`
     DO $$
-    DECLARE cname text;
+    DECLARE r record;
     BEGIN
-      SELECT con.conname INTO cname
-      FROM pg_constraint con
-      JOIN pg_class rel ON rel.oid = con.conrelid
-      WHERE rel.relname = 'external_sync_configs'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%event_type%';
-      IF cname IS NOT NULL THEN
-        EXECUTE format('ALTER TABLE external_sync_configs DROP CONSTRAINT %I', cname);
-      END IF;
+      FOR r IN
+        SELECT con.conname AS cname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'external_sync_configs'
+          AND con.contype = 'c'
+          AND (
+            con.conname = 'external_sync_configs_event_type_check'
+            OR pg_get_constraintdef(con.oid) ILIKE '%event_type%'
+          )
+      LOOP
+        EXECUTE format('ALTER TABLE external_sync_configs DROP CONSTRAINT %I', r.cname);
+      END LOOP;
       ALTER TABLE external_sync_configs
         ADD CONSTRAINT external_sync_configs_event_type_check
         CHECK (event_type IN ${EVENT_TYPE_CHECK});
-    EXCEPTION WHEN duplicate_object THEN
-      NULL;
     END $$;
   `);
   await createUpdatedAtTrigger(pool, "external_sync_configs");
@@ -213,22 +227,24 @@ async function ensureExternalIntegrationTables(pool) {
   `);
   await pool.query(`
     DO $$
-    DECLARE cname text;
+    DECLARE r record;
     BEGIN
-      SELECT con.conname INTO cname
-      FROM pg_constraint con
-      JOIN pg_class rel ON rel.oid = con.conrelid
-      WHERE rel.relname = 'record_export_rules'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%event_type%';
-      IF cname IS NOT NULL THEN
-        EXECUTE format('ALTER TABLE record_export_rules DROP CONSTRAINT %I', cname);
-      END IF;
+      FOR r IN
+        SELECT con.conname AS cname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'record_export_rules'
+          AND con.contype = 'c'
+          AND (
+            con.conname = 'record_export_rules_event_type_check'
+            OR pg_get_constraintdef(con.oid) ILIKE '%event_type%'
+          )
+      LOOP
+        EXECUTE format('ALTER TABLE record_export_rules DROP CONSTRAINT %I', r.cname);
+      END LOOP;
       ALTER TABLE record_export_rules
         ADD CONSTRAINT record_export_rules_event_type_check
         CHECK (event_type IN ${EVENT_TYPE_CHECK});
-    EXCEPTION WHEN duplicate_object THEN
-      NULL;
     END $$;
   `);
   await createUpdatedAtTrigger(pool, "record_export_rules");
@@ -703,6 +719,21 @@ async function ensureAlertAccessDoorDeviceIds(pool) {
   `);
 }
 
+/**
+ * 既有庫：補 alert_rules 訊息模板鍵欄位（initSchema 已有；舊庫靠 patch）。
+ * 必須在 syncEnergyAlertRuleCatalog / migrateEnergySettingsToAlertRules 之前執行。
+ */
+async function ensureAlertRulesMessageTemplateColumns(pool) {
+  await pool.query(`
+    ALTER TABLE alert_rules
+      ADD COLUMN IF NOT EXISTS message_template_key VARCHAR(120)
+  `);
+  await pool.query(`
+    ALTER TABLE alert_rules
+      ADD COLUMN IF NOT EXISTS message_template_custom BOOLEAN DEFAULT FALSE
+  `);
+}
+
 /** 既有庫：補建人臉比對事件表（initSchema 已有；舊庫靠 patch） */
 async function ensureIsapiFaceContrastEventsTable(pool) {
   await pool.query(`
@@ -755,11 +786,16 @@ async function applySchemaPatches(pool) {
   await ensureAlertSipRingLinkagesTable(pool);
   await ensureAlertElevatorCallLinkagesTable(pool);
   await ensureIsapiFaceContrastEventsTable(pool);
+  await ensureAlertRulesMessageTemplateColumns(pool);
+  const energyRulesMigration = await migrateEnergySettingsToAlertRules(pool);
+  const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
   const deviceModelSync = await syncDeviceModelCatalog(pool);
   const deviceModelRepair = await repairDeviceModelCatalogConfig(pool);
   logger.info("schema patches 已套用", {
     module: "schemaPatches",
+    energyRulesMigration,
+    energyAlertRuleSync,
     migratedSensorModels,
     ...deviceModelSync,
     ...deviceModelRepair,
@@ -779,6 +815,7 @@ module.exports = {
   ensureAlertSipRingLinkagesTable,
   ensureAlertElevatorCallLinkagesTable,
   ensureIsapiFaceContrastEventsTable,
+  ensureAlertRulesMessageTemplateColumns,
   migrateLegacySensorModelConfigs,
   applySchemaPatches,
 };

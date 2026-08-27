@@ -5,6 +5,10 @@
  */
 
 const alertService = require("./alertService");
+const {
+  summaryRuleBitStateFallback,
+  summaryManualAlarmFallback,
+} = require("./alertCopy");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger");
@@ -1081,7 +1085,10 @@ async function recordRuleBitStateAlarm(
     // ignore
   }
   if (!message) {
-    message = `${config.source}:${scope.systemId} ${at.toUpperCase()} ${bk} 觸發`;
+    message = summaryRuleBitStateFallback({
+      source: config.source,
+      bitKey: bk,
+    });
   }
 
   await alertService.createAlert({
@@ -1226,7 +1233,7 @@ async function recordManualAlarm(systemKey, sourceId, options = {}) {
     // ignore
   }
   if (!message) {
-    message = `${sourceInfo.name} 手動觸發警報`;
+    message = summaryManualAlarmFallback({ sourceLabel: sourceInfo.name });
   }
 
   await alertService.createAlert({

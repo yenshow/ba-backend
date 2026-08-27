@@ -19,6 +19,10 @@ const {
 const {
   emitVehicleBarrierCameraEventFromPlaceContext,
 } = require("./vehicleBarrierCameraResolver");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const {
+  summaryBarrierControlWrite,
+} = require("../operationalEvents/operationalEventCopy");
 
 const VALID_CTRL_MODES = new Set(["open", "close", "lock", "unlock"]);
 const VALID_OPERATION_TYPES = new Set(["add", "modify"]);
@@ -430,21 +434,60 @@ async function controlBarrierGate(deviceId, options = {}) {
   const { device, client } = await getCameraDeviceAndClient(deviceId);
   const channelId = resolveChannelId(options.channelId);
   const modelName = device.model_name || device.model?.name;
-  await executeBarrierGateControl({
-    client,
-    modelName,
-    channelId,
-    ctrlMode,
-  });
+  const deviceName = device?.name || `設備 #${deviceId}`;
+  const placeCtx = await loadPlaceContextByVehicleCameraDeviceId(deviceId);
+  const actorUserId =
+    options.actorUserId != null ? Number(options.actorUserId) : null;
 
-  if (ctrlMode === "open") {
-    const placeCtx = await loadPlaceContextByVehicleCameraDeviceId(deviceId);
-    if (placeCtx?.locationId) {
-      emitVehicleBarrierCameraEventFromPlaceContext(placeCtx, {
-        source: "manual",
-        deviceId,
-      });
-    }
+  const recordOe = (success, errorMessage = null) => {
+    void operationalEventService.recordEvent({
+      source: "vehicle_access",
+      event_kind: "control_write",
+      location_id: placeCtx?.locationId ?? null,
+      system_id: placeCtx?.systemId ?? null,
+      device_id: deviceId,
+      bit_key: `barrier:${ctrlMode}`,
+      new_value: success ? true : null,
+      actor_user_id: Number.isFinite(actorUserId) ? actorUserId : null,
+      message: summaryBarrierControlWrite({
+        deviceName,
+        cmd: ctrlMode,
+        success,
+        errorMessage,
+        placeLabel: placeCtx?.placeLabel ?? null,
+      }),
+      ref_table: "devices",
+      ref_id: deviceId,
+      payload: {
+        cmd: ctrlMode,
+        success,
+        channelId,
+        ...(errorMessage
+          ? { errorMessage: String(errorMessage).slice(0, 500) }
+          : {}),
+      },
+    });
+  };
+
+  try {
+    await executeBarrierGateControl({
+      client,
+      modelName,
+      channelId,
+      ctrlMode,
+    });
+  } catch (err) {
+    recordOe(false, err?.message || String(err));
+    throw err;
+  }
+
+  recordOe(true);
+
+  if (ctrlMode === "open" && placeCtx?.locationId) {
+    emitVehicleBarrierCameraEventFromPlaceContext(placeCtx, {
+      source: "manual",
+      deviceId,
+    });
   }
 
   return { success: true, channelId, ctrlMode };

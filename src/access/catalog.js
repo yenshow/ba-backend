@@ -484,6 +484,7 @@ const getModuleDisplayNameByCode = (
 
 const ALERT_SOURCE_EXTRA_LABELS = {
   device: "設備",
+  energy: "能源管理",
 };
 
 /** 警報／報表 alert.source → 顯示名稱（依部署 profile，對齊 catalog） */

@@ -1,5 +1,5 @@
 /**
- * 外部整合：共用查詢工具 + 七種 eventType adapter（對接／轉存）
+ * 外部整合：共用查詢工具 + 六種 eventType adapter（對接／轉存）
  */
 const { DateTime } = require("luxon");
 const db = require("../../database/db");
@@ -23,6 +23,41 @@ function formatTs(value, format) {
   if (!fmt || !value) return "";
   const dt = DateTime.fromJSDate(new Date(value)).setZone("Asia/Taipei");
   return dt.isValid ? dt.toFormat(fmt) : "";
+}
+
+/** 日期時間／日期／時間三分欄（與門禁 eventDateTime／eventDate／eventTime 同型） */
+function timeSplitFields({
+  dateTimeKey,
+  dateKey,
+  timeKey,
+  labelStem,
+  required = false,
+}) {
+  return [
+    {
+      key: dateTimeKey,
+      label: `${labelStem}日期和時間`,
+      requiresFormat: true,
+      formatKind: "datetime",
+      ...(required ? { required: true } : {}),
+    },
+    {
+      key: dateKey,
+      label: `${labelStem}日期`,
+      requiresFormat: true,
+      formatKind: "date",
+    },
+    {
+      key: timeKey,
+      label: `${labelStem}時間`,
+      requiresFormat: true,
+      formatKind: "time",
+    },
+  ];
+}
+
+function isTimeSplitKey(fieldKey, dateTimeKey, dateKey, timeKey) {
+  return fieldKey === dateTimeKey || fieldKey === dateKey || fieldKey === timeKey;
 }
 
 function toJsonText(value) {
@@ -144,20 +179,153 @@ function parseStringList(raw) {
   ];
 }
 
-/** @returns {'raw'|'hourly'} */
-function parseGrain(raw) {
+/** @param {string[]} allowed @param {string} fallback */
+function parseEnumValue(raw, allowed, fallback) {
   const v = String(raw ?? "").trim().toLowerCase();
-  if (v === "raw" || v === "hourly") return v;
-  return "hourly";
+  return allowed.includes(v) ? v : fallback;
+}
+
+/** 能源／環境：raw｜hourly（預設 hourly） */
+function parseGrain(raw) {
+  return parseEnumValue(raw, ["raw", "hourly"], "hourly");
+}
+
+/** 門禁：raw｜daily_first_last（預設 raw；相容舊 punchMode） */
+function parseAccessGrain(raw) {
+  return parseEnumValue(raw, ["raw", "daily_first_last"], "raw");
+}
+
+function readAccessGrain(obj) {
+  return parseAccessGrain(obj?.grain ?? obj?.punchMode);
 }
 
 const GRAIN_FILTER_FIELD = {
   key: "grain",
   type: "string",
-  label: "粒度（raw=原始／hourly=每小時，預設 hourly）",
+  label: "匯出粒度",
   enum: ["raw", "hourly"],
+  enumLabels: {
+    hourly: "每小時彙總（預設）",
+    raw: "原始讀數",
+  },
   required: false,
 };
+
+const ACCESS_GRAIN_FILTER_FIELD = {
+  key: "grain",
+  type: "string",
+  label: "匯出粒度",
+  enum: ["raw", "daily_first_last"],
+  enumLabels: {
+    raw: "逐筆（全部進出）",
+    daily_first_last: "每日最早與最晚（考勤）",
+  },
+  required: false,
+};
+
+/**
+ * 寫入 options_json.grain（依 adapter filterSchema）；清除舊 punchMode
+ * @returns {object}
+ */
+function normalizeOptionsGrain(adapter, optionsJson) {
+  const out = { ...(optionsJson || {}) };
+  const grainField = adapter?.filterSchema?.fields?.find((f) => f.key === "grain");
+  if (!grainField) {
+    delete out.grain;
+    delete out.punchMode;
+    return out;
+  }
+  const allowed = Array.isArray(grainField.enum) ? grainField.enum : [];
+  const fallback = allowed.includes("hourly")
+    ? "hourly"
+    : allowed[0] || "raw";
+  out.grain = parseEnumValue(out.grain ?? out.punchMode, allowed, fallback);
+  delete out.punchMode;
+  return out;
+}
+
+function taipeiDateKey(ts) {
+  if (!ts) return "";
+  const dt = DateTime.fromJSDate(new Date(ts)).setZone("Asia/Taipei");
+  return dt.isValid ? dt.toFormat("yyyy-MM-dd") : "";
+}
+
+function eventSortKey(evt) {
+  const t = new Date(evt?.timestamp).getTime();
+  const time = Number.isFinite(t) ? t : 0;
+  const id = Number(evt?.id);
+  return { time, id: Number.isFinite(id) ? id : 0 };
+}
+
+function cmpEventSort(a, b) {
+  const ka = eventSortKey(a);
+  const kb = eventSortKey(b);
+  if (ka.time !== kb.time) return ka.time - kb.time;
+  return ka.id - kb.id;
+}
+
+/** 每人（工號）每日：最早一筆 + 最晚一筆（僅一筆則不重複） */
+function reduceDailyFirstLast(events) {
+  const groups = new Map();
+  for (const evt of events || []) {
+    const emp = String(evt?.employeeId ?? "").trim();
+    if (!emp) continue;
+    const day = taipeiDateKey(evt.timestamp);
+    if (!day) continue;
+    const key = `${emp}\0${day}`;
+    const cur = groups.get(key);
+    if (!cur) {
+      groups.set(key, { first: evt, last: evt });
+      continue;
+    }
+    if (cmpEventSort(evt, cur.first) < 0) cur.first = evt;
+    if (cmpEventSort(evt, cur.last) > 0) cur.last = evt;
+  }
+
+  const out = [];
+  for (const { first, last } of groups.values()) {
+    out.push(first);
+    if (first !== last) out.push(last);
+  }
+  out.sort(cmpEventSort);
+  return out;
+}
+
+/**
+ * 對接考勤彙整：批次觸及 limit 時末日本可能不完整，先扣住不輸出，游標停在完整日末。
+ * 整批同日則仍輸出並推進游標（避免卡住）。
+ */
+function reduceDailyFirstLastForSync(rawEvents, fetchLimit) {
+  const raw = rawEvents || [];
+  const lim = clampLimit(fetchLimit);
+  const reduced = reduceDailyFirstLast(raw);
+  if (!raw.length) {
+    return { events: [], cursorEvent: null };
+  }
+
+  const hitLimit = raw.length >= lim;
+  if (!hitLimit) {
+    return { events: reduced, cursorEvent: raw[raw.length - 1] };
+  }
+
+  const lastDay = taipeiDateKey(raw[raw.length - 1]?.timestamp);
+  if (!lastDay) {
+    return { events: reduced, cursorEvent: raw[raw.length - 1] };
+  }
+
+  const completeEvents = reduced.filter(
+    (e) => taipeiDateKey(e.timestamp) && taipeiDateKey(e.timestamp) < lastDay,
+  );
+  if (completeEvents.length > 0) {
+    const cursorPool = raw.filter((e) => taipeiDateKey(e.timestamp) < lastDay);
+    return {
+      events: completeEvents,
+      cursorEvent: cursorPool[cursorPool.length - 1] ?? null,
+    };
+  }
+
+  return { events: reduced, cursorEvent: raw[raw.length - 1] };
+}
 
 // --- 門禁（access_control）---
 
@@ -165,11 +333,17 @@ const ACCESS_CONTROL_FIELD_CATALOG = [
   { key: "employeeId", label: "員工/人員 ID", required: true },
   { key: "personName", label: "姓名" },
   { key: "personGroup", label: "人員群組" },
+  { key: "deviceId", label: "出入口 ID" },
   { key: "deviceName", label: "出入口名稱" },
   { key: "deviceScreenshot", label: "設備截圖" },
-  { key: "eventDateTime", label: "進出日期和時間", requiresFormat: true },
-  { key: "eventDate", label: "進出日期", requiresFormat: true },
-  { key: "eventTime", label: "進出時間", requiresFormat: true },
+  {
+    key: "eventDateTime",
+    label: "進出日期和時間",
+    requiresFormat: true,
+    formatKind: "datetime",
+  },
+  { key: "eventDate", label: "進出日期", requiresFormat: true, formatKind: "date" },
+  { key: "eventTime", label: "進出時間", requiresFormat: true, formatKind: "time" },
   { key: "cardNo", label: "卡號" },
   { key: "direction", label: "進出方向" },
   { key: "verifyMethod", label: "驗證方式" },
@@ -193,6 +367,9 @@ function mapAccessControlEventToFieldValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "employeeId") return evt.employeeId ?? "";
   if (fieldKey === "personName") return evt.personName ?? "";
   if (fieldKey === "personGroup") return evt.unitName ?? "";
+  if (fieldKey === "deviceId") {
+    return evt.deviceId != null && evt.deviceId !== "" ? String(evt.deviceId) : "";
+  }
   if (fieldKey === "deviceName") return evt.deviceName ?? "";
   if (fieldKey === "deviceScreenshot") return evt.deviceScreenshotUrl ?? "";
   if (fieldKey === "cardNo") return evt.cardNo ?? "";
@@ -262,6 +439,7 @@ async function loadAccessControlDeviceContext() {
   const entryCameraIds = new Set();
   const exitCameraIds = new Set();
   const ipToDeviceName = new Map();
+  const ipToDeviceId = new Map();
   const deviceIdToName = new Map();
 
   const rows = await db.query(
@@ -288,6 +466,7 @@ async function loadAccessControlDeviceContext() {
       deviceIdToName.set(deviceId, name);
       if (ip) {
         ipToDeviceName.set(ip, name);
+        ipToDeviceId.set(ip, deviceId);
         if (role === "entry") entryIps.add(ip);
         else if (role === "exit") exitIps.add(ip);
       }
@@ -314,6 +493,7 @@ async function loadAccessControlDeviceContext() {
     entryCameraIds,
     exitCameraIds,
     ipToDeviceName,
+    ipToDeviceId,
     deviceIdToName,
   };
   acDeviceContextCachedAt = Date.now();
@@ -396,6 +576,7 @@ function buildAccessControlEventDto(row, ctx) {
 
   const deviceIp = row.device_ip != null ? String(row.device_ip) : "";
   const deviceName = ctx.ipToDeviceName.get(deviceIp) || deviceIp;
+  const mappedDeviceId = ctx.ipToDeviceId?.get(deviceIp);
 
   return {
     id: row.id,
@@ -407,6 +588,7 @@ function buildAccessControlEventDto(row, ctx) {
     eventType,
     verifyMethod,
     cardNo,
+    deviceId: mappedDeviceId != null ? mappedDeviceId : null,
     deviceName,
     deviceScreenshotUrl: row.picture_path != null ? String(row.picture_path) : "",
   };
@@ -454,6 +636,7 @@ function buildFaceContrastEventDto(row, ctx) {
     eventType: resolveFaceDirection(row, ctx),
     verifyMethod: "人臉",
     cardNo: "",
+    deviceId: Number.isFinite(deviceId) && deviceId > 0 ? deviceId : null,
     deviceName,
     deviceScreenshotUrl: row.picture_path != null ? String(row.picture_path) : "",
   };
@@ -582,25 +765,53 @@ const accessControlAdapter = {
         label: "人員群組（選填，空白=全部）",
         required: false,
       },
+      ACCESS_GRAIN_FILTER_FIELD,
     ],
   },
   getFieldByKey: getAccessControlFieldByKey,
   mapValue: mapAccessControlEventToFieldValue,
-  async fetchForSync({ cursorTsText, limit }) {
-    return fetchMergedAccessEvents({ cursorTsText, limit });
+  async fetchForSync({ cursorTsText, limit, options }) {
+    const grain = readAccessGrain(options);
+    const result = await fetchMergedAccessEvents({ cursorTsText, limit });
+    if (grain !== "daily_first_last") {
+      return {
+        events: result.events,
+        lastFetchedEventId: result.lastFetchedEventId,
+        cursorEvent: result.events[result.events.length - 1] ?? null,
+      };
+    }
+    const { events, cursorEvent } = reduceDailyFirstLastForSync(
+      result.events,
+      limit,
+    );
+    return {
+      events,
+      lastFetchedEventId:
+        cursorEvent?.id != null ? Number(cursorEvent.id) : null,
+      cursorEvent,
+    };
   },
   async fetchForExport({ filter, startTime, endTime, limit }) {
     const groupIds = parseIdList(filter?.groupIds);
-    const { events } = await fetchMergedAccessEvents({
+    const grain = readAccessGrain(filter);
+    const lim = clampLimit(limit);
+    // 考勤彙整需整段日窗再裁切（上限＝clampLimit 上界）
+    const fetchLimit = grain === "daily_first_last" ? 50000 : lim;
+    const { events: raw } = await fetchMergedAccessEvents({
       startTime,
       endTime,
-      limit,
+      limit: fetchLimit,
       groupIds,
     });
-    return events;
+    const events =
+      grain === "daily_first_last" ? reduceDailyFirstLast(raw) : raw;
+    return events.slice(0, lim);
   },
   validateFilter(filter) {
-    return { groupIds: parseIdList(filter?.groupIds) };
+    return {
+      groupIds: parseIdList(filter?.groupIds),
+      grain: readAccessGrain(filter),
+    };
   },
 };
 
@@ -633,7 +844,12 @@ const ENERGY_HOURLY_SELECT = `
 const ENERGY_CATALOG = [
   { key: "deviceId", label: "設備 ID", required: true },
   { key: "deviceName", label: "設備名稱" },
-  { key: "recordedAt", label: "記錄時間", requiresFormat: true },
+  ...timeSplitFields({
+    dateTimeKey: "recordedAt",
+    dateKey: "recordedDate",
+    timeKey: "recordedTime",
+    labelStem: "記錄",
+  }),
   { key: "dataJson", label: "讀數 JSON" },
 ];
 
@@ -642,7 +858,9 @@ const getEnergyFieldByKey = (key) => ENERGY_CATALOG.find((f) => f.key === key) ?
 function mapEnergyValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "deviceId") return evt.deviceId != null ? String(evt.deviceId) : "";
   if (fieldKey === "deviceName") return evt.deviceName ?? "";
-  if (fieldKey === "recordedAt") return formatTs(evt.timestamp, fieldConfig?.format);
+  if (isTimeSplitKey(fieldKey, "recordedAt", "recordedDate", "recordedTime")) {
+    return formatTs(evt.timestamp, fieldConfig?.format);
+  }
   if (fieldKey === "dataJson") return toJsonText(evt.data);
   return "";
 }
@@ -779,7 +997,13 @@ const OPERATIONAL_SELECT = `
 `;
 
 const OPERATIONAL_CATALOG = [
-  { key: "occurredAt", label: "發生時間", requiresFormat: true, required: true },
+  ...timeSplitFields({
+    dateTimeKey: "occurredAt",
+    dateKey: "occurredDate",
+    timeKey: "occurredTime",
+    labelStem: "發生",
+    required: true,
+  }),
   { key: "source", label: "來源" },
   { key: "eventKind", label: "事件類型" },
   { key: "summary", label: "摘要" },
@@ -793,7 +1017,9 @@ const OPERATIONAL_CATALOG = [
 const getOperationalFieldByKey = (key) => OPERATIONAL_CATALOG.find((f) => f.key === key) ?? null;
 
 function mapOperationalValue(evt, fieldKey, fieldConfig) {
-  if (fieldKey === "occurredAt") return formatTs(evt.timestamp, fieldConfig?.format);
+  if (isTimeSplitKey(fieldKey, "occurredAt", "occurredDate", "occurredTime")) {
+    return formatTs(evt.timestamp, fieldConfig?.format);
+  }
   if (fieldKey === "source") return evt.source ?? "";
   if (fieldKey === "eventKind") return evt.eventKind ?? "";
   if (fieldKey === "summary") return evt.summary ?? "";
@@ -905,7 +1131,12 @@ const VEHICLE_SELECT = `
 
 const VEHICLE_CATALOG = [
   { key: "licensePlate", label: "車牌", required: true },
-  { key: "triggerTime", label: "通行時間", requiresFormat: true },
+  ...timeSplitFields({
+    dateTimeKey: "triggerTime",
+    dateKey: "triggerDate",
+    timeKey: "triggerClock",
+    labelStem: "通行",
+  }),
   { key: "laneName", label: "車道" },
   { key: "dataSource", label: "資料來源" },
   { key: "zoneName", label: "區域" },
@@ -919,7 +1150,9 @@ const getVehicleFieldByKey = (key) => VEHICLE_CATALOG.find((f) => f.key === key)
 
 function mapVehicleValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "licensePlate") return evt.licensePlate ?? "";
-  if (fieldKey === "triggerTime") return formatTs(evt.timestamp, fieldConfig?.format);
+  if (isTimeSplitKey(fieldKey, "triggerTime", "triggerDate", "triggerClock")) {
+    return formatTs(evt.timestamp, fieldConfig?.format);
+  }
   if (fieldKey === "laneName") return evt.laneName ?? "";
   if (fieldKey === "dataSource") return evt.dataSource ?? "";
   if (fieldKey === "zoneName") return evt.zoneName ?? "";
@@ -991,129 +1224,6 @@ const vehicleAdapter = {
   },
 };
 
-// --- 人流（people_counting）---
-
-const PEOPLE_COUNTING_SELECT = `
-  SELECT p.id,
-         p.swip_card_rev_time AS event_time,
-         'yscp'::text AS data_source,
-         p.physical_id::text AS ref_key,
-         p.person_name,
-         p.unit_name,
-         NULL::text AS device_ip,
-         p.location_id
-  FROM people_counting_logs p
-`;
-
-const PEOPLE_COUNTING_CATALOG = [
-  { key: "eventTime", label: "事件時間", requiresFormat: true, required: true },
-  { key: "dataSource", label: "資料來源" },
-  { key: "personName", label: "姓名" },
-  { key: "unitName", label: "單位" },
-  { key: "deviceIp", label: "設備 IP" },
-  { key: "refKey", label: "來源鍵" },
-];
-
-const getPeopleCountingFieldByKey = (key) =>
-  PEOPLE_COUNTING_CATALOG.find((f) => f.key === key) ?? null;
-
-function mapPeopleCountingValue(evt, fieldKey, fieldConfig) {
-  if (fieldKey === "eventTime") return formatTs(evt.timestamp, fieldConfig?.format);
-  if (fieldKey === "dataSource") return evt.dataSource ?? "";
-  if (fieldKey === "personName") return evt.personName ?? "";
-  if (fieldKey === "unitName") return evt.unitName ?? "";
-  if (fieldKey === "deviceIp") return evt.deviceIp ?? "";
-  if (fieldKey === "refKey") return evt.refKey ?? "";
-  return "";
-}
-
-function peopleCountingRowToEvent(row) {
-  return {
-    id: row.id,
-    timestamp: row.event_time,
-    dataSource: row.data_source ?? "",
-    personName: row.person_name ?? "",
-    unitName: row.unit_name ?? "",
-    deviceIp: row.device_ip ?? "",
-    refKey: row.ref_key ?? "",
-    locationId: row.location_id,
-  };
-}
-
-function yscpLocationFilter(locationIds) {
-  if (!locationIds.length) return { extraWhere: "", extraParams: [] };
-  return {
-    extraWhere: `p.location_id IN (${locationIds.map(() => "?").join(",")})`,
-    extraParams: locationIds,
-  };
-}
-
-async function fetchYscpRows({
-  cursorTsText,
-  cursorEventId,
-  limit,
-  startTime,
-  endTime,
-  locationIds = [],
-}) {
-  const { extraWhere, extraParams } = yscpLocationFilter(locationIds);
-  if (startTime != null && endTime != null) {
-    const rows = await fetchRowsInWindow({
-      selectSql: PEOPLE_COUNTING_SELECT,
-      timeColumn: "p.swip_card_rev_time",
-      idColumn: "p.id",
-      startTime,
-      endTime,
-      limit,
-      extraWhere,
-      extraParams,
-    });
-    return { events: rows.map(peopleCountingRowToEvent), lastFetchedEventId: null };
-  }
-  const { rows, lastFetchedEventId } = await fetchRowsAfterCursor({
-    selectSql: PEOPLE_COUNTING_SELECT,
-    timeColumn: "p.swip_card_rev_time",
-    idColumn: "p.id",
-    cursorTsText,
-    cursorEventId,
-    limit,
-    extraWhere,
-    extraParams,
-  });
-  return { events: rows.map(peopleCountingRowToEvent), lastFetchedEventId };
-}
-
-const peopleCountingAdapter = {
-  eventType: "people_counting",
-  label: "人流紀錄（YSCP）",
-  sourceTable: "people_counting_logs",
-  timeColumn: "swip_card_rev_time",
-  catalog: PEOPLE_COUNTING_CATALOG,
-  filterSchema: {
-    kind: "locations",
-    required: false,
-    fields: [{ key: "locationIds", type: "number[]", label: "地點（選填，空白=全部）" }],
-  },
-  getFieldByKey: getPeopleCountingFieldByKey,
-  mapValue: mapPeopleCountingValue,
-  async fetchForSync(opts) {
-    return fetchYscpRows(opts);
-  },
-  async fetchForExport({ filter, startTime, endTime, limit }) {
-    const locationIds = parseIdList(filter?.locationIds);
-    const { events } = await fetchYscpRows({
-      startTime,
-      endTime,
-      limit,
-      locationIds,
-    });
-    return events;
-  },
-  validateFilter(filter) {
-    return { locationIds: parseIdList(filter?.locationIds) };
-  },
-};
-
 // --- 警報（alerts）---
 
 const ALERTS_SELECT = `
@@ -1124,8 +1234,18 @@ const ALERTS_SELECT = `
 
 const ALERTS_CATALOG = [
   { key: "alertId", label: "警報 ID", required: true },
-  { key: "createdAt", label: "建立時間", requiresFormat: true },
-  { key: "updatedAt", label: "更新時間", requiresFormat: true },
+  ...timeSplitFields({
+    dateTimeKey: "createdAt",
+    dateKey: "createdDate",
+    timeKey: "createdTime",
+    labelStem: "建立",
+  }),
+  ...timeSplitFields({
+    dateTimeKey: "updatedAt",
+    dateKey: "updatedDate",
+    timeKey: "updatedTime",
+    labelStem: "更新",
+  }),
   { key: "status", label: "狀態" },
   { key: "source", label: "來源" },
   { key: "severity", label: "嚴重度" },
@@ -1139,8 +1259,12 @@ const getAlertsFieldByKey = (key) => ALERTS_CATALOG.find((f) => f.key === key) ?
 
 function mapAlertsValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "alertId") return evt.alertId != null ? String(evt.alertId) : "";
-  if (fieldKey === "createdAt") return formatTs(evt.createdAt, fieldConfig?.format);
-  if (fieldKey === "updatedAt") return formatTs(evt.updatedAt, fieldConfig?.format);
+  if (isTimeSplitKey(fieldKey, "createdAt", "createdDate", "createdTime")) {
+    return formatTs(evt.createdAt, fieldConfig?.format);
+  }
+  if (isTimeSplitKey(fieldKey, "updatedAt", "updatedDate", "updatedTime")) {
+    return formatTs(evt.updatedAt, fieldConfig?.format);
+  }
   if (fieldKey === "status") return evt.status ?? "";
   if (fieldKey === "source") return evt.source ?? "";
   if (fieldKey === "severity") return evt.severity ?? "";
@@ -1253,7 +1377,12 @@ const ENVIRONMENT_CATALOG = [
   { key: "locationId", label: "地點 ID", required: true },
   { key: "zoneName", label: "區域" },
   { key: "locationName", label: "地點" },
-  { key: "recordedAt", label: "記錄時間", requiresFormat: true },
+  ...timeSplitFields({
+    dateTimeKey: "recordedAt",
+    dateKey: "recordedDate",
+    timeKey: "recordedTime",
+    labelStem: "記錄",
+  }),
   { key: "dataJson", label: "讀數 JSON" },
 ];
 
@@ -1263,7 +1392,9 @@ function mapEnvironmentValue(evt, fieldKey, fieldConfig) {
   if (fieldKey === "locationId") return evt.locationId != null ? String(evt.locationId) : "";
   if (fieldKey === "zoneName") return evt.zoneName ?? "";
   if (fieldKey === "locationName") return evt.locationName ?? "";
-  if (fieldKey === "recordedAt") return formatTs(evt.timestamp, fieldConfig?.format);
+  if (isTimeSplitKey(fieldKey, "recordedAt", "recordedDate", "recordedTime")) {
+    return formatTs(evt.timestamp, fieldConfig?.format);
+  }
   if (fieldKey === "dataJson") return toJsonText(evt.data);
   return "";
 }
@@ -1377,17 +1508,41 @@ const environmentAdapter = {
   },
 };
 
+/** 各事件類型共用：客戶 ERP／導入模板預留空白欄（表頭／第三方欄名自訂） */
+const BLANK_FIELD_COUNT = 3;
+
+/** 在 catalog 末端附加空白欄，並讓 mapValue 對 constantEmpty 固定回傳 "" */
+function withBlankFields(adapter, count = BLANK_FIELD_COUNT) {
+  const blanks = Array.from({ length: count }, (_, i) => ({
+    key: `blank${i + 1}`,
+    label: `空白欄 ${i + 1}`,
+    constantEmpty: true,
+  }));
+  const catalog = [...(adapter.catalog || []), ...blanks];
+  const getFieldByKey = (key) => catalog.find((f) => f.key === key) ?? null;
+  const origMap = adapter.mapValue;
+  return {
+    ...adapter,
+    catalog,
+    getFieldByKey,
+    mapValue(evt, fieldKey, fieldConfig) {
+      if (getFieldByKey(fieldKey)?.constantEmpty) return "";
+      return origMap(evt, fieldKey, fieldConfig);
+    },
+  };
+}
+
 const ADAPTERS = {
-  access_control: accessControlAdapter,
-  energy: energyAdapter,
-  operational: operationalAdapter,
-  vehicle: vehicleAdapter,
-  people_counting: peopleCountingAdapter,
-  alerts: alertsAdapter,
-  environment: environmentAdapter,
+  access_control: withBlankFields(accessControlAdapter),
+  energy: withBlankFields(energyAdapter),
+  operational: withBlankFields(operationalAdapter),
+  vehicle: withBlankFields(vehicleAdapter),
+  alerts: withBlankFields(alertsAdapter),
+  environment: withBlankFields(environmentAdapter),
 };
 
 module.exports = {
   ADAPTERS,
   parseGrain,
+  normalizeOptionsGrain,
 };

@@ -15,6 +15,7 @@ const {
   summaryStateChange,
   resolvePointLabel,
 } = require("../operationalEvents/operationalEventCopy");
+const { summaryBitTriggerFallback } = require("../alerts/alertCopy");
 const {
   shouldSuppressCoilStateChange,
 } = require("../operationalEvents/operationalEventHooks");
@@ -169,7 +170,10 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
     }
     if (!message) {
       const parsed = parseBitKey(rule.condition_config?.bit_key);
-      message = `${rule.alert_type.toUpperCase()} 位址 ${parsed?.address ?? "?"} 觸發`;
+      message = summaryBitTriggerFallback({
+        alertType: rule.alert_type,
+        address: parsed?.address,
+      });
     }
 
     await alertService.createAlert({

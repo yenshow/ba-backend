@@ -1,5 +1,6 @@
 const db = require("../../database/db");
 const alertRuleService = require("./alertRuleService");
+const { summaryOfflineFallback, resolveSourceLabel } = require("./alertCopy");
 const logger = require("../../utils/logger");
 
 const trackerLogger = logger.createLogger("errorTracker");
@@ -138,13 +139,17 @@ async function recordErrorDetailed(
       // 5. 創建或更新警報
       try {
         // 構建警報資料（總是提供 message，使用達到閾值時的錯誤次數）
-        const sourceName = metadata.name || `${source}:${sourceId}`;
+        const sourceName = metadata.name || resolveSourceLabel(source);
         let message = await alertRuleService.renderRuleMessage(rule, {
           source_id: sourceId,
           error_count: threshold,
         });
         if (!message) {
-          message = `${sourceName} 連續 ${threshold} 次無法連接，請檢查狀態`;
+          message = summaryOfflineFallback({
+            sourceDisplayName: sourceName,
+            sourceLabel: resolveSourceLabel(source),
+            errorCount: threshold,
+          });
         }
         const alertData = {
           source,
