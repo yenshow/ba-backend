@@ -155,6 +155,7 @@ async function createPersonGroup(data, createdBy = null) {
 
 async function updatePersonGroup(id, data) {
   const existing = await getPersonGroupById(id);
+  const isMain = existing.parent_id == null;
   const updates = [];
   const params = [];
   if (data.name !== undefined) {
@@ -168,6 +169,17 @@ async function updatePersonGroup(id, data) {
     if (nextParentId != null && nextParentId === existing.id) {
       throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組無效：不可選擇自己");
     }
+
+    if (isMain) {
+      // 主群組不可改為子群組（避免三層／破壞二層規格）
+      if (nextParentId != null) {
+        throwApiError(C.PERSONNEL_VALIDATION_FAILED, "主群組不可改為子群組");
+      }
+    } else if (nextParentId == null) {
+      // 子群組僅能改掛至另一主群組；不可升格為主群組
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED, "子群組不可改為主群組");
+    }
+
     updates.push("parent_id = ?");
     params.push(nextParentId);
   }
@@ -259,8 +271,19 @@ async function ensureLocationIsSyncable(locationId) {
   return id;
 }
 
-async function getPersonsByGroupId(personGroupId, options = {}) {
+async function ensureChildPersonGroup(personGroupId) {
   const group = await ensurePersonGroupExists(personGroupId);
+  if (group.parent_id == null) {
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      "主群組不可直接操作成員，請操作子群組",
+    );
+  }
+  return group;
+}
+
+async function getPersonsByGroupId(personGroupId, options = {}) {
+  const group = await ensureChildPersonGroup(personGroupId);
   const limit = clampInt(options.limit, { min: 1, max: 500, fallback: 200 });
   const offset = clampInt(options.offset, {
     min: 0,
@@ -331,7 +354,7 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
 }
 
 async function getPersonGroupMemberIds(personGroupId) {
-  const group = await ensurePersonGroupExists(personGroupId);
+  const group = await ensureChildPersonGroup(personGroupId);
   const rows = await db.query(
     `SELECT id
      FROM persons
@@ -353,43 +376,44 @@ async function getChildGroupIdsByMainGroupId(mainGroupId) {
   return (rows || []).map((r) => r.id);
 }
 
-async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
-  const group = await ensurePersonGroupExists(personGroupId);
-  if (group.parent_id == null) {
-    throwApiError(
-      C.PERSONNEL_VALIDATION_FAILED,
-      "主群組不可直接設定成員，請操作子群組",
-    );
-  }
-  const id = group.id;
-
+function normalizeMemberPersonIds(memberPersonIds = []) {
   const rawIds = Array.isArray(memberPersonIds)
     ? memberPersonIds
         .map((x) => Number.parseInt(String(x), 10))
         .filter((x) => Number.isFinite(x))
     : [];
-  const nextIds = Array.from(new Set(rawIds));
+  return Array.from(new Set(rawIds));
+}
+
+async function assertPersonIdsExist(nextIds) {
+  if (nextIds.length === 0) return;
+  const rows = await db.query(
+    `SELECT id FROM persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
+    nextIds,
+  );
+  const existing = new Set((rows || []).map((r) => r.id));
+  const missing = nextIds.filter((pid) => !existing.has(pid));
+  if (missing.length > 0) {
+    const labels = await formatMissingPersonIdLabels(missing);
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      `人員不存在：${labels.join("、")}`,
+    );
+  }
+}
+
+async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
+  const group = await ensureChildPersonGroup(personGroupId);
+  const id = group.id;
+
+  const nextIds = normalizeMemberPersonIds(memberPersonIds);
   if (nextIds.length > MAX_PERSON_GROUP_MEMBER_IDS) {
     throwApiError(C.PERSONNEL_VALIDATION_FAILED,
       `群組成員人數上限為 ${MAX_PERSON_GROUP_MEMBER_IDS} 人（目前 ${nextIds.length} 人）`,
     );
   }
 
-  if (nextIds.length > 0) {
-    const rows = await db.query(
-      `SELECT id FROM persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
-      nextIds,
-    );
-    const existing = new Set((rows || []).map((r) => r.id));
-    const missing = nextIds.filter((pid) => !existing.has(pid));
-    if (missing.length > 0) {
-      const labels = await formatMissingPersonIdLabels(missing);
-      throwApiError(
-        C.PERSONNEL_VALIDATION_FAILED,
-        `人員不存在：${labels.join("、")}`,
-      );
-    }
-  }
+  await assertPersonIdsExist(nextIds);
 
   await db.transaction(async (query) => {
     // 移出原本在此群組但不在 nextIds 的人
@@ -420,6 +444,84 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
   });
 
   return getPersonsByGroupId(id, { limit: 500, offset: 0 });
+}
+
+/**
+ * 批次取代多個子群組成員（單 transaction）
+ * @param {Record<string|number, number[]>} assignments childGroupId → memberPersonIds（全量；未出現的子群組不動）
+ */
+async function replacePersonGroupMembersBatch(assignments = {}) {
+  const raw =
+    assignments && typeof assignments === "object" && !Array.isArray(assignments)
+      ? assignments
+      : {};
+  const entries = [];
+  for (const [key, value] of Object.entries(raw)) {
+    const childId = Number.parseInt(String(key), 10);
+    if (!Number.isFinite(childId)) {
+      throwApiError(C.PERSONNEL_VALIDATION_FAILED, "子群組 id 無效");
+    }
+    entries.push([Math.trunc(childId), normalizeMemberPersonIds(value)]);
+  }
+  if (entries.length === 0) {
+    return { updatedChildIds: [] };
+  }
+
+  const personToChild = new Map();
+  const allPersonIds = new Set();
+  for (const [childId, nextIds] of entries) {
+    if (nextIds.length > MAX_PERSON_GROUP_MEMBER_IDS) {
+      throwApiError(
+        C.PERSONNEL_VALIDATION_FAILED,
+        `群組成員人數上限為 ${MAX_PERSON_GROUP_MEMBER_IDS} 人（子群組 ${childId} 目前 ${nextIds.length} 人）`,
+      );
+    }
+    await ensureChildPersonGroup(childId);
+    for (const pid of nextIds) {
+      if (personToChild.has(pid) && personToChild.get(pid) !== childId) {
+        throwApiError(
+          C.PERSONNEL_VALIDATION_FAILED,
+          `同一人員不可同時屬於多個子群組（personId=${pid}）`,
+        );
+      }
+      personToChild.set(pid, childId);
+      allPersonIds.add(pid);
+    }
+  }
+
+  await assertPersonIdsExist([...allPersonIds]);
+
+  await db.transaction(async (query) => {
+    // 先移出：各子群組中不在 nextIds 的人 → NULL
+    for (const [childId, nextIds] of entries) {
+      if (nextIds.length === 0) {
+        await query(
+          "UPDATE persons SET person_group_id = NULL WHERE person_group_id = ?",
+          [childId],
+        );
+      } else {
+        await query(
+          `UPDATE persons
+           SET person_group_id = NULL
+           WHERE person_group_id = ?
+             AND id NOT IN (${nextIds.map(() => "?").join(",")})`,
+          [childId, ...nextIds],
+        );
+      }
+    }
+    // 再移入：依互斥對應寫入目標子群組
+    for (const [childId, nextIds] of entries) {
+      if (nextIds.length === 0) continue;
+      await query(
+        `UPDATE persons SET person_group_id = ? WHERE id IN (${nextIds
+          .map(() => "?")
+          .join(",")})`,
+        [childId, ...nextIds],
+      );
+    }
+  });
+
+  return { updatedChildIds: entries.map(([childId]) => childId) };
 }
 
 // ========== 人員 ==========
@@ -991,6 +1093,7 @@ module.exports = {
   getPersonsByGroupId,
   getPersonGroupMemberIds,
   replacePersonGroupMembers,
+  replacePersonGroupMembersBatch,
   getPersonsByLocationIdPaged: locationMemberService.getPersonsByLocationIdPaged,
   replaceLocationMembers: locationMemberService.replaceLocationMembers,
   getPersons,

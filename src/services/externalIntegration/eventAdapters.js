@@ -11,6 +11,15 @@ const {
   resolveVerifyMethodLabel,
 } = require("../peopleCounting/accessControlLogLabels");
 const { normalizeEmployeeNo } = require("../peopleCounting/helpers/entryExitStats");
+const {
+  labelAlertStatus,
+  labelAlertSeverity,
+  labelAlertType,
+  labelSystemSource,
+  labelOperationalKind,
+  labelVehicleDataSource,
+  labelDimensionKey,
+} = require("./exportDisplayLabels");
 
 // --- 共用查詢工具 ---
 
@@ -1009,9 +1018,9 @@ const OPERATIONAL_CATALOG = [
   { key: "summary", label: "摘要" },
   { key: "zoneName", label: "區域" },
   { key: "locationName", label: "地點" },
-  { key: "deviceName", label: "設備" },
   { key: "deviceId", label: "設備 ID" },
-  { key: "payloadJson", label: "Payload JSON" },
+  { key: "deviceName", label: "設備" },
+  { key: "payloadJson", label: "酬載 JSON" },
 ];
 
 const getOperationalFieldByKey = (key) => OPERATIONAL_CATALOG.find((f) => f.key === key) ?? null;
@@ -1020,8 +1029,8 @@ function mapOperationalValue(evt, fieldKey, fieldConfig) {
   if (isTimeSplitKey(fieldKey, "occurredAt", "occurredDate", "occurredTime")) {
     return formatTs(evt.timestamp, fieldConfig?.format);
   }
-  if (fieldKey === "source") return evt.source ?? "";
-  if (fieldKey === "eventKind") return evt.eventKind ?? "";
+  if (fieldKey === "source") return labelSystemSource(evt.source);
+  if (fieldKey === "eventKind") return labelOperationalKind(evt.eventKind);
   if (fieldKey === "summary") return evt.summary ?? "";
   if (fieldKey === "zoneName") return evt.zoneName ?? "";
   if (fieldKey === "locationName") return evt.locationName ?? "";
@@ -1154,7 +1163,7 @@ function mapVehicleValue(evt, fieldKey, fieldConfig) {
     return formatTs(evt.timestamp, fieldConfig?.format);
   }
   if (fieldKey === "laneName") return evt.laneName ?? "";
-  if (fieldKey === "dataSource") return evt.dataSource ?? "";
+  if (fieldKey === "dataSource") return labelVehicleDataSource(evt.dataSource);
   if (fieldKey === "zoneName") return evt.zoneName ?? "";
   if (fieldKey === "locationName") return evt.locationName ?? "";
   if (fieldKey === "deviceName") return evt.deviceName ?? "";
@@ -1265,13 +1274,13 @@ function mapAlertsValue(evt, fieldKey, fieldConfig) {
   if (isTimeSplitKey(fieldKey, "updatedAt", "updatedDate", "updatedTime")) {
     return formatTs(evt.updatedAt, fieldConfig?.format);
   }
-  if (fieldKey === "status") return evt.status ?? "";
-  if (fieldKey === "source") return evt.source ?? "";
-  if (fieldKey === "severity") return evt.severity ?? "";
-  if (fieldKey === "alertType") return evt.alertType ?? "";
+  if (fieldKey === "status") return labelAlertStatus(evt.status);
+  if (fieldKey === "source") return labelSystemSource(evt.source);
+  if (fieldKey === "severity") return labelAlertSeverity(evt.severity);
+  if (fieldKey === "alertType") return labelAlertType(evt.alertType);
   if (fieldKey === "message") return evt.message ?? "";
   if (fieldKey === "sourceId") return evt.sourceId != null ? String(evt.sourceId) : "";
-  if (fieldKey === "dimensionKey") return evt.dimensionKey ?? "";
+  if (fieldKey === "dimensionKey") return labelDimensionKey(evt.dimensionKey);
   return "";
 }
 

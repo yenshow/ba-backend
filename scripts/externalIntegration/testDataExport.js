@@ -1,14 +1,17 @@
 /**
- * 資料匯出本機測試 CLI（假第三方 DB + 立刻執行，略過排程）
+ * 資料匯出本機測試 CLI（假第三方 DB + 立刻對接，略過排程）
  *
- *   npm run test:data-export              # 一鍵 all（門禁 + energy/operational 煙測）
+ *   npm run test:data-export              # 一鍵：門禁 + energy/operational 對接煙測
  *   npm run test:data-export -- setup --apply-config [--event-type TYPE]
  *   npm run test:data-export -- seed [--count N] [--event-type TYPE]
  *   npm run test:data-export -- sync [--reset-cursor] [--verify] [--event-type TYPE]
  *   npm run test:data-export -- export --group-id <id> | --rule-id <id> [--event-type TYPE]
+ *
+ * 看欄位／CSV：npm run test:data-export:sample-all → tmp/data-export/
  */
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { Client } = require("pg");
 
@@ -32,7 +35,8 @@ const TEST_RULE_NAME = {
   energy: "BA_EXPORT_TEST_RULE_ENERGY",
   operational: "BA_EXPORT_TEST_RULE_OPERATIONAL",
 };
-const DEFAULT_EXPORT_DIR = path.resolve(process.cwd(), "tmp", "record-export-test");
+/** 手動 export 暫存目錄（不寫入 tmp/data-export） */
+const DEFAULT_EXPORT_DIR = path.join(os.tmpdir(), "ba-export-smoke");
 
 const quoteIdent = (name) => `"${String(name).replaceAll('"', '""')}"`;
 
@@ -65,11 +69,11 @@ const printHelp = () => {
 用法: node scripts/externalIntegration/testDataExport.js <command> [options]
 
 commands:
-  all      一鍵：門禁 setup/seed/sync/export → energy／operational 煙測
+  all      一鍵：門禁 setup/seed/sync → energy／operational 對接煙測
   setup    建立測試目標表 [--table NAME] [--apply-config] [--event-type TYPE]
   seed     種子資料 [--count N] [--event-type TYPE]
   sync     立刻資料庫對接 [--reset-cursor] [--verify] [--event-type TYPE]
-  export   立刻記錄轉存 --group-id N | --rule-id N [--dir PATH] [--event-type TYPE]
+  export   立刻記錄轉存（選用；預設寫 OS temp）--group-id N | --rule-id N [--dir PATH] [--event-type TYPE]
 `);
 };
 
@@ -181,6 +185,8 @@ const cmdSetup = async (argv) => {
     throw new Error(`表名不合法: ${table}`);
   }
 
+  // IF NOT EXISTS 不會補新欄位；煙測表可重建
+  await db.query(`DROP TABLE IF EXISTS ${quoteIdent(table)} CASCADE`);
   await db.query(CREATE_SQL[eventType](table));
   await db.query(
     `CREATE INDEX IF NOT EXISTS ${quoteIdent(`idx_${table}_pushed_at`)}
@@ -203,6 +209,8 @@ const cmdSetup = async (argv) => {
     password: config.database.password,
     targetTable: table,
     mappings: MAPPINGS[eventType],
+    // 種子寫入 energy_readings（raw）；預設 hourly 會對接 0 列
+    ...(eventType === "energy" ? { options: { grain: "raw" } } : {}),
   });
   await db.query(
     `UPDATE external_sync_configs
@@ -437,7 +445,9 @@ const cmdExport = async (argv) => {
             }
             return { groupIds: [groupId] };
           })()
-        : {};
+        : eventType === "energy"
+          ? { grain: "raw" }
+          : {};
 
     const payload = {
       eventType,
@@ -488,20 +498,13 @@ const smokeEventType = async (eventType) => {
   await cmdSetup(["--apply-config", "--event-type", eventType]);
   await cmdSeed(["--count", "2", "--event-type", eventType]);
   await cmdSync(["--reset-cursor", "--verify", "--event-type", eventType]);
-  await cmdExport(["--event-type", eventType]);
 };
 
 const cmdAll = async () => {
-  console.log("=== 資料匯出一鍵測試 ===");
+  console.log("=== 資料庫對接一鍵測試 ===");
   await cmdSetup(["--apply-config", "--event-type", "access_control"]);
-  const seeded = await cmdSeed(["--count", "3", "--event-type", "access_control"]);
+  await cmdSeed(["--count", "3", "--event-type", "access_control"]);
   await cmdSync(["--reset-cursor", "--verify", "--event-type", "access_control"]);
-  await cmdExport([
-    "--event-type",
-    "access_control",
-    "--group-id",
-    String(seeded.groupId),
-  ]);
 
   try {
     await smokeEventType("energy");
@@ -517,7 +520,7 @@ const cmdAll = async () => {
   console.log(`
 === 完成 ===
 門禁目標表: ${DEFAULT_TABLE.access_control}
-CSV 根目錄: ${DEFAULT_EXPORT_DIR}
+看 CSV／欄位: npm run test:data-export:sample-all → tmp/data-export/
 `);
 };
 

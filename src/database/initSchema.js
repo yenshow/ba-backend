@@ -1366,6 +1366,7 @@ async function initSchema() {
         field_key VARCHAR(64) NOT NULL,
         target_column TEXT NOT NULL,
         format TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(config_id, field_key)
@@ -1375,6 +1376,8 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_external_sync_field_mappings_config
       ON external_sync_field_mappings(config_id);
+      CREATE INDEX IF NOT EXISTS idx_external_sync_field_mappings_config_sort
+      ON external_sync_field_mappings(config_id, sort_order);
     `);
     schemaLogger.info("external_sync_field_mappings 表已建立", {
       module: "initSchema",
@@ -1414,6 +1417,7 @@ async function initSchema() {
         date_format TEXT NOT NULL,
         time_format TEXT NOT NULL,
         output_format VARCHAR(8) NOT NULL CHECK (output_format IN ('csv','txt')),
+        column_delimiter TEXT NOT NULL DEFAULT ',',
         export_time TIME NOT NULL,
         schedule_freq VARCHAR(16) NOT NULL DEFAULT 'daily' CHECK (schedule_freq IN ('daily','weekly','monthly')),
         schedule_day INTEGER NULL,

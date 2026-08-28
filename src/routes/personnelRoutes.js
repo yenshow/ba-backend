@@ -131,6 +131,23 @@ router.delete(
 
 // ========== 人員群組成員（SSOT：persons.person_group_id） ==========
 
+/**
+ * 批次取代多個子群組成員
+ * PUT /api/personnel/groups/members-batch
+ * Body: { assignments: { [childGroupId]: number[] } }
+ */
+router.put(
+  "/groups/members-batch",
+  requirePermission("system.personnel.group.update"),
+  asyncHandler(async (req, res) => {
+    const assignments = req.body?.assignments;
+    const result = await personnelService.replacePersonGroupMembersBatch(
+      assignments && typeof assignments === "object" ? assignments : {},
+    );
+    res.sendSuccess(result);
+  }),
+);
+
 router.get(
   "/groups/:id/members",
   validateIntegers("id"),

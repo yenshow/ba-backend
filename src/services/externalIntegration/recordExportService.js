@@ -39,22 +39,51 @@ function normalizeStorageType(raw) {
   return String(raw ?? "").trim().toLowerCase() === "sftp" ? "sftp" : "local";
 }
 
-function safeCsvCell(value) {
-  const s = value == null ? "" : String(value);
-  if (/[",\r\n]/.test(s)) return `"${s.replaceAll("\"", "\"\"")}"`;
+function defaultDelimiterForFormat(outputFormat) {
+  return normalizeOutputFormat(outputFormat) === "txt" ? "\t" : ",";
+}
+
+function normalizeColumnDelimiter(raw, outputFormat) {
+  if (raw == null || String(raw).trim() === "") {
+    return defaultDelimiterForFormat(outputFormat);
+  }
+  let s = String(raw);
+  if (s.trim() === "\\t") s = "\t";
+  if (s.length < 1 || s.length > 4) {
+    throwApiError(C.VALIDATION_CUSTOM, "欄位分隔符長度須為 1–4 個字元", { statusCode: 400 });
+  }
+  if (/[\r\n]/.test(s)) {
+    throwApiError(C.VALIDATION_CUSTOM, "欄位分隔符不可包含換行", { statusCode: 400 });
+  }
   return s;
 }
 
-function rowsToCsv(headers, rows) {
-  let out = CSV_BOM + headers.map(safeCsvCell).join(",") + "\n";
-  for (const r of rows) out += r.map(safeCsvCell).join(",") + "\n";
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function safeDelimitedCell(value, delimiter) {
+  const s = value == null ? "" : String(value);
+  const needsQuote = new RegExp(`["${escapeRegExp(delimiter)}\r\n]`).test(s);
+  if (needsQuote) return `"${s.replaceAll("\"", "\"\"")}"`;
+  return s;
+}
+
+function rowsToDelimited(headers, rows, delimiter, { useBom = false } = {}) {
+  const prefix = useBom ? CSV_BOM : "";
+  let out =
+    prefix + headers.map((h) => safeDelimitedCell(h, delimiter)).join(delimiter) + "\n";
+  for (const r of rows) {
+    out += r.map((v) => safeDelimitedCell(v, delimiter)).join(delimiter) + "\n";
+  }
   return out;
 }
 
-function rowsToTxt(headers, rows) {
-  const head = headers.join("\t");
-  const lines = rows.map((r) => r.map((v) => (v == null ? "" : String(v))).join("\t"));
-  return [head, ...lines].join("\n") + "\n";
+function buildExportContent(headers, rows, { outputFormat, columnDelimiter }) {
+  const delimiter = normalizeColumnDelimiter(columnDelimiter, outputFormat);
+  const useBom =
+    normalizeOutputFormat(outputFormat) === "csv" && delimiter === ",";
+  return rowsToDelimited(headers, rows, delimiter, { useBom });
 }
 
 function parseFilterJson(raw) {
@@ -131,6 +160,10 @@ async function listRules(eventType) {
       dateFormat: r.date_format,
       timeFormat: r.time_format,
       outputFormat: r.output_format,
+      columnDelimiter:
+        r.column_delimiter && String(r.column_delimiter).length > 0
+          ? r.column_delimiter
+          : defaultDelimiterForFormat(r.output_format),
       exportTime: String(r.export_time).slice(0, 5),
       scheduleFreq: normalizeScheduleFreq(r.schedule_freq) || "daily",
       scheduleDay: r.schedule_day != null ? Number(r.schedule_day) : null,
@@ -181,6 +214,7 @@ function validateRulePayload(payload, options = {}) {
     });
   }
   const outputFormat = normalizeOutputFormat(payload.outputFormat);
+  const columnDelimiter = normalizeColumnDelimiter(payload.columnDelimiter, outputFormat);
   const storageType = normalizeStorageType(payload.storageType);
 
   const rawFilter =
@@ -235,6 +269,7 @@ function validateRulePayload(payload, options = {}) {
     dateFormat,
     timeFormat,
     outputFormat,
+    columnDelimiter,
     exportTime,
     scheduleFreq,
     scheduleDay,
@@ -274,6 +309,7 @@ async function upsertRule(ruleId, payload) {
       normalized.dateFormat,
       normalized.timeFormat,
       normalized.outputFormat,
+      normalized.columnDelimiter,
       normalized.exportTime,
       normalized.scheduleFreq,
       normalized.scheduleDay,
@@ -291,9 +327,9 @@ async function upsertRule(ruleId, payload) {
       const rows = await q(
         `
           INSERT INTO record_export_rules
-            (event_type, name, enabled, filename_prefix, date_format, time_format, output_format, export_time, schedule_freq, schedule_day, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
+            (event_type, name, enabled, filename_prefix, date_format, time_format, output_format, column_delimiter, export_time, schedule_freq, schedule_day, storage_type, local_dir, sftp_host, sftp_port, sftp_username, sftp_password_enc, sftp_remote_dir, filter_json)
           VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
           RETURNING id
         `,
         params,
@@ -304,7 +340,7 @@ async function upsertRule(ruleId, payload) {
       await q(
         `
           UPDATE record_export_rules
-          SET event_type = ?, name = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, export_time = ?::time,
+          SET event_type = ?, name = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, column_delimiter = ?, export_time = ?::time,
               schedule_freq = ?, schedule_day = ?,
               storage_type = ?, local_dir = ?, sftp_host = ?, sftp_port = ?, sftp_username = ?, sftp_password_enc = ?, sftp_remote_dir = ?,
               filter_json = ?::jsonb, updated_at = CURRENT_TIMESTAMP
@@ -475,8 +511,10 @@ async function runRecordExportRule(ruleId) {
       fieldConfigs.map((f) => adapter.mapValue(evt, f.fieldKey, f)),
     );
 
-    const content =
-      rule.output_format === "txt" ? rowsToTxt(headers, rows) : rowsToCsv(headers, rows);
+    const content = buildExportContent(headers, rows, {
+      outputFormat: rule.output_format,
+      columnDelimiter: rule.column_delimiter,
+    });
     const filename = buildExportFilename(rule, now);
 
     let filePath = "";

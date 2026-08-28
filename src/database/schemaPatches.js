@@ -154,6 +154,24 @@ async function ensureExternalIntegrationTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_external_sync_field_mappings_config
     ON external_sync_field_mappings(config_id);
   `);
+  await pool.query(`
+    ALTER TABLE external_sync_field_mappings
+      ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    UPDATE external_sync_field_mappings m
+    SET sort_order = sub.rn
+    FROM (
+      SELECT id, ROW_NUMBER() OVER (PARTITION BY config_id ORDER BY id ASC) AS rn
+      FROM external_sync_field_mappings
+      WHERE sort_order = 0
+    ) sub
+    WHERE m.id = sub.id AND m.sort_order = 0
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_sync_field_mappings_config_sort
+    ON external_sync_field_mappings(config_id, sort_order);
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_sync_run_logs (
@@ -253,6 +271,10 @@ async function ensureExternalIntegrationTables(pool) {
     ON record_export_rules(event_type, enabled);
     CREATE INDEX IF NOT EXISTS idx_record_export_rules_export_time
     ON record_export_rules(export_time);
+  `);
+  await pool.query(`
+    ALTER TABLE record_export_rules
+      ADD COLUMN IF NOT EXISTS column_delimiter TEXT NOT NULL DEFAULT ','
   `);
 
   await pool.query(`

@@ -237,7 +237,7 @@ async function getConfig(eventType = "access_control") {
   const config = rows?.[0] ?? null;
   if (!config) return null;
   const mapRows = await db.query(
-    "SELECT field_key, target_column, format FROM external_sync_field_mappings WHERE config_id = ? ORDER BY id ASC",
+    "SELECT field_key, target_column, format FROM external_sync_field_mappings WHERE config_id = ? ORDER BY sort_order ASC, id ASC",
     [config.id],
   );
   return mapConfigRow(config, mapRows);
@@ -252,7 +252,7 @@ async function listConfigs() {
   const mapRows = await db.query(
     `SELECT config_id, field_key, target_column, format
      FROM external_sync_field_mappings WHERE config_id IN (${ids.map(() => "?").join(",")})
-     ORDER BY config_id ASC, id ASC`,
+     ORDER BY config_id ASC, sort_order ASC, id ASC`,
     ids,
   );
   const byConfig = new Map();
@@ -336,15 +336,18 @@ async function upsertConfig(payload) {
       throwApiError(C.INTERNAL_ERROR, "儲存資料庫對接設定失敗", { statusCode: 500 });
     }
     await q("DELETE FROM external_sync_field_mappings WHERE config_id = ?", [configId]);
+    let sortOrder = 0;
     for (const [fieldKey, cfg] of Object.entries(payload.mappings || {})) {
+      sortOrder += 1;
       await q(
-        `INSERT INTO external_sync_field_mappings (config_id, field_key, target_column, format)
-         VALUES (?, ?, ?, ?)`,
+        `INSERT INTO external_sync_field_mappings (config_id, field_key, target_column, format, sort_order)
+         VALUES (?, ?, ?, ?, ?)`,
         [
           configId,
           fieldKey,
           String(cfg.targetColumn).trim(),
           cfg.format != null ? String(cfg.format).trim() : null,
+          sortOrder,
         ],
       );
     }
@@ -362,7 +365,7 @@ async function loadConfigWithMappings(eventType) {
   const cfg = cfgRows?.[0] ?? null;
   if (!cfg) return null;
   const mapRows = await db.query(
-    "SELECT field_key, target_column, format FROM external_sync_field_mappings WHERE config_id = ? ORDER BY id ASC",
+    "SELECT field_key, target_column, format FROM external_sync_field_mappings WHERE config_id = ? ORDER BY sort_order ASC, id ASC",
     [cfg.id],
   );
   const mappings = (mapRows || []).map((r) => ({

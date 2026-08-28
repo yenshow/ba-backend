@@ -3,11 +3,12 @@
  *
  *   cd ba-backend
  *   npm run test:data-export:sample-all
- *   npm run test:data-export:sample-all -- --days 90 --limit 10
- *   npm run test:data-export:sample-all -- --days 365 --limit 100
+ *   npm run test:data-export:sample-all -- --days 90 --limit 100
+ *   npm run test:data-export:sample-all -- --event-type access_control --format txt
  *
- * 產出: tmp/data-export-samples/<eventType>.csv + SUMMARY.md
+ * 產出: tmp/data-export/<eventType>.csv|.txt + SUMMARY.md（單一類型時略過 SUMMARY）
  * 取樣語意：相對「現在」往回看 --days，取時間最近的 --limit 筆（CSV 內時間升序）。
+ * energy／environment：先 hourly，近窗 0 筆則改 raw。
  * 不含完整報表統計區塊；僅 adapter 可映射欄位。
  * --limit 上限 50000（與 adapter clampLimit 一致）。
  */
@@ -61,28 +62,44 @@ const resolveFormat = (field) => {
   return DEFAULT_FORMATS.datetime;
 };
 
-const fetchEvents = async (adapter, { days, limit }) => {
+const fetchEvents = async (adapter, { days, limit, accessGrain }) => {
   const endTime = new Date();
   const startTime = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  // 腳本專用：多取再裁成「相對現在最近 N 筆」（production adapter 僅 ASC，無 newestFirst）
-  const raw = await adapter.fetchForExport({
-    filter: {},
-    startTime,
-    endTime,
-    limit: 50000,
-  });
-  const all = Array.isArray(raw) ? raw : [];
-  const events = all.length > limit ? all.slice(all.length - limit) : all;
-  const grain =
-    adapter.eventType === "energy" || adapter.eventType === "environment"
-      ? "hourly"
-      : null;
+  const isEnergyEnv =
+    adapter.eventType === "energy" || adapter.eventType === "environment";
+  const isAccess = adapter.eventType === "access_control";
+
+  let grains;
+  if (isEnergyEnv) grains = ["hourly", "raw"];
+  else if (isAccess && accessGrain) grains = [accessGrain];
+  else grains = [null];
+
+  let events = [];
+  let grain = null;
+  for (const tryGrain of grains) {
+    const filter = tryGrain ? { grain: tryGrain } : {};
+    const raw = await adapter.fetchForExport({
+      filter,
+      startTime,
+      endTime,
+      limit: 50000,
+    });
+    const all = Array.isArray(raw) ? raw : [];
+    if (all.length === 0 && tryGrain === "hourly") continue;
+    events = all.length > limit ? all.slice(all.length - limit) : all;
+    grain = tryGrain;
+    break;
+  }
   return { events, grain };
 };
 
 const resolveSourceNote = (adapter, grain) => {
   if (adapter.eventType === "access_control") {
-    return "isapi_access_events＋isapi_face_contrast_events";
+    const mode =
+      grain === "daily_first_last"
+        ? "daily_first_last（每人每日最早＋最晚）"
+        : "逐筆 raw";
+    return `isapi_access_events＋isapi_face_contrast_events（${mode}）`;
   }
   if (adapter.eventType === "energy") {
     return grain === "hourly"
@@ -105,7 +122,14 @@ const writeCsv = (filePath, headers, rows) => {
   fs.writeFileSync(filePath, `\uFEFF${body}\r\n`, "utf8");
 };
 
-const sampleOne = async (eventType, { days, limit, outDir }) => {
+/** 與 recordExportService.rowsToTxt 相同：表頭＋資料列以 Tab 分隔 */
+const writeTxt = (filePath, headers, rows) => {
+  const head = headers.join("\t");
+  const lines = rows.map((r) => r.map((v) => (v == null ? "" : String(v))).join("\t"));
+  fs.writeFileSync(filePath, `${head}\n${lines.join("\n")}\n`, "utf8");
+};
+
+const sampleOne = async (eventType, { days, limit, outDir, format, accessGrain }) => {
   const adapter = getAdapter(eventType);
   const catalog = adapter.catalog || [];
   const headers = catalog.map((f) => f.label || f.key);
@@ -115,7 +139,7 @@ const sampleOne = async (eventType, { days, limit, outDir }) => {
   let grain = null;
   let error = null;
   try {
-    const fetched = await fetchEvents(adapter, { days, limit });
+    const fetched = await fetchEvents(adapter, { days, limit, accessGrain });
     events = fetched.events;
     grain = fetched.grain;
   } catch (err) {
@@ -126,10 +150,12 @@ const sampleOne = async (eventType, { days, limit, outDir }) => {
     catalog.map((f) => adapter.mapValue(evt, f.key, { format: resolveFormat(f) })),
   );
 
-  const csvName = `${eventType}.csv`;
-  const csvPath = path.join(outDir, csvName);
+  const ext = format === "txt" ? "txt" : "csv";
+  const outName = `${eventType}.${ext}`;
+  const outPath = path.join(outDir, outName);
   if (!error) {
-    writeCsv(csvPath, headers, rows);
+    if (format === "txt") writeTxt(outPath, headers, rows);
+    else writeCsv(outPath, headers, rows);
   }
 
   const dtoExtra =
@@ -151,7 +177,7 @@ const sampleOne = async (eventType, { days, limit, outDir }) => {
     catalogKeys: keys,
     catalogLabels: headers,
     rowCount: rows.length,
-    csvName: error ? null : csvName,
+    csvName: error ? null : outName,
     error,
     dtoExtra,
     expected: EXPECTED[eventType] || "",
@@ -161,22 +187,23 @@ const sampleOne = async (eventType, { days, limit, outDir }) => {
 
 const writeSummary = (outDir, results, { days, limit }) => {
   const lines = [
-    "# 資料匯出取樣 SUMMARY",
+    "# 資料匯出取樣摘要",
     "",
     `- 產生時間: ${new Date().toISOString()}`,
     `- 視窗: 近 ${days} 天內、相對現在最近最多 ${limit} 筆（CSV 時間升序）`,
-    `- 通道: adapter.fetchForExport（ASC）＋腳本裁成最近 N 筆`,
-    `- energy／environment：本取樣固定 grain=hourly（raw 需另行指定）`,
+    `- 通道: adapter.fetchForExport（升序）＋腳本裁成最近 N 筆`,
+    `- 能源／環境：優先小時彙總；近窗 0 筆則改原始讀數`,
     `- **不含** 完整報表進出統計／群組統計等彙總`,
+    `- 列舉欄位（狀態／來源／類型等）已中文化；人名、地點、設備名、JSON、路徑維持原文`,
     "",
     "## 總覽",
     "",
-    "| eventType | 標籤 | 實際來源 | 筆數 | 檔案 | 狀態 |",
+    "| 事件類型 | 標籤 | 實際來源 | 筆數 | 檔案 | 狀態 |",
     "|-----------|------|----------|------|------|------|",
   ];
 
   for (const r of results) {
-    const status = r.error ? `錯誤: ${r.error}` : r.rowCount > 0 ? "OK" : "無資料";
+    const status = r.error ? `錯誤: ${r.error}` : r.rowCount > 0 ? "正常" : "無資料";
     lines.push(
       `| \`${r.eventType}\` | ${r.label} | \`${r.sourceTable}\` | ${r.rowCount} | ${r.csvName || "—"} | ${status} |`,
     );
@@ -189,10 +216,12 @@ const writeSummary = (outDir, results, { days, limit }) => {
     lines.push("");
     lines.push(`- 預期: ${r.expected}`);
     lines.push(`- 實際來源: \`${r.sourceTable}\``);
-    lines.push(`- catalog: ${r.catalogKeys.map((k, i) => `${k}「${r.catalogLabels[i]}」`).join("、")}`);
+    lines.push(
+      `- 欄位目錄: ${r.catalogKeys.map((k, i) => `${k}「${r.catalogLabels[i]}」`).join("、")}`,
+    );
     if (r.dtoExtra.length) {
       lines.push(
-        `- DTO 有但 catalog 未映射: ${r.dtoExtra.join(", ")}（正式對接／轉存 UI 無法勾這些欄）`,
+        `- 內部欄位有但匯出目錄未映射: ${r.dtoExtra.join(", ")}（正式對接／轉存介面無法勾選）`,
       );
     }
     if (r.rowCount === 0 && !r.error) {
@@ -207,10 +236,10 @@ const writeSummary = (outDir, results, { days, limit }) => {
   lines.push("## 與完整報表對照（簡）", "");
   lines.push("| 系統 | 完整報表常有 | 本取樣／對接轉存 |");
   lines.push("|------|--------------|------------------|");
-  lines.push("| 門禁／人流 UI | 進出統計＋群組統計＋明細 | 門禁＋人臉明細用 `access_control` |");
+  lines.push("| 門禁／人流介面 | 進出統計＋群組統計＋明細 | 門禁＋人臉明細用 `access_control` |");
   lines.push("| 車輛 | 統計＋群組＋過車紀錄 | 僅過車明細 `vehicle` |");
-  lines.push("| 能源 | 小時／日彙總＋原始 | 預設小時彙總；`grain=raw` 才讀 `energy_readings` |");
-  lines.push("| 環境 | 時間桶平均＋明細 | 預設小時平均；`grain=raw` 才讀 `environment_readings` |");
+  lines.push("| 能源 | 小時／日彙總＋原始 | 預設小時彙總；`grain=raw` 才讀原始讀數 |");
+  lines.push("| 環境 | 時間桶平均＋明細 | 預設小時平均；`grain=raw` 才讀原始讀數 |");
   lines.push("");
 
   const summaryPath = path.join(outDir, "SUMMARY.md");
@@ -228,26 +257,61 @@ const main = async () => {
     Math.max(Number.parseInt(takeFlag(argv, "--limit") || "10", 10) || 10, 1),
     50000,
   );
+  const formatRaw = String(takeFlag(argv, "--format") || "csv").trim().toLowerCase();
+  const format = formatRaw === "txt" ? "txt" : "csv";
+  const grainArg = takeFlag(argv, "--grain");
+  const accessGrain =
+    grainArg && ["raw", "daily_first_last"].includes(String(grainArg).trim())
+      ? String(grainArg).trim()
+      : null;
+  const eventTypeFilter = takeFlag(argv, "--event-type");
+  const types = eventTypeFilter
+    ? (() => {
+        const v = String(eventTypeFilter).trim();
+        if (!EVENT_TYPES.includes(v)) throw new Error(`未知 eventType: ${v}`);
+        return [v];
+      })()
+    : [...EVENT_TYPES];
   const outDir = path.resolve(
-    takeFlag(argv, "--out-dir") || path.join("tmp", "data-export-samples"),
+    takeFlag(argv, "--out-dir") || path.join("tmp", "data-export"),
   );
   fs.mkdirSync(outDir, { recursive: true });
+  if (types.length === EVENT_TYPES.length) {
+    for (const name of fs.readdirSync(outDir)) {
+      const full = path.join(outDir, name);
+      if (!fs.statSync(full).isFile()) continue;
+      if (name.endsWith(".csv") || name === "SUMMARY.md") fs.unlinkSync(full);
+    }
+  } else {
+    const target = path.join(outDir, `${types[0]}.${format}`);
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+  }
 
   console.log(`取樣目錄: ${outDir}`);
+  console.log(`格式: ${format.toUpperCase()}（Tab 分隔＝正式轉存 txt）`);
+  if (accessGrain) console.log(`門禁粒度: ${accessGrain}`);
   console.log(`近 ${days} 天內、相對現在最近最多 ${limit} 筆（時間升序輸出）\n`);
 
   const results = [];
-  for (const eventType of EVENT_TYPES) {
+  for (const eventType of types) {
     process.stdout.write(`… ${eventType} `);
-    const r = await sampleOne(eventType, { days, limit, outDir });
+    const r = await sampleOne(eventType, {
+      days,
+      limit,
+      outDir,
+      format,
+      accessGrain: eventType === "access_control" ? accessGrain : null,
+    });
     results.push(r);
     console.log(
       r.error ? `FAIL ${r.error}` : r.rowCount > 0 ? `${r.rowCount} 筆 → ${r.csvName}` : "0 筆",
     );
   }
 
-  const summaryPath = writeSummary(outDir, results, { days, limit });
-  console.log(`\nSUMMARY → ${summaryPath}`);
+  if (types.length === EVENT_TYPES.length) {
+    const summaryPath = writeSummary(outDir, results, { days, limit });
+    console.log(`\nSUMMARY → ${summaryPath}`);
+  }
 };
 
 main()
