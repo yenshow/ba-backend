@@ -277,6 +277,9 @@ function buildSystemConfig(systemType, config) {
           return cols.length > 0 ? cols : undefined;
         })(),
         stats_reset_at: resetFields.statsResetAt ?? config.statsResetAt ?? undefined,
+        ...(isFace
+          ? { face_similarity_threshold: resetFields.faceSimilarityThreshold }
+          : {}),
         ...(entryEventCam !== undefined
           ? { entry_event_camera_device_id: entryEventCam }
           : {}),

@@ -23,6 +23,7 @@ const operationalEventService = require("../operationalEvents/operationalEventSe
 const {
   summaryBarrierControlWrite,
 } = require("../operationalEvents/operationalEventCopy");
+const { formatIsapiUtcTime } = require("../isapi/isapiTimeFormat");
 
 const VALID_CTRL_MODES = new Set(["open", "close", "lock", "unlock"]);
 const VALID_OPERATION_TYPES = new Set(["add", "modify"]);
@@ -32,10 +33,6 @@ const IO_PULSE_MS = 3000;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function formatIsapiTime(date = new Date()) {
-  return new Date(date).toISOString().replace(/\.\d{3}Z$/, "");
 }
 
 function resolveChannelId(channelId) {
@@ -335,8 +332,8 @@ async function upsertLicensePlates(deviceId, options = {}) {
         id = String(nextNumericId++);
       }
     }
-    const createTime = formatIsapiTime(p.createTime || new Date());
-    const effectiveTime = formatIsapiTime(
+    const createTime = formatIsapiUtcTime(p.createTime || new Date());
+    const effectiveTime = formatIsapiUtcTime(
       p.effectiveTime || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
     );
 

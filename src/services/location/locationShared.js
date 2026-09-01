@@ -412,6 +412,7 @@ function formatSystem(system) {
           exitEventCameraDeviceId: parseOptionalEventCameraDeviceId(
             config.exit_event_camera_device_id,
           ),
+          ...(isFace ? { faceSimilarityThreshold: cameras.faceSimilarityThreshold } : {}),
         },
       };
     }

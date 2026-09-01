@@ -13,12 +13,12 @@ const { createIsapiClient } = require("../accessControl/isapiClient");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
 const logger = require("../../utils/logger").createLogger("ISAPI Camera FDLib");
+const { escapeXml, xmlDoc } = require("../isapi/isapiXmlUtils");
 
 const DEFAULT_LIB_NAME = "BA_FaceLib";
 const DEFAULT_FACE_LIB_TYPE = "ordinary";
 const DEFAULT_SIMILARITY = 50;
 const CUSTOM_FACE_LIB_ID = "BA_PC_FACELIB";
-const XMLNS = "http://www.isapi.org/ver20/XMLSchema";
 
 const PATHS = {
   fdLib: "/ISAPI/Intelligent/FDLib",
@@ -43,19 +43,6 @@ function parseConfig(raw) {
     }
   }
   return raw && typeof raw === "object" ? { ...raw } : {};
-}
-
-function escapeXml(value) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function xmlDoc(rootTag, inner) {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<${rootTag} version="2.0" xmlns="${XMLNS}">\n${inner}\n</${rootTag}>`;
 }
 
 function pickTag(xml, tag) {

@@ -33,6 +33,16 @@ const FORM_SCHEMA = {
         },
       ],
     },
+    {
+      title: "ISAPI 設備校時",
+      fields: [
+        {
+          key: "ISAPI_TIME_SYNC_ENABLED",
+          label: "啟用每日校時",
+          kind: "boolean",
+        },
+      ],
+    },
   ],
 };
 

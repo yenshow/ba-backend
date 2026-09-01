@@ -11,6 +11,8 @@ const CAMERA_MODE = Object.freeze({
   FACE_RECOGNITION: "face_recognition",
 });
 
+const DEFAULT_FACE_SIMILARITY_THRESHOLD = 50;
+
 /**
  * @param {unknown} raw
  * @returns {"people_counting"|"face_recognition"}
@@ -23,6 +25,18 @@ function normalizeCameraMode(raw) {
 
 function isFaceRecognitionCameraMode(raw) {
   return normalizeCameraMode(raw) === CAMERA_MODE.FACE_RECOGNITION;
+}
+
+/**
+ * 人臉比對準確度下限（0–100，預設 50）
+ * @param {unknown} raw
+ * @returns {number}
+ */
+function normalizeFaceSimilarityThreshold(raw) {
+  if (raw == null || raw === "") return DEFAULT_FACE_SIMILARITY_THRESHOLD;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_FACE_SIMILARITY_THRESHOLD;
+  return Math.min(100, Math.max(0, Math.trunc(n)));
 }
 
 function uniquePositiveIds(...lists) {
@@ -112,6 +126,9 @@ function parsePeopleCountingConfigFields(raw) {
     entryCameraDeviceIds: cameras.entryCameraDeviceIds,
     exitCameraDeviceIds: cameras.exitCameraDeviceIds,
     cameraDeviceIds: cameras.cameraDeviceIds,
+    faceSimilarityThreshold: normalizeFaceSimilarityThreshold(
+      cfg.face_similarity_threshold ?? cfg.faceSimilarityThreshold,
+    ),
   };
 }
 
@@ -180,8 +197,10 @@ function enrichOptionsWithStatsReset(cfg, options = {}) {
 
 module.exports = {
   CAMERA_MODE,
+  DEFAULT_FACE_SIMILARITY_THRESHOLD,
   normalizeCameraMode,
   isFaceRecognitionCameraMode,
+  normalizeFaceSimilarityThreshold,
   resolvePeopleCountingCameraDevices,
   resolveFaceCameraDirection,
   parsePeopleCountingConfigFields,

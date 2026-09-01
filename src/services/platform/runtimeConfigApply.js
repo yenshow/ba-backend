@@ -5,6 +5,7 @@
 const runtimeConfigService = require("./runtimeConfigService");
 const yscpRuntimeService = require("../yscp/yscpRuntimeService");
 const backupScheduler = require("../backup/backupScheduler");
+const isapiTimeSyncScheduler = require("../isapi/isapiTimeSyncScheduler");
 const {
   startAlertDailyRolloverScheduler,
   stopAlertDailyRolloverScheduler,
@@ -24,6 +25,11 @@ async function bootstrapRuntimeInfrastructure() {
       global.__backupSchedulerHandle?.stop?.();
       global.__backupSchedulerHandle = backupScheduler.startScheduler();
       applyLogger.info("備份排程已依新設定重啟");
+    },
+    onIsapiTimeSyncChange: async () => {
+      global.__isapiTimeSyncHandle?.stop?.();
+      global.__isapiTimeSyncHandle = isapiTimeSyncScheduler.startScheduler();
+      applyLogger.info("ISAPI 校時排程已依新設定重啟");
     },
   });
 

@@ -4,12 +4,12 @@ const ExcelJS = require("exceljs");
 const AdmZip = require("adm-zip");
 const personnelService = require("./personnelService");
 const {
-  PERSONNEL_FACE_MAX_BYTES,
-  formatPersonnelFaceMaxSizeLabel,
-  buildPersonnelFilename,
+  PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES,
+  formatPersonnelFaceImportSourceMaxSizeLabel,
   listPersonnelImportZipCandidateNames,
-  isJpegByMagicBytes,
+  resolveUniquePersonnelFacePath,
 } = require("./personnelFileHelpers");
+const { normalizeFaceImage } = require("./personnelFaceImageService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 
@@ -282,37 +282,21 @@ async function executeBatchImport({
           if (!buffer || buffer.length <= 0) {
             continue;
           }
-          if (buffer.length > PERSONNEL_FACE_MAX_BYTES) {
-            throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,`圖片檔案過大（需 ≤ ${formatPersonnelFaceMaxSizeLabel()}）`);
-          }
-          if (!isJpegByMagicBytes(buffer.slice(0, 32))) {
-            throwApiError(C.PERSONNEL_IMPORT_VALIDATION_FAILED,"圖片格式不正確：僅允許 JPEG（JPG）");
+          if (buffer.length > PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES) {
+            throwApiError(
+              C.PERSONNEL_IMPORT_VALIDATION_FAILED,
+              `圖片檔案過大（需 ≤ ${formatPersonnelFaceImportSourceMaxSizeLabel()}）`,
+            );
           }
 
-          const desiredName = buildPersonnelFilename(
+          const normalized = await normalizeFaceImage(buffer);
+          const { finalPath, faceUrl } = resolveUniquePersonnelFacePath(
+            personnelUploadsDir,
             fullName ?? "",
             employeeNo,
-            ".jpg",
           );
-          const ext = ".jpg";
-          let finalFilename = desiredName;
-          let finalPath = path.join(personnelUploadsDir, finalFilename);
-          let n = 0;
-          // 避免覆蓋既有檔案（也避免多次匯入互相踩檔）
-          for (;;) {
-            try {
-              await fs.access(finalPath);
-              n += 1;
-              const base = path.basename(desiredName, ext);
-              finalFilename = `${base}_${n}${ext}`;
-              finalPath = path.join(personnelUploadsDir, finalFilename);
-            } catch {
-              break;
-            }
-          }
 
-          await fs.writeFile(finalPath, buffer);
-          const faceUrl = `/uploads/personnel/${finalFilename}`;
+          await fs.writeFile(finalPath, normalized.buffer);
           try {
             // 舊檔清理由 personnelService.updatePerson 統一處理
             await personnelService.updatePerson(person.id, { faceUrl });

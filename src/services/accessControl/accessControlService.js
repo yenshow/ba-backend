@@ -64,11 +64,6 @@ const USER_INFO_FIELDS = [
   "faceURL",
 ];
 
-function formatIsapiTime(date = new Date()) {
-  // ISAPI 常見格式：YYYY-MM-DDTHH:mm:ss（不含毫秒與 Z）
-  return new Date(date).toISOString().replace(/\.\d{3}Z$/, "");
-}
-
 const CRLF = Buffer.from("\r\n");
 const CRLFCRLF = Buffer.from("\r\n\r\n");
 

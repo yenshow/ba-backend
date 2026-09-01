@@ -1,19 +1,16 @@
 const fs = require("fs");
-const path = require("path");
+const fsPromises = require("fs").promises;
 const personnelService = require("./personnelService");
 const {
-  PERSONNEL_FACE_MAX_BYTES,
-  formatPersonnelFaceMaxSizeLabel,
-  buildPersonnelFilename,
-  readFileHeaderBytes,
-  isJpegByMagicBytes,
+  resolveUniquePersonnelFacePath,
   safeUnlink,
 } = require("./personnelFileHelpers");
+const { normalizeFaceImage } = require("./personnelFaceImageService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 
 /**
- * 將暫存 JPEG 移至正式檔名並更新 personnel.face_url（DB 成功後刪舊檔）。
+ * 將暫存 JPEG 正規化後移至正式檔名並更新 personnel.face_url（DB 成功後刪舊檔）。
  * @returns {{ faceUrl: string, person: object }}
  */
 async function finalizeFaceUpload({
@@ -23,52 +20,54 @@ async function finalizeFaceUpload({
   warnLogger,
 }) {
   const pid = Number(personId);
-  if (!pid || pid <= 0) throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"personId 不合法");
+  if (!pid || pid <= 0) {
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED, "personId 不合法");
+  }
   if (!tempPath || !fs.existsSync(tempPath)) {
-    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"上傳暫存檔不存在");
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED, "上傳暫存檔不存在");
   }
 
-  const st = fs.statSync(tempPath);
-  if (st.size > PERSONNEL_FACE_MAX_BYTES) {
+  let inputBuffer;
+  try {
+    inputBuffer = await fsPromises.readFile(tempPath);
+  } catch {
     safeUnlink(tempPath);
-    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,`大頭照需小於等於 ${formatPersonnelFaceMaxSizeLabel()}（設備限制）`);
+    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED, "讀取上傳暫存檔失敗");
   }
 
-  const header = readFileHeaderBytes(tempPath, 32);
-  if (!isJpegByMagicBytes(header)) {
+  let normalized;
+  try {
+    normalized = await normalizeFaceImage(inputBuffer);
+  } catch (err) {
     safeUnlink(tempPath);
-    throwApiError(C.PERSONNEL_FACE_UPLOAD_VALIDATION_FAILED,"圖片格式不正確：僅允許 JPEG（JPG）");
+    throw err;
   }
 
   const person = await personnelService.getPersonById(pid);
-  const ext = ".jpg";
-  const fullName = person.full_name ?? "";
-  const employeeNo = person.employee_no ?? "";
-  const desiredName = buildPersonnelFilename(fullName, employeeNo, ext);
-
-  const oldPath = tempPath;
-  let finalFilename = desiredName;
-  let newPath = path.join(personnelUploadsDir, finalFilename);
-  let n = 0;
-  while (fs.existsSync(newPath) && newPath !== oldPath) {
-    n += 1;
-    const base = path.basename(desiredName, ext);
-    finalFilename = `${base}_${n}${ext}`;
-    newPath = path.join(personnelUploadsDir, finalFilename);
-  }
-  if (oldPath !== newPath) fs.renameSync(oldPath, newPath);
-  const faceUrl = `/uploads/personnel/${finalFilename}`;
+  const { finalPath, faceUrl } = resolveUniquePersonnelFacePath(
+    personnelUploadsDir,
+    person.full_name ?? "",
+    person.employee_no ?? "",
+    { excludePath: tempPath },
+  );
 
   try {
-    // 舊檔清理由 personnelService.updatePerson 統一處理（避免 upload/import 邏輯分歧）
+    await fsPromises.writeFile(finalPath, normalized.buffer);
+  } catch (err) {
+    safeUnlink(tempPath);
+    throw err;
+  }
+  safeUnlink(tempPath);
+
+  try {
     const updated = await personnelService.updatePerson(pid, { faceUrl });
     return { faceUrl, person: updated };
   } catch (err) {
     try {
-      if (fs.existsSync(newPath)) fs.unlinkSync(newPath);
+      if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
     } catch (cleanupErr) {
       warnLogger?.("清理新上傳大頭照失敗", {
-        path: newPath,
+        path: finalPath,
         error: cleanupErr?.message,
       });
     }

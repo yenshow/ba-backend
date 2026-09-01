@@ -69,6 +69,7 @@ const licenseRuntimeService = require("./services/license/licenseRuntimeService"
 
 // 備份排程
 const backupScheduler = require("./services/backup/backupScheduler");
+const isapiTimeSyncScheduler = require("./services/isapi/isapiTimeSyncScheduler");
 const externalIntegrationSchedulers = require("./services/externalIntegration/externalIntegrationSchedulers");
 const {
   startAlertDailyRolloverScheduler,
@@ -309,6 +310,8 @@ async function startServer() {
     });
 
     global.__backupSchedulerHandle = backupScheduler.startScheduler();
+    global.__isapiTimeSyncHandle = isapiTimeSyncScheduler.startScheduler();
+    serverLogger.info("ISAPI 設備校時排程已啟用（依 runtime 營運設定）");
 
     global.__alertRolloverStop = startAlertDailyRolloverScheduler();
     serverLogger.info("警報日界線排程已啟用（依 runtime 營運設定）");
@@ -366,6 +369,11 @@ async function gracefulShutdown(signal) {
     if (global.__backupSchedulerHandle?.stop) {
       global.__backupSchedulerHandle.stop();
       global.__backupSchedulerHandle = null;
+    }
+
+    if (global.__isapiTimeSyncHandle?.stop) {
+      global.__isapiTimeSyncHandle.stop();
+      global.__isapiTimeSyncHandle = null;
     }
 
     if (global.__externalSyncHandle?.stop) {

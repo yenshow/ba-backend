@@ -14,7 +14,7 @@ const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadSe
 const personImportService = require("../services/personnel/personImportService");
 const virtualCardService = require("../services/personnel/virtualCardService");
 const {
-  PERSONNEL_FACE_MAX_BYTES,
+  PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES,
   PERSONNEL_FACE_ALLOWED_MIME,
 } = require("../services/personnel/personnelFileHelpers");
 const { getUploadsDir } = require("../utils/baDataPaths");
@@ -64,7 +64,7 @@ const personnelUpload = multer({
       false,
     );
   },
-  limits: { fileSize: PERSONNEL_FACE_MAX_BYTES },
+  limits: { fileSize: PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES },
 });
 
 const importUpload = multer({

@@ -1,69 +1,52 @@
-const { DateTime } = require("luxon");
 const runtimeConfigService = require("../platform/runtimeConfigService");
 const logger = require("../../utils/logger");
 const alertService = require("./alertService");
+const { createDailyLocalScheduler } = require("../../utils/dailyLocalScheduler");
 
 const rolloverLogger = logger.createLogger("alertRollover");
 
-let rolloverTimer = null;
+let schedulerHandle = null;
 
-/**
- * 依設定時區之本地時刻排程下一次執行（遞迴 setTimeout，避免 setInterval 漂移）
- */
-function scheduleNextRollover() {
-  if (rolloverTimer) {
-    clearTimeout(rolloverTimer);
-    rolloverTimer = null;
-  }
-  const alerts = runtimeConfigService.getAlerts();
-  if (!alerts.dailyRolloverEnabled) {
-    return;
-  }
-
-  const tz = alerts.dailyRolloverTimezone;
-  const h = alerts.dailyRolloverLocalHour;
-  const m = alerts.dailyRolloverLocalMinute;
-
-  const now = DateTime.now().setZone(tz);
-  let next = now.set({ hour: h, minute: m, second: 0, millisecond: 0 });
-  if (next <= now) {
-    next = next.plus({ days: 1 });
-  }
-  const ms = Math.max(1000, Math.ceil(next.diff(now).as("milliseconds")));
-
-  rolloverTimer = setTimeout(async () => {
-    rolloverTimer = null;
-    try {
-      const r = await alertService.resolveAllActiveForDailyRollover();
-      if (r.resolvedCount > 0) {
-        rolloverLogger.info("警報日界線結案完成", {
-          resolvedCount: r.resolvedCount,
-          timezone: tz,
-        });
-      }
-    } catch (err) {
-      rolloverLogger.warn("警報日界線結案失敗", {
-        error: err?.message || String(err),
+const schedulerCore = createDailyLocalScheduler({
+  name: "alertRollover",
+  getSchedule: () => {
+    const alerts = runtimeConfigService.getAlerts();
+    return {
+      enabled: alerts.dailyRolloverEnabled,
+      timezone: alerts.dailyRolloverTimezone,
+      hour: alerts.dailyRolloverLocalHour,
+      minute: alerts.dailyRolloverLocalMinute,
+    };
+  },
+  runJob: async () => {
+    const alerts = runtimeConfigService.getAlerts();
+    const r = await alertService.resolveAllActiveForDailyRollover();
+    if (r.resolvedCount > 0) {
+      rolloverLogger.info("警報日界線結案完成", {
+        resolvedCount: r.resolvedCount,
+        timezone: alerts.dailyRolloverTimezone,
       });
-    } finally {
-      scheduleNextRollover();
     }
-  }, ms);
-}
+  },
+});
 
 function startAlertDailyRolloverScheduler() {
   if (!runtimeConfigService.getAlerts().dailyRolloverEnabled) {
     rolloverLogger.info("警報日界線排程已停用");
     return () => {};
   }
-  scheduleNextRollover();
+
+  if (schedulerHandle?.stop) {
+    schedulerHandle.stop();
+  }
+  schedulerHandle = schedulerCore.startScheduler();
   return stopAlertDailyRolloverScheduler;
 }
 
 function stopAlertDailyRolloverScheduler() {
-  if (rolloverTimer) {
-    clearTimeout(rolloverTimer);
-    rolloverTimer = null;
+  if (schedulerHandle?.stop) {
+    schedulerHandle.stop();
+    schedulerHandle = null;
   }
 }
 

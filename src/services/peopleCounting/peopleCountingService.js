@@ -727,6 +727,7 @@ function getPeopleCountingConfig(location) {
       peopleCountingSystem?.config?.logDisplayColumns,
     ),
     statsResetAt: resetFields.statsResetAt,
+    faceSimilarityThreshold: resetFields.faceSimilarityThreshold,
   };
 }
 

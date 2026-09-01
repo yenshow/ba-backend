@@ -32,7 +32,7 @@ function summarizePlateSyncError(failures) {
 }
 
 function buildIsapiTimesFromRow(row) {
-  // 時間格式統一由 isapiVehicleDeviceService.formatIsapiTime 處理
+  // 時間格式：isapiVehicleDeviceService 使用 isapiTimeFormat.formatIsapiUtcTime
   return {
     createTime: row.effective_begin || new Date(),
     effectiveTime:

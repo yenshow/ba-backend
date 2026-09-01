@@ -9,6 +9,7 @@ const PEOPLE_COUNTING_LOG_COLUMN_KEYS = [
   "device_name",
   "name",
   "verify_method",
+  "similarity",
   "event",
   "time",
 ];
@@ -19,6 +20,7 @@ const PEOPLE_COUNTING_LOG_COLUMN_LABELS = {
   device_name: "出入口名稱",
   name: "姓名",
   verify_method: "方式",
+  similarity: "準確度",
   event: "事件",
   time: "時間",
 };

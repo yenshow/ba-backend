@@ -11,6 +11,7 @@ const {
   isHcnetSdkController,
   resolveHcnetSdkPort,
 } = require("../../utils/deviceHelpers");
+const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
 
 /**
  * In-memory connectivity snapshot.
@@ -381,30 +382,6 @@ async function checkSingleDeviceConnectivity(deviceRow) {
   return { deviceId, ok: true, skipped: true, nextStatus: "offline" };
 }
 
-async function mapWithConcurrency(items, worker) {
-  const list = Array.isArray(items) ? items : [];
-  const results = new Array(list.length);
-  let idx = 0;
-  const runners = new Array(Math.min(CONCURRENCY, list.length))
-    .fill(null)
-    .map(async () => {
-      while (idx < list.length) {
-        const my = idx++;
-        try {
-          results[my] = await worker(list[my], my);
-        } catch (e) {
-          results[my] = {
-            ok: false,
-            error: e?.message || String(e),
-            code: e?.code || null,
-          };
-        }
-      }
-    });
-  await Promise.all(runners);
-  return results;
-}
-
 async function checkAndBroadcastConnectivity({ type_code } = {}) {
   const typeCode = type_code ? String(type_code).trim().toLowerCase() : null;
   const params = [];
@@ -425,19 +402,23 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
     params,
   );
 
-  const checks = await mapWithConcurrency(rows, async (row) => {
-    try {
-      const r = await checkSingleDeviceConnectivity(row);
-      return { ok: true, ...r };
-    } catch (e) {
-      return {
-        ok: false,
-        deviceId: Number(row?.id),
-        error: e?.message || String(e),
-        code: e?.code || null,
-      };
-    }
-  });
+  const checks = await mapWithConcurrency(
+    rows,
+    async (row) => {
+      try {
+        const r = await checkSingleDeviceConnectivity(row);
+        return { ok: true, ...r };
+      } catch (e) {
+        return {
+          ok: false,
+          deviceId: Number(row?.id),
+          error: e?.message || String(e),
+          code: e?.code || null,
+        };
+      }
+    },
+    { concurrency: CONCURRENCY },
+  );
 
   const updates = [];
   for (const r of checks) {
@@ -512,19 +493,23 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
     [ids],
   );
 
-  const checks = await mapWithConcurrency(rows, async (row) => {
-    try {
-      const r = await checkSingleDeviceConnectivity(row);
-      return { ok: true, ...r };
-    } catch (e) {
-      return {
-        ok: false,
-        deviceId: Number(row?.id),
-        error: e?.message || String(e),
-        code: e?.code || null,
-      };
-    }
-  });
+  const checks = await mapWithConcurrency(
+    rows,
+    async (row) => {
+      try {
+        const r = await checkSingleDeviceConnectivity(row);
+        return { ok: true, ...r };
+      } catch (e) {
+        return {
+          ok: false,
+          deviceId: Number(row?.id),
+          error: e?.message || String(e),
+          code: e?.code || null,
+        };
+      }
+    },
+    { concurrency: CONCURRENCY },
+  );
 
   const updates = [];
   for (const r of checks) {

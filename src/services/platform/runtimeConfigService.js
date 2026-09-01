@@ -1,5 +1,5 @@
 /**
- * 營運設定（system_settings）：備份排程。
+ * 營運設定（system_settings）：備份排程、ISAPI 設備校時。
  * 警報日界線固定 Asia/Taipei 00:00（不可經 Web 調整）。
  * Bootstrap（伺服器/JWT/主庫/MediaMTX/YSCP/功能開關）由 .env 管理（安裝精靈）。
  */
@@ -23,6 +23,9 @@ const RUNTIME_KEYS = [
   "BACKUP_ONLINE_RETENTION_DAYS",
   "BACKUP_DAILY_LOCAL_HOUR",
   "BACKUP_DAILY_LOCAL_MINUTE",
+  "ISAPI_TIME_SYNC_ENABLED",
+  "ISAPI_TIME_SYNC_DAILY_LOCAL_HOUR",
+  "ISAPI_TIME_SYNC_DAILY_LOCAL_MINUTE",
 ];
 
 const RUNTIME_KEY_SET = new Set(RUNTIME_KEYS);
@@ -35,6 +38,12 @@ const BACKUP_KEYS = [
   "BACKUP_DAILY_LOCAL_MINUTE",
 ];
 
+const ISAPI_TIME_SYNC_KEYS = [
+  "ISAPI_TIME_SYNC_ENABLED",
+  "ISAPI_TIME_SYNC_DAILY_LOCAL_HOUR",
+  "ISAPI_TIME_SYNC_DAILY_LOCAL_MINUTE",
+];
+
 const buildDefaultBackupRootDir = () => getBackupRootDir();
 
 const DEFAULTS = {
@@ -43,6 +52,9 @@ const DEFAULTS = {
   BACKUP_ONLINE_RETENTION_DAYS: "365",
   BACKUP_DAILY_LOCAL_HOUR: "0",
   BACKUP_DAILY_LOCAL_MINUTE: "0",
+  ISAPI_TIME_SYNC_ENABLED: "true",
+  ISAPI_TIME_SYNC_DAILY_LOCAL_HOUR: "3",
+  ISAPI_TIME_SYNC_DAILY_LOCAL_MINUTE: "0",
 };
 
 /** @type {Record<string, string>} */
@@ -53,6 +65,47 @@ let initialized = false;
 const toNumber = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const parseDailyLocalTime = (
+  source,
+  { hourKey, minuteKey, defaultHour, defaultMinute },
+) => ({
+  dailyLocalHour: Math.min(
+    23,
+    Math.max(0, toNumber(source[hourKey], defaultHour)),
+  ),
+  dailyLocalMinute: Math.min(
+    59,
+    Math.max(0, toNumber(source[minuteKey], defaultMinute)),
+  ),
+});
+
+const validateDailyLocalTimeKeys = (merged, hourKey, minuteKey, label) => {
+  for (const k of [hourKey, minuteKey]) {
+    const raw = merged[k]?.trim() ?? "";
+    if (!raw) continue;
+    const n = Number(raw);
+    if (!Number.isInteger(n)) return `${label}時刻須為整數`;
+    if (k.endsWith("HOUR") && (n < 0 || n > 23)) {
+      return `${label}小時須為 0–23`;
+    }
+    if (k.endsWith("MINUTE") && (n < 0 || n > 59)) {
+      return `${label}分鐘須為 0–59`;
+    }
+  }
+  return null;
+};
+
+const validateBooleanString = (merged, key, label) => {
+  const raw = String(merged[key] ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return null;
+  if (raw !== "true" && raw !== "false") {
+    return `${label}須為 true 或 false`;
+  }
+  return null;
 };
 
 const buildCacheFromMap = (map) => {
@@ -90,16 +143,28 @@ const getBackup = () => {
       archiveAfterDays,
       onlineRetentionDays,
     },
-    scheduler: {
-      dailyLocalHour: Math.min(
-        23,
-        Math.max(0, toNumber(cache.BACKUP_DAILY_LOCAL_HOUR, 0)),
-      ),
-      dailyLocalMinute: Math.min(
-        59,
-        Math.max(0, toNumber(cache.BACKUP_DAILY_LOCAL_MINUTE, 0)),
-      ),
-    },
+    scheduler: parseDailyLocalTime(cache, {
+      hourKey: "BACKUP_DAILY_LOCAL_HOUR",
+      minuteKey: "BACKUP_DAILY_LOCAL_MINUTE",
+      defaultHour: 0,
+      defaultMinute: 0,
+    }),
+  };
+};
+
+const getIsapiTimeSync = () => {
+  const enabledRaw = String(cache.ISAPI_TIME_SYNC_ENABLED ?? "true")
+    .trim()
+    .toLowerCase();
+  return {
+    enabled: enabledRaw !== "false",
+    timezone: FIXED_ALERT_ROLLOVER_TZ,
+    scheduler: parseDailyLocalTime(cache, {
+      hourKey: "ISAPI_TIME_SYNC_DAILY_LOCAL_HOUR",
+      minuteKey: "ISAPI_TIME_SYNC_DAILY_LOCAL_MINUTE",
+      defaultHour: 3,
+      defaultMinute: 0,
+    }),
   };
 };
 
@@ -147,18 +212,28 @@ function validateValues(merged) {
     return "線上資料保留天數須大於「逾此天數寫入備份檔」";
   }
 
-  for (const k of ["BACKUP_DAILY_LOCAL_HOUR", "BACKUP_DAILY_LOCAL_MINUTE"]) {
-    const raw = merged[k]?.trim() ?? "";
-    if (!raw) continue;
-    const n = Number(raw);
-    if (!Number.isInteger(n)) return `${k} 須為整數`;
-    if (k.endsWith("HOUR") && (n < 0 || n > 23)) {
-      return "BACKUP_DAILY_LOCAL_HOUR 須為 0–23";
-    }
-    if (k.endsWith("MINUTE") && (n < 0 || n > 59)) {
-      return "BACKUP_DAILY_LOCAL_MINUTE 須為 0–59";
-    }
-  }
+  const backupTimeErr = validateDailyLocalTimeKeys(
+    merged,
+    "BACKUP_DAILY_LOCAL_HOUR",
+    "BACKUP_DAILY_LOCAL_MINUTE",
+    "備份",
+  );
+  if (backupTimeErr) return backupTimeErr;
+
+  const isapiTimeErr = validateDailyLocalTimeKeys(
+    merged,
+    "ISAPI_TIME_SYNC_DAILY_LOCAL_HOUR",
+    "ISAPI_TIME_SYNC_DAILY_LOCAL_MINUTE",
+    "ISAPI 校時",
+  );
+  if (isapiTimeErr) return isapiTimeErr;
+
+  const enabledErr = validateBooleanString(
+    merged,
+    "ISAPI_TIME_SYNC_ENABLED",
+    "ISAPI 校時啟用",
+  );
+  if (enabledErr) return enabledErr;
 
   const rootDir = merged.BACKUP_ROOT_DIR?.trim() ?? "";
   if (rootDir) {
@@ -210,6 +285,7 @@ async function updateBatch(partial) {
 let applyHooks = {
   onAlertsChange: async () => {},
   onBackupChange: async () => {},
+  onIsapiTimeSyncChange: async () => {},
 };
 
 function registerApplyHooks(hooks) {
@@ -221,12 +297,14 @@ const hasAny = (keys, set) => keys.some((k) => set.has(k));
 async function applySideEffects(changedKeys) {
   const set = new Set(changedKeys);
   if (hasAny(BACKUP_KEYS, set)) await applyHooks.onBackupChange();
+  if (hasAny(ISAPI_TIME_SYNC_KEYS, set)) await applyHooks.onIsapiTimeSyncChange();
 }
 
 module.exports = {
   init,
   getAlerts,
   getBackup,
+  getIsapiTimeSync,
   getValues,
   updateBatch,
   registerApplyHooks,

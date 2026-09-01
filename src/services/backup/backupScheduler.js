@@ -2,7 +2,7 @@
  * 備份排程：雙層保留、按日 CSV、每日定時觸發
  */
 
-const { DateTime } = require("luxon");
+const { createDailyLocalScheduler } = require("../../utils/dailyLocalScheduler");
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const backupService = require("./backupService");
 const { getBackupConfig } = require("./backupConfig");
@@ -47,7 +47,7 @@ const {
 const backupLogger = logger.createLogger("backupScheduler");
 
 let isBackupRunning = false;
-let backupTimer = null;
+let schedulerHandle = null;
 
 async function runOptionalSync(label, syncFns) {
   for (const fn of syncFns) {
@@ -407,43 +407,32 @@ async function runBackupOnce() {
   }
 }
 
-function scheduleNextBackup(onError) {
-  if (backupTimer) {
-    clearTimeout(backupTimer);
-    backupTimer = null;
-  }
-
-  const alerts = runtimeConfigService.getAlerts();
-  const { scheduler } = getBackupConfig();
-  const tz = alerts.dailyRolloverTimezone;
-  const h = scheduler.dailyLocalHour;
-  const m = scheduler.dailyLocalMinute;
-
-  const now = DateTime.now().setZone(tz);
-  let next = now.set({ hour: h, minute: m, second: 0, millisecond: 0 });
-  if (next <= now) {
-    next = next.plus({ days: 1 });
-  }
-  const ms = Math.max(1000, Math.ceil(next.diff(now).as("milliseconds")));
-
-  backupTimer = setTimeout(() => {
-    backupTimer = null;
-    runBackupOnce().catch(onError);
-    scheduleNextBackup(onError);
-  }, ms);
-}
-
 function startScheduler() {
   const { retention, scheduler } = getBackupConfig();
   const alerts = runtimeConfigService.getAlerts();
-  const onError = (err) =>
-    backupLogger.error("備份任務失敗", {
-      error: err?.message || String(err),
-      module: "backupScheduler",
-    });
 
-  scheduleNextBackup(onError);
-  setImmediate(() => runBackupOnce().catch(onError));
+  if (schedulerHandle?.stop) {
+    schedulerHandle.stop();
+    schedulerHandle = null;
+  }
+
+  const core = createDailyLocalScheduler({
+    name: "backup",
+    getSchedule: () => {
+      const liveAlerts = runtimeConfigService.getAlerts();
+      const { scheduler: liveScheduler } = getBackupConfig();
+      return {
+        enabled: true,
+        timezone: liveAlerts.dailyRolloverTimezone,
+        hour: liveScheduler.dailyLocalHour,
+        minute: liveScheduler.dailyLocalMinute,
+      };
+    },
+    runJob: () => runBackupOnce(),
+    runOnStart: true,
+  });
+
+  schedulerHandle = core.startScheduler();
 
   backupLogger.info("備份排程已啟動", {
     dailyLocalTime: `${String(scheduler.dailyLocalHour).padStart(2, "0")}:${String(scheduler.dailyLocalMinute).padStart(2, "0")}`,
@@ -453,16 +442,7 @@ function startScheduler() {
     module: "backupScheduler",
   });
 
-  return {
-    stop: () => {
-      if (backupTimer) {
-        clearTimeout(backupTimer);
-        backupTimer = null;
-      }
-      backupLogger.info("備份排程已停止", { module: "backupScheduler" });
-    },
-    runNow: () => runBackupOnce(),
-  };
+  return schedulerHandle;
 }
 
 module.exports = {

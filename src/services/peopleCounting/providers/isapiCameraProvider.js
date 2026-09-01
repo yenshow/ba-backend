@@ -32,6 +32,7 @@ const {
   isFaceRecognitionCameraMode,
   resolvePeopleCountingCameraDevices,
   resolveFaceCameraDirection,
+  normalizeFaceSimilarityThreshold,
 } = require("../peopleCountingConfig");
 const C = require("../../../utils/apiErrorCodes");
 const { throwApiError } = require("../../../utils/apiErrors");
@@ -310,8 +311,13 @@ async function getSiteData(siteId, config) {
 
   if (isFaceRecognitionCameraMode(config.cameraMode)) {
     const today = resolvePeopleCountingStatsTimeRange({}, config.statsResetAt);
-    const faceRows = await loadTodayFaceContrastRows(siteId, deviceIds, today);
-    const directed = assignFaceDirections(faceRows, cameras);
+    const directed = await loadGatedDirectedFaceRows(
+      siteId,
+      deviceIds,
+      today,
+      config,
+      cameras,
+    );
     const siteStats = computeTransitionStats(directed, {
       getKey: (r) => facePersonKey(r),
       getDirection: (r) =>
@@ -382,6 +388,10 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
     exitCameraDeviceIds: [],
   };
 
+  const threshold = normalizeFaceSimilarityThreshold(
+    options.faceSimilarityThreshold,
+  );
+
   const allRows = await db.query(
     `SELECT
        e.id, e.device_id, e.device_ip, e.event_time, e.similarity,
@@ -403,7 +413,8 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
     [siteId, deviceIds, startIso, endIso],
   );
 
-  const directed = assignFaceDirections(allRows || [], cameras);
+  const gated = applyFaceSimilarityGate(allRows || [], threshold);
+  const directed = assignFaceDirections(gated, cameras);
   const page = directed
     .slice()
     .reverse()
@@ -426,6 +437,10 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
         : direction === "entry"
           ? "entry"
           : "failed";
+    const similarity =
+      r.similarity != null && Number.isFinite(Number(r.similarity))
+        ? Number(r.similarity)
+        : null;
     return {
       id: `fc-cam-${r.id}`,
       personId: r.person_id != null ? Number(r.person_id) : null,
@@ -440,6 +455,7 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
       eventLabel:
         eventType === "entry" ? "進入" : eventType === "exit" ? "離開" : "失敗",
       verifyMethod: "人臉",
+      similarity,
       timestamp: r.event_time,
       deviceScreenshotUrl:
         r.picture_path != null ? String(r.picture_path).trim() : "",
@@ -461,6 +477,29 @@ function facePersonKey(r) {
       ? String(r.person_name).trim()
       : "";
   return name ? `name:${name}` : "";
+}
+
+/** 依地點準確度下限：未達標視同 matched=false（仍保留 similarity 供顯示） */
+function applyFaceSimilarityGate(rows, threshold) {
+  const t = normalizeFaceSimilarityThreshold(threshold);
+  return (rows || []).map((r) => {
+    if (r.matched === false) return r;
+    const s = Number(r.similarity);
+    if (!Number.isFinite(s) || s < t) return { ...r, matched: false };
+    return r;
+  });
+}
+
+async function loadGatedDirectedFaceRows(
+  siteId,
+  deviceIds,
+  eventTimeRange,
+  config,
+  cameras,
+) {
+  const rows = await loadTodayFaceContrastRows(siteId, deviceIds, eventTimeRange);
+  const gated = applyFaceSimilarityGate(rows, config.faceSimilarityThreshold);
+  return assignFaceDirections(gated, cameras);
 }
 
 function readStoredDirection(payload) {
@@ -497,7 +536,7 @@ async function loadTodayFaceContrastRows(siteId, deviceIds, eventTimeRange) {
   const startIso = eventTimeRange.start.toISOString();
   const endIso = eventTimeRange.end.toISOString();
   const rows = await db.query(
-    `SELECT employee_no, person_name, matched, event_time, payload
+    `SELECT employee_no, person_name, matched, similarity, event_time, payload, device_id
      FROM isapi_face_contrast_events
      WHERE location_id = ?
        AND device_id = ANY(?::int[])
@@ -540,6 +579,7 @@ async function getSiteLogs(siteId, config, options = {}) {
     return getFaceContrastSiteLogs(siteId, deviceIds, {
       ...options,
       statsResetAt: config.statsResetAt,
+      faceSimilarityThreshold: config.faceSimilarityThreshold,
       cameras,
     });
   }
@@ -640,8 +680,13 @@ async function getUnitPersonnel(unitId, siteId, config) {
 
   const { deviceIds, cameras } = await getSiteConfigOrThrow(siteId, config);
   const today = resolvePeopleCountingStatsTimeRange({}, config.statsResetAt);
-  const faceRows = await loadTodayFaceContrastRows(siteId, deviceIds, today);
-  const directed = assignFaceDirections(faceRows, cameras);
+  const directed = await loadGatedDirectedFaceRows(
+    siteId,
+    deviceIds,
+    today,
+    config,
+    cameras,
+  );
   const presenceByEmployeeNo = buildFacePresenceByEmployeeNo(directed);
 
   const persons =

@@ -21,21 +21,9 @@ const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const { assertSafeOutboundUrl } = require("../../utils/safeUrl");
 const { resolveUploadFilePath } = require("../../utils/baDataPaths");
+const { normalizeIsapiErrorMessage } = require("./personnelIsapiErrorUtils");
 
 const SYNC_DELAY_MS = 300;
-
-function normalizeIsapiErrorMessage(raw) {
-  const msg = raw != null ? String(raw) : "";
-  if (!msg) return msg;
-  // ISAPI 常見回應：Unauthorized: <userCheck ...><statusValue>401</statusValue>...
-  if (
-    /Unauthorized/i.test(msg) &&
-    (/<statusValue>\s*401\s*<\/statusValue>/i.test(msg) || /\b401\b/.test(msg))
-  ) {
-    return "設備驗證失敗（401 Unauthorized），請確認帳密/權限";
-  }
-  return msg;
-}
 
 // ========== sync 背景工作（DB 持久化） ==========
 // 需求：避免長時間同步造成 HTTP timeout；前端以 jobId 輪詢進度/結果。
