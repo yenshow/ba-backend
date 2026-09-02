@@ -36,6 +36,8 @@
     "test:personnel-face-image": "node tests/personnel/personnelFaceImageService.test.js",
     "test:personnel-isapi-error": "node tests/personnel/personnelIsapiErrorUtils.test.js",
     "test:personnel-file-helpers": "node tests/personnel/personnelFileHelpers.test.js",
+    "test:personnel-groups-members-api": "node tests/personnel/personnelGroupsAndMembersApi.test.js",
+    "test:personnel-apply-sync-api": "node tests/personnel/personnelMembersApplyAndSyncApi.test.js",
     "test:operational-event-copy": "node tests/operationalEvents/operationalEventCopy.test.js",
     "test:alert-copy": "node tests/alerts/alertCopy.test.js",
     "yscp:resubscribe": "node scripts/yscpResubscribe.js",
