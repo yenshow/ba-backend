@@ -307,6 +307,36 @@ async function getIsapiAccessEventsForBackup(beforeDate) {
   return rows || [];
 }
 
+async function getIsapiFaceContrastEventsForBackup(beforeDate) {
+  const rows = await db.query(
+    `SELECT
+       e.id,
+       e.location_id,
+       e.device_id,
+       e.device_ip,
+       e.channel_id,
+       e.event_time,
+       e.event_type,
+       e.similarity,
+       e.employee_no,
+       e.person_name,
+       e.pid,
+       e.certificate_number,
+       e.matched,
+       e.payload,
+       e.picture_path,
+       l.name AS location_name,
+       z.name AS zone_name
+     FROM isapi_face_contrast_events e
+     LEFT JOIN locations l ON e.location_id = l.id
+     LEFT JOIN zones z ON l.zone_id = z.id
+     WHERE e.event_time < $1
+     ORDER BY e.event_time ASC`,
+    [beforeDate],
+  );
+  return rows || [];
+}
+
 async function getIsapiPeopleCountingEventsForBackup(beforeDate) {
   const rows = await db.query(
     `SELECT
@@ -394,6 +424,7 @@ module.exports = {
   getRetentionContext,
   getPeopleCountingForBackup,
   getIsapiAccessEventsForBackup,
+  getIsapiFaceContrastEventsForBackup,
   getIsapiPeopleCountingEventsForBackup,
   getVehiclePassagewayForBackup,
   getLadderSdkEventsForBackup,

@@ -40,6 +40,36 @@ function transformIsapiAccessEventsToReportFormat(rows) {
   );
 }
 
+function transformIsapiFaceContrastEventsToReportFormat(rows) {
+  return rowsToFlatCsv(
+    rows,
+    [
+      "區域",
+      "地點",
+      "設備IP",
+      "事件時間",
+      "事件類型",
+      "相似度",
+      "工號",
+      "姓名",
+      "比對結果",
+      "附圖路徑",
+    ],
+    (r) => ({
+      區域: r.zone_name ?? "",
+      地點: r.location_name ?? "",
+      設備IP: r.device_ip ?? "",
+      事件時間: formatDateTimeZhTW(r.event_time),
+      事件類型: r.event_type ?? "",
+      相似度: r.similarity ?? "",
+      工號: r.employee_no ?? "",
+      姓名: r.person_name ?? "",
+      比對結果: r.matched ? "成功" : "失敗",
+      附圖路徑: r.backup_picture_path ?? r.picture_path ?? "",
+    }),
+  );
+}
+
 function transformIsapiPeopleCountingToReportFormat(rows) {
   return rowsToFlatCsv(
     rows,
@@ -70,5 +100,6 @@ function transformIsapiPeopleCountingToReportFormat(rows) {
 
 module.exports = {
   transformIsapiAccessEventsToReportFormat,
+  transformIsapiFaceContrastEventsToReportFormat,
   transformIsapiPeopleCountingToReportFormat,
 };

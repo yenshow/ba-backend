@@ -130,6 +130,36 @@ async function getRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
   return await externalDb.query(sql, params);
 }
 
+async function countRecordsByPhysicalIdsWithJoin(physicalIds, options = {}) {
+  if (!Array.isArray(physicalIds) || physicalIds.length === 0) return 0;
+  const {
+    unitId = null,
+    startTime: optStart,
+    endTime: optEnd,
+  } = options;
+  const { start, end } = resolveStatsTimeRange({
+    startTime: optStart,
+    endTime: optEnd,
+    timeRange: options.timeRange,
+  });
+  const placeholders = generatePlaceholders(physicalIds);
+  const baseParamIndex = physicalIds.length + 1;
+  const unitFilterSql = unitId
+    ? `AND p.person_group_id = $${baseParamIndex + 2}`
+    : "";
+  const sql = `
+    SELECT COUNT(*)::int AS cnt
+    FROM baseacs.slot_card_records r
+    LEFT JOIN platform.person p ON r.person_id = p.id
+    WHERE r.physical_id IN (${placeholders}) AND r.is_deleted = false
+      AND r.swip_card_rev_time >= $${baseParamIndex} AND r.swip_card_rev_time <= $${baseParamIndex + 1}
+      ${unitFilterSql}`;
+  const params = [...physicalIds, start.toISOString(), end.toISOString()];
+  if (unitId) params.push(unitId);
+  const rows = await externalDb.query(sql, params);
+  return Number(rows?.[0]?.cnt) || 0;
+}
+
 async function batchGetGroups(groupIds) {
   if (groupIds.length === 0) return new Map();
   return handleNonCriticalError(
@@ -327,15 +357,19 @@ async function getSitesData(locations, getPeopleCountingConfig) {
 async function getSiteLogs(siteId, config, options = {}) {
   const { entryDoorIds, exitDoorIds } = config;
   const allowedPhysicalIds = normalizeDoorPhysicalIds(entryDoorIds, exitDoorIds);
-  if (allowedPhysicalIds.length === 0) return { logs: [] };
-  const records = await getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, {
+  if (allowedPhysicalIds.length === 0) return { logs: [], total: 0 };
+  const queryOpts = {
     limit: options.limit ?? 50,
     offset: Math.max(0, Number(options.offset) || 0),
     unitId: options.unitId || null,
     startTime: options.startTime,
     endTime: options.endTime,
     timeRange: options.timeRange,
-  });
+  };
+  const [records, total] = await Promise.all([
+    getRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, queryOpts),
+    countRecordsByPhysicalIdsWithJoin(allowedPhysicalIds, queryOpts),
+  ]);
   const sortedRecords = [...records].sort(
     (a, b) =>
       new Date(b.swip_card_rev_time).getTime() -
@@ -375,7 +409,7 @@ async function getSiteLogs(siteId, config, options = {}) {
       deviceName,
     };
   });
-  return { logs };
+  return { logs, total };
 }
 
 /**

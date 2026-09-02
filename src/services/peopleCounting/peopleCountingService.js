@@ -529,7 +529,7 @@ async function getSiteLogs(siteId, options = {}) {
     async () => {
       const { dataSource, ...siteConfig } = await getSiteConfig(siteId);
       if (yscpFeature.shouldSkipYscp(dataSource)) {
-        return { logs: [] };
+        return { logs: [], total: 0 };
       }
       const provider = getProvider(dataSource);
       const enriched = enrichOptionsWithStatsReset(siteConfig, options);

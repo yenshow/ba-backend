@@ -2,10 +2,14 @@
  * 備份 CSV 報表共用工具（繁中本地化）
  */
 
+/** 與營運日／警報日界線一致（runtimeConfigService FIXED_ALERT_ROLLOVER_TZ） */
+const REPORT_TZ = "Asia/Taipei";
+
 function formatDateTimeZhTW(dateString) {
   if (!dateString) return "";
   const d = new Date(dateString);
   return d.toLocaleString("zh-TW", {
+    timeZone: REPORT_TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -19,6 +23,7 @@ function formatDateTimeZhTW(dateString) {
 function formatDateZhTW(dateString) {
   if (!dateString) return "";
   return new Date(dateString).toLocaleDateString("zh-TW", {
+    timeZone: REPORT_TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

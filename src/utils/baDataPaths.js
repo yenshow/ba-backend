@@ -5,6 +5,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const { DateTime } = require("luxon");
 
 const getProjectDir = () => path.resolve(__dirname, "..", "..");
 
@@ -28,20 +29,27 @@ const getMediamtxGeneratedConfigPath = () =>
 /** 備份根目錄（例：D:\YSOS\backups） */
 const getBackupRootDir = () => path.join(getInstallRoot(), "backups");
 
-/** ISAPI 附圖檔名時間戳（避免 Date.toString() 產生空格） */
+/** 與營運日／警報日界線一致（runtimeConfigService FIXED_ALERT_ROLLOVER_TZ） */
+const UPLOAD_FILENAME_TZ = "Asia/Taipei";
+
+/** ISAPI 附圖檔名時間戳（本地營運時區；避免 UTC ISO 與報表時間不一致） */
 const formatUploadTimestampForFilename = (value, maxLen = 19) => {
+  let dt;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value
-      .toISOString()
+    dt = DateTime.fromJSDate(value, { zone: "utc" }).setZone(UPLOAD_FILENAME_TZ);
+  } else {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    dt = DateTime.fromISO(raw, { setZone: true }).setZone(UPLOAD_FILENAME_TZ);
+  }
+  if (!dt.isValid) {
+    return String(value || "")
       .replace(/:/g, "-")
-      .replace(/\..*$/, "")
+      .replace(/\+.*$/, "")
+      .replace(/Z$/, "")
       .slice(0, maxLen);
   }
-  return String(value || "")
-    .replace(/:/g, "-")
-    .replace(/\+.*$/, "")
-    .replace(/Z$/, "")
-    .slice(0, maxLen);
+  return dt.toFormat("yyyy-MM-dd'T'HH-mm-ss").slice(0, maxLen);
 };
 
 const decodeUploadRequestPath = (requestPath) => {

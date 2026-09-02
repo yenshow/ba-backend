@@ -26,6 +26,7 @@ const {
 } = require("./environmentReadingsReportFormat");
 const {
   transformIsapiAccessEventsToReportFormat,
+  transformIsapiFaceContrastEventsToReportFormat,
   transformIsapiPeopleCountingToReportFormat,
 } = require("./isapiEventsReportFormat");
 const {
@@ -104,6 +105,15 @@ async function selectVehiclePictures(start, end, dataSource) {
 async function selectAccessPictures(start, end) {
   const rows = await db.query(
     `SELECT picture_path FROM isapi_access_events
+     WHERE event_time >= $1 AND event_time < $2 AND picture_path IS NOT NULL`,
+    [start, end],
+  );
+  return (rows || []).map((r) => r.picture_path).filter(Boolean);
+}
+
+async function selectFaceContrastPictures(start, end) {
+  const rows = await db.query(
+    `SELECT picture_path FROM isapi_face_contrast_events
      WHERE event_time >= $1 AND event_time < $2 AND picture_path IS NOT NULL`,
     [start, end],
   );
@@ -237,6 +247,30 @@ async function runBackup() {
         }),
     );
 
+    const faceContrastDelete = buildDeleteSql(
+      "isapi_face_contrast_events",
+      "event_time",
+    );
+    const peopleFaceContrastIsapiResult = await runBackupJob(
+      `${peopleModuleLabel}人臉比對（ISAPI）`,
+      async () =>
+        backupService.backupTableDual({
+          tableName: "isapi_face_contrast_events",
+          rows: await backupService.getIsapiFaceContrastEventsForBackup(
+            archiveBeforeDate,
+          ),
+          dateField: "event_time",
+          category: "peopleCounting",
+          csvTransform: transformIsapiFaceContrastEventsToReportFormat,
+          attachmentSubdir: "face-contrast-events",
+          selectColdTimestampsSql: `SELECT event_time FROM isapi_face_contrast_events WHERE event_time < $1`,
+          selectColdParams: [deleteBeforeDate],
+          selectPicturesForDay: (start, end) =>
+            selectFaceContrastPictures(start, end),
+          ...faceContrastDelete,
+        }),
+    );
+
     let vehicleYscpResult = { skipped: true };
     if (yscpVehicleFeature.isEnabled()) {
       await runOptionalSync("車輛進出（YSCP）", [
@@ -349,6 +383,7 @@ async function runBackup() {
       peopleYscpResult,
       peopleAccessIsapiResult,
       peopleCameraIsapiResult,
+      peopleFaceContrastIsapiResult,
       vehicleYscpResult,
       vehicleIsapiResult,
       ladderResult,
@@ -362,6 +397,7 @@ async function runBackup() {
       people_counting_logs: peopleYscpResult,
       isapi_access_events: peopleAccessIsapiResult,
       isapi_people_counting_events: peopleCameraIsapiResult,
+      isapi_face_contrast_events: peopleFaceContrastIsapiResult,
       vehicle_passageway_logs: vehicleYscpResult,
       vehicle_passageway_logs_isapi: vehicleIsapiResult,
       ladder_sdk_events: ladderResult,

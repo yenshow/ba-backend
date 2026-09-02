@@ -105,7 +105,9 @@ async function getAccessControlSiteLogs(options = {}) {
         .map((v) => Number(v))
         .filter((n) => Number.isFinite(n) && n > 0)
     : [];
-  if (entryIds.length === 0 && exitIds.length === 0) return [];
+  if (entryIds.length === 0 && exitIds.length === 0) {
+    return { logs: [], total: 0 };
+  }
 
   const entryIps = new Set();
   const exitIps = new Set();
@@ -137,7 +139,7 @@ async function getAccessControlSiteLogs(options = {}) {
     if (!entryIdSet.has(id)) await addDevice(id, false);
   }
   const allIpsArray = [...allIps];
-  if (allIpsArray.length === 0) return [];
+  if (allIpsArray.length === 0) return { logs: [], total: 0 };
 
   const { start, end } = resolveStatsTimeRange({
     startTime: optStart,
@@ -147,21 +149,29 @@ async function getAccessControlSiteLogs(options = {}) {
   const offsetNum = Math.max(Number(offset) || 0, 0);
 
   const placeholders = allIpsArray.map(() => "?").join(",");
-  const params = [
+  const rangeParams = [
     ...allIpsArray,
     start.toISOString(),
     end.toISOString(),
-    limitNum,
-    offsetNum,
   ];
-  const rows = await db.query(
-    `SELECT id, device_ip, event_time, event_type, payload, picture_path
-     FROM isapi_access_events
-     WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?
-     ORDER BY event_time DESC
-     LIMIT ? OFFSET ?`,
-    params,
-  );
+  const dataParams = [...rangeParams, limitNum, offsetNum];
+  const [countRows, rows] = await Promise.all([
+    db.query(
+      `SELECT COUNT(*)::int AS cnt
+       FROM isapi_access_events
+       WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?`,
+      rangeParams,
+    ),
+    db.query(
+      `SELECT id, device_ip, event_time, event_type, payload, picture_path
+       FROM isapi_access_events
+       WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?
+       ORDER BY event_time DESC
+       LIMIT ? OFFSET ?`,
+      dataParams,
+    ),
+  ]);
+  const total = Number(countRows?.[0]?.cnt) || 0;
 
   const getEmployeeNo = (payload) => {
     const v = payload.employeeNoString ?? payload.employeeNo;
@@ -200,7 +210,7 @@ async function getAccessControlSiteLogs(options = {}) {
     }
   }
 
-  return (rows || []).map((row) => {
+  const logs = (rows || []).map((row) => {
     const payload = typeof row.payload === "object" ? row.payload : {};
     const sub = extractSubEventType(payload);
     const { eventType, eventLabel } = resolveAccessControlEvent(
@@ -229,6 +239,7 @@ async function getAccessControlSiteLogs(options = {}) {
       deviceName: ipToDeviceName.get(row.device_ip) || row.device_ip,
     };
   });
+  return { logs, total };
 }
 
 /** 營運日入口／出口設備上所有進出事件（統計與 logs 同範圍，不限授權名單） */
@@ -248,7 +259,7 @@ async function getTodaySiteLogs(config, options = {}) {
     },
     config.statsResetAt,
   );
-  return getAccessControlSiteLogs({
+  const { logs } = await getAccessControlSiteLogs({
     entryDeviceIds,
     exitDeviceIds,
     startTime: start.toISOString(),
@@ -256,6 +267,7 @@ async function getTodaySiteLogs(config, options = {}) {
     limit: options.limit ?? ENTRY_EXIT_MAX_RECORDS,
     offset: options.offset ?? 0,
   });
+  return logs;
 }
 
 function filterLogsForUnitEmployees(logs, persons) {
@@ -332,7 +344,7 @@ async function getSiteData(siteId, config) {
  * 進出紀錄
  */
 async function getSiteLogs(siteId, config, options = {}) {
-  const accessControlLogs = await getAccessControlSiteLogs({
+  const { logs, total } = await getAccessControlSiteLogs({
     entryDeviceIds: config.entryDeviceIds,
     exitDeviceIds: config.exitDeviceIds,
     limit: options.limit ?? 50,
@@ -340,7 +352,7 @@ async function getSiteLogs(siteId, config, options = {}) {
     startTime: options.startTime,
     endTime: options.endTime,
   });
-  return { logs: accessControlLogs };
+  return { logs, total };
 }
 
 /**

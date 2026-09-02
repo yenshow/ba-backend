@@ -415,6 +415,7 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
 
   const gated = applyFaceSimilarityGate(allRows || [], threshold);
   const directed = assignFaceDirections(gated, cameras);
+  const total = directed.length;
   const page = directed
     .slice()
     .reverse()
@@ -463,7 +464,7 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
     };
   });
 
-  return { logs };
+  return { logs, total };
 }
 
 function facePersonKey(r) {
@@ -629,6 +630,22 @@ async function getSiteLogs(siteId, config, options = {}) {
   const batchSize = Math.min(Math.max(limit * 10, 50), 1000);
   let rowOffset = offset;
 
+  const countRows = await db.query(
+    `SELECT COALESCE(SUM(
+       CASE WHEN enter_delta > 0 THEN 1 ELSE 0 END +
+       CASE WHEN exit_delta > 0 THEN 1 ELSE 0 END
+     ), 0)::int AS cnt
+     FROM isapi_people_counting_events
+     WHERE location_id = ?
+       AND device_id = ANY(?::int[])
+       AND channel_id = ?
+       ${regionFilterSql}
+       AND event_time >= ?
+       AND event_time <= ?`,
+    [siteId, deviceIds, channelId, startIso, endIso],
+  );
+  const total = Number(countRows?.[0]?.cnt) || 0;
+
   while (events.length < limit) {
     const rows = await db.query(
       `SELECT id, region_id, region_name, event_time, enter_delta, exit_delta, device_id, device_ip
@@ -670,7 +687,7 @@ async function getSiteLogs(siteId, config, options = {}) {
     rowOffset += rows.length;
   }
 
-  return { logs: events.slice(0, limit) };
+  return { logs: events.slice(0, limit), total };
 }
 
 async function getUnitPersonnel(unitId, siteId, config) {

@@ -1,5 +1,5 @@
 /**
- * 門禁／車輛 ISAPI 事件附圖：歸檔複製至 backups/，冷刪除時清理 uploads 原檔
+ * 門禁／車輛／人臉比對 ISAPI 事件附圖：歸檔複製至 backups/，冷刪除時清理 uploads 原檔
  */
 const fs = require("fs");
 const path = require("path");
