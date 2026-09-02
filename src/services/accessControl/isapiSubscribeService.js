@@ -3,18 +3,13 @@
  * 後端主動向門禁設備 POST subscribeEvent，建立長連線接收事件，寫入 isapi_access_events 並推送 WebSocket。
  * 含：事件過濾／寫入／附圖（原 isapiEventPersistence）
  */
-const path = require("path");
-const fs = require("fs");
 const db = require("../../database/db");
 const accessControlService = require("./accessControlService");
 const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
-const {
-  getUploadsDir,
-  formatUploadTimestampForFilename,
-} = require("../../utils/baDataPaths");
+const { writeIsapiUploadPicture } = require("../../utils/isapiUploadPicture");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const {
   summaryAccessEvent,
@@ -135,12 +130,11 @@ async function persistIsapiEvent(options) {
 /**
  * 為剛寫入的門禁事件補上附圖（multipart 順序：先 JSON 後圖）
  */
-async function attachPictureToEvent(eventId, pictureBuffer, uploadsDir) {
+async function attachPictureToEvent(eventId, pictureBuffer) {
   if (
     eventId == null ||
     !Buffer.isBuffer(pictureBuffer) ||
-    pictureBuffer.length === 0 ||
-    !uploadsDir
+    pictureBuffer.length === 0
   )
     return;
   const rows = await db.query(
@@ -149,17 +143,17 @@ async function attachPictureToEvent(eventId, pictureBuffer, uploadsDir) {
   );
   const row = rows?.[0];
   if (!row) return;
-  const deviceIp = row.device_ip || "unknown";
-  const eventTime = row.event_time || new Date().toISOString();
-  const safeIp = String(deviceIp).replace(/[^0-9a-fA-F.:]/g, "_");
-  const rawTime = formatUploadTimestampForFilename(eventTime, 16);
-  const basename = `${safeIp}_${rawTime}.jpg`;
-  const filePath = path.join(uploadsDir, basename);
-  fs.writeFileSync(filePath, pictureBuffer);
-  const picturePath = `/uploads/access-events/${basename}`;
+  const saved = writeIsapiUploadPicture({
+    subdir: "access-events",
+    deviceKey: row.device_ip,
+    eventTime: row.event_time,
+    recordId: eventId,
+    pictureBuffer,
+  });
+  if (!saved) return;
   await db.query(
     `UPDATE isapi_access_events SET picture_path = ?, file_count = 1 WHERE id = ?`,
-    [picturePath, eventId],
+    [saved.picturePath, eventId],
   );
   websocketService.emitIsapiAccessEvent();
 }
@@ -290,7 +284,9 @@ async function consumeEventStreamIncremental(
   const sep = Buffer.from(`--${boundary}`, "utf8");
   const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
   let buffer = Buffer.alloc(0);
-  let lastWrittenEventId = null;
+  /** 依 multipart 順序（先 JSON 後圖）排隊，避免非同步寫入與附圖錯綁 */
+  const pendingPictureEventIds = [];
+  let partQueue = Promise.resolve();
 
   const processParsedEvent = async (parsed) => {
     if (!parsed) return;
@@ -298,38 +294,42 @@ async function consumeEventStreamIncremental(
     if (String(parsed.eventType).toLowerCase() === "heartbeat") return;
     if (!isProcessableEvent(ac)) return;
     const id = await handleEvent(parsed, deviceIp, deviceId);
-    if (id) lastWrittenEventId = id;
+    if (id) pendingPictureEventIds.push(id);
     logger.info("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };
 
-  const processPart = (headerStr, body) => {
-    const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
-    const name =
-      (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) || [])[1] ||
-      "";
-    const rawBody = body
-      .toString("utf8")
-      .replace(/^\uFEFF/, "")
-      .trim();
-    if (
-      /application\/json/i.test(ct) ||
-      (rawBody.length > 0 && rawBody[0] === "{")
-    ) {
-      const parsed = parseEventJson(rawBody);
-      if (parsed) processParsedEvent(parsed).catch(() => {});
-      return;
-    }
-    if (
-      /image/i.test(ct) ||
-      (/\.(jpg|jpeg|png)$/i.test(name) && lastWrittenEventId != null)
-    ) {
-      attachPictureToEvent(
-        lastWrittenEventId,
-        body,
-        getUploadsDir("access-events"),
-      ).catch(() => {});
-      lastWrittenEventId = null;
-    }
+  const enqueuePart = (headerStr, body) => {
+    partQueue = partQueue
+      .then(async () => {
+        const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+        const name =
+          (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) || [])[1] ||
+          "";
+        const rawBody = body
+          .toString("utf8")
+          .replace(/^\uFEFF/, "")
+          .trim();
+        if (
+          /application\/json/i.test(ct) ||
+          (rawBody.length > 0 && rawBody[0] === "{")
+        ) {
+          const parsed = parseEventJson(rawBody);
+          if (parsed) await processParsedEvent(parsed);
+          return;
+        }
+        if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
+          const eventId = pendingPictureEventIds.shift();
+          if (eventId == null) return;
+          await attachPictureToEvent(eventId, body);
+        }
+      })
+      .catch((err) => {
+        logger.warn("[ISAPI] 處理事件片段失敗", {
+          deviceId,
+          deviceIp,
+          error: err?.message || String(err),
+        });
+      });
   };
 
   const tryConsumeOnePart = () => {
@@ -382,12 +382,19 @@ async function consumeEventStreamIncremental(
       if (trim) bodyEnd -= trim;
     }
     const body = buffer.slice(bodyStart, bodyEnd);
-    processPart(headerStr, body);
+    enqueuePart(headerStr, body);
     buffer = buffer.slice(bodyEnd);
     return true;
   };
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      partQueue.then(() => resolve(), () => resolve());
+    };
+
     const abortHandler = () => {
       try {
         // 強制關閉 stream，讓 consume 結束並觸發重連迴圈退出
@@ -405,8 +412,8 @@ async function consumeEventStreamIncremental(
       if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
     });
     stream.on("error", reject);
-    stream.on("end", () => resolve());
-    stream.on("close", () => resolve());
+    stream.on("end", finish);
+    stream.on("close", finish);
   });
 }
 

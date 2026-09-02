@@ -74,11 +74,11 @@ async function getSiteConfig(siteId) {
 
 function resolveLogTimeOptions(cfg, createdAt, options = {}) {
   if (options.since) {
-    return { since: String(options.since), useSinceOnly: true };
+    return { ...options, since: String(options.since), useSinceOnly: true };
   }
   if (cfg.operationMode === "parking" && !options.startTime && !options.timeRange) {
     const since = getEffectiveSince(cfg, createdAt);
-    if (since) return { since, useSinceOnly: true };
+    if (since) return { ...options, since, useSinceOnly: true };
   }
   return { ...options, useSinceOnly: false };
 }

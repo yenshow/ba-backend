@@ -181,7 +181,7 @@ async function getSiteConfigOrThrow(siteId, config) {
     throwApiError(
       C.PEOPLE_COUNTING_VALIDATION_FAILED,
       isFaceRecognitionCameraMode(config.cameraMode)
-        ? "未設定進場／出場攝影機"
+        ? "未設定入口／出口攝影機"
         : "未設定攝影機設備（cameraDeviceIds）",
     );
   }

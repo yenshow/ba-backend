@@ -32,24 +32,42 @@ const getBackupRootDir = () => path.join(getInstallRoot(), "backups");
 /** 與營運日／警報日界線一致（runtimeConfigService FIXED_ALERT_ROLLOVER_TZ） */
 const UPLOAD_FILENAME_TZ = "Asia/Taipei";
 
-/** ISAPI 附圖檔名時間戳（本地營運時區；避免 UTC ISO 與報表時間不一致） */
-const formatUploadTimestampForFilename = (value, maxLen = 19) => {
-  let dt;
+const ISO_HAS_OFFSET = /[zZ]|[+-]\d{2}:?\d{2}$/;
+
+/** 將事件時間轉為營運時區（Asia/Taipei）的 Luxon DateTime */
+const parseEventTimeForUploadFilename = (value) => {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    dt = DateTime.fromJSDate(value, { zone: "utc" }).setZone(UPLOAD_FILENAME_TZ);
-  } else {
-    const raw = String(value || "").trim();
-    if (!raw) return "";
-    dt = DateTime.fromISO(raw, { setZone: true }).setZone(UPLOAD_FILENAME_TZ);
+    return DateTime.fromJSDate(value, { zone: "utc" }).setZone(UPLOAD_FILENAME_TZ);
   }
-  if (!dt.isValid) {
-    return String(value || "")
-      .replace(/:/g, "-")
-      .replace(/\+.*$/, "")
-      .replace(/Z$/, "")
-      .slice(0, maxLen);
+
+  const raw = String(value ?? "").trim();
+  if (!raw) return DateTime.now().setZone(UPLOAD_FILENAME_TZ);
+
+  if (ISO_HAS_OFFSET.test(raw)) {
+    const dt = DateTime.fromISO(raw, { setZone: true });
+    if (dt.isValid) return dt.setZone(UPLOAD_FILENAME_TZ);
+    return DateTime.now().setZone(UPLOAD_FILENAME_TZ);
   }
-  return dt.toFormat("yyyy-MM-dd'T'HH-mm-ss").slice(0, maxLen);
+
+  // 設備常推送無 offset 的本地牆鐘 → 視為營運時區
+  const local = DateTime.fromISO(raw, { zone: UPLOAD_FILENAME_TZ });
+  return local.isValid ? local : DateTime.now().setZone(UPLOAD_FILENAME_TZ);
+};
+
+/** ISAPI 附圖檔名時間戳（固定秒級 yyyy-MM-ddTHH-mm-ss，營運時區） */
+const formatUploadTimestampForFilename = (value) =>
+  parseEventTimeForUploadFilename(value).toFormat("yyyy-MM-dd'T'HH-mm-ss");
+
+/** ISAPI 附圖唯一檔名：{deviceKey}_{營運日時間}_{recordId}.jpg */
+const buildIsapiUploadBasename = ({
+  deviceKey,
+  eventTime,
+  recordId,
+  ext = "jpg",
+}) => {
+  const safeKey = String(deviceKey || "unknown").replace(/[^0-9a-fA-F.:]/g, "_");
+  const rawTime = formatUploadTimestampForFilename(eventTime);
+  return `${safeKey}_${rawTime}_${recordId}.${ext}`;
 };
 
 const decodeUploadRequestPath = (requestPath) => {
@@ -145,6 +163,9 @@ module.exports = {
   resolveUploadRelativePath,
   resolveUploadFilePath,
   formatUploadTimestampForFilename,
+  parseEventTimeForUploadFilename,
+  buildIsapiUploadBasename,
+  UPLOAD_FILENAME_TZ,
   ensureDirSync,
   ensureRuntimeDataLayout,
 };

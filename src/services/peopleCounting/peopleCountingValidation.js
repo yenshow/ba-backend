@@ -227,13 +227,13 @@ function validateLocationData(locationData, isUpdate = false) {
           if (entryCam.length === 0) {
             throwApiError(
               C.PEOPLE_COUNTING_VALIDATION_FAILED,
-              "人臉辨識模式至少需要選擇一台進場攝影機",
+              "人臉辨識模式至少需要選擇一台入口攝影機",
             );
           }
           if (exitCam.length === 0) {
             throwApiError(
               C.PEOPLE_COUNTING_VALIDATION_FAILED,
-              "人臉辨識模式至少需要選擇一台出場攝影機",
+              "人臉辨識模式至少需要選擇一台出口攝影機",
             );
           }
           const entrySet = new Set(entryCam);
@@ -241,7 +241,7 @@ function validateLocationData(locationData, isUpdate = false) {
             if (entrySet.has(id)) {
               throwApiError(
                 C.PEOPLE_COUNTING_VALIDATION_FAILED,
-                "進場與出場攝影機不能為同一設備",
+                "入口與出口攝影機不能為同一設備",
               );
             }
           }

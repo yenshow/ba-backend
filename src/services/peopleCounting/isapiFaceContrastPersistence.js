@@ -3,14 +3,9 @@
  * 進出語意：由進場／出場攝影機設備歸屬決定（與門禁 entry/exit device 相同）
  * 附圖：multipart 先事件後圖，由訂閱端呼叫 attachPictureToFaceContrastEvent
  */
-const fs = require("fs");
-const path = require("path");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
-const {
-  getUploadsDir,
-  formatUploadTimestampForFilename,
-} = require("../../utils/baDataPaths");
+const { writeIsapiUploadPicture } = require("../../utils/isapiUploadPicture");
 
 function safeInt(v) {
   const n = Number(v);
@@ -160,32 +155,29 @@ async function attachPictureToFaceContrastEvent(eventId, pictureBuffer) {
   if (!row) return null;
   if (row.picture_path) return row.picture_path;
 
-  const deviceIp = row.device_ip || "unknown";
-  const eventTime = row.event_time || new Date().toISOString();
-  const safeIp = String(deviceIp).replace(/[^0-9a-fA-F.:]/g, "_");
-  const rawTime = formatUploadTimestampForFilename(eventTime, 16);
-  const basename = `${safeIp}_${rawTime}_${eventId}.jpg`;
-  const uploadsDir = getUploadsDir("face-contrast-events");
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-  const filePath = path.join(uploadsDir, basename);
-  fs.writeFileSync(filePath, pictureBuffer);
-  const picturePath = `/uploads/face-contrast-events/${basename}`;
+  const saved = writeIsapiUploadPicture({
+    subdir: "face-contrast-events",
+    deviceKey: row.device_ip,
+    eventTime: row.event_time,
+    recordId: eventId,
+    pictureBuffer,
+  });
+  if (!saved) return null;
+
   await db.query(
     `UPDATE isapi_face_contrast_events SET picture_path = ? WHERE id = ?`,
-    [picturePath, eventId],
+    [saved.picturePath, eventId],
   );
   try {
     websocketService.emitIsapiFaceContrastEvent({
       id: Number(eventId),
-      picturePath,
+      picturePath: saved.picturePath,
       hasPicture: true,
     });
   } catch (_e) {
     // WS 失敗不影響附圖
   }
-  return picturePath;
+  return saved.picturePath;
 }
 
 module.exports = {

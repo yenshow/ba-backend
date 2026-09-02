@@ -1,8 +1,6 @@
 /**
  * ISAPI 車輛 ANPR 事件寫入 vehicle_passageway_logs（先 XML 後圖）
  */
-const path = require("path");
-const fs = require("fs");
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const { normalizePlate } = require("../../utils/vehiclePlateUtils");
@@ -12,7 +10,7 @@ const {
   getEffectiveSince,
   isEventAfterEffectiveSince,
 } = require("./vehicleAccessConfig");
-const { getUploadsDir, formatUploadTimestampForFilename } = require("../../utils/baDataPaths");
+const { writeIsapiUploadPicture } = require("../../utils/isapiUploadPicture");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryVehicle } = require("../operationalEvents/operationalEventCopy");
 const { formatPlaceLabel } = require("../operationalEvents/operationalEventPlaceContext");
@@ -223,17 +221,21 @@ async function attachLicensePlatePicture(logIds, pictureBuffer) {
     row.device_id,
   ]);
   const host = devRows?.[0]?.config?.host
-    ? String(devRows[0].config.host).replace(/[^0-9a-fA-F.:]/g, "_")
+    ? String(devRows[0].config.host)
     : "unknown";
-  const rawTime = formatUploadTimestampForFilename(row.trigger_time, 19);
-  const basename = `${host}_${rawTime}_${primaryId}.jpg`;
-  const filePath = path.join(getUploadsDir("vehicle-events"), basename);
-  fs.writeFileSync(filePath, pictureBuffer);
-  const picturePath = `/uploads/vehicle-events/${basename}`;
+  const saved = writeIsapiUploadPicture({
+    subdir: "vehicle-events",
+    deviceKey: host,
+    eventTime: row.trigger_time,
+    recordId: primaryId,
+    pictureBuffer,
+  });
+  if (!saved) return;
+
   const placeholders = ids.map(() => "?").join(", ");
   await db.query(
     `UPDATE vehicle_passageway_logs SET picture_path = ?, file_count = 1 WHERE id IN (${placeholders})`,
-    [picturePath, ...ids],
+    [saved.picturePath, ...ids],
   );
   websocketService.emitVehicleAccessIsapiEvent({
     logIds: ids,
