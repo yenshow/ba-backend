@@ -23,6 +23,7 @@ const {
   resolveOperationalAccessResult,
   extractSubEventType,
   extractAccessEventIdentity,
+  shouldQueueAccessEventPicture,
 } = require("../peopleCounting/accessControlLogLabels");
 const {
   emitAccessControlEventFromPlaceContext,
@@ -128,7 +129,7 @@ async function persistIsapiEvent(options) {
 }
 
 /**
- * 為剛寫入的門禁事件補上附圖（multipart 順序：先 JSON 後圖）
+ * 為剛寫入的門禁事件補上附圖（僅人臉列；已有圖則略過）
  */
 async function attachPictureToEvent(eventId, pictureBuffer) {
   if (
@@ -138,11 +139,24 @@ async function attachPictureToEvent(eventId, pictureBuffer) {
   )
     return;
   const rows = await db.query(
-    `SELECT device_ip, event_time FROM isapi_access_events WHERE id = ?`,
+    `SELECT device_ip, event_time, payload, picture_path
+     FROM isapi_access_events WHERE id = ?`,
     [eventId],
   );
   const row = rows?.[0];
   if (!row) return;
+  const payload =
+    row.payload != null && typeof row.payload === "object" ? row.payload : {};
+  const hasPicture =
+    row.picture_path != null && String(row.picture_path).trim() !== "";
+  if (hasPicture || !shouldQueueAccessEventPicture(payload)) {
+    logger.warn("[ISAPI] 拒絕附圖綁定（事件類型不符或已有圖）", {
+      eventId,
+      subEventType: payload.subEventType,
+      hasPicture,
+    });
+    return;
+  }
   const saved = writeIsapiUploadPicture({
     subdir: "access-events",
     deviceKey: row.device_ip,
@@ -284,8 +298,8 @@ async function consumeEventStreamIncremental(
   const sep = Buffer.from(`--${boundary}`, "utf8");
   const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
   let buffer = Buffer.alloc(0);
-  /** 依 multipart 順序（先 JSON 後圖）排隊，避免非同步寫入與附圖錯綁 */
-  const pendingPictureEventIds = [];
+  /** 僅人臉事件佔槽；指紋等 JSON 不清除。新人臉覆蓋並 warn。 */
+  let lastPendingFaceEventId = null;
   let partQueue = Promise.resolve();
 
   const processParsedEvent = async (parsed) => {
@@ -294,7 +308,16 @@ async function consumeEventStreamIncremental(
     if (String(parsed.eventType).toLowerCase() === "heartbeat") return;
     if (!isProcessableEvent(ac)) return;
     const id = await handleEvent(parsed, deviceIp, deviceId);
-    if (id) pendingPictureEventIds.push(id);
+    if (id && shouldQueueAccessEventPicture(ac)) {
+      if (lastPendingFaceEventId != null) {
+        logger.warn("[ISAPI] 前一人臉事件未收到附圖", {
+          deviceId,
+          deviceIp,
+          eventId: lastPendingFaceEventId,
+        });
+      }
+      lastPendingFaceEventId = id;
+    }
     logger.info("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };
 
@@ -318,8 +341,12 @@ async function consumeEventStreamIncremental(
           return;
         }
         if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
-          const eventId = pendingPictureEventIds.shift();
-          if (eventId == null) return;
+          const eventId = lastPendingFaceEventId;
+          if (eventId == null) {
+            logger.warn("[ISAPI] 收到附圖但無待綁定事件", { deviceId, deviceIp });
+            return;
+          }
+          lastPendingFaceEventId = null;
           await attachPictureToEvent(eventId, body);
         }
       })
@@ -392,7 +419,19 @@ async function consumeEventStreamIncremental(
     const finish = () => {
       if (settled) return;
       settled = true;
-      partQueue.then(() => resolve(), () => resolve());
+      partQueue
+        .then(() => {
+          if (lastPendingFaceEventId != null) {
+            logger.warn("[ISAPI] 串流結束仍有未配對附圖的事件", {
+              deviceId,
+              deviceIp,
+              eventId: lastPendingFaceEventId,
+            });
+            lastPendingFaceEventId = null;
+          }
+          resolve();
+        })
+        .catch(() => resolve());
     };
 
     const abortHandler = () => {

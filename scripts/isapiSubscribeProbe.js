@@ -1,7 +1,7 @@
 /**
  * ISAPI subscribeEvent 探測（POST subscribeEvent?deployID=1）
  *
- * Runbook：docs/10-setting/troubleshooting-isapi-events.md
+ * Runbook：docs/10-setting/faq-troubleshooting.md
  *
  * 用法（測人臉時請先停掉後端佈防，避免搶連線）：
  *   node scripts/isapiSubscribeProbe.js

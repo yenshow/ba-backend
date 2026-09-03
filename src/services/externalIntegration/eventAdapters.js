@@ -9,6 +9,7 @@ const {
   extractSubEventType,
   resolveAccessControlEvent,
   resolveVerifyMethodLabel,
+  shouldDisplayAccessEventPicture,
 } = require("../peopleCounting/accessControlLogLabels");
 const { normalizeEmployeeNo } = require("../peopleCounting/helpers/entryExitStats");
 const {
@@ -599,7 +600,12 @@ function buildAccessControlEventDto(row, ctx) {
     cardNo,
     deviceId: mappedDeviceId != null ? mappedDeviceId : null,
     deviceName,
-    deviceScreenshotUrl: row.picture_path != null ? String(row.picture_path) : "",
+    deviceScreenshotUrl: shouldDisplayAccessEventPicture(
+      payload,
+      row.picture_path,
+    )
+      ? String(row.picture_path)
+      : "",
   };
 }
 

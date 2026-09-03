@@ -11,6 +11,7 @@ const {
   extractSubEventType,
   resolveAccessControlEvent,
   resolveVerifyMethodLabel,
+  shouldDisplayAccessEventPicture,
 } = require("../accessControlLogLabels");
 const {
   computeTransitionStats,
@@ -235,7 +236,12 @@ async function getAccessControlSiteLogs(options = {}) {
       eventLabel,
       verifyMethod: verifyMethodLabel,
       timestamp: row.event_time,
-      deviceScreenshotUrl: row.picture_path || "",
+      deviceScreenshotUrl: shouldDisplayAccessEventPicture(
+        payload,
+        row.picture_path,
+      )
+        ? row.picture_path || ""
+        : "",
       deviceName: ipToDeviceName.get(row.device_ip) || row.device_ip,
     };
   });

@@ -21,6 +21,9 @@ const VERIFY_LABEL = { face: "人臉", card: "卡片", fingerprint: "指紋" };
 
 const FAIL_SUBS = new Set([9, 39, 76]);
 
+/** 設備 multipart「JSON 後接圖」僅人臉驗證事件帶抓拍；指紋／卡片等多為純 JSON */
+const SUB_TYPES_WITH_SNAPSHOT = new Set([75, 76]);
+
 function extractSubEventType(payload) {
   if (!payload || typeof payload !== "object") return null;
   const direct = payload.subEventType;
@@ -124,6 +127,19 @@ function resolveAccessEventPopupLabel(payload, { deviceRole } = {}) {
   return "進入";
 }
 
+/** 人臉驗證事件才帶抓拍（佔附圖單槽／顯示縮圖） */
+function shouldQueueAccessEventPicture(payload) {
+  const sub = extractSubEventType(payload);
+  return sub != null && SUB_TYPES_WITH_SNAPSHOT.has(sub);
+}
+
+/** 顯示前：人臉事件且有 path 才回傳縮圖 URL */
+function shouldDisplayAccessEventPicture(payload, picturePath) {
+  const path = picturePath != null ? String(picturePath).trim() : "";
+  if (!path) return false;
+  return shouldQueueAccessEventPicture(payload);
+}
+
 module.exports = {
   extractSubEventType,
   extractAccessEventIdentity,
@@ -133,5 +149,7 @@ module.exports = {
   resolveOperationalAccessResult,
   resolveOperationalAccessSemantics,
   resolveAccessEventPopupLabel,
+  shouldQueueAccessEventPicture,
+  shouldDisplayAccessEventPicture,
   yscpEventLabel,
 };

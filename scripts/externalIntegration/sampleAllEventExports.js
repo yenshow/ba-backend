@@ -3,11 +3,11 @@
  *
  *   cd ba-backend
  *   npm run test:data-export:sample-all
- *   npm run test:data-export:sample-all -- --days 90 --limit 100
- *   npm run test:data-export:sample-all -- --event-type access_control --format txt
+ *   npm run test:data-export:sample-all -- --event-type access_control
+ *   npm run test:data-export:sample-all -- --days 30 --limit 200 --format txt
  *
  * 產出: tmp/data-export/<eventType>.csv|.txt + SUMMARY.md（單一類型時略過 SUMMARY）
- * 取樣語意：相對「現在」往回看 --days，取時間最近的 --limit 筆（CSV 內時間升序）。
+ * 取樣語意：相對「現在」往回看 --days（預設 90，非僅今天），取時間最近的 --limit 筆（預設 500；CSV 內時間升序）。
  * energy／environment：先 hourly，近窗 0 筆則改 raw。
  * 不含完整報表統計區塊；僅 adapter 可映射欄位。
  * --limit 上限 50000（與 adapter clampLimit 一致）。
@@ -254,7 +254,7 @@ const main = async () => {
     365,
   );
   const limit = Math.min(
-    Math.max(Number.parseInt(takeFlag(argv, "--limit") || "10", 10) || 10, 1),
+    Math.max(Number.parseInt(takeFlag(argv, "--limit") || "500", 10) || 500, 1),
     50000,
   );
   const formatRaw = String(takeFlag(argv, "--format") || "csv").trim().toLowerCase();
