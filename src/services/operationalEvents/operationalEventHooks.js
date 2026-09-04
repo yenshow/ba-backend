@@ -26,6 +26,10 @@ const {
   getElevatorConfigFromLocation,
   formatElevatorLogFloor,
 } = require("../elevator/elevatorFloorModel");
+const {
+  resolveFormulaFromDef,
+  applyDefTransform,
+} = require("../../utils/modbusTransform");
 
 // ─── coil suppress ───────────────────────────────────────────
 
@@ -146,14 +150,13 @@ async function resolveControlWriteTargets({
 }
 
 /**
- * address → statusPoints 鍵／scale，或主 DO → 電源
+ * address → statusPoints 鍵／transform，或主 DO → 電源
  * @param {{ systemConfig: object|null, address: number, registerType: 'coil'|'holding' }} args
  */
 function resolveControlPointMeta({ systemConfig, address, registerType }) {
+  const empty = { pointKey: null, pointDef: null, pointLabel: null };
   const addr = Number(address);
-  if (!Number.isFinite(addr)) {
-    return { pointKey: null, scale: null, pointLabel: null };
-  }
+  if (!Number.isFinite(addr)) return empty;
 
   const cfg =
     systemConfig && typeof systemConfig === "object" ? systemConfig : {};
@@ -172,13 +175,9 @@ function resolveControlPointMeta({ systemConfig, address, registerType }) {
       const rt = String(def.registerType || "").toLowerCase();
       if (registerType === "holding") {
         if (rt && rt !== "holding") continue;
-        const scale =
-          def.scale != null && Number.isFinite(Number(def.scale))
-            ? Number(def.scale)
-            : null;
         return {
           pointKey: key,
-          scale,
+          pointDef: def,
           pointLabel: resolvePointLabel(key, null, addr, "holding"),
         };
       }
@@ -186,7 +185,7 @@ function resolveControlPointMeta({ systemConfig, address, registerType }) {
       if (rt === "holding" || rt === "input") continue;
       return {
         pointKey: key,
-        scale: null,
+        pointDef: null,
         pointLabel: resolvePointLabel(key, null, addr, "coil"),
       };
     }
@@ -197,21 +196,20 @@ function resolveControlPointMeta({ systemConfig, address, registerType }) {
     if (doPart && Number(doPart.address) === addr) {
       return {
         pointKey: "isOn",
-        scale: null,
+        pointDef: null,
         pointLabel: resolvePointLabel("isOn", `do:${addr}`, addr, "coil"),
       };
     }
   }
 
-  return { pointKey: null, scale: null, pointLabel: null };
+  return empty;
 }
 
-function applyHoldingDisplayScale(rawValue, scale) {
+function applyHoldingDisplayTransform(rawValue, pointDef) {
   const raw = Number(rawValue);
-  if (!Number.isFinite(raw)) return rawValue;
-  const s = scale != null ? Number(scale) : 1;
-  if (!Number.isFinite(s) || s === 0 || s === 1) return raw;
-  const display = raw * s;
+  if (!Number.isFinite(raw) || !pointDef) return Number.isFinite(raw) ? raw : rawValue;
+  const display = Number(applyDefTransform(raw, pointDef));
+  if (!Number.isFinite(display)) return raw;
   return Number.isInteger(display) ? display : Math.round(display * 1000) / 1000;
 }
 
@@ -273,7 +271,7 @@ async function recordControlWriteEvent({
       : value
     : Boolean(value);
   const displayValue = isHolding
-    ? applyHoldingDisplayScale(rawWriteValue, pointMeta.scale)
+    ? applyHoldingDisplayTransform(rawWriteValue, pointMeta.pointDef)
     : rawWriteValue;
 
   const payloadValue = isHolding
@@ -288,6 +286,9 @@ async function recordControlWriteEvent({
     payloadExtra && typeof payloadExtra === "object"
       ? payloadExtra.executionType
       : null;
+  const holdingTransform = isHolding
+    ? resolveFormulaFromDef(pointMeta.pointDef)
+    : null;
   const defaultMessage =
     controlScope === "alert_linkage" && linkageExecutionType != null
       ? summaryLinkageWrite({
@@ -329,9 +330,7 @@ async function recordControlWriteEvent({
       address,
       registerType: isHolding ? "holding" : "coil",
       ...(pointMeta.pointKey ? { pointKey: pointMeta.pointKey } : {}),
-      ...(isHolding && pointMeta.scale != null && pointMeta.scale !== 1
-        ? { scale: pointMeta.scale, displayValue }
-        : {}),
+      ...(holdingTransform ? { transform: holdingTransform, displayValue } : {}),
       ...payloadValue,
       ...(payloadExtra && typeof payloadExtra === "object" ? payloadExtra : {}),
     },

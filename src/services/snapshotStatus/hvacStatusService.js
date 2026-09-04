@@ -21,6 +21,7 @@ const alertService = require("../alerts/alertService");
 const { loadActiveAlertSystemIdSet, mergeActiveAlertsIntoSnapshotItems } =
   systemAlert;
 const logger = require("../../utils/logger");
+const { applyDefTransform } = require("../../utils/modbusTransform");
 
 const statusLogger = logger.createLogger("hvacStatusService");
 
@@ -112,15 +113,8 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     }
     let value = r.data?.[0];
     const def = statusPoints[k];
-    const scale = def?.scale != null ? Number(def.scale) : 1;
-    if (
-      value != null &&
-      Number.isFinite(Number(value)) &&
-      Number.isFinite(scale) &&
-      scale !== 0 &&
-      scale !== 1
-    ) {
-      value = Number(value) * scale;
+    if (value != null && Number.isFinite(Number(value))) {
+      value = applyDefTransform(Number(value), def);
     }
     raw[k] = value;
   }
