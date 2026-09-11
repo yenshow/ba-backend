@@ -20,7 +20,7 @@ function defaultEffectiveBegin() {
 
 function defaultEffectiveEnd() {
   const d = new Date();
-  d.setFullYear(d.getFullYear() + 5);
+  d.setFullYear(d.getFullYear() + 1);
   return d;
 }
 
@@ -97,6 +97,17 @@ async function assertPlateNotOwnedByOther(plateNormalized, personId) {
     throwApiError(
       C.PLATE_ALREADY_ASSIGNED,
       `車牌已被其他人員使用（person_id=${owner}）`,
+    );
+  }
+
+  const tempRows = await db.query(
+    `SELECT location_id FROM location_temporary_license_plates WHERE plate_normalized = ? LIMIT 1`,
+    [plateNormalized],
+  );
+  if (tempRows?.[0]?.location_id != null) {
+    throwApiError(
+      C.PLATE_ALREADY_ASSIGNED,
+      `車牌已登記為臨時車輛（location_id=${tempRows[0].location_id}）`,
     );
   }
 }

@@ -7,6 +7,8 @@ const vehicleAccessService = require("../services/vehicleAccess/vehicleAccessSer
 const isapiVehicleSubscribeService = require("../services/vehicleAccess/isapiVehicleSubscribeService");
 const isapiVehicleDeviceService = require("../services/vehicleAccess/isapiVehicleDeviceService");
 const personLicensePlateService = require("../services/personnel/personLicensePlateService");
+const locationTemporaryPlateService = require("../services/vehicleAccess/locationTemporaryPlateService");
+const vehiclePlateSyncService = require("../services/vehicleAccess/vehiclePlateSyncService");
 const {
   authenticate,
   requirePermission,
@@ -20,6 +22,8 @@ const {
   ENTRY_EXIT_MAX_RECORDS,
 } = require("../services/entryExit/resolveTimeOptions");
 const { validateIntegers, validateNumbers } = require("../middleware/validation");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrors");
 
 router.use(
   authenticate,
@@ -178,6 +182,67 @@ router.get(
   disableHttpCache,
   asyncHandler(async (req, res) => {
     res.sendSuccess(isapiVehicleSubscribeService.getSubscribeStatus());
+  }),
+);
+
+/**
+ * 地點臨時車牌列表
+ * GET /api/vehicle-access/locations/:locationId/temporary-plates
+ */
+router.get(
+  "/locations/:locationId/temporary-plates",
+  requirePermission("system.vehicle_access.plate.manage"),
+  disableHttpCache,
+  validateIntegers("locationId"),
+  asyncHandler(async (req, res) => {
+    const locationId = parseInt(req.params.locationId, 10);
+    const items = await locationTemporaryPlateService.listByLocationId(locationId);
+    res.sendSuccess({ items });
+  }),
+);
+
+/**
+ * 地點臨時車牌新增／修改（寫平台 + 推送設備）
+ * PUT /api/vehicle-access/locations/:locationId/temporary-plates
+ * query mutation=create|update
+ */
+router.put(
+  "/locations/:locationId/temporary-plates",
+  requirePlateUpsert(),
+  validateIntegers("locationId"),
+  asyncHandler(async (req, res) => {
+    const locationId = parseInt(req.params.locationId, 10);
+    const mutation = String(req.query.mutation || "")
+      .trim()
+      .toLowerCase();
+    const result = await vehiclePlateSyncService.saveAndSyncTemporaryPlate(
+      locationId,
+      req.body || {},
+      { mutation },
+    );
+    res.sendSuccess(result);
+  }),
+);
+
+/**
+ * 地點臨時車牌刪除
+ * DELETE /api/vehicle-access/locations/:locationId/temporary-plates/:id
+ */
+router.delete(
+  "/locations/:locationId/temporary-plates/:id",
+  requirePermission("system.vehicle_access.plate.delete"),
+  validateIntegers("locationId", "id"),
+  asyncHandler(async (req, res) => {
+    const locationId = parseInt(req.params.locationId, 10);
+    const id = parseInt(req.params.id, 10);
+    const result = await vehiclePlateSyncService.deleteAndUnsyncTemporaryPlate(
+      locationId,
+      id,
+    );
+    if (!result.row) {
+      throwApiError(C.NOT_FOUND, "找不到臨時車牌");
+    }
+    res.sendSuccess(result);
   }),
 );
 

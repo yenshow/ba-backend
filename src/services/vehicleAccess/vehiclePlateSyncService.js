@@ -6,6 +6,7 @@ const { parseConfig } = require("./vehicleAccessConfig");
 const isapiVehicleDeviceService = require("./isapiVehicleDeviceService");
 const { normalizeListTypeToDevice } = require("./isapiVehicleXmlParser");
 const personLicensePlateService = require("../personnel/personLicensePlateService");
+const locationTemporaryPlateService = require("./locationTemporaryPlateService");
 
 const SYNC_STATUS = {
   SYNCED: "synced",
@@ -36,7 +37,7 @@ function buildIsapiTimesFromRow(row) {
   return {
     createTime: row.effective_begin || new Date(),
     effectiveTime:
-      row.effective_end || new Date(Date.now() + 5 * 365 * 24 * 60 * 60 * 1000),
+      row.effective_end || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
   };
 }
 
@@ -97,6 +98,21 @@ function resolveTargetForLocation(locationId, systemConfig) {
     deviceIds,
     channelId: cfg.cameraChannelId ?? 1,
   };
+}
+
+async function loadVehicleAccessTarget(locationId) {
+  const locId = Number(locationId);
+  if (!Number.isFinite(locId)) return null;
+  const rows = await db.query(
+    `
+      SELECT system_config
+      FROM location_systems
+      WHERE location_id = ? AND system_type = 'vehicle_access'
+      LIMIT 1
+    `,
+    [locId],
+  );
+  return resolveTargetForLocation(locId, rows?.[0]?.system_config);
 }
 
 function aggregateSyncResults(results) {
@@ -184,18 +200,15 @@ async function pushPlateRowToTarget(plateRow, target) {
   return { successCount, failures, totalDevices: target.deviceIds.length };
 }
 
-async function syncPlateRowById(plateId, targets) {
-  const rows = await db.query(
-    `SELECT * FROM person_license_plates WHERE id = ? LIMIT 1`,
-    [plateId],
-  );
-  const row = rows?.[0];
-  if (!row) {
-    return { status: SYNC_STATUS.SKIPPED, warning: null, failure: null };
-  }
-
+/**
+ * @param {object} row
+ * @param {Array} targets
+ * @param {(id: number, payload: object) => Promise<void>} updateSyncStatus
+ */
+async function syncLoadedPlateRow(row, targets, updateSyncStatus) {
+  const plateId = row.id;
   if (!targets.length) {
-    await personLicensePlateService.updateSyncStatus(plateId, {
+    await updateSyncStatus(plateId, {
       status: SYNC_STATUS.PENDING,
       error: null,
       syncedAt: null,
@@ -206,7 +219,6 @@ async function syncPlateRowById(plateId, targets) {
   let totalOk = 0;
   let totalDevices = 0;
   const allFailures = [];
-
   const targetResults = await Promise.all(
     targets.map((target) => pushPlateRowToTarget(row, target)),
   );
@@ -217,7 +229,7 @@ async function syncPlateRowById(plateId, targets) {
   }
 
   if (totalDevices === 0) {
-    await personLicensePlateService.updateSyncStatus(plateId, {
+    await updateSyncStatus(plateId, {
       status: SYNC_STATUS.PENDING,
       error: "缺少入口/出口攝影機",
       syncedAt: null,
@@ -226,7 +238,7 @@ async function syncPlateRowById(plateId, targets) {
   }
 
   if (allFailures.length === 0) {
-    await personLicensePlateService.updateSyncStatus(plateId, {
+    await updateSyncStatus(plateId, {
       status: SYNC_STATUS.SYNCED,
       error: null,
       syncedAt: new Date(),
@@ -235,7 +247,7 @@ async function syncPlateRowById(plateId, targets) {
   }
 
   if (totalOk > 0) {
-    await personLicensePlateService.updateSyncStatus(plateId, {
+    await updateSyncStatus(plateId, {
       status: SYNC_STATUS.PARTIAL,
       error: summarizePlateSyncError(allFailures) || "部分設備同步失敗",
       syncedAt: new Date(),
@@ -247,7 +259,7 @@ async function syncPlateRowById(plateId, targets) {
     };
   }
 
-  await personLicensePlateService.updateSyncStatus(plateId, {
+  await updateSyncStatus(plateId, {
     status: SYNC_STATUS.FAILED,
     error: summarizePlateSyncError(allFailures) || "同步失敗",
     syncedAt: null,
@@ -257,6 +269,22 @@ async function syncPlateRowById(plateId, targets) {
     warning: null,
     failure: allFailures[0],
   };
+}
+
+async function syncPlateRowById(plateId, targets) {
+  const rows = await db.query(
+    `SELECT * FROM person_license_plates WHERE id = ? LIMIT 1`,
+    [plateId],
+  );
+  const row = rows?.[0];
+  if (!row) {
+    return { status: SYNC_STATUS.SKIPPED, warning: null, failure: null };
+  }
+  return syncLoadedPlateRow(
+    row,
+    targets,
+    personLicensePlateService.updateSyncStatus,
+  );
 }
 
 /**
@@ -290,16 +318,7 @@ async function syncPlatesForLocation(locationId) {
     return { status: SYNC_STATUS.SKIPPED, warnings: [], failures: [] };
   }
 
-  const rows = await db.query(
-    `
-      SELECT system_config
-      FROM location_systems
-      WHERE location_id = ? AND system_type = 'vehicle_access'
-      LIMIT 1
-    `,
-    [locId],
-  );
-  const target = resolveTargetForLocation(locId, rows?.[0]?.system_config);
+  const target = await loadVehicleAccessTarget(locId);
 
   if (!target) {
     return {
@@ -341,6 +360,20 @@ async function syncPlatesForLocation(locationId) {
   for (const row of plateRows || []) {
     results.push(await syncPlateRowById(row.id, [target]));
   }
+
+  const tempPlateRows = await db.query(
+    `
+      SELECT id
+      FROM location_temporary_license_plates
+      WHERE location_id = ?
+      ORDER BY id ASC
+    `,
+    [locId],
+  );
+  for (const row of tempPlateRows || []) {
+    results.push(await syncTemporaryPlateRowById(row.id, [target]));
+  }
+
   const aggregated = aggregateSyncResults(results);
   if (cleanupFailures.length > 0) {
     aggregated.failures = [...(aggregated.failures || []), ...cleanupFailures];
@@ -351,27 +384,63 @@ async function syncPlatesForLocation(locationId) {
   return aggregated;
 }
 
-function mergeTargets(targetLists) {
-  const map = new Map();
-  for (const list of targetLists) {
-    for (const target of list || []) {
-      if (!target?.locationId) continue;
-      const key = Number(target.locationId);
-      const existing = map.get(key);
-      if (!existing) {
-        map.set(key, {
-          locationId: key,
-          deviceIds: Array.from(new Set(target.deviceIds || [])),
-          channelId: target.channelId ?? 1,
-        });
-        continue;
-      }
-      existing.deviceIds = Array.from(
-        new Set([...(existing.deviceIds || []), ...(target.deviceIds || [])]),
-      );
-    }
+async function syncTemporaryPlateRowById(plateId, targets) {
+  const rows = await db.query(
+    `SELECT * FROM location_temporary_license_plates WHERE id = ? LIMIT 1`,
+    [plateId],
+  );
+  const row = rows?.[0];
+  if (!row) {
+    return { status: SYNC_STATUS.SKIPPED, warning: null, failure: null };
   }
-  return Array.from(map.values());
+  return syncLoadedPlateRow(
+    row,
+    targets,
+    locationTemporaryPlateService.updateSyncStatus,
+  );
+}
+
+/**
+ * 寫入臨時車牌並推送至該地點 ISAPI 攝影機
+ * @param {number} locationId
+ * @param {object} plateInput
+ * @param {{ mutation?: 'create'|'update' }} [options]
+ */
+async function saveAndSyncTemporaryPlate(locationId, plateInput, options = {}) {
+  const { row, created } = await locationTemporaryPlateService.upsertForLocation(
+    locationId,
+    plateInput,
+    { expectedMutation: options.mutation },
+  );
+  const target = await loadVehicleAccessTarget(locationId);
+  const syncResult = await syncTemporaryPlateRowById(
+    row.id,
+    target ? [target] : [],
+  );
+  const refreshed = await locationTemporaryPlateService.getById(row.id);
+  return { row: refreshed || row, created, sync: syncResult };
+}
+
+/**
+ * 刪除臨時車牌：先自設備移除，再刪平台列（設備失敗仍刪平台，failures 回傳）
+ */
+async function deleteAndUnsyncTemporaryPlate(locationId, plateId) {
+  const existing = await locationTemporaryPlateService.getById(plateId);
+  if (!existing || Number(existing.location_id) !== Number(locationId)) {
+    return { row: null, failures: [] };
+  }
+
+  const target = await loadVehicleAccessTarget(locationId);
+  const failures = [];
+  if (target) {
+    await removePlateFromTargets(existing.plate_number, [target], failures);
+  }
+
+  const removed = await locationTemporaryPlateService.deleteById(
+    locationId,
+    plateId,
+  );
+  return { row: removed, failures };
 }
 
 async function removePlateFromTargets(plateNumber, targets, failures = []) {
@@ -536,10 +605,13 @@ async function saveAndSyncPersonLicensePlates(personId, platesInput, oldPlates =
 module.exports = {
   SYNC_STATUS,
   resolveIsapiTargetsForPersonId,
+  resolveTargetForLocation,
   savePersonLicensePlatesPlatform,
   saveAndSyncPersonLicensePlates,
   syncPersonPlates,
   syncPlatesForLocation,
+  saveAndSyncTemporaryPlate,
+  deleteAndUnsyncTemporaryPlate,
   reconcileAfterPersonChange,
   purgePersonPlatesFromDevices,
   reconcileLocationMemberChange,

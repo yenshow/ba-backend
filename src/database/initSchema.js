@@ -981,6 +981,38 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // 地點臨時車牌（不上人員主檔；姓名僅平台顯示）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS location_temporary_license_plates (
+        id SERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        plate_number VARCHAR(32) NOT NULL,
+        plate_normalized VARCHAR(32) NOT NULL,
+        list_type VARCHAR(16) NOT NULL DEFAULT 'allowList',
+        effective_begin TIMESTAMPTZ,
+        effective_end TIMESTAMPTZ,
+        display_name VARCHAR(128) NOT NULL,
+        isapi_sync_status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        isapi_sync_error TEXT,
+        isapi_synced_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (location_id, plate_normalized)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "location_temporary_license_plates");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_location_temp_plates_normalized
+      ON location_temporary_license_plates(plate_normalized);
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_location_temp_plates_location
+      ON location_temporary_license_plates(location_id);
+    `);
+    schemaLogger.info("location_temporary_license_plates 表已建立", {
+      module: "initSchema",
+    });
+
     // 人員梯控卡片（主檔；下發至 HCNetSDK 設備）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_ladder_cards (

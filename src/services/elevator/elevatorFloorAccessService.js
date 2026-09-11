@@ -210,6 +210,9 @@ async function replaceFloorAccess(locationId, assignments = []) {
     }
   }
 
+  const previousPersonIds =
+    await getPersonIdsWithFloorAccess(Number(locationId));
+
   await db.transaction(async (query) => {
     await query(
       `DELETE FROM person_elevator_floor_access WHERE location_id = ?`,
@@ -229,7 +232,11 @@ async function replaceFloorAccess(locationId, assignments = []) {
     }
   });
 
-  await syncLadderFloorsFromLocationAssignments(Number(locationId), list);
+  await syncLadderFloorsFromLocationAssignments(
+    Number(locationId),
+    list,
+    previousPersonIds,
+  );
 
   const floorAccess = await getFloorAccess(locationId);
   let deviceSync = null;
@@ -306,9 +313,38 @@ async function syncPersonFloorAccessFromLadderFloors(personId, floorsStorage) {
   });
 }
 
+const sortedFloorIndices = (values) =>
+  [...values].sort((a, b) => a - b);
+
+/** 從 person_ladder_cards.floors 取出可突變的 byLocation map */
+const cloneByLocationMap = (rawFloors, locKey) => {
+  let storage = rawFloors;
+  if (typeof storage === "string") {
+    try {
+      storage = JSON.parse(storage);
+    } catch {
+      storage = {};
+    }
+  }
+  if (storage && typeof storage === "object" && !Array.isArray(storage)) {
+    return { ...(storage.byLocation || {}) };
+  }
+  if (Array.isArray(storage) && storage.length) {
+    return { [locKey]: parseFloorsJson(storage) };
+  }
+  return {};
+};
+
+/**
+ * 將地點樓層授權回寫 person_ladder_cards（鏡像主檔；含新建列）。
+ * @param {number} locationId
+ * @param {Array<{ floorIndex?: number, personIds?: number[] }>} assignments
+ * @param {number[]} [previousPersonIds] 套用前此地點曾授權的人員（用於清除被移除者）
+ */
 async function syncLadderFloorsFromLocationAssignments(
   locationId,
   assignments = [],
+  previousPersonIds = [],
 ) {
   const locId = Number(locationId);
   if (!Number.isFinite(locId) || locId <= 0) return;
@@ -328,14 +364,8 @@ async function syncLadderFloorsFromLocationAssignments(
   }
 
   const affectedIds = new Set(personFloorMap.keys());
-  const hadRows = await db.query(
-    `SELECT DISTINCT person_id
-     FROM person_elevator_floor_access
-     WHERE location_id = ?`,
-    [locId],
-  );
-  for (const row of hadRows || []) {
-    const personId = Number(row.person_id);
+  for (const rawId of previousPersonIds || []) {
+    const personId = Number(rawId);
     if (Number.isFinite(personId) && personId > 0) affectedIds.add(personId);
   }
   if (!affectedIds.size) return;
@@ -346,48 +376,76 @@ async function syncLadderFloorsFromLocationAssignments(
      WHERE person_id IN (${[...affectedIds].map(() => "?").join(",")})`,
     [...affectedIds],
   );
+  const cardByPersonId = new Map(
+    (cards || []).map((row) => [Number(row.person_id), row]),
+  );
   const locKey = String(locId);
 
-  for (const card of cards || []) {
-    const personId = Number(card.person_id);
-    if (!Number.isFinite(personId) || personId <= 0) continue;
+  const needInsertIds = [...personFloorMap.keys()].filter(
+    (personId) => !cardByPersonId.has(personId),
+  );
+  const personConfigById = new Map();
+  if (needInsertIds.length) {
+    const personRows = await db.query(
+      `SELECT id, config FROM persons WHERE id IN (${needInsertIds.map(() => "?").join(",")})`,
+      needInsertIds,
+    );
+    for (const row of personRows || []) {
+      personConfigById.set(Number(row.id), row);
+    }
+  }
+
+  for (const personId of affectedIds) {
+    const hasNew = personFloorMap.has(personId);
+    const card = cardByPersonId.get(personId);
+
+    if (!card) {
+      if (!hasNew) continue;
+      const personRow = personConfigById.get(personId);
+      const resolved = personLadderCardService.resolveSyncFields(personRow, []);
+      const cardNo = String(resolved.cardNo || "").trim();
+      if (!cardNo) continue;
+      const floors = sortedFloorIndices(personFloorMap.get(personId));
+      await db.query(
+        `INSERT INTO person_ladder_cards (
+           person_id, card_no, home_floor, floors, card_type, floor_mode,
+           card_password, valid_enabled, valid_begin, valid_end, sdk_sync_status
+         )
+         VALUES (?, ?, ?, ?, 1, 'byte', NULL, FALSE, NULL, NULL, 'pending')`,
+        [
+          personId,
+          cardNo,
+          floors[0] ?? 1,
+          JSON.stringify({ byLocation: { [locKey]: floors } }),
+        ],
+      );
+      continue;
+    }
 
     const hadAtLocation = parseFloorsForLocation(card.floors, locId).length > 0;
-    const hasNew = personFloorMap.has(personId);
     if (!hadAtLocation && !hasNew) continue;
 
-    let storage = card.floors;
-    if (typeof storage === "string") {
-      try {
-        storage = JSON.parse(storage);
-      } catch {
-        storage = {};
-      }
-    }
-    const byLocation =
-      storage && typeof storage === "object" && !Array.isArray(storage)
-        ? { ...(storage.byLocation || {}) }
-        : Array.isArray(storage) && storage.length
-          ? { [locKey]: parseFloorsJson(storage) }
-          : {};
-
+    const byLocation = cloneByLocationMap(card.floors, locKey);
     if (hasNew) {
-      byLocation[locKey] = [...personFloorMap.get(personId)].sort(
-        (a, b) => a - b,
-      );
+      byLocation[locKey] = sortedFloorIndices(personFloorMap.get(personId));
     } else {
       delete byLocation[locKey];
     }
 
-    const nextFloors =
-      Object.keys(byLocation).length > 0 ? { byLocation } : { byLocation: {} };
-
+    const flatFloors = Object.values(byLocation).flatMap((v) =>
+      parseFloorsJson(v),
+    );
     await db.query(
       `UPDATE person_ladder_cards
        SET floors = ?,
+           home_floor = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE person_id = ?`,
-      [JSON.stringify(nextFloors), personId],
+      [
+        JSON.stringify({ byLocation }),
+        flatFloors.length ? Math.min(...flatFloors) : 1,
+        personId,
+      ],
     );
   }
 }
