@@ -5,7 +5,6 @@
  */
 const db = require("../../database/db");
 const accessControlService = require("./accessControlService");
-const websocketService = require("../websocket/websocketService");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
@@ -129,7 +128,8 @@ async function persistIsapiEvent(options) {
 }
 
 /**
- * 為剛寫入的門禁事件補上附圖（僅人臉列；已有圖則略過）
+ * 為剛寫入的門禁事件補上附圖（僅人臉列；已有圖則略過）。
+ * 主事件寫入時已推 WS；此處只落庫，不再二次 emit。
  */
 async function attachPictureToEvent(eventId, pictureBuffer) {
   if (
@@ -169,7 +169,6 @@ async function attachPictureToEvent(eventId, pictureBuffer) {
     `UPDATE isapi_access_events SET picture_path = ?, file_count = 1 WHERE id = ?`,
     [saved.picturePath, eventId],
   );
-  websocketService.emitIsapiAccessEvent();
 }
 
 /**

@@ -308,17 +308,24 @@ async function checkEnvironmentLocations() {
                       );
                     });
                 }
+                const readingChanged =
+                  deviceReadingSnapshotCache.hasReadingChanged(deviceId, {
+                    data: derived,
+                    status: "online",
+                  });
                 deviceReadingSnapshotCache.setDeviceReading(deviceId, {
                   recordedAt: ts,
                   data: derived,
                   status: "online",
                 });
-                websocketService.emitEnvironmentReading({
-                  locationId: location.location_id,
-                  recordedAt: ts,
-                  data: derived,
-                  devices: [{ deviceId, status: "online" }],
-                });
+                if (readingChanged) {
+                  websocketService.emitEnvironmentReading({
+                    locationId: location.location_id,
+                    recordedAt: ts,
+                    data: derived,
+                    devices: [{ deviceId, status: "online" }],
+                  });
+                }
               }
             }
           } catch (logError) {
@@ -419,17 +426,24 @@ async function checkEnvironmentLocations() {
           : null;
         if (Number.isFinite(failedDeviceId)) {
           const failedAt = new Date().toISOString();
+          const readingChanged =
+            deviceReadingSnapshotCache.hasReadingChanged(failedDeviceId, {
+              data: {},
+              status: "offline",
+            });
           deviceReadingSnapshotCache.setDeviceReading(failedDeviceId, {
             recordedAt: failedAt,
             data: {},
             status: "offline",
           });
-          websocketService.emitEnvironmentReading({
-            locationId: location.location_id,
-            recordedAt: failedAt,
-            data: {},
-            devices: [{ deviceId: failedDeviceId, status: "offline" }],
-          });
+          if (readingChanged) {
+            websocketService.emitEnvironmentReading({
+              locationId: location.location_id,
+              recordedAt: failedAt,
+              data: {},
+              devices: [{ deviceId: failedDeviceId, status: "offline" }],
+            });
+          }
         }
 
         return {

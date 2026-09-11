@@ -16,6 +16,14 @@ const { parseConfig } = require("../../utils/deviceHelpers");
 const { isValidEnergyParameterKey } = require("../../constants/energyParameterCatalog");
 
 const lastRawWriteByDevice = new Map();
+/** 上次已推播的讀數簽章（deviceId → JSON）；相同則略過 energy:reading:new */
+const lastEmittedReadingSigByDevice = new Map();
+
+const energyReadingSignature = (data, online) =>
+  JSON.stringify({
+    online: !!online,
+    data: data && typeof data === "object" ? data : {},
+  });
 
 async function readMeterValues(enabledValues, deviceConfig, meta = {}) {
   const deviceValues = {};
@@ -209,13 +217,17 @@ async function checkEnergyMeters() {
       });
     }
 
-    websocketService.emitEnergyReadingNew({
-      deviceId: device.id,
-      deviceName: device.name,
-      recordedAt: new Date().toISOString(),
-      data,
-      online,
-    });
+    const sig = energyReadingSignature(data, online);
+    if (lastEmittedReadingSigByDevice.get(device.id) !== sig) {
+      lastEmittedReadingSigByDevice.set(device.id, sig);
+      websocketService.emitEnergyReadingNew({
+        deviceId: device.id,
+        deviceName: device.name,
+        recordedAt: new Date().toISOString(),
+        data,
+        online,
+      });
+    }
   }
 
   const removedIds = includeIds.filter(

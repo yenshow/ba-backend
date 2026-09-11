@@ -31,6 +31,30 @@ const setDeviceReading = (deviceId, payload) => {
   });
 };
 
+/** 取快取（含可能已 stale；供 Monitor 做 WS diff，不刪除） */
+const peekDeviceReading = (deviceId) => {
+  const id = Number(deviceId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return byDeviceId.get(id) || null;
+};
+
+/**
+ * 讀數／連線狀態是否相對上次快取有變（不含 recordedAt）
+ * @param {number} deviceId
+ * @param {{ data?: object, status?: string }} next
+ */
+const hasReadingChanged = (deviceId, next) => {
+  const prev = peekDeviceReading(deviceId);
+  if (!prev) return true;
+  const nextStatus = next?.status === "offline" ? "offline" : "online";
+  if (prev.status !== nextStatus) return true;
+  const nextData =
+    next?.data && typeof next.data === "object" && !Array.isArray(next.data)
+      ? next.data
+      : {};
+  return JSON.stringify(prev.data) !== JSON.stringify(nextData);
+};
+
 const getDeviceReadings = (deviceIds) => {
   const out = new Map();
   for (const rawId of deviceIds || []) {
@@ -48,5 +72,6 @@ const getDeviceReadings = (deviceIds) => {
 
 module.exports = {
   setDeviceReading,
+  hasReadingChanged,
   getDeviceReadings,
 };
