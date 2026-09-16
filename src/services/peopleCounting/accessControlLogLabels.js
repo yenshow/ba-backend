@@ -39,19 +39,33 @@ function extractSubEventType(payload) {
   return null;
 }
 
-function resolveAccessControlEvent(sub, entryIps, exitIps, deviceIp) {
+/**
+ * 解析門禁事件方向／標籤（僅依 device_id ∈ entry／exit）。
+ * @param {number|null} sub
+ * @param {{ deviceId?: number|null, entryDeviceIds?: Set<number>, exitDeviceIds?: Set<number> }} [opts]
+ */
+function resolveAccessControlEvent(sub, opts = {}) {
   if (sub != null && EVENT_LABEL_BY_SUB[sub]) {
     return { eventType: "failed", eventLabel: EVENT_LABEL_BY_SUB[sub] };
   }
   if (sub != null && FAIL_SUBS.has(sub)) {
     return { eventType: "failed", eventLabel: "失敗" };
   }
-  const ip = deviceIp != null ? String(deviceIp) : "";
-  const eventType = entryIps.has(ip) ? "entry" : exitIps.has(ip) ? "exit" : "entry";
-  return {
-    eventType,
-    eventLabel: eventType === "entry" ? "進入" : "離開",
-  };
+
+  const deviceId =
+    opts.deviceId != null && Number.isFinite(Number(opts.deviceId))
+      ? Number(opts.deviceId)
+      : null;
+  if (deviceId != null && deviceId > 0) {
+    if (opts.entryDeviceIds instanceof Set && opts.entryDeviceIds.has(deviceId)) {
+      return { eventType: "entry", eventLabel: "進入" };
+    }
+    if (opts.exitDeviceIds instanceof Set && opts.exitDeviceIds.has(deviceId)) {
+      return { eventType: "exit", eventLabel: "離開" };
+    }
+  }
+  // 無可靠歸屬時預設進場（與 transition 首筆 exit 忽略搭配）
+  return { eventType: "entry", eventLabel: "進入" };
 }
 
 function resolveVerifyMethodKey(payload) {

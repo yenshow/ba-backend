@@ -4,9 +4,9 @@
  */
 
 const db = require("../../../database/db");
-const deviceService = require("../../devices/deviceService");
 const personnelService = require("../../personnel/personnelService");
 const logger = require("../../../utils/logger");
+const { getDeviceNameByIds } = require("../../../utils/deviceHelpers");
 const {
   extractSubEventType,
   resolveAccessControlEvent,
@@ -34,13 +34,6 @@ function accessControlLogDirection(log) {
   return log.eventType === "entry" || log.eventType === "exit"
     ? log.eventType
     : null;
-}
-
-function normalizeDeviceHost(host) {
-  if (!host || typeof host !== "string") return "";
-  const trimmed = host.trim();
-  const m = trimmed.match(/^(?:https?:\/\/)?([^:/]+)/);
-  return m ? m[1] : trimmed;
 }
 
 function statsFromAccessControlLogs(logs) {
@@ -84,7 +77,7 @@ function resolvePhotoUrl(person) {
 }
 
 /**
- * 門禁地點進出紀錄：從 isapi_access_events 查詢
+ * 門禁地點進出紀錄：從 isapi_access_events 依 device_id 查詢
  */
 async function getAccessControlSiteLogs(options = {}) {
   const {
@@ -110,37 +103,10 @@ async function getAccessControlSiteLogs(options = {}) {
     return { logs: [], total: 0 };
   }
 
-  const entryIps = new Set();
-  const exitIps = new Set();
-  const allIps = new Set();
-  const ipToDeviceName = new Map();
-
-  const addDevice = async (deviceId, isEntry) => {
-    try {
-      const { device } = await deviceService.getDeviceById(deviceId);
-      const host = device?.config?.host;
-      const ip = normalizeDeviceHost(host);
-      if (ip) {
-        allIps.add(ip);
-        ipToDeviceName.set(ip, device?.name || ip);
-        if (isEntry) entryIps.add(ip);
-        else exitIps.add(ip);
-      }
-    } catch (err) {
-      logger.warn("取得門禁設備 IP 失敗，略過", {
-        deviceId,
-        error: err.message,
-      });
-    }
-  };
-
   const entryIdSet = new Set(entryIds);
-  for (const id of entryIdSet) await addDevice(id, true);
-  for (const id of new Set(exitIds)) {
-    if (!entryIdSet.has(id)) await addDevice(id, false);
-  }
-  const allIpsArray = [...allIps];
-  if (allIpsArray.length === 0) return { logs: [], total: 0 };
+  const exitIdSet = new Set(exitIds);
+  const allDeviceIds = [...new Set([...entryIds, ...exitIds])];
+  const idToDeviceName = await getDeviceNameByIds(allDeviceIds);
 
   const { start, end } = resolveStatsTimeRange({
     startTime: optStart,
@@ -148,25 +114,26 @@ async function getAccessControlSiteLogs(options = {}) {
   });
   const limitNum = Math.min(Math.max(Number(limit) || 50, 1), ENTRY_EXIT_MAX_RECORDS);
   const offsetNum = Math.max(Number(offset) || 0, 0);
-
-  const placeholders = allIpsArray.map(() => "?").join(",");
   const rangeParams = [
-    ...allIpsArray,
+    allDeviceIds,
     start.toISOString(),
     end.toISOString(),
   ];
   const dataParams = [...rangeParams, limitNum, offsetNum];
+
   const [countRows, rows] = await Promise.all([
     db.query(
       `SELECT COUNT(*)::int AS cnt
        FROM isapi_access_events
-       WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?`,
+       WHERE device_id = ANY(?::int[])
+         AND event_time >= ? AND event_time <= ?`,
       rangeParams,
     ),
     db.query(
-      `SELECT id, device_ip, event_time, event_type, payload, picture_path
+      `SELECT id, device_id, device_ip, event_time, event_type, payload, picture_path
        FROM isapi_access_events
-       WHERE device_ip IN (${placeholders}) AND event_time >= ? AND event_time <= ?
+       WHERE device_id = ANY(?::int[])
+         AND event_time >= ? AND event_time <= ?
        ORDER BY event_time DESC
        LIMIT ? OFFSET ?`,
       dataParams,
@@ -214,17 +181,24 @@ async function getAccessControlSiteLogs(options = {}) {
   const logs = (rows || []).map((row) => {
     const payload = typeof row.payload === "object" ? row.payload : {};
     const sub = extractSubEventType(payload);
-    const { eventType, eventLabel } = resolveAccessControlEvent(
-      sub,
-      entryIps,
-      exitIps,
-      row.device_ip,
-    );
+    const rowDeviceId =
+      row.device_id != null && Number.isFinite(Number(row.device_id))
+        ? Number(row.device_id)
+        : null;
+    const { eventType, eventLabel } = resolveAccessControlEvent(sub, {
+      deviceId: rowDeviceId,
+      entryDeviceIds: entryIdSet,
+      exitDeviceIds: exitIdSet,
+    });
     const verifyMethodLabel = resolveVerifyMethodLabel(payload);
     const employeeId = getEmployeeNo(payload);
     const personInfo = employeeId ? personByEmployeeNo.get(employeeId) : null;
     const devicePersonName =
       payload.personName != null ? String(payload.personName).trim() : "";
+    const deviceName =
+      (rowDeviceId != null ? idToDeviceName.get(rowDeviceId) : null) ||
+      row.device_ip ||
+      "";
     return {
       id: `isapi-${row.id}`,
       personId: personInfo?.personId ?? null,
@@ -242,7 +216,7 @@ async function getAccessControlSiteLogs(options = {}) {
       )
         ? row.picture_path || ""
         : "",
-      deviceName: ipToDeviceName.get(row.device_ip) || row.device_ip,
+      deviceName,
     };
   });
   return { logs, total };

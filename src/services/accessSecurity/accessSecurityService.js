@@ -5,6 +5,7 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError, createApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
+const { normalizeDeviceHost } = require("../../utils/deviceHelpers");
 const { alertIndoorDevice } = require("./sipInviteService");
 const videoIntercomArmingService = require("./videoIntercomArmingService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
@@ -70,12 +71,46 @@ async function resolveLocationByIndoorDeviceId(deviceId) {
 
 async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
   const voip = String(voipNumber || "").trim();
-  const ip = String(host || "").trim();
+  const ip = normalizeDeviceHost(host);
   if (!voip && !ip) return null;
 
-  const rows = await db.query(
+  const mapRow = (row) => {
+    if (!row?.location_id) return null;
+    return {
+      locationId: Number(row.location_id),
+      systemId: row.system_id != null ? Number(row.system_id) : null,
+      locationName: row.location_name || null,
+    };
+  };
+
+  // 優先 voip（穩定）；host 僅在唯一命中時採用（NAT 同公網多戶勿亂配）
+  if (voip) {
+    const rows = await db.query(
+      `
+      SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
+      FROM location_systems ls
+      INNER JOIN locations l ON l.id = ls.location_id
+      INNER JOIN devices d
+        ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
+      WHERE ls.system_type = 'access_security'
+        AND d.type_code = 'video_intercom'
+        AND (d.config->>'voipNumber') = ?
+      LIMIT 2
+      `,
+      [voip],
+    );
+    if ((rows || []).length === 1) return mapRow(rows[0]);
+    if ((rows || []).length > 1) {
+      logger.warn("voipNumber 對應多個門禁保全地點，略過", { voipNumber: voip });
+      return null;
+    }
+  }
+
+  if (!ip) return null;
+
+  const hostRows = await db.query(
     `
-    SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
+    SELECT ls.location_id, ls.id AS system_id, l.name AS location_name, d.config
     FROM location_systems ls
     INNER JOIN locations l ON l.id = ls.location_id
     INNER JOIN devices d
@@ -83,20 +118,25 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
     WHERE ls.system_type = 'access_security'
       AND d.type_code = 'video_intercom'
       AND (
-        (? <> '' AND (d.config->>'voipNumber') = ?)
-        OR (? <> '' AND (d.config->>'host') = ?)
+        (d.config->>'host') = ?
+        OR (d.config->>'host') LIKE ?
       )
-    LIMIT 1
     `,
-    [voip, voip, ip, ip],
+    [ip, `%${ip}%`],
   );
-  const row = rows?.[0];
-  if (!row?.location_id) return null;
-  return {
-    locationId: Number(row.location_id),
-    systemId: row.system_id != null ? Number(row.system_id) : null,
-    locationName: row.location_name || null,
-  };
+  const matched = [];
+  for (const row of hostRows || []) {
+    const cfg = parseConfig(row.config);
+    if (normalizeDeviceHost(cfg.host) === ip) matched.push(row);
+  }
+  if (matched.length === 1) return mapRow(matched[0]);
+  if (matched.length > 1) {
+    logger.warn("host 對應多個門禁保全地點（NAT 可能同公網），略過", {
+      host: ip,
+      matchCount: matched.length,
+    });
+  }
+  return null;
 }
 
 const parseConfig = (raw) => {

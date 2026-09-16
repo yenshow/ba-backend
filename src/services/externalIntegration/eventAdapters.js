@@ -3,8 +3,7 @@
  */
 const { DateTime } = require("luxon");
 const db = require("../../database/db");
-const deviceService = require("../devices/deviceService");
-const logger = require("../../utils/logger").createLogger("eventAdapters");
+const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const {
   extractSubEventType,
   resolveAccessControlEvent,
@@ -402,13 +401,6 @@ const AC_DEVICE_CACHE_MS = 60_000;
 let acDeviceContextCache = null;
 let acDeviceContextCachedAt = 0;
 
-function normalizeDeviceHost(host) {
-  if (!host || typeof host !== "string") return "";
-  const trimmed = host.trim();
-  const match = trimmed.match(/^(?:https?:\/\/)?([^:/]+)/);
-  return match ? match[1] : trimmed;
-}
-
 function collectDeviceIdsFromConfig(config) {
   const entry = [];
   const exit = [];
@@ -444,66 +436,40 @@ async function loadAccessControlDeviceContext() {
     return acDeviceContextCache;
   }
 
-  const entryIps = new Set();
-  const exitIps = new Set();
+  const entryDeviceIds = new Set();
+  const exitDeviceIds = new Set();
   const entryCameraIds = new Set();
   const exitCameraIds = new Set();
-  const ipToDeviceName = new Map();
-  const ipToDeviceId = new Map();
-  const deviceIdToName = new Map();
 
   const rows = await db.query(
     `SELECT system_config FROM location_systems WHERE system_type = 'people_counting'`,
     [],
   );
 
-  const allEntryIds = new Set();
-  const allExitIds = new Set();
   for (const row of rows || []) {
     const { entry, exit } = collectDeviceIdsFromConfig(row.system_config);
-    for (const id of entry) allEntryIds.add(id);
-    for (const id of exit) allExitIds.add(id);
+    for (const id of entry) entryDeviceIds.add(id);
+    for (const id of exit) exitDeviceIds.add(id);
     const cams = collectCameraIdsFromConfig(row.system_config);
     for (const id of cams.entry) entryCameraIds.add(id);
     for (const id of cams.exit) exitCameraIds.add(id);
   }
 
-  const addDevice = async (deviceId, role) => {
-    try {
-      const { device } = await deviceService.getDeviceById(deviceId);
-      const ip = normalizeDeviceHost(device?.config?.host);
-      const name = device?.name || ip || String(deviceId);
-      deviceIdToName.set(deviceId, name);
-      if (ip) {
-        ipToDeviceName.set(ip, name);
-        ipToDeviceId.set(ip, deviceId);
-        if (role === "entry") entryIps.add(ip);
-        else if (role === "exit") exitIps.add(ip);
-      }
-    } catch (err) {
-      logger.warn("取得門禁／攝影機設備失敗，略過", {
-        deviceId,
-        error: err?.message || String(err),
-      });
-    }
-  };
-
-  for (const id of allEntryIds) await addDevice(id, "entry");
-  for (const id of allExitIds) {
-    if (!allEntryIds.has(id)) await addDevice(id, "exit");
-  }
-  for (const id of entryCameraIds) await addDevice(id, "entry");
-  for (const id of exitCameraIds) {
-    if (!entryCameraIds.has(id)) await addDevice(id, "exit");
-  }
+  const allIds = [
+    ...new Set([
+      ...entryDeviceIds,
+      ...exitDeviceIds,
+      ...entryCameraIds,
+      ...exitCameraIds,
+    ]),
+  ];
+  const deviceIdToName = await getDeviceNameByIds(allIds);
 
   acDeviceContextCache = {
-    entryIps,
-    exitIps,
+    entryDeviceIds,
+    exitDeviceIds,
     entryCameraIds,
     exitCameraIds,
-    ipToDeviceName,
-    ipToDeviceId,
     deviceIdToName,
   };
   acDeviceContextCachedAt = Date.now();
@@ -513,6 +479,7 @@ async function loadAccessControlDeviceContext() {
 const ACCESS_CONTROL_EVENT_SELECT = `
   SELECT
     e.id,
+    e.device_id,
     e.device_ip,
     e.event_time,
     e.payload,
@@ -521,8 +488,10 @@ const ACCESS_CONTROL_EVENT_SELECT = `
     p.employee_no,
     p.full_name,
     pg.name AS unit_name,
-    plc.ladder_card_no
+    plc.ladder_card_no,
+    d.name AS device_name
   FROM isapi_access_events e
+  LEFT JOIN devices d ON d.id = e.device_id
   LEFT JOIN persons p
     ON p.employee_no = COALESCE((e.payload->>'employeeNoString'), (e.payload->>'employeeNo'))
   LEFT JOIN person_groups pg ON p.person_group_id = pg.id
@@ -572,21 +541,26 @@ function buildAccessControlEventDto(row, ctx) {
   const personName = personNameRaw || devicePersonName || "—";
 
   const sub = extractSubEventType(payload);
-  const { eventType } = resolveAccessControlEvent(
-    sub,
-    ctx.entryIps,
-    ctx.exitIps,
-    row.device_ip,
-  );
+  const rowDeviceId =
+    row.device_id != null && Number.isFinite(Number(row.device_id))
+      ? Number(row.device_id)
+      : null;
+  const { eventType } = resolveAccessControlEvent(sub, {
+    deviceId: rowDeviceId,
+    entryDeviceIds: ctx.entryDeviceIds,
+    exitDeviceIds: ctx.exitDeviceIds,
+  });
   const verifyMethod = resolveVerifyMethodLabel(payload) ?? "";
   const cardFromPayload = payload.cardNo != null ? String(payload.cardNo).trim() : "";
   const cardFromLadder =
     row.ladder_card_no != null ? String(row.ladder_card_no).trim() : "";
   const cardNo = cardFromLadder || cardFromPayload;
 
-  const deviceIp = row.device_ip != null ? String(row.device_ip) : "";
-  const deviceName = ctx.ipToDeviceName.get(deviceIp) || deviceIp;
-  const mappedDeviceId = ctx.ipToDeviceId?.get(deviceIp);
+  const deviceName =
+    (row.device_name != null ? String(row.device_name).trim() : "") ||
+    (rowDeviceId != null ? ctx.deviceIdToName?.get(rowDeviceId) : null) ||
+    (row.device_ip != null ? String(row.device_ip) : "") ||
+    "";
 
   return {
     id: row.id,
@@ -598,7 +572,7 @@ function buildAccessControlEventDto(row, ctx) {
     eventType,
     verifyMethod,
     cardNo,
-    deviceId: mappedDeviceId != null ? mappedDeviceId : null,
+    deviceId: rowDeviceId,
     deviceName,
     deviceScreenshotUrl: shouldDisplayAccessEventPicture(
       payload,
@@ -620,9 +594,6 @@ function resolveFaceDirection(row, ctx) {
     if (ctx.entryCameraIds?.has(deviceId)) return "entry";
     if (ctx.exitCameraIds?.has(deviceId)) return "exit";
   }
-  const ip = row.device_ip != null ? String(row.device_ip) : "";
-  if (ip && ctx.entryIps?.has(ip)) return "entry";
-  if (ip && ctx.exitIps?.has(ip)) return "exit";
   return row.matched === false ? "failed" : "entry";
 }
 
@@ -729,7 +700,8 @@ async function fetchMergedAccessEvents({
   const [doorRows, faceRows] = await Promise.all([
     db.query(
       `${ACCESS_CONTROL_EVENT_SELECT}
-       WHERE ${timeWhere}
+       WHERE e.device_id IS NOT NULL
+         AND ${timeWhere}
        ORDER BY e.event_time ASC, e.id ASC
        LIMIT ?`,
       [...params, ...groupParams, lim],

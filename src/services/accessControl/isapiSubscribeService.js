@@ -68,9 +68,12 @@ async function persistIsapiEvent(options) {
   if (!isProcessableEvent(payload)) return { inserted: false };
 
   const rows = await db.query(
-    `INSERT INTO isapi_access_events (device_ip, event_time, event_type, payload, file_count, picture_path)
-     VALUES (?, ?, ?, ?, 0, NULL) RETURNING id`,
+    `INSERT INTO isapi_access_events (device_id, device_ip, event_time, event_type, payload, file_count, picture_path)
+     VALUES (?, ?, ?, ?, ?, 0, NULL) RETURNING id`,
     [
+      deviceId != null && Number.isFinite(Number(deviceId)) && Number(deviceId) > 0
+        ? Number(deviceId)
+        : null,
       deviceIp,
       eventTime || new Date().toISOString(),
       eventType,

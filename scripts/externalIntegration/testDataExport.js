@@ -255,6 +255,11 @@ const cmdSeedAccess = async (count) => {
     childGroupId = Number(rows[0].id);
   }
 
+  const accessDevices = await db.query(
+    `SELECT id FROM devices WHERE type_code = 'access_control' ORDER BY id ASC LIMIT 1`,
+  );
+  const seedDeviceId = accessDevices?.[0]?.id ?? null;
+
   for (let i = 1; i <= count; i += 1) {
     const employeeNo = `${EMPLOYEE_PREFIX}${String(i).padStart(3, "0")}`;
     const fullName = `匯出測試員 ${i}`;
@@ -277,9 +282,10 @@ const cmdSeedAccess = async (count) => {
 
     await db.query(
       `INSERT INTO isapi_access_events
-         (device_ip, event_time, event_type, payload, file_count)
-       VALUES ('127.0.0.1', CURRENT_TIMESTAMP, 'AccessControllerEvent', ?::jsonb, 0)`,
+         (device_id, device_ip, event_time, event_type, payload, file_count)
+       VALUES (?, '127.0.0.1', CURRENT_TIMESTAMP, 'AccessControllerEvent', ?::jsonb, 0)`,
       [
+        seedDeviceId,
         JSON.stringify({
           employeeNoString: employeeNo,
           employeeNo,

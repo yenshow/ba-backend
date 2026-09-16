@@ -756,6 +756,41 @@ async function ensureAlertRulesMessageTemplateColumns(pool) {
   `);
 }
 
+/**
+ * 既有庫：門禁事件補 device_id（身份鍵）
+ * 以 operational_events.ref_id 回填（寫入時已有 device_id）。
+ */
+async function ensureIsapiAccessEventsDeviceId(pool) {
+  await pool.query(`
+    ALTER TABLE isapi_access_events
+      ADD COLUMN IF NOT EXISTS device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_isapi_access_events_device_time
+    ON isapi_access_events(device_id, event_time DESC)
+  `);
+
+  const fromOe = await pool.query(`
+    UPDATE isapi_access_events iae
+    SET device_id = oe.device_id
+    FROM operational_events oe
+    WHERE oe.ref_table = 'isapi_access_events'
+      AND oe.ref_id = iae.id
+      AND oe.device_id IS NOT NULL
+      AND iae.device_id IS NULL
+  `);
+
+  const remaining = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM isapi_access_events WHERE device_id IS NULL`,
+  );
+
+  logger.info("isapi_access_events.device_id 已確保並回填", {
+    module: "schemaPatches",
+    backfillFromOperationalEvents: fromOe.rowCount ?? 0,
+    remainingNullDeviceId: Number(remaining?.rows?.[0]?.cnt) || 0,
+  });
+}
+
 /** 既有庫：補建人臉比對事件表（initSchema 已有；舊庫靠 patch） */
 async function ensureIsapiFaceContrastEventsTable(pool) {
   await pool.query(`
@@ -808,6 +843,7 @@ async function applySchemaPatches(pool) {
   await ensureAlertSipRingLinkagesTable(pool);
   await ensureAlertElevatorCallLinkagesTable(pool);
   await ensureIsapiFaceContrastEventsTable(pool);
+  await ensureIsapiAccessEventsDeviceId(pool);
   await ensureAlertRulesMessageTemplateColumns(pool);
   const energyRulesMigration = await migrateEnergySettingsToAlertRules(pool);
   const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(pool);
@@ -837,6 +873,7 @@ module.exports = {
   ensureAlertSipRingLinkagesTable,
   ensureAlertElevatorCallLinkagesTable,
   ensureIsapiFaceContrastEventsTable,
+  ensureIsapiAccessEventsDeviceId,
   ensureAlertRulesMessageTemplateColumns,
   migrateLegacySensorModelConfigs,
   applySchemaPatches,

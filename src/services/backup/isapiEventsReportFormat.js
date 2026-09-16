@@ -18,7 +18,7 @@ function rowsToFlatCsv(rows, headers, rowMapper) {
 function transformIsapiAccessEventsToReportFormat(rows) {
   return rowsToFlatCsv(
     rows,
-    ["設備IP", "事件時間", "事件類型", "附圖數", "附圖路徑", "payload摘要"],
+    ["設備ID", "設備IP", "事件時間", "事件類型", "附圖數", "附圖路徑", "payload摘要"],
     (r) => {
       let summary = "";
       try {
@@ -29,6 +29,7 @@ function transformIsapiAccessEventsToReportFormat(rows) {
         summary = "";
       }
       return {
+        設備ID: r.device_id ?? "",
         設備IP: r.device_ip ?? "",
         事件時間: formatDateTimeZhTW(r.event_time),
         事件類型: r.event_type ?? "",
@@ -46,6 +47,7 @@ function transformIsapiFaceContrastEventsToReportFormat(rows) {
     [
       "區域",
       "地點",
+      "設備ID",
       "設備IP",
       "事件時間",
       "事件類型",
@@ -58,6 +60,7 @@ function transformIsapiFaceContrastEventsToReportFormat(rows) {
     (r) => ({
       區域: r.zone_name ?? "",
       地點: r.location_name ?? "",
+      設備ID: r.device_id ?? "",
       設備IP: r.device_ip ?? "",
       事件時間: formatDateTimeZhTW(r.event_time),
       事件類型: r.event_type ?? "",

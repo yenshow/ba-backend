@@ -71,6 +71,12 @@ const validateDeviceConfig = (config, typeCode) => {
           "camera 類型需要 rtsp_url (string)，且需以 rtsp:// 開頭，例如 rtsp://admin:xxx@192.168.2.102:554/Streaming/Channels/102",
         );
       }
+      if (config.port !== undefined && config.port !== null) {
+        const p = Number(config.port);
+        if (Number.isNaN(p) || p < 1 || p > 65535) {
+          deviceConfigInvalid("camera 類型的 port 必須為 1–65535 的數字");
+        }
+      }
       break;
     }
 
@@ -340,6 +346,19 @@ const getDeviceNameByIds = async (deviceIds) => {
   return map;
 };
 
+/**
+ * 正規化設備 host：去掉 scheme／port，只留主機名或 IP（連線／對講診斷用；事件歸戶請用 device_id）
+ * @param {unknown} host
+ * @returns {string}
+ */
+function normalizeDeviceHost(host) {
+  if (!host || typeof host !== "string") return "";
+  const trimmed = host.trim();
+  if (!trimmed) return "";
+  const m = trimmed.match(/^(?:https?:\/\/)?([^:/]+)/i);
+  return m ? m[1] : trimmed;
+}
+
 module.exports = {
   parseConfig,
   stringifyConfig,
@@ -349,4 +368,5 @@ module.exports = {
   ensureControllerHcnetProtocol,
   resolveHcnetSdkPort,
   getDeviceNameByIds,
+  normalizeDeviceHost,
 };

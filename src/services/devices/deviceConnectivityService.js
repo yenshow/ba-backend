@@ -23,7 +23,7 @@ const VALID_STATUSES = new Set(["online", "offline"]);
 
 const FAIL_THRESHOLD = 1;
 // Unified timeout for connectivity probes (RTSP / ISAPI).
-const { CONNECTIVITY_TIMEOUT_MS } = require("../../config/realtimeTiming");
+const { CONNECTIVITY_TIMEOUT_MS, RTSP_CONNECTIVITY_TIMEOUT_MS } = require("../../config/realtimeTiming");
 const CONCURRENCY = 8;
 
 function nowIso() {
@@ -106,7 +106,7 @@ async function rtspOptionsProbe(rtspUrl) {
         createApiError(C.DEVICE_CONNECTIVITY_RTSP_TIMEOUT, "RTSP 連線超時"),
         false,
       );
-    }, CONNECTIVITY_TIMEOUT_MS);
+    }, RTSP_CONNECTIVITY_TIMEOUT_MS);
 
     socket.once("error", (e) => {
       clearTimeout(timer);

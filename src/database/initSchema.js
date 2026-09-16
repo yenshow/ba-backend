@@ -1188,10 +1188,11 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // ISAPI 監聽主機收到之門禁事件
+    // ISAPI 監聽主機收到之門禁事件（身份鍵 device_id；device_ip 為設備回報／診斷）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS isapi_access_events (
         id BIGSERIAL PRIMARY KEY,
+        device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
         device_ip VARCHAR(45) NOT NULL,
         event_time TIMESTAMPTZ NOT NULL,
         event_type VARCHAR(64) NOT NULL,
@@ -1204,6 +1205,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_event_time ON isapi_access_events(event_time DESC);
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_device_ip ON isapi_access_events(device_ip);
+      CREATE INDEX IF NOT EXISTS idx_isapi_access_events_device_time ON isapi_access_events(device_id, event_time DESC);
       CREATE INDEX IF NOT EXISTS idx_isapi_access_events_payload ON isapi_access_events USING GIN (payload);
     `);
     schemaLogger.info("isapi_access_events 表已建立", { module: "initSchema" });

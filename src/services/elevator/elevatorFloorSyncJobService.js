@@ -553,8 +553,9 @@ async function getSyncCandidatesForLocation(locationId) {
           allSynced = false;
           continue;
         }
+        const cardSt = String(row.card_status || "").toLowerCase();
         const ok =
-          String(row.card_status || "") === "synced" &&
+          (cardSt === "synced" || cardSt === "success") &&
           String(row.card_hash || "") === String(desiredHash || "");
         if (!ok) allSynced = false;
         if (row.card_synced_at) {

@@ -14,6 +14,7 @@ function transformLadderSdkEventsToReportFormat(rows) {
       payloadSummary = "";
     }
     return {
+      設備ID: r.device_id ?? "",
       設備名稱: r.device_name ?? "",
       設備IP: r.device_ip ?? "",
       事件時間: formatDateTimeZhTW(r.event_time),

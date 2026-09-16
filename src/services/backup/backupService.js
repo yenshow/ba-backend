@@ -298,7 +298,7 @@ async function getPeopleCountingForBackup(beforeDate) {
 
 async function getIsapiAccessEventsForBackup(beforeDate) {
   const rows = await db.query(
-    `SELECT id, device_ip, event_time, event_type, payload, file_count, picture_path
+    `SELECT id, device_id, device_ip, event_time, event_type, payload, file_count, picture_path
      FROM isapi_access_events
      WHERE event_time < $1
      ORDER BY event_time ASC`,

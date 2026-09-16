@@ -2089,7 +2089,7 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       if (t != null && (lastAt == null || t > lastAt)) lastAt = t;
     }
     if (desired == null) return { status: "no_data", at: null };
-    if (rows.length === 0) return { status: "success", at: null };
+    if (rows.length === 0) return { status: "pending", at: null };
     if (hasFailed) return { status: "failed", at: lastAt };
     if (
       hasSuccess &&
@@ -2098,7 +2098,7 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     )
       return { status: "unchanged", at: lastAt };
     if (hasSuccess) return { status: "success", at: lastAt };
-    return { status: "success", at: lastAt };
+    return { status: "pending", at: lastAt };
   };
 
   const buildNeedsSync = async (person) => {
