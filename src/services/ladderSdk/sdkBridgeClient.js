@@ -232,6 +232,7 @@ const spawnArmingProcess = (deviceCredentials, handlers = {}, options = {}) => {
     SDK_DEVICE_PORT: String(deviceCredentials.port ?? 8000),
     SDK_DEVICE_USER: deviceCredentials.username,
     SDK_DEVICE_PASS: deviceCredentials.password,
+    ...(options.env && typeof options.env === "object" ? options.env : {}),
   };
 
   const args = Array.isArray(options.args) && options.args.length

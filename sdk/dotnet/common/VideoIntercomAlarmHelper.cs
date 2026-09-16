@@ -222,17 +222,55 @@ internal static class VideoIntercomAlarmHelper
     private static string DescribeAlarmType(byte type) => type switch
     {
         1 => "zone_alarm",
-        2 => "tamper",
+        2 => "tamper(hostAntiDismantle)",
         3 => "duress",
         4 => "password_over_times",
         5 => "door_not_open",
         6 => "door_not_closed",
         7 => "panic",
         8 => "intercom_alarm",
-        17 => "doorbell_ringing",
+        17 => "DoorBellRing",
         18 => "dismiss_incoming_call",
         _ => $"alarm_type_{type}",
     };
+
+    /// <summary>
+    /// 從 ISAPI 摘要／本文標出文件常見事件名（DoorBellRing／CallCenter／呼梯等）。
+    /// </summary>
+    public static string? HintIsapiEvent(string? summary, string? text)
+    {
+        var haystack = $"{summary}\n{text}";
+        if (string.IsNullOrWhiteSpace(haystack))
+        {
+            return null;
+        }
+
+        string[] known =
+        [
+            "DoorBellRing",
+            "CallCenter",
+            "RemoteVisitorCallLadder",
+            "RemoteHouseholdCallLadder",
+            "hostAntiDismantle",
+            "HostAntiDismantle",
+            "NetBroken",
+            "changedCallStatus",
+            "CallRecordsEvent",
+            "magneticDoor",
+            "doorNotClosed",
+            "doorIllegalOpen",
+        ];
+
+        foreach (var key in known)
+        {
+            if (haystack.Contains(key, StringComparison.OrdinalIgnoreCase))
+            {
+                return key;
+            }
+        }
+
+        return null;
+    }
 
     private static string FormatTime(NET_DVR_TIME_EX t)
     {

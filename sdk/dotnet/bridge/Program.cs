@@ -24,6 +24,11 @@ if (args.Length > 0 && args[0] == "--arming-intercom")
     return await RunIntercomArmingDaemonAsync(jsonOptions);
 }
 
+if (args.Length > 0 && args[0] == "--listen-intercom")
+{
+    return await RunIntercomListenDaemonAsync(jsonOptions);
+}
+
 var stdin = await Console.In.ReadToEndAsync();
 if (string.IsNullOrWhiteSpace(stdin))
 {
@@ -92,6 +97,7 @@ static BridgeResponse HandleRequest(BridgeRequest request)
         "door.set" => HandleDoorSet(session, request.Payload),
         "isapi.request" => HandleIsapiRequest(session, request.Payload),
         "ability.probe" => HandleAbilityProbe(session, request.Payload),
+        "voice.probe" => HandleVoiceProbe(session, request.Payload),
         _ => new BridgeResponse(false, "UNKNOWN_ACTION", $"不支援的 action: {request.Action}"),
     };
 }
@@ -182,6 +188,56 @@ static BridgeResponse HandleControlGateway(SdkDeviceSession session, JsonElement
         gatewayIndex,
         command,
         commandName = SdkGatewayHelper.CommandName(command),
+    });
+}
+
+static BridgeResponse HandleVoiceProbe(SdkDeviceSession session, JsonElement? payload)
+{
+    var voiceChan = (uint)Math.Max(1, ReadInt(payload, "voiceChan", 1));
+    var holdMs = Math.Clamp(ReadInt(payload, "holdMs", 2000), 500, 30_000);
+    var clientVolume = (ushort)Math.Clamp(ReadInt(payload, "clientVolume", 0xFFFF), 0, 0xFFFF);
+
+    HcNetSdkNative.VoiceDataCallback? callback = static (_, _, _, _, _) => { };
+    GC.KeepAlive(callback);
+
+    var handle = HcNetSdkNative.NET_DVR_StartVoiceCom_V30(
+        session.UserId,
+        voiceChan,
+        false,
+        callback,
+        IntPtr.Zero);
+    if (handle < 0)
+    {
+        var err = HcNetSdkNative.NET_DVR_GetLastError();
+        return new BridgeResponse(false, "VOICE_START_FAILED", SdkErrorHelper.Explain(err), new
+        {
+            errorCode = err,
+            voiceChan,
+        });
+    }
+
+    var volumeOk = HcNetSdkNative.NET_DVR_SetVoiceComClientVolume(handle, clientVolume);
+    uint? volumeError = volumeOk ? null : HcNetSdkNative.NET_DVR_GetLastError();
+
+    Thread.Sleep(holdMs);
+
+    var stopOk = HcNetSdkNative.NET_DVR_StopVoiceCom(handle);
+    uint? stopError = stopOk ? null : HcNetSdkNative.NET_DVR_GetLastError();
+    GC.KeepAlive(callback);
+
+    return new BridgeResponse(true, null, null, new
+    {
+        voiceChan,
+        holdMs,
+        voiceHandle = handle,
+        started = true,
+        clientVolume,
+        volumeOk,
+        volumeError,
+        volumeErrorText = volumeOk ? null : SdkErrorHelper.Explain(volumeError ?? 0),
+        stopped = stopOk,
+        stopError,
+        stopErrorText = stopOk ? null : SdkErrorHelper.Explain(stopError ?? 0),
     });
 }
 
@@ -568,84 +624,192 @@ static async Task<int> RunIntercomArmingDaemonAsync(JsonSerializerOptions jsonOp
         uint dwBufLen,
         IntPtr pUser)
     {
-        var deviceIp = ReadAlarmerIp(ref pAlarmer);
-        var serial = ReadAlarmerSerial(ref pAlarmer);
-        var now = DateTimeOffset.Now.ToString("o");
+        EmitIntercomCallback(jsonOptions, lCommand, ref pAlarmer, pAlarmInfo, dwBufLen);
+    }
+}
 
-        if (lCommand == VideoIntercomAlarmHelper.CommIsapiAlarm &&
-            VideoIntercomAlarmHelper.TryParseIsapiAlarm(pAlarmInfo, dwBufLen, out var isapi))
+static async Task<int> RunIntercomListenDaemonAsync(JsonSerializerOptions jsonOptions)
+{
+    var localIp = Environment.GetEnvironmentVariable("SDK_LISTEN_IP");
+    if (string.IsNullOrWhiteSpace(localIp))
+    {
+        localIp = null;
+    }
+
+    var listenPort = ushort.TryParse(
+        Environment.GetEnvironmentVariable("SDK_LISTEN_PORT"),
+        out var parsedPort)
+        ? parsedPort
+        : (ushort)7200;
+
+    if (!HcNetSdkNative.NET_DVR_Init())
+    {
+        var err = HcNetSdkNative.NET_DVR_GetLastError();
+        await WriteLineJsonAsync(jsonOptions, new
         {
-            WriteLineJsonAsync(jsonOptions, new
+            type = "error",
+            message = "NET_DVR_Init 失敗",
+            errorCode = err,
+        });
+        return 1;
+    }
+
+    try
+    {
+        var callback = new HcNetSdkNative.MsgCallback(HandleListenMessage);
+        GC.KeepAlive(callback);
+
+        var listenHandle = HcNetSdkNative.NET_DVR_StartListen_V30(
+            localIp,
+            listenPort,
+            callback,
+            IntPtr.Zero);
+        if (listenHandle < 0)
+        {
+            var err = HcNetSdkNative.NET_DVR_GetLastError();
+            await WriteLineJsonAsync(jsonOptions, new
             {
-                type = "event",
-                category = "isapi_alarm",
-                command = $"0x{lCommand:X4}",
-                commandName = "COMM_ISAPI_ALARM",
-                dataType = isapi.DataTypeName,
-                dataLen = isapi.DataLen,
-                summary = isapi.Summary,
-                body = isapi.Text,
-                sourceIp = deviceIp,
-                serial,
-                timestamp = now,
-            }).GetAwaiter().GetResult();
-            return;
+                type = "error",
+                message = SdkErrorHelper.Explain(err),
+                errorCode = err,
+            });
+            return 1;
         }
 
-        if (VideoIntercomAlarmHelper.TryParse(lCommand, pAlarmInfo, dwBufLen, out var intercom))
+        await WriteLineJsonAsync(jsonOptions, new
         {
-            WriteLineJsonAsync(jsonOptions, new
-            {
-                type = "event",
-                category = intercom.Kind,
-                command = $"0x{lCommand:X4}",
-                eventType = intercom.EventOrAlarmType,
-                eventName = intercom.TypeName,
-                deviceNumber = string.IsNullOrEmpty(intercom.DeviceNumber) ? null : intercom.DeviceNumber,
-                deviceTime = string.IsNullOrEmpty(intercom.Time) ? null : intercom.Time,
-                iotChannelNo = intercom.IotChannelNo > 0 ? intercom.IotChannelNo : (uint?)null,
-                detail = intercom.Detail,
-                sourceIp = deviceIp,
-                serial,
-                timestamp = now,
-            }).GetAwaiter().GetResult();
-            return;
-        }
+            type = "ready",
+            mode = "listen_v30",
+            listenHandle,
+            localIp = localIp ?? "(any)",
+            listenPort,
+            filter = "none",
+            listen =
+                new[]
+                {
+                    "COMM_ISAPI_ALARM(0x6009)",
+                    "COMM_UPLOAD_VIDEO_INTERCOM_EVENT(0x1132)",
+                    "COMM_ALARM_VIDEO_INTERCOM(0x1133)",
+                    "COMM_ALARM_ACS(0x5002)",
+                    "ANY(raw)",
+                },
+            note = "設備端需將警報主機／中心指向本機 IP:Port（NET_DVR_StartListen_V30）",
+        });
 
-        if (lCommand == HcNetSdkNative.CommAlarmAcs &&
-            SdkAlarmHelper.TryParse(pAlarmInfo, dwBufLen, out var acs))
+        var exitEvent = new ManualResetEventSlim(false);
+        Console.CancelKeyPress += (_, e) =>
         {
-            WriteLineJsonAsync(jsonOptions, new
-            {
-                type = "event",
-                category = "acs",
-                command = $"0x{lCommand:X4}",
-                major = acs.Major,
-                minor = acs.Minor,
-                eventName = AcsEventNames.Format(acs.Major, acs.Minor),
-                doorNo = acs.DoorNo > 0 ? acs.DoorNo : (uint?)null,
-                cardNo = string.IsNullOrEmpty(acs.CardNo) || acs.CardNo == "0" ? null : acs.CardNo,
-                sourceIp = deviceIp,
-                serial,
-                timestamp = now,
-            }).GetAwaiter().GetResult();
-            return;
-        }
+            e.Cancel = true;
+            exitEvent.Set();
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => exitEvent.Set();
+        exitEvent.Wait();
 
-        // 其餘事件先以 raw 輸出，方便現場對照來電／通話信令
+        HcNetSdkNative.NET_DVR_StopListen_V30(listenHandle);
+        GC.KeepAlive(callback);
+        await WriteLineJsonAsync(jsonOptions, new { type = "stopped", mode = "listen_v30" });
+        return 0;
+    }
+    finally
+    {
+        HcNetSdkNative.NET_DVR_Cleanup();
+    }
+
+    void HandleListenMessage(
+        int lCommand,
+        ref HcNetSdkNative.NET_DVR_ALARMER pAlarmer,
+        IntPtr pAlarmInfo,
+        uint dwBufLen,
+        IntPtr pUser)
+    {
+        EmitIntercomCallback(jsonOptions, lCommand, ref pAlarmer, pAlarmInfo, dwBufLen);
+    }
+}
+
+static void EmitIntercomCallback(
+    JsonSerializerOptions jsonOptions,
+    int lCommand,
+    ref HcNetSdkNative.NET_DVR_ALARMER pAlarmer,
+    IntPtr pAlarmInfo,
+    uint dwBufLen)
+{
+    var deviceIp = ReadAlarmerIp(ref pAlarmer);
+    var serial = ReadAlarmerSerial(ref pAlarmer);
+    var now = DateTimeOffset.Now.ToString("o");
+
+    if (lCommand == VideoIntercomAlarmHelper.CommIsapiAlarm &&
+        VideoIntercomAlarmHelper.TryParseIsapiAlarm(pAlarmInfo, dwBufLen, out var isapi))
+    {
         WriteLineJsonAsync(jsonOptions, new
         {
-            type = "raw",
-            category = "unknown",
+            type = "event",
+            category = "isapi_alarm",
             command = $"0x{lCommand:X4}",
-            commandDec = lCommand,
-            bufLen = dwBufLen,
-            hexPreview = VideoIntercomAlarmHelper.HexPreview(pAlarmInfo, dwBufLen),
+            commandName = "COMM_ISAPI_ALARM",
+            dataType = isapi.DataTypeName,
+            dataLen = isapi.DataLen,
+            summary = isapi.Summary,
+            eventHint = VideoIntercomAlarmHelper.HintIsapiEvent(isapi.Summary, isapi.Text),
+            body = isapi.Text,
             sourceIp = deviceIp,
             serial,
             timestamp = now,
         }).GetAwaiter().GetResult();
+        return;
     }
+
+    if (VideoIntercomAlarmHelper.TryParse(lCommand, pAlarmInfo, dwBufLen, out var intercom))
+    {
+        WriteLineJsonAsync(jsonOptions, new
+        {
+            type = "event",
+            category = intercom.Kind,
+            command = $"0x{lCommand:X4}",
+            eventType = intercom.EventOrAlarmType,
+            eventName = intercom.TypeName,
+            deviceNumber = string.IsNullOrEmpty(intercom.DeviceNumber) ? null : intercom.DeviceNumber,
+            deviceTime = string.IsNullOrEmpty(intercom.Time) ? null : intercom.Time,
+            iotChannelNo = intercom.IotChannelNo > 0 ? intercom.IotChannelNo : (uint?)null,
+            detail = intercom.Detail,
+            sourceIp = deviceIp,
+            serial,
+            timestamp = now,
+        }).GetAwaiter().GetResult();
+        return;
+    }
+
+    if (lCommand == HcNetSdkNative.CommAlarmAcs &&
+        SdkAlarmHelper.TryParse(pAlarmInfo, dwBufLen, out var acs))
+    {
+        WriteLineJsonAsync(jsonOptions, new
+        {
+            type = "event",
+            category = "acs",
+            command = $"0x{lCommand:X4}",
+            major = acs.Major,
+            minor = acs.Minor,
+            eventName = AcsEventNames.Format(acs.Major, acs.Minor),
+            doorNo = acs.DoorNo > 0 ? acs.DoorNo : (uint?)null,
+            cardNo = string.IsNullOrEmpty(acs.CardNo) || acs.CardNo == "0" ? null : acs.CardNo,
+            sourceIp = deviceIp,
+            serial,
+            timestamp = now,
+        }).GetAwaiter().GetResult();
+        return;
+    }
+
+    WriteLineJsonAsync(jsonOptions, new
+    {
+        type = "raw",
+        category = "unknown",
+        command = $"0x{lCommand:X4}",
+        commandDec = lCommand,
+        bufLen = dwBufLen,
+        hexPreview = VideoIntercomAlarmHelper.HexPreview(pAlarmInfo, dwBufLen),
+        sourceIp = deviceIp,
+        serial,
+        timestamp = now,
+    }).GetAwaiter().GetResult();
 }
 
 static string? ReadAlarmerIp(ref HcNetSdkNative.NET_DVR_ALARMER alarmer)

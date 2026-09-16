@@ -13,6 +13,8 @@ internal static class AcsEventNames
         [(0x5, 0x60)] = "呼梯繼電器閉合",
         [(0x5, 0x63)] = "關門",
         [(0x5, 0x64)] = "開門",
+        [(0x5, 0x75)] = "門磁打開",
+        [(0x5, 0x76)] = "門磁關閉",
     };
 
     public static string Format(uint major, uint minor)

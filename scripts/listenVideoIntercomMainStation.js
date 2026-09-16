@@ -1,14 +1,15 @@
 /**
- * 視訊對講設備 SDK 佈防監聽
+ * 視訊對講設備 SDK 事件接收（層 1）
  *
- * 通話事件請聽管理中心主機 192.168.2.27（勿聽室內機）。
- * 驗證時只開本腳本，勿同時跑診斷腳本或 sdk:build。
- * 用設備本機 UI 發起通話（Web 無撥號鈕）。
- *
+ * 布防（預設，SetupAlarmChan_V50）：
  *   node scripts/listenVideoIntercomMainStation.js --host 192.168.2.27
  *
- * 外撥請用：testVideoIntercomSipInvite.js（直打室內 SIP，接聽後播音檔）
- * 詳見：docs/40-systems/access-security.md（層 1）；探測附錄 video-intercom-main-station.md
+ * 監聽（StartListen_V30；設備須把警報中心指到本機）：
+ *   node scripts/listenVideoIntercomMainStation.js --mode listen --listen-port 7200
+ *
+ * 通話事件請聽管理中心主機（勿聽室內機）。一次只開本腳本。
+ * 層 2 外撥：testVideoIntercomSipInvite.js
+ * 詳見：docs/40-systems/access-security.md；探測附錄 video-intercom-main-station.md
  */
 
 /* eslint-disable no-console */
@@ -23,6 +24,10 @@ const SCRIPT_CONFIG = {
   port: 8000,
   username: "admin",
   password: "Aa83124007",
+  /** arming = SetupAlarmChan_V50；listen = StartListen_V30 */
+  mode: "arming",
+  listenIp: "",
+  listenPort: 7200,
   /** 輸出未知 raw 事件 */
   showRaw: true,
 };
@@ -54,6 +59,21 @@ const parseCliArgs = () => {
       i += 1;
       continue;
     }
+    if (arg === "--mode" && args[i + 1]) {
+      result.mode = String(args[i + 1]).toLowerCase();
+      i += 1;
+      continue;
+    }
+    if (arg === "--listen-ip" && args[i + 1]) {
+      result.listenIp = args[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--listen-port" && args[i + 1]) {
+      result.listenPort = Number(args[i + 1]) || result.listenPort;
+      i += 1;
+      continue;
+    }
     if (arg === "--no-raw") {
       result.showRaw = false;
     }
@@ -73,8 +93,9 @@ const formatEventLine = (message) => {
   const category = message.category || "-";
 
   if (category === "isapi_alarm") {
+    const hint = message.eventHint ? ` hint=${message.eventHint}` : "";
     const summary = message.summary || message.dataType || "-";
-    return `[${time}] ISAPI | ${summary} | len=${message.dataLen ?? "-"} | ip=${message.sourceIp || "-"}`;
+    return `[${time}] ISAPI | ${summary}${hint} | len=${message.dataLen ?? "-"} | ip=${message.sourceIp || "-"}`;
   }
 
   const name = message.eventName || message.command || "-";
@@ -96,17 +117,30 @@ const formatEventLine = (message) => {
 
 const run = () => {
   const config = parseCliArgs();
+  const isListen = config.mode === "listen";
 
-  if (!config.password) {
+  if (!isListen && !config.password) {
     console.error(
       "請在 SCRIPT_CONFIG.password 填入密碼，或使用 --password 參數",
     );
     process.exit(1);
   }
 
-  printSection("視訊對講設備 — SDK 佈防監聽");
-  console.log(`目標：${config.host}:${config.port}`);
-  console.log("流程：Init → Login → Callback → SetupAlarmChan_V50");
+  printSection(
+    isListen
+      ? "視訊對講設備 — SDK 監聽模式（StartListen_V30）"
+      : "視訊對講設備 — SDK 佈防監聽（SetupAlarmChan_V50）",
+  );
+  if (isListen) {
+    console.log(
+      `本機：${config.listenIp || "(any)"}:${config.listenPort}`,
+    );
+    console.log("流程：Init → StartListen_V30 → MSGCallBack");
+    console.log("請確認設備警報主機／中心已指向本機 IP:Port");
+  } else {
+    console.log(`目標：${config.host}:${config.port}`);
+    console.log("流程：Init → Login → Callback → SetupAlarmChan_V50");
+  }
   console.log("過濾：無（所有 command 皆輸出；未知則 raw）");
   console.log("重要：測試期間請保持此視窗開啟，勿提前 Ctrl+C");
   console.log("結束：Ctrl+C\n");
@@ -118,7 +152,7 @@ const run = () => {
   const heartbeat = setInterval(() => {
     if (!ready) return;
     console.log(
-      `[heartbeat] 監聽中 ${config.host} | events=${eventCount} raw=${rawCount} | ${new Date().toISOString()}`,
+      `[heartbeat] 監聽中 ${isListen ? `:${config.listenPort}` : config.host} | events=${eventCount} raw=${rawCount} | ${new Date().toISOString()}`,
     );
   }, 15000);
 
@@ -132,15 +166,19 @@ const run = () => {
     {
       onReady: (message) => {
         ready = true;
-        console.log("佈防就緒（不過濾事件）");
+        console.log(isListen ? "監聽就緒（不過濾事件）" : "佈防就緒（不過濾事件）");
         console.log(
           JSON.stringify(
             {
               host: message.host,
               port: message.port,
               alarmHandle: message.alarmHandle,
+              listenHandle: message.listenHandle,
+              localIp: message.localIp,
+              listenPort: message.listenPort,
               filter: message.filter || "none",
               listen: message.listen,
+              mode: message.mode,
             },
             null,
             2,
@@ -155,6 +193,7 @@ const run = () => {
         console.log("");
       },
       onRaw: (message) => {
+        if (!config.showRaw) return;
         rawCount += 1;
         console.log(
           `[${message.timestamp}] RAW | ${message.command} | bufLen=${message.bufLen} | ip=${message.sourceIp || "-"}`,
@@ -172,7 +211,7 @@ const run = () => {
       onStopped: () => {
         clearInterval(heartbeat);
         console.log(
-          `\n已停止佈防（事件 ${eventCount} 筆，raw ${rawCount} 筆）`,
+          `\n已停止（事件 ${eventCount} 筆，raw ${rawCount} 筆）`,
         );
       },
       onClose: (code) => {
@@ -184,11 +223,19 @@ const run = () => {
         process.exit(process.exitCode || 0);
       },
     },
-    { args: ["--arming-intercom"] },
+    {
+      args: [isListen ? "--listen-intercom" : "--arming-intercom"],
+      env: isListen
+        ? {
+            ...(config.listenIp ? { SDK_LISTEN_IP: config.listenIp } : {}),
+            SDK_LISTEN_PORT: String(config.listenPort),
+          }
+        : undefined,
+    },
   );
 
   const handleSignal = () => {
-    console.log("\n正在關閉佈防...");
+    console.log("\n正在關閉...");
     if (!child.killed) {
       child.kill();
     }

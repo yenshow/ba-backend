@@ -19,6 +19,7 @@
     "test:sdk-ladder-events": "powershell -ExecutionPolicy Bypass -File sdk/scripts/run-bridge.ps1 -Arming",
     "listen:video-intercom": "node scripts/listenVideoIntercomMainStation.js",
     "probe:video-intercom": "node scripts/probeVideoIntercom.js",
+    "probe:video-intercom-matrix": "node scripts/probeVideoIntercomModelMatrix.js",
     "scan:video-intercom-indoor": "node scripts/scanVideoIntercomIndoor.js",
     "test:video-intercom-sip": "node scripts/testVideoIntercomSipInvite.js",
     "test:video-intercom-voip-write": "node scripts/testVideoIntercomVoipWrite.js",

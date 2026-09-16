@@ -60,6 +60,14 @@ internal static class HcNetSdkNative
         IntPtr pUser);
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    public delegate void VoiceDataCallback(
+        int lVoiceComHandle,
+        IntPtr pRecvDataBuffer,
+        uint dwBufSize,
+        byte byAudioFlag,
+        IntPtr pUser);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     public delegate void RemoteConfigCallback(
         uint dwType,
         IntPtr lpBuffer,
@@ -380,6 +388,30 @@ internal static class HcNetSdkNative
 
     [DllImport("HCNetSDK.dll")]
     public static extern bool NET_DVR_ControlGateway(int lUserID, int lGatewayIndex, uint dwStaic);
+
+    [DllImport("HCNetSDK.dll", CharSet = CharSet.Ansi)]
+    public static extern int NET_DVR_StartListen_V30(
+        string? sLocalIP,
+        ushort wLocalPort,
+        MsgCallback DataCallback,
+        IntPtr pUserData);
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern bool NET_DVR_StopListen_V30(int lListenHandle);
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern int NET_DVR_StartVoiceCom_V30(
+        int lUserID,
+        uint dwVoiceChan,
+        bool bNeedCBNoEncData,
+        VoiceDataCallback? fVoiceDataCallBack,
+        IntPtr pUser);
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern bool NET_DVR_SetVoiceComClientVolume(int lVoiceComHandle, ushort wVolume);
+
+    [DllImport("HCNetSDK.dll")]
+    public static extern bool NET_DVR_StopVoiceCom(int lVoiceComHandle);
 
     [DllImport("HCNetSDK.dll")]
     public static extern int NET_DVR_StartRemoteConfig(
@@ -960,7 +992,11 @@ internal static class SdkErrorHelper
         17 => "參數錯誤（NET_DVR_PARAMETER_ERROR）",
         23 => "設備不支援此功能（NET_DVR_NOSUPPORT）",
         29 => "設備操作失敗（操作無效／參數錯誤）",
+        31 => "對講通道已被占用",
+        69 => "音效裝置被独占",
+        108 => "載入對講元件失敗（請確認 HCNetSDKCom\\HCVoiceTalk.dll）",
         109 => "載入報警元件失敗（請確認 HCNetSDKCom\\HCAlarm.dll 已複製）",
+        605 => "對講找不到裝置（NET_AUDIOINTECOM_ERR_FIND_DEVICE；室內機常不支援 SDK StartVoiceCom）",
         1000 => "XML 能力不支援（XML_ABILITY_NOTSUPPORT）",
         1924 => "佈防資源已滿",
         _ => $"HCNetSDK 錯誤碼 {code}",
