@@ -778,6 +778,17 @@ function emitEnergyReadingNew(data) {
   });
 }
 
+function emitPdaScan(data) {
+  safeEmit(
+    "pda:scan",
+    {
+      ...data,
+      timestamp: new Date().toISOString(),
+    },
+    { logMessage: `PDA 掃碼 ${data?.device_code || ""}` },
+  );
+}
+
 module.exports = {
   initializeWebSocket,
   getIO,
@@ -803,4 +814,5 @@ module.exports = {
   emitVehicleAccessIsapiEvent,
   emitYscpEvent,
   emitPermissionsUpdated,
+  emitPdaScan,
 };

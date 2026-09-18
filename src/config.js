@@ -284,6 +284,16 @@ const operationalEvents = {
   ),
 };
 
+const isup = {
+  key: getEnv("ISUP_KEY", ""),
+  listenIp: getEnv("ISUP_LISTEN_IP", "0.0.0.0"),
+  listenPort: toNumber(getEnv("ISUP_LISTEN_PORT", "7660"), 7660),
+  alarmPort: toNumber(getEnv("ISUP_ALARM_PORT", "7663"), 7663),
+  advertiseIp: getEnv("ISUP_ADVERTISE_IP", "192.168.2.8"),
+  alarmProtocol: getEnv("ISUP_ALARM_PROTOCOL", "mqtt"),
+  bridgeExePath: getEnv("ISUP_BRIDGE_EXE", ""),
+};
+
 /**
  * 門禁保全 SIP（層 2 手動／警報語音廣播）
  */
@@ -320,6 +330,7 @@ module.exports = {
   mediaMTX,
   ladderSdk,
   operationalEvents,
+  isup,
   accessSecurity,
   cors,
   serverHost: server.host,

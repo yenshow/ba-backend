@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <AssemblyName>IsupCmsBridge</AssemblyName>
+    <RootNamespace>IsupCmsBridge</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="QuickNV.HikvisionISUPSDK" Version="1.0.3" />
+    <PackageReference Include="QuickNV.HikvisionISUPSDK.Native" Version="1.0.3" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+  </ItemGroup>
+  <Target Name="CopyIsupNativeDlls" AfterTargets="Build">
+    <PropertyGroup>
+      <IsupNativeDir>$(NuGetPackageRoot)quicknv.hikvisionisupsdk.native\1.0.3\runtimes\win-x64\native</IsupNativeDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <IsupNativeFiles Include="$(IsupNativeDir)\**\*.*" Condition="Exists('$(IsupNativeDir)')" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(IsupNativeFiles)"
+      DestinationFiles="@(IsupNativeFiles->'$(OutputPath)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+</Project>

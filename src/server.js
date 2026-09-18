@@ -53,6 +53,7 @@ const multimediaDashboardRoutes = require("./routes/multimediaDashboardRoutes");
 const licenseRoutes = require("./routes/licenseRoutes");
 const moduleRegistryRoutes = require("./routes/moduleRegistryRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
+const pdaScanRoutes = require("./routes/pdaScanRoutes");
 
 // 授權（Feature Gate）
 const { requireFeature } = require("./middleware/licenseMiddleware");
@@ -74,6 +75,7 @@ const externalIntegrationSchedulers = require("./services/externalIntegration/ex
 const {
   startAlertDailyRolloverScheduler,
 } = require("./services/alerts/alertRolloverScheduler");
+const isupListenService = require("./services/pda/isupListenService");
 
 const app = express();
 
@@ -160,6 +162,7 @@ app.use(
 
 // 受保護上傳讀取（需登入；img 可用 ?access_token=）
 app.use("/api/uploads", uploadRoutes);
+app.use("/api/pda", pdaScanRoutes);
 
 // 註冊路由：業務模組寫入以 requirePermission + requireFeature；平台管理以 requireAdmin
 app.use("/api/modbus", modbusRoutes);
@@ -320,6 +323,8 @@ async function startServer() {
     global.__recordExportHandle = externalIntegrationSchedulers.startRecordExport();
 
     global.__httpServer = httpServer;
+
+    isupListenService.start();
   } catch (error) {
     if (error && error.code === "EADDRINUSE") {
       serverLogger.error(
@@ -360,6 +365,8 @@ async function gracefulShutdown(signal) {
   try {
     await licenseRuntimeService.stopLicensedBackgroundServices();
     shutdownLogger.info("授權背景服務已停止");
+
+    isupListenService.stop();
 
     if (typeof global.__alertRolloverStop === "function") {
       global.__alertRolloverStop();

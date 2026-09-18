@@ -33,6 +33,7 @@
     "postgres:start": "node scripts/portable-postgres.js start",
     "postgres:stop": "node scripts/portable-postgres.js stop",
     "probe:isapi": "node scripts/isapiSubscribeProbe.js",
+    "sdk:build-isup": "powershell -ExecutionPolicy Bypass -File sdk/scripts/run-isup-listen.ps1 -BuildOnly",
     "test:security:safe-url": "node tests/security/safeUrl.test.js",
     "test:personnel-face-image": "node tests/personnel/personnelFaceImageService.test.js",
     "test:personnel-isapi-error": "node tests/personnel/personnelIsapiErrorUtils.test.js",

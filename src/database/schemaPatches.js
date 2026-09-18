@@ -831,6 +831,32 @@ async function ensureIsapiFaceContrastEventsTable(pool) {
   `);
 }
 
+async function ensurePdaScanEventsTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pda_scan_events (
+      id BIGSERIAL PRIMARY KEY,
+      device_code VARCHAR(64) NOT NULL,
+      barcode TEXT NOT NULL,
+      scanned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE pda_scan_events
+      DROP COLUMN IF EXISTS raw_data,
+      DROP COLUMN IF EXISTS code_type,
+      DROP COLUMN IF EXISTS code_type_name
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pda_scan_events_scanned_at
+    ON pda_scan_events(scanned_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_pda_scan_events_device
+    ON pda_scan_events(device_code, scanned_at DESC)
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -843,6 +869,7 @@ async function applySchemaPatches(pool) {
   await ensureAlertSipRingLinkagesTable(pool);
   await ensureAlertElevatorCallLinkagesTable(pool);
   await ensureIsapiFaceContrastEventsTable(pool);
+  await ensurePdaScanEventsTable(pool);
   await ensureIsapiAccessEventsDeviceId(pool);
   await ensureAlertRulesMessageTemplateColumns(pool);
   const energyRulesMigration = await migrateEnergySettingsToAlertRules(pool);
@@ -873,6 +900,7 @@ module.exports = {
   ensureAlertSipRingLinkagesTable,
   ensureAlertElevatorCallLinkagesTable,
   ensureIsapiFaceContrastEventsTable,
+  ensurePdaScanEventsTable,
   ensureIsapiAccessEventsDeviceId,
   ensureAlertRulesMessageTemplateColumns,
   migrateLegacySensorModelConfigs,

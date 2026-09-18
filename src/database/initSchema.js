@@ -1540,6 +1540,25 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS pda_scan_events (
+        id BIGSERIAL PRIMARY KEY,
+        device_code VARCHAR(64) NOT NULL,
+        barcode TEXT NOT NULL,
+        scanned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_pda_scan_events_scanned_at
+      ON pda_scan_events(scanned_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_pda_scan_events_device
+      ON pda_scan_events(device_code, scanned_at DESC);
+    `);
+    schemaLogger.info("pda_scan_events 表已建立", {
+      module: "initSchema",
+    });
+
     await targetPool.end();
 
     schemaLogger.info("資料庫 Schema 初始化完成", { module: "initSchema" });
