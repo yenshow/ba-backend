@@ -5,6 +5,7 @@
  */
 const db = require("../../database/db");
 const accessControlService = require("./accessControlService");
+const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
@@ -468,6 +469,7 @@ async function runSubscribeForDevice(deviceId, abortSignal) {
   const { device, client } =
     await accessControlService.getDeviceAndClient(deviceId);
   const deviceIp = device.config?.host || "";
+  await isapiTimeSyncService.syncOnConnect(device);
 
   const res = await client.requestSubscribeStream(SUBSCRIBE_XML);
   const contentType = res.headers["content-type"] || "";

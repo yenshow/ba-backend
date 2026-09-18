@@ -12,6 +12,7 @@ const {
   runFanOutPictureBackfillOnce,
 } = require("./isapiVehiclePersistence");
 const { ensureIntArray } = require("../location/locationShared");
+const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
 
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
@@ -215,6 +216,7 @@ async function consumeEventStreamIncremental(
 async function runSubscribeForDevice(deviceId, abortSignal) {
   if (abortSignal?.aborted) return;
   const { device, client } = await getDeviceClient(deviceId);
+  await isapiTimeSyncService.syncOnConnect(device);
   const res = await client.requestSubscribeStream(SUBSCRIBE_XML);
   const contentType = res.headers["content-type"] || "";
   await consumeEventStreamIncremental(

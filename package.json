@@ -42,6 +42,7 @@
     "test:operational-event-copy": "node tests/operationalEvents/operationalEventCopy.test.js",
     "test:alert-copy": "node tests/alerts/alertCopy.test.js",
     "test:isapi-picture-binding": "node tests/accessControl/isapiPictureBinding.test.js",
+    "test:isapi-time-sync-on-connect": "node tests/isapi/isapiTimeSyncOnConnect.test.js",
     "yscp:resubscribe": "node scripts/yscpResubscribe.js",
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",

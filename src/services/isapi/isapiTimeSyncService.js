@@ -7,6 +7,7 @@ const {
   toIsapiTimeZone,
 } = require("./isapiTimeFormat");
 const {
+  hasIsapiCredentials,
   listIsapiCapableDevices,
   resolveIsapiClientFromConfig,
 } = require("./isapiDeviceUtils");
@@ -15,6 +16,11 @@ const syncLogger = logger.createLogger("ISAPI TimeSync");
 
 const ISAPI_TIME_PATH = "/ISAPI/System/time";
 const SYNC_CONCURRENCY = 8;
+/** NAT 重連勿每次 PUT；與每日 03:00 排程並存 */
+const CONNECT_SYNC_COOLDOWN_MS = 15 * 60 * 1000;
+
+/** @type {Map<string, number>} */
+const lastConnectSyncAt = new Map();
 
 function getSyncTimezone() {
   return runtimeConfigService.getIsapiTimeSync().timezone;
@@ -56,14 +62,78 @@ async function syncDeviceConfig(config, meta = {}) {
   };
 }
 
+function deviceLabel(typeCode) {
+  return typeCode === "camera" ? "攝影機" : "門禁";
+}
+
+function resolveDeviceId(raw) {
+  const id = Number(raw);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 async function syncDeviceTime(deviceRow) {
-  const label =
-    deviceRow?.type_code === "camera" ? "攝影機" : "門禁";
   return syncDeviceConfig(deviceRow?.config, {
-    label,
-    deviceId: Number(deviceRow?.id),
+    label: deviceLabel(deviceRow?.type_code),
+    deviceId: resolveDeviceId(deviceRow?.id),
     deviceName: deviceRow?.name,
   });
+}
+
+/**
+ * 佈防訂閱前是否應立刻校時（停用、缺帳密／id、cooldown 則略過）。
+ */
+function shouldAttemptConnectSync({
+  enabled,
+  hasCredentials,
+  deviceId,
+  lastAt,
+  now,
+  cooldownMs = CONNECT_SYNC_COOLDOWN_MS,
+} = {}) {
+  if (enabled === false) return { attempt: false, reason: "disabled" };
+  if (!hasCredentials || deviceId == null) {
+    return { attempt: false, reason: "incomplete" };
+  }
+  if (lastAt != null && now - lastAt < cooldownMs) {
+    return { attempt: false, reason: "cooldown" };
+  }
+  return { attempt: true };
+}
+
+/**
+ * 佈防訂閱建立前校時。失敗只記 log，不擋訂閱；cooldown 避免 NAT 重連打爆設備。
+ */
+async function syncOnConnect(device) {
+  const config = device?.config;
+  const deviceId = resolveDeviceId(device?.id);
+  const key = deviceId != null ? `id:${deviceId}` : "";
+  const decision = shouldAttemptConnectSync({
+    enabled: runtimeConfigService.getIsapiTimeSync().enabled,
+    hasCredentials: hasIsapiCredentials(config),
+    deviceId,
+    lastAt: key ? lastConnectSyncAt.get(key) : undefined,
+    now: Date.now(),
+  });
+  if (!decision.attempt) return;
+
+  lastConnectSyncAt.set(key, Date.now());
+  try {
+    const r = await syncDeviceConfig(config, {
+      label: deviceLabel(device?.type_code),
+      deviceId,
+      deviceName: device?.name,
+    });
+    syncLogger.info("連線校時成功", {
+      deviceId: r.deviceId,
+      deviceName: r.deviceName,
+    });
+  } catch (e) {
+    syncLogger.warn("連線校時失敗", {
+      deviceId,
+      deviceName: device?.name,
+      error: e?.message || String(e),
+    });
+  }
 }
 
 async function syncAllIsapiDevices() {
@@ -111,9 +181,12 @@ async function syncAllIsapiDevices() {
 }
 
 module.exports = {
+  CONNECT_SYNC_COOLDOWN_MS,
   buildTimeSyncXml,
   buildTimeSyncPayload,
+  shouldAttemptConnectSync,
   syncDeviceConfig,
   syncDeviceTime,
+  syncOnConnect,
   syncAllIsapiDevices,
 };

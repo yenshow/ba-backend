@@ -25,6 +25,7 @@ const {
   parseFaceContrastEventPayload,
 } = require("./isapiFaceContrastXmlParser");
 const { persistFaceContrastEvent, attachPictureToFaceContrastEvent } = require("./isapiFaceContrastPersistence");
+const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
 
 const RE_CONNECT_DELAY_MS = 10000;
 
@@ -453,6 +454,7 @@ async function runSubscribeForCamera(sub, abortSignal) {
     includeFaceContrast,
     direction,
   });
+  await isapiTimeSyncService.syncOnConnect(device);
   const res = await client.requestSubscribeStream(
     buildSubscribeXml(sub.channelId, {
       includePeopleCounting,
