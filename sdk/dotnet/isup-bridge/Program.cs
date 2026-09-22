@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -24,6 +25,8 @@ var isupKey = Environment.GetEnvironmentVariable("ISUP_KEY")?.Trim() ?? "";
 var alarmProtocol = ReadEnv("ISUP_ALARM_PROTOCOL", "mqtt").Equals("tcp", StringComparison.OrdinalIgnoreCase)
     ? IsupAlarmNative.ProtocolTcp
     : IsupAlarmNative.ProtocolMqtt;
+var devices = new ConcurrentDictionary<string, OnlineDevice>(StringComparer.OrdinalIgnoreCase);
+var sdkGate = new object();
 
 if (string.IsNullOrWhiteSpace(isupKey))
 {
@@ -49,7 +52,7 @@ try
         });
         return 1;
     }
-    Invoke(NET_ECMS_Init());
+    InvokeBool(NET_ECMS_Init());
 }
 catch (Exception exception)
 {
@@ -107,7 +110,7 @@ listenParam.byRes = new byte[32];
 int listenHandle;
 try
 {
-    listenHandle = Invoke(NET_ECMS_StartListen(ref listenParam));
+    listenHandle = InvokeHandle(NET_ECMS_StartListen(ref listenParam));
 }
 catch (Exception exception)
 {
@@ -133,6 +136,8 @@ WriteEvent(new
     listenPort,
     advertiseIp,
 });
+
+StartStdinLoop();
 
 var exitEvent = new ManualResetEventSlim(false);
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -179,6 +184,10 @@ bool HandleRegister(
     var deviceId = ReadCString(deviceInfo.struRegInfo.byDeviceID);
     var protocol = ReadCString(deviceInfo.struRegInfo.byDevProtocolVersion);
     var deviceIp = ReadCString(deviceInfo.struRegInfo.struDevAdd.szIP);
+    if (userId > 0 && !string.IsNullOrWhiteSpace(deviceId) && dataType != ENUM_DEV_OFF)
+    {
+        devices[deviceId] = new OnlineDevice(deviceId, userId, deviceIp);
+    }
 
     if (dataType == ENUM_DEV_AUTH)
     {
@@ -254,13 +263,31 @@ bool HandleRegister(
             Marshal.StructureToPtr(serverInfo, inBuffer, false);
         }
 
-        WriteEvent(new { type = "online", deviceId, deviceIp });
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            devices[deviceId] = new OnlineDevice(deviceId, userId, deviceIp);
+        }
+        WriteEvent(new { type = "online", deviceId, deviceIp, userId });
         return true;
     }
 
     if (dataType == ENUM_DEV_OFF)
     {
-        WriteEvent(new { type = "offline", deviceId });
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            devices.TryRemove(deviceId, out _);
+        }
+        else
+        {
+            foreach (var pair in devices)
+            {
+                if (pair.Value.UserId == userId)
+                {
+                    devices.TryRemove(pair.Key, out _);
+                }
+            }
+        }
+        WriteEvent(new { type = "offline", deviceId, userId });
         return true;
     }
 
@@ -441,6 +468,155 @@ static List<object> ExtractScans(string? payload, string fallbackDeviceId)
     return scans;
 }
 
+void StartStdinLoop()
+{
+    var thread = new Thread(() =>
+    {
+        while (true)
+        {
+            string? line;
+            try
+            {
+                line = Console.In.ReadLine();
+            }
+            catch
+            {
+                break;
+            }
+            if (line == null)
+            {
+                break;
+            }
+            HandleStdinLine(line);
+        }
+    })
+    {
+        IsBackground = true,
+        Name = "isup-stdin",
+    };
+    thread.Start();
+}
+
+void HandleStdinLine(string line)
+{
+    var trimmed = line.Trim();
+    if (trimmed.Length == 0)
+    {
+        return;
+    }
+
+    JsonNode? node;
+    try
+    {
+        node = JsonNode.Parse(trimmed);
+    }
+    catch (JsonException exception)
+    {
+        WriteEvent(new { type = "error", message = "stdin JSON 無效", detail = exception.Message });
+        return;
+    }
+
+    var type = node?["type"]?.GetValue<string>()?.Trim() ?? "";
+    var requestId = node?["requestId"]?.GetValue<string>()?.Trim() ?? "";
+    if (type.Equals("list", StringComparison.OrdinalIgnoreCase))
+    {
+        WriteEvent(new
+        {
+            type = "devices",
+            requestId,
+            items = devices.Values.Select(item => new { item.DeviceId, item.DeviceIp, item.UserId }).ToList(),
+        });
+        return;
+    }
+
+    if (!type.Equals("beep", StringComparison.OrdinalIgnoreCase))
+    {
+        WriteEvent(new { type = "error", requestId, message = "未知指令: " + type });
+        return;
+    }
+
+    var deviceId = node?["deviceId"]?.GetValue<string>()?.Trim()
+        ?? node?["deviceCode"]?.GetValue<string>()?.Trim()
+        ?? "";
+    HandleBeep(requestId, deviceId);
+}
+
+void HandleBeep(string requestId, string deviceId)
+{
+    OnlineDevice? target = null;
+    if (!string.IsNullOrWhiteSpace(deviceId))
+    {
+        devices.TryGetValue(deviceId, out target);
+    }
+    else if (!string.IsNullOrWhiteSpace(expectedDeviceId))
+    {
+        devices.TryGetValue(expectedDeviceId, out target);
+    }
+    else if (devices.Count == 1)
+    {
+        target = devices.Values.First();
+    }
+
+    if (target == null)
+    {
+        WriteEvent(new
+        {
+            type = "beepResult",
+            requestId,
+            ok = false,
+            deviceId,
+            message = devices.IsEmpty
+                ? "沒有已上線的 PDA，請確認 ISUP 註冊"
+                : "請指定 deviceCode。目前上線: " + string.Join(",", devices.Keys),
+        });
+        return;
+    }
+
+    lock (sdkGate)
+    {
+        var result = TryRingDevice();
+        WriteEvent(new
+        {
+            type = "beepResult",
+            requestId,
+            ok = result.ok,
+            deviceId = target.DeviceId,
+            method = result.method,
+            errorCode = result.errorCode,
+            message = result.detail,
+            attempts = result.attempts,
+        });
+    }
+}
+
+(bool ok, string method, string detail, int errorCode, List<object> attempts) TryRingDevice()
+{
+    return (
+        false,
+        "voice-talk-disabled",
+        "ISUP 對講已停用。請使用 YSOP PDA APK（POST /api/pda/beep → /pda-agent）。",
+        0,
+        new List<object>());
+}
+
+static bool InvokeBool(bool ok)
+{
+    if (!ok)
+    {
+        throw new InvalidOperationException("ISUP SDK 呼叫失敗 error=" + NET_ECMS_GetLastError());
+    }
+    return true;
+}
+
+static int InvokeHandle(int handle)
+{
+    if (handle < 0)
+    {
+        throw new InvalidOperationException("ISUP SDK 呼叫失敗 error=" + NET_ECMS_GetLastError());
+    }
+    return handle;
+}
+
 static void WriteEvent(object payload)
 {
     Console.WriteLine(JsonSerializer.Serialize(payload, IsupEventJson.Options));
@@ -456,3 +632,5 @@ file static class IsupEventJson
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 }
+
+file sealed record OnlineDevice(string DeviceId, int UserId, string DeviceIp);

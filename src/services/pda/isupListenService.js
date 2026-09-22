@@ -1,11 +1,14 @@
 /**
  * ISUP 5.0 常駐監聽：spawn IsupCmsBridge，將 type=scan 寫入 pda_scan_events。
  */
+const { randomUUID } = require("crypto");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const config = require("../../config");
 const logger = require("../../utils/logger").createLogger("ISUP Listen");
+const C = require("../../utils/apiErrorCodes");
+const { createApiError, throwApiError } = require("../../utils/apiErrors");
 const pdaScanService = require("./pdaScanService");
 
 const BRIDGE_EXE_NAME = "IsupCmsBridge.exe";
@@ -26,6 +29,8 @@ let child = null;
 let stopping = false;
 let restartTimer = null;
 let stdoutBuffer = "";
+const devices = new Map();
+const pending = new Map();
 
 const state = {
   running: false,
@@ -37,12 +42,22 @@ const state = {
   lastError: null,
 };
 
+const failPending = (message) => {
+  for (const item of pending.values()) {
+    clearTimeout(item.timer);
+    item.reject(createApiError(C.SERVICE_UNAVAILABLE, message));
+  }
+  pending.clear();
+};
+
 const resetRuntimeState = () => {
   state.running = false;
   state.cmsReady = false;
   state.alarmReady = false;
   state.deviceId = null;
   state.deviceIp = null;
+  devices.clear();
+  failPending("ISUP bridge 已停止");
 };
 
 const resolveBridgeExe = () => {
@@ -55,6 +70,7 @@ const resolveBridgeExe = () => {
 
 const getStatus = () => ({
   ...state,
+  devices: Array.from(devices.values()),
   enabled: Boolean(config.isup?.key),
   listenPort: config.isup?.listenPort,
   alarmPort: config.isup?.alarmPort,
@@ -87,19 +103,48 @@ const handleMessage = async (message) => {
         logger.info("ISUP 告警已就緒", { alarmPort: message.alarmPort });
       }
       return;
-    case "online":
-      state.deviceId = message.deviceId || null;
-      state.deviceIp = message.deviceIp || null;
+    case "online": {
+      const deviceId = message.deviceId || null;
+      const deviceIp = message.deviceIp || null;
+      if (deviceId) {
+        devices.set(deviceId, {
+          deviceId,
+          deviceIp,
+          userId: message.userId ?? null,
+          onlineAt: new Date().toISOString(),
+        });
+      }
+      state.deviceId = deviceId || state.deviceId;
+      state.deviceIp = deviceIp || state.deviceIp;
       logger.info("PDA ISUP 上線", {
-        deviceId: message.deviceId,
-        deviceIp: message.deviceIp,
+        deviceId,
+        deviceIp,
+        userId: message.userId,
       });
       return;
-    case "offline":
-      logger.warn("PDA ISUP 離線", { deviceId: message.deviceId || state.deviceId });
-      state.deviceId = null;
-      state.deviceIp = null;
+    }
+    case "offline": {
+      const deviceId = message.deviceId || state.deviceId;
+      logger.warn("PDA ISUP 離線", { deviceId });
+      if (deviceId) {
+        devices.delete(deviceId);
+      }
+      const remain = Array.from(devices.values());
+      state.deviceId = remain[remain.length - 1]?.deviceId || null;
+      state.deviceIp = remain[remain.length - 1]?.deviceIp || null;
       return;
+    }
+    case "beepResult": {
+      const item = pending.get(message.requestId);
+      if (!item) {
+        logger.info("PDA 響鈴結果", message);
+        return;
+      }
+      pending.delete(message.requestId);
+      clearTimeout(item.timer);
+      item.resolve(message);
+      return;
+    }
     case "error":
     case "warn":
       state.lastError = message.message || "ISUP 錯誤";
@@ -185,7 +230,7 @@ const spawnBridge = () => {
       ISUP_ALARM_PROTOCOL: isup.alarmProtocol,
     },
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 
   state.running = true;
@@ -238,8 +283,63 @@ const stop = () => {
   resetRuntimeState();
 };
 
+const beep = ({ deviceCode } = {}) => {
+  if (!child?.stdin?.writable) {
+    throwApiError(C.SERVICE_UNAVAILABLE, "ISUP bridge 未啟動");
+  }
+  if (!state.cmsReady) {
+    throwApiError(C.SERVICE_UNAVAILABLE, "ISUP CMS 尚未就緒");
+  }
+
+  const code = String(deviceCode || "").trim();
+  const online = Array.from(devices.values());
+  if (online.length === 0) {
+    throwApiError(C.DEVICE_NOT_FOUND, "沒有已上線的 PDA，請先確認掃碼／ISUP 註冊");
+  }
+  if (code && !devices.has(code)) {
+    throwApiError(
+      C.DEVICE_NOT_FOUND,
+      `PDA ${code} 未上線。目前上線: ${online.map((item) => item.deviceId).join(",")}`,
+    );
+  }
+
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(requestId);
+      reject(createApiError(C.SERVICE_UNAVAILABLE, "PDA 響鈴指令逾時"));
+    }, 25_000);
+    pending.set(requestId, {
+      resolve: (payload) => {
+        if (!payload?.ok) {
+          reject(
+            createApiError(
+              C.BAD_GATEWAY,
+              payload?.message || "PDA 不支援平台下發響鈴",
+              { details: payload },
+            ),
+          );
+          return;
+        }
+        resolve({
+          deviceId: payload.deviceId,
+          method: payload.method,
+          message: payload.message,
+          attempts: payload.attempts || [],
+        });
+      },
+      reject,
+      timer,
+    });
+    child.stdin.write(
+      `${JSON.stringify({ type: "beep", requestId, deviceId: code })}\n`,
+    );
+  });
+};
+
 module.exports = {
   start,
   stop,
   getStatus,
+  beep,
 };

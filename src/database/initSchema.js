@@ -1559,6 +1559,45 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS garment_master (
+        barcode VARCHAR(64) PRIMARY KEY,
+        employee_name VARCHAR(128),
+        department VARCHAR(128),
+        plant_code VARCHAR(8),
+        garment_type VARCHAR(16),
+        wash_count INTEGER NOT NULL DEFAULT 0,
+        last_wash_date DATE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS pda_entrance_bindings (
+        device_code VARCHAR(64) PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        entrance_label VARCHAR(128),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_pda_entrance_bindings_location
+      ON pda_entrance_bindings(location_id)
+    `);
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS garment_wash_limits (
+        id SERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        plant_code VARCHAR(8) NOT NULL,
+        garment_type VARCHAR(16) NOT NULL,
+        wash_limit INTEGER NOT NULL,
+        UNIQUE (location_id, plant_code, garment_type)
+      )
+    `);
+    schemaLogger.info("garment / pda_entrance 表已建立", {
+      module: "initSchema",
+    });
+
     await targetPool.end();
 
     schemaLogger.info("資料庫 Schema 初始化完成", { module: "initSchema" });

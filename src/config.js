@@ -294,6 +294,11 @@ const isup = {
   bridgeExePath: getEnv("ISUP_BRIDGE_EXE", ""),
 };
 
+/** PDA 掃衣 APK（HTTP scan + Socket.IO /pda-agent） */
+const pda = {
+  agentKey: getEnv("PDA_AGENT_KEY", ""),
+};
+
 /**
  * 門禁保全 SIP（層 2 手動／警報語音廣播）
  */
@@ -331,6 +336,7 @@ module.exports = {
   ladderSdk,
   operationalEvents,
   isup,
+  pda,
   accessSecurity,
   cors,
   serverHost: server.host,

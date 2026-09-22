@@ -291,6 +291,14 @@ async function startServer() {
 
     const httpServer = http.createServer(app);
     websocketService.initializeWebSocket(httpServer);
+    try {
+      const pdaAgentService = require("./services/pda/pdaAgentService");
+      pdaAgentService.attach(websocketService.getIO());
+    } catch (error) {
+      serverLogger.warn("PDA Agent namespace 掛載失敗", {
+        error: error?.message || String(error),
+      });
+    }
 
     await new Promise((resolve, reject) => {
       httpServer.once("error", reject);
