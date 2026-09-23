@@ -101,11 +101,11 @@ async function computeZoneLocationSuffix(rule) {
   return `（${inner}）`;
 }
 
-function extractIoAddress(rule) {
+function extractIoChannel(rule) {
   const m = String(rule?.condition_config?.bit_key || "").match(
-    /^(di|do):(\d+)$/i,
+    /^(di|do|discrete|coil):(\d+)$/i,
   );
-  return m ? m[2] : "1";
+  return m ? m[2] : "";
 }
 
 async function resolveSourceDisplayNameForRule(rule, sourceId) {
@@ -164,9 +164,9 @@ async function resolveMessageLocationPrefix(rule, runtimeVars) {
  */
 async function buildRuleMessageRenderContext(rule, runtimeVars = {}) {
   const cfg = rule.condition_config || {};
-  const ioAddr = extractIoAddress(rule);
-  const diAddress = rule.alert_type === "di" ? ioAddr : "";
-  const doAddress = rule.alert_type === "do" ? ioAddr : "";
+  const ioChannel = extractIoChannel(rule);
+  const diChannel = rule.alert_type === "di" ? ioChannel : "";
+  const doChannel = rule.alert_type === "do" ? ioChannel : "";
 
   const { displayName, zoneLocationSuffix } =
     await resolveMessageLocationPrefix(rule, runtimeVars);
@@ -197,8 +197,12 @@ async function buildRuleMessageRenderContext(rule, runtimeVars = {}) {
     operator: operatorLabel,
     threshold: cfg.value != null ? String(cfg.value) : "",
     unit: cfg.unit ?? "",
-    di_address: diAddress,
-    do_address: doAddress,
+    /** 與 dimension_key `di:ch:N`／`do:ch:N` 同一通道號 */
+    di_channel: diChannel,
+    do_channel: doChannel,
+    /** 舊模板相容別名（語意＝通道，非 Modbus 硬體位址） */
+    di_address: diChannel,
+    do_address: doChannel,
     current_value: currentVal,
     error_count:
       runtimeVars.error_count != null ? String(runtimeVars.error_count) : "",

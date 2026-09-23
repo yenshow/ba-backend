@@ -895,6 +895,18 @@ async function ensureGarmentTables(pool) {
   `);
 }
 
+/** resolved 列不應殘留 ignored_*（與日界線／updateAlertStatus 語意對齊） */
+async function clearResolvedAlertIgnoredFields(pool) {
+  const result = await pool.query(`
+    UPDATE alerts
+    SET ignored_at = NULL,
+        ignored_by = NULL
+    WHERE status = 'resolved'::alert_status
+      AND (ignored_at IS NOT NULL OR ignored_by IS NOT NULL)
+  `);
+  return { cleared: result.rowCount || 0 };
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -911,6 +923,7 @@ async function applySchemaPatches(pool) {
   await ensureGarmentTables(pool);
   await ensureIsapiAccessEventsDeviceId(pool);
   await ensureAlertRulesMessageTemplateColumns(pool);
+  const clearedResolvedIgnored = await clearResolvedAlertIgnoredFields(pool);
   const energyRulesMigration = await migrateEnergySettingsToAlertRules(pool);
   const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
@@ -918,6 +931,7 @@ async function applySchemaPatches(pool) {
   const deviceModelRepair = await repairDeviceModelCatalogConfig(pool);
   logger.info("schema patches 已套用", {
     module: "schemaPatches",
+    clearedResolvedIgnored,
     energyRulesMigration,
     energyAlertRuleSync,
     migratedSensorModels,

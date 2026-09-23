@@ -6,6 +6,7 @@ const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { resolveUploadFilePath } = require("../../utils/baDataPaths");
+const { mergeStepErrorMessage } = require("./personnelIsapiErrorUtils");
 
 const STEP_COLUMNS = {
   userInfo: { hash: "user_info_hash", status: "user_info_status", at: "user_info_synced_at" },
@@ -266,6 +267,7 @@ async function upsertStepState(params) {
   const eno = String(employeeNo);
   const st = status != null ? String(status) : null;
   const h = hash != null ? String(hash) : null;
+  const mergedError = await mergedLastError(did, eno, step, lastErrorMessage);
 
   await db.query(
     `INSERT INTO person_device_sync_states (
@@ -280,7 +282,21 @@ async function upsertStepState(params) {
        ${cols.at} = EXCLUDED.${cols.at},
        last_error_message = EXCLUDED.last_error_message,
        updated_at = CURRENT_TIMESTAMP`,
-    [did, eno, h, st, syncedAt, lastErrorMessage],
+    [did, eno, h, st, syncedAt, mergedError],
+  );
+}
+
+async function mergedLastError(deviceId, employeeNo, step, lastErrorMessage) {
+  const rows = await db.query(
+    `SELECT last_error_message
+     FROM person_device_sync_states
+     WHERE device_id = ? AND employee_no = ?`,
+    [deviceId, employeeNo],
+  );
+  return mergeStepErrorMessage(
+    rows?.[0]?.last_error_message,
+    step,
+    lastErrorMessage,
   );
 }
 
@@ -301,6 +317,12 @@ async function upsertFingerprintDetailState(params) {
   const st = status != null ? String(status) : null;
   const h = hash != null ? String(hash) : null;
   const payload = JSON.stringify({ hash: h, status: st, at: syncedAt });
+  const mergedError = await mergedLastError(
+    did,
+    eno,
+    "fingerprint",
+    lastErrorMessage,
+  );
 
   await db.query(
       `INSERT INTO person_device_sync_states (
@@ -313,7 +335,7 @@ async function upsertFingerprintDetailState(params) {
          fingerprint_detail = jsonb_set(COALESCE(person_device_sync_states.fingerprint_detail, '{}'::jsonb), ARRAY[?]::text[], ?::jsonb, true),
          last_error_message = EXCLUDED.last_error_message,
          updated_at = CURRENT_TIMESTAMP`,
-      [did, eno, id, payload, lastErrorMessage, id, payload],
+      [did, eno, id, payload, mergedError, id, payload],
     );
 }
 

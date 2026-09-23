@@ -29,9 +29,9 @@ const run = () => {
   assert.equal(
     formatMessage(getCanonicalTemplateString(MESSAGE_TEMPLATE_KEYS.DI_V1), {
       location_label: "一樓 - 大廳",
-      di_address: "3",
+      di_channel: "3",
     }),
-    "一樓 - 大廳 DI 3 觸發",
+    "一樓 - 大廳 DI 通道 3 觸發",
   );
 
   assert.equal(
@@ -45,10 +45,10 @@ const run = () => {
   assert.equal(
     summaryBitTriggerFallback({
       alertType: "di",
-      address: 3,
+      channel: 3,
       locationLabel: "一樓 - 大廳",
     }),
-    "一樓 - 大廳：DI 3 觸發",
+    "一樓 - 大廳：DI 通道 3 觸發",
   );
 
   assert.equal(
@@ -56,7 +56,15 @@ const run = () => {
       source: "drainage",
       bitKey: "di:0",
     }),
-    "排水系統：DI 0 觸發",
+    "排水系統：DI 通道 0 觸發",
+  );
+
+  assert.equal(
+    summaryRuleBitStateFallback({
+      source: "drainage",
+      bitKey: "discrete:1",
+    }),
+    "排水系統：DI 通道 1 觸發",
   );
 
   assert.equal(

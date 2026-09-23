@@ -172,7 +172,7 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
       const parsed = parseBitKey(rule.condition_config?.bit_key);
       message = summaryBitTriggerFallback({
         alertType: rule.alert_type,
-        address: parsed?.address,
+        channel: parsed?.address,
       });
     }
 

@@ -98,7 +98,7 @@ async function handleNonCriticalError(
     return await fn();
   } catch (error) {
     logger.warn(warnMessage, {
-      error,
+      error: error?.message || String(error),
       ...context,
       module: "peopleCountingService",
     });

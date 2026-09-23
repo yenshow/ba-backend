@@ -5,6 +5,7 @@
 
 const config = require("../../config");
 const logger = require("../../utils/logger");
+const { isOriginAllowed } = require("../../utils/corsOrigin");
 const userService = require("../platform/userService");
 const permissionService = require("../../access/permissionService");
 const {
@@ -110,14 +111,10 @@ function initializeWebSocket(httpServer) {
     cors: {
       origin: (origin, callback) => {
         // 使用與 Express CORS 相同的邏輯
-        if (
-          !origin ||
-          allowedOrigins.includes("*") ||
-          allowedOrigins.includes(origin)
-        ) {
+        if (isOriginAllowed(origin, allowedOrigins)) {
           return callback(null, true);
         }
-        return callback(new Error(`不被允許的跨域來源: ${origin}`), false);
+        return callback(null, false);
       },
       credentials: true,
       methods: ["GET", "POST"],
@@ -273,6 +270,13 @@ function initializeWebSocket(httpServer) {
  * 獲取 Socket.IO 實例
  * @returns {Object|null} Socket.IO 實例
  */
+function closeWebSocket() {
+  if (!ioInstance) return;
+  ioInstance.disconnectSockets(true);
+  ioInstance.close();
+  ioInstance = null;
+}
+
 function getIO() {
   return ioInstance;
 }
@@ -791,6 +795,7 @@ function emitPdaScan(data) {
 
 module.exports = {
   initializeWebSocket,
+  closeWebSocket,
   getIO,
   emitAlertNew,
   emitAlertUpdated,

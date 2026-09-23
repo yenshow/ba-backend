@@ -84,18 +84,15 @@ if (config.isProduction) {
   app.set("trust proxy", 1);
 }
 
+const { isOriginAllowed } = require("./utils/corsOrigin");
 const allowedOrigins = serverConfig.cors.origins;
 const corsOptions = {
   origin: (origin, callback) => {
-    // 允許無來源（如 Postman）以及白名單網域
-    if (
-      !origin ||
-      allowedOrigins.includes("*") ||
-      allowedOrigins.includes(origin)
-    ) {
+    // 允許無來源（如 Postman）以及白名單網域。拒絕時不丟 Error，避免變成 HTTP 500。
+    if (isOriginAllowed(origin, allowedOrigins)) {
       return callback(null, true);
     }
-    return callback(new Error(`不被允許的跨域來源: ${origin}`), false);
+    return callback(null, false);
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -361,12 +358,34 @@ async function startServer() {
  */
 const shutdownLogger = logger.createLogger("Shutdown");
 let isShuttingDown = false;
+const SHUTDOWN_DEADLINE_MS = 10_000;
+const HTTP_CLOSE_MS = 5_000;
+
+const closeHttpServer = (httpServer) =>
+  new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (typeof httpServer.closeAllConnections === "function") {
+        httpServer.closeAllConnections();
+      }
+      resolve();
+    }, HTTP_CLOSE_MS);
+    httpServer.close(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 
 async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     return;
   }
   isShuttingDown = true;
+
+  const forceTimer = setTimeout(() => {
+    shutdownLogger.error("關閉逾時，強制結束行程");
+    process.exit(1);
+  }, SHUTDOWN_DEADLINE_MS);
+  forceTimer.unref?.();
 
   shutdownLogger.info(`收到 ${signal}，正在關閉伺服器...`);
 
@@ -401,11 +420,12 @@ async function gracefulShutdown(signal) {
       global.__recordExportHandle = null;
     }
 
+    websocketService.closeWebSocket();
+
     if (global.__httpServer) {
-      await new Promise((resolve) => {
-        global.__httpServer.close(() => resolve());
-      });
+      const httpServer = global.__httpServer;
       global.__httpServer = null;
+      await closeHttpServer(httpServer);
     }
 
     // 關閉資料庫連線
@@ -414,12 +434,14 @@ async function gracefulShutdown(signal) {
     shutdownLogger.info("資料庫連線已關閉");
 
     shutdownLogger.info("伺服器已優雅關閉");
+    clearTimeout(forceTimer);
     process.exit(0);
   } catch (error) {
     shutdownLogger.error("關閉伺服器時發生錯誤", {
       error: error.message,
       stack: error.stack,
     });
+    clearTimeout(forceTimer);
     process.exit(1);
   }
 }

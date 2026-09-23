@@ -232,9 +232,16 @@ async function subscribeLoop(deviceId, abortSignal) {
     if (abortSignal?.aborted) return;
     try {
       await runSubscribeForDevice(deviceId, abortSignal);
+      if (abortSignal?.aborted) return;
+      logger.warn("[ISAPI Vehicle] 訂閱串流結束，將重連", { deviceId });
     } catch (e) {
       if (abortSignal?.aborted) return;
       if (e && String(e.message || "").includes("ABORTED")) return;
+      logger.warn("[ISAPI Vehicle] 訂閱連線中斷，將重連", {
+        deviceId,
+        error: e?.message || String(e),
+        statusCode: e?.statusCode ?? null,
+      });
     }
     if (abortSignal?.aborted) return;
     await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));

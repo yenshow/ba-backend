@@ -27,9 +27,9 @@ const CANONICAL_TEMPLATES = {
   [MESSAGE_TEMPLATE_KEYS.OFFLINE_V1]:
     "{location_label} 連續 {error_count} 次無法連接",
   [MESSAGE_TEMPLATE_KEYS.DI_V1]:
-    "{location_label} DI {di_address} 觸發",
+    "{location_label} DI 通道 {di_channel} 觸發",
   [MESSAGE_TEMPLATE_KEYS.DO_V1]:
-    "{location_label} DO {do_address} 觸發",
+    "{location_label} DO 通道 {do_channel} 觸發",
   [MESSAGE_TEMPLATE_KEYS.ENERGY_CONTRACT_STAGE_V1]:
     "契約 {level} 級：即時功率／需量 {demand_kw} kW 已達契約容量 {contract_kw} kW 的 {threshold_pct}%",
   [MESSAGE_TEMPLATE_KEYS.ENERGY_METER_STALE_V1]:
@@ -145,9 +145,11 @@ function formatMessage(template, variables) {
 }
 
 function parseBitAddress(bitKey) {
-  const m = String(bitKey || "").match(/^(di|do):(\d+)$/i);
-  if (!m) return { kind: null, address: null };
-  return { kind: m[1].toLowerCase(), address: m[2] };
+  const m = String(bitKey || "").match(/^(di|do|discrete|coil):(\d+)$/i);
+  if (!m) return { kind: null, channel: null };
+  const rawKind = m[1].toLowerCase();
+  const kind = rawKind === "do" || rawKind === "coil" ? "do" : "di";
+  return { kind, channel: m[2] };
 }
 
 function resolveSourceLabel(source) {
@@ -179,20 +181,21 @@ function summaryOfflineFallback({
   return `${prefix} 連續 ${count} 次無法連接`;
 }
 
-/** DI/DO bit 觸發兜底（diDoMonitor / systemAlertHelper） */
+/** DI/DO bit 觸發兜底（diDoMonitor / systemAlertHelper）；數字＝通道，與 di:ch:N 一致 */
 function summaryBitTriggerFallback({
   alertType,
-  address,
+  channel = null,
   locationLabel = null,
   sourceLabel = null,
 }) {
   const key = String(alertType || "").trim().toLowerCase();
   const kind = key === "do" ? "DO" : key === "di" ? "DI" : "點位";
-  const addr = address != null ? String(address) : "?";
+  const ch =
+    channel != null && String(channel).trim() !== "" ? String(channel) : "?";
   const place = formatLocationPrefix(locationLabel);
-  if (place) return `${place}${kind} ${addr} 觸發`;
-  if (sourceLabel) return `${sourceLabel}：${kind} ${addr} 觸發`;
-  return `${kind} ${addr} 觸發`;
+  if (place) return `${place}${kind} 通道 ${ch} 觸發`;
+  if (sourceLabel) return `${sourceLabel}：${kind} 通道 ${ch} 觸發`;
+  return `${kind} 通道 ${ch} 觸發`;
 }
 
 /** recordRuleBitStateAlarm 兜底 */
@@ -200,7 +203,7 @@ function summaryRuleBitStateFallback({ source, bitKey, locationLabel = null }) {
   const parsed = parseBitAddress(bitKey);
   return summaryBitTriggerFallback({
     alertType: parsed.kind || "di",
-    address: parsed.address,
+    channel: parsed.channel,
     locationLabel,
     sourceLabel: resolveSourceLabel(source),
   });

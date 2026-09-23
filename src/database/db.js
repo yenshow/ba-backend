@@ -16,6 +16,14 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
+// 閒置連線被 PostgreSQL 管理員中斷（57P01）時，沒有監聽會變成未捕獲例外並結束行程。
+pool.on("error", (err) => {
+  dbLogger.warn("資料庫連線池錯誤", {
+    code: err?.code || null,
+    error: err?.message || String(err),
+  });
+});
+
 // 測試連線
 async function testConnection() {
   try {

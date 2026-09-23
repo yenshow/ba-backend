@@ -19,7 +19,59 @@ function normalizeIsapiErrorMessage(raw) {
   return msg;
 }
 
+function isPermanentFaceModelingError(message) {
+  const msg = message != null ? String(message) : "";
+  if (!msg) return false;
+  return (
+    msg === FACE_MODELING_ERROR_MESSAGE ||
+    /SubpicAnalysisModelingError/i.test(msg) ||
+    /saveFacePic/i.test(msg)
+  );
+}
+
+function isPermanentCardEmployeeNoError(message) {
+  const msg = message != null ? String(message) : "";
+  return /badJsonContent/i.test(msg) && /checkEmployeeNo/i.test(msg);
+}
+
+function parseErrorBag(raw) {
+  if (raw == null || raw === "") return {};
+  const text = String(raw);
+  if (!text.startsWith("{")) return { legacy: text };
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    return { legacy: text };
+  }
+  return { legacy: text };
+}
+
+/** 各步驟錯誤分開存，避免後續步驟覆寫前人臉／卡片的永久失敗原因。 */
+function readStepErrorMessage(raw, step) {
+  const bag = parseErrorBag(raw);
+  if (typeof bag[step] === "string" && bag[step]) return bag[step];
+  if (typeof bag.legacy === "string") return bag.legacy;
+  return "";
+}
+
+function mergeStepErrorMessage(raw, step, message) {
+  const bag = parseErrorBag(raw);
+  delete bag.legacy;
+  if (message) bag[step] = String(message);
+  else delete bag[step];
+  const keys = Object.keys(bag).filter((key) => bag[key]);
+  if (!keys.length) return null;
+  return JSON.stringify(bag);
+}
+
 module.exports = {
   FACE_MODELING_ERROR_MESSAGE,
   normalizeIsapiErrorMessage,
+  isPermanentFaceModelingError,
+  isPermanentCardEmployeeNoError,
+  readStepErrorMessage,
+  mergeStepErrorMessage,
 };

@@ -317,6 +317,7 @@ async function resolveActiveAlerts(source, sourceId, alertTypes) {
         type,
         alertService.ALERT_STATUS.RESOLVED,
         null,
+        { reason: "recovered" },
       );
       resolvedAny = true;
     } catch (resolveError) {

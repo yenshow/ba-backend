@@ -47,6 +47,18 @@ const buildPathsYaml = (items) => {
   return lines.join("\n");
 };
 
+const LOCAL_API_ADDRESS_LINE = "apiAddress: 127.0.0.1:9997";
+
+/** Control API 只綁本機，避免產生檔沿用 `:9997`（所有介面）。 */
+const ensureLocalApiAddress = (text) => {
+  const source = String(text || "");
+  if (/^apiAddress:\s*127\.0\.0\.1:9997\s*$/m.test(source)) return source;
+  if (/^apiAddress:\s*\S+/m.test(source)) {
+    return source.replace(/^apiAddress:\s*\S[^\r\n]*/m, LOCAL_API_ADDRESS_LINE);
+  }
+  return `${LOCAL_API_ADDRESS_LINE}\n${source}`;
+};
+
 const replacePathsBlock = (baseText, pathsYaml) => {
   const t = String(baseText || "");
   const replacedInline = t.replace(/^\s*paths:\s*\{\s*\}\s*$/m, pathsYaml);
@@ -102,7 +114,7 @@ async function generateConfigFile() {
   const baseText = fs.readFileSync(baseConfigPath, "utf8");
   const items = await listCameraRtspItems();
   const pathsYaml = buildPathsYaml(items);
-  const nextText = replacePathsBlock(baseText, pathsYaml);
+  const nextText = ensureLocalApiAddress(replacePathsBlock(baseText, pathsYaml));
   fs.writeFileSync(generatedConfigPath, nextText, "utf8");
   logger.info("已產生 mediamtx.generated.yml", { paths: items.length });
   return { pathsCount: items.length, generatedConfigPath };

@@ -576,7 +576,7 @@ async function resolveThresholdAlert(
       "threshold",
       alertService.ALERT_STATUS.RESOLVED,
       null,
-      { dimensionKey },
+      { dimensionKey, reason: "recovered" },
     );
 
     logger.debug(
@@ -811,6 +811,7 @@ async function resolveAllThresholdAlerts(systemId) {
         "threshold",
         alertService.ALERT_STATUS.RESOLVED,
         null,
+        { reason: "recovered" },
       );
 
       logger.debug(

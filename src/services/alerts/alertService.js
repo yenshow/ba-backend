@@ -1174,6 +1174,7 @@ async function planUnignoreToActiveSafely({
  * @param {number} userId - 用戶 ID
  * @param {Object} options - 額外條件
  * @param {string|null} options.dimensionKey - 維度鍵（可選）
+ * @param {string|null} options.reason - 寫入 alert_events.payload.reason（可選）
  * @returns {Promise<number>} 更新的警報數量
  */
 async function updateAlertStatus(
@@ -1251,12 +1252,15 @@ async function updateAlertStatus(
 
     updateFields.push("status = ?", "updated_at = CURRENT_TIMESTAMP");
     params.push(effectiveStatus);
+    // CAS：僅當列仍為預期舊狀態時才翻轉，避免並行 clearError 重複寫 event
     params.push(finalAlertIds);
+    params.push(statusScope);
 
     const query = `
 			UPDATE alerts
 			SET ${updateFields.join(", ")}
 			WHERE id = ANY(?::integer[])
+			  AND status = ANY(?::alert_status[])
 			RETURNING id
 		`;
 
@@ -1269,69 +1273,63 @@ async function updateAlertStatus(
       );
     }
 
-    const updatedCount = result.length;
+    const flippedIds = result.map((row) => row.id);
+    const alertResults = await loadAlertsWithIgnoredByUser(flippedIds);
 
-    if (finalAlertIds.length > 0) {
-      const alertResults = await loadAlertsWithIgnoredByUser(finalAlertIds);
+    for (const alert of alertResults) {
+      const oldStatus = oldStatusMap.get(alert.id);
+      if (!oldStatus || oldStatus === effectiveStatus) {
+        continue;
+      }
+      const enrichedAlert = enrichAlert(alert);
+      const eventReason =
+        newStatus === ALERT_STATUS.ACTIVE &&
+        effectiveStatus === ALERT_STATUS.RESOLVED
+          ? "already_has_active_incident"
+          : options.reason || null;
+      await createAlertEvent(
+        alert.id,
+        effectiveStatus === ALERT_STATUS.RESOLVED
+          ? "resolved"
+          : effectiveStatus === ALERT_STATUS.IGNORED
+            ? "ignored"
+            : "unignored",
+        oldStatus,
+        effectiveStatus,
+        {
+          source,
+          source_id: sourceId,
+          alert_type: alertType,
+          dimension_key: alert.dimension_key,
+          ...(eventReason ? { reason: eventReason } : {}),
+        },
+        userId || null,
+      );
+      websocketService.emitAlertUpdated(
+        enrichedAlert,
+        oldStatus,
+        effectiveStatus,
+      );
+    }
 
-      if (alertResults && alertResults.length > 0) {
-        for (const alert of alertResults) {
-          const oldStatus = oldStatusMap.get(alert.id) || effectiveStatus;
-          if (oldStatus === effectiveStatus) {
-            continue;
-          }
-          const enrichedAlert = enrichAlert(alert);
-          await createAlertEvent(
-            alert.id,
-            effectiveStatus === ALERT_STATUS.RESOLVED
-              ? "resolved"
-              : effectiveStatus === ALERT_STATUS.IGNORED
-                ? "ignored"
-                : "unignored",
-            oldStatus,
-            effectiveStatus,
-            {
-              source,
-              source_id: sourceId,
-              alert_type: alertType,
-              dimension_key: alert.dimension_key,
-              ...(newStatus === ALERT_STATUS.ACTIVE &&
-              effectiveStatus === ALERT_STATUS.RESOLVED
-                ? { reason: "already_has_active_incident" }
-                : {}),
-            },
-            userId || null,
-          );
-          websocketService.emitAlertUpdated(
-            enrichedAlert,
-            oldStatus,
-            effectiveStatus,
-          );
-        }
+    void emitUnresolvedAlertCount();
 
-        void emitUnresolvedAlertCount();
-
-        if (
-          effectiveStatus === ALERT_STATUS.RESOLVED &&
-          runtimeConfigService.getAlerts()?.linkageRevertOnResolve !== false &&
-          alertResults &&
-          alertResults.length > 0
-        ) {
-          try {
-            await alertLinkageService.revertLinkagesForResolvedAlerts(
-              alertResults,
-            );
-          } catch (linkErr) {
-            alertLogger.warn("結案後連動 DO 復歸失敗（略過）", {
-              error: linkErr?.message || String(linkErr),
-              module: "alertService",
-            });
-          }
-        }
+    if (
+      effectiveStatus === ALERT_STATUS.RESOLVED &&
+      runtimeConfigService.getAlerts()?.linkageRevertOnResolve !== false &&
+      alertResults.length > 0
+    ) {
+      try {
+        await alertLinkageService.revertLinkagesForResolvedAlerts(alertResults);
+      } catch (linkErr) {
+        alertLogger.warn("結案後連動 DO 復歸失敗（略過）", {
+          error: linkErr?.message || String(linkErr),
+          module: "alertService",
+        });
       }
     }
 
-    return updatedCount;
+    return flippedIds.length;
   } catch (error) {
     // 如果錯誤是"未找到可更新的警報"，這是正常情況（警報可能不存在或已經被解決）
     // 不記錄為錯誤，直接拋出讓調用者處理
@@ -1366,7 +1364,7 @@ async function resolveAlert(
     alertType,
     ALERT_STATUS.RESOLVED,
     null,
-    { dimensionKey },
+    { dimensionKey, reason: "recovered" },
   );
 }
 
@@ -1604,6 +1602,8 @@ async function resolveAllActiveForDailyRollover() {
         closing AS (
           UPDATE alerts a
           SET status = 'resolved'::alert_status,
+              ignored_at = NULL,
+              ignored_by = NULL,
               updated_at = CURRENT_TIMESTAMP
           FROM targets t
           WHERE a.id = t.id

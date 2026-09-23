@@ -720,13 +720,19 @@ router.get(
   "/isapi-subscribe-status",
   asyncHandler(async (_req, res) => {
     const status = isapiSubscribeService.getSubscribeStatus();
+    const connected = status.connectedDeviceIds || [];
+    let message = "佈防未啟動或無需訂閱的門禁設備";
+    if (status.started && connected.length > 0) {
+      message = `訂閱長連線中，設備 ID：${connected.join(", ")}`;
+    } else if (status.started) {
+      message = `訂閱迴圈已啟動（設備 ID：${status.deviceIds.join(", ") || "無"}），目前沒有訂閱長連線`;
+    }
     res.sendSuccess({
       subscribe: {
         started: status.started,
         deviceIds: status.deviceIds,
-        message: status.started
-          ? `佈防已啟動，訂閱設備 ID：${status.deviceIds.join(", ") || "無"}`
-          : "佈防未啟動或無需訂閱的門禁設備",
+        connectedDeviceIds: connected,
+        message,
       },
     });
   }),

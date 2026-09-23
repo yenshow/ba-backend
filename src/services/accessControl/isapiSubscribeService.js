@@ -72,7 +72,9 @@ async function persistIsapiEvent(options) {
     `INSERT INTO isapi_access_events (device_id, device_ip, event_time, event_type, payload, file_count, picture_path)
      VALUES (?, ?, ?, ?, ?, 0, NULL) RETURNING id`,
     [
-      deviceId != null && Number.isFinite(Number(deviceId)) && Number(deviceId) > 0
+      deviceId != null &&
+      Number.isFinite(Number(deviceId)) &&
+      Number(deviceId) > 0
         ? Number(deviceId)
         : null,
       deviceIp,
@@ -321,16 +323,17 @@ async function consumeEventStreamIncremental(
       }
       lastPendingFaceEventId = id;
     }
-    logger.info("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
+    logger.debug("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };
 
   const enqueuePart = (headerStr, body) => {
     partQueue = partQueue
       .then(async () => {
-        const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+        const ct =
+          (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
         const name =
-          (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) || [])[1] ||
-          "";
+          (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) ||
+            [])[1] || "";
         const rawBody = body
           .toString("utf8")
           .replace(/^\uFEFF/, "")
@@ -346,7 +349,10 @@ async function consumeEventStreamIncremental(
         if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
           const eventId = lastPendingFaceEventId;
           if (eventId == null) {
-            logger.warn("[ISAPI] 收到附圖但無待綁定事件", { deviceId, deviceIp });
+            logger.warn("[ISAPI] 收到附圖但無待綁定事件", {
+              deviceId,
+              deviceIp,
+            });
             return;
           }
           lastPendingFaceEventId = null;
@@ -474,13 +480,20 @@ async function runSubscribeForDevice(deviceId, abortSignal) {
   const res = await client.requestSubscribeStream(SUBSCRIBE_XML);
   const contentType = res.headers["content-type"] || "";
   const stream = res.data;
-  await consumeEventStreamIncremental(
-    stream,
-    contentType,
-    deviceIp,
-    deviceId,
-    abortSignal,
-  );
+  connectedDeviceIds.add(deviceId);
+  try {
+    await consumeEventStreamIncremental(
+      stream,
+      contentType,
+      deviceIp,
+      deviceId,
+      abortSignal,
+    );
+  } finally {
+    connectedDeviceIds.delete(deviceId);
+    // 先關掉這一條，再讓迴圈隔 10 秒重連，避免同一台同時兩條 subscribeEvent
+    if (stream && !stream.destroyed) stream.destroy();
+  }
 }
 
 /**
@@ -491,11 +504,17 @@ async function subscribeLoop(deviceId, abortSignal) {
     if (abortSignal?.aborted) return;
     try {
       await runSubscribeForDevice(deviceId, abortSignal);
+      if (abortSignal?.aborted) return;
+      logger.warn("[ISAPI] 訂閱串流結束，將重連", { deviceId });
     } catch (e) {
       if (abortSignal?.aborted) return;
-      // 被 destroy 的 stream 會拋錯；這裡只做降噪
       if (e && (e.code === "ABORTED" || String(e.message).includes("ABORTED")))
         return;
+      logger.warn("[ISAPI] 訂閱連線中斷，將重連", {
+        deviceId,
+        error: e?.message || String(e),
+        statusCode: e?.statusCode ?? null,
+      });
     }
     if (abortSignal?.aborted) return;
     await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
@@ -505,6 +524,8 @@ async function subscribeLoop(deviceId, abortSignal) {
 let started = false;
 /** 目前訂閱中的設備 ID 列表（start 時寫入，供狀態查詢） */
 let subscribedDeviceIds = [];
+/** 訂閱長連線仍在讀取的設備（與 deviceIds 不同：迴圈在跑不代表 socket 還在） */
+const connectedDeviceIds = new Set();
 
 function startLoopForDevice(deviceId) {
   if (deviceLoopControllers.has(deviceId)) return;
@@ -536,6 +557,7 @@ async function start() {
 function stop() {
   started = false;
   subscribedDeviceIds = [];
+  connectedDeviceIds.clear();
   for (const deviceId of [...deviceLoopControllers.keys()]) {
     stopLoopForDevice(deviceId);
   }
@@ -575,10 +597,14 @@ async function refresh() {
 
 /**
  * 取得佈防訂閱狀態（供確認是否已實施佈防）
- * @returns {{ started: boolean, deviceIds: number[] }}
+ * @returns {{ started: boolean, deviceIds: number[], connectedDeviceIds: number[] }}
  */
 function getSubscribeStatus() {
-  return { started, deviceIds: [...subscribedDeviceIds] };
+  return {
+    started,
+    deviceIds: [...subscribedDeviceIds],
+    connectedDeviceIds: [...connectedDeviceIds].sort((a, b) => a - b),
+  };
 }
 
 module.exports = {
@@ -587,5 +613,8 @@ module.exports = {
   refresh,
   getSubscribeStatus,
   getDeviceIdsToSubscribe,
+  persistIsapiEvent,
+  isProcessableEvent,
+  attachPictureToEvent,
   SUBSCRIBE_XML,
 };

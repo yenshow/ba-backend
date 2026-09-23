@@ -21,7 +21,12 @@ const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const { assertSafeOutboundUrl } = require("../../utils/safeUrl");
 const { resolveUploadFilePath } = require("../../utils/baDataPaths");
-const { normalizeIsapiErrorMessage } = require("./personnelIsapiErrorUtils");
+const {
+  normalizeIsapiErrorMessage,
+  isPermanentFaceModelingError,
+  isPermanentCardEmployeeNoError,
+  readStepErrorMessage,
+} = require("./personnelIsapiErrorUtils");
 
 const SYNC_DELAY_MS = 300;
 
@@ -565,18 +570,35 @@ async function syncPersonToDevice(
     const lastStatus = stateRow?.face_status
       ? String(stateRow.face_status)
       : null;
-    if (
-      lastStatus === "success" &&
-      lastHash &&
-      faceHash &&
-      lastHash === faceHash
-    ) {
+    const faceError = readStepErrorMessage(
+      stateRow?.last_error_message,
+      "face",
+    );
+    const faceUnchanged =
+      lastHash && faceHash && lastHash === faceHash;
+    if (lastStatus === "success" && faceUnchanged) {
       reporter?.skipOp?.({
         employeeNo: person.employeeNo,
         deviceId,
         action: "sync",
         stage: "face",
         message: "未變更",
+      });
+    } else if (
+      lastStatus === "failed" &&
+      faceUnchanged &&
+      isPermanentFaceModelingError(faceError)
+    ) {
+      logger.debug("ISAPI 人臉未變更，略過已知建模失敗", {
+        deviceId,
+        employeeNo: person.employeeNo,
+      });
+      reporter?.skipOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "face",
+        message: faceError,
       });
     } else {
       const startedAt = reporter?.startOp
@@ -653,6 +675,8 @@ async function syncPersonToDevice(
   const lastStatus = stateRow?.card_status
     ? String(stateRow.card_status)
     : null;
+  const cardError = readStepErrorMessage(stateRow?.last_error_message, "card");
+  const cardUnchanged = Boolean(lastHash && cardsHash && lastHash === cardsHash);
 
   if (!cardNos.length) {
     try {
@@ -691,18 +715,29 @@ async function syncPersonToDevice(
         error: toMessage(searchErr),
       });
     }
-  } else if (
-    lastStatus === "success" &&
-    lastHash &&
-    cardsHash &&
-    lastHash === cardsHash
-  ) {
+  } else if (lastStatus === "success" && cardUnchanged) {
     reporter?.skipOp?.({
       employeeNo: person.employeeNo,
       deviceId,
       action: "sync",
       stage: "card",
       message: "未變更",
+    });
+  } else if (
+    lastStatus === "failed" &&
+    cardUnchanged &&
+    isPermanentCardEmployeeNoError(cardError)
+  ) {
+    logger.debug("ISAPI 卡片未變更，略過已知工號格式錯誤", {
+      deviceId,
+      employeeNo: person.employeeNo,
+    });
+    reporter?.skipOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "card",
+      message: cardError,
     });
   } else {
     const startedAt = reporter?.startOp

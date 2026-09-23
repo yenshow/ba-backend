@@ -36,6 +36,14 @@ const main = async () => {
     process.exit(1);
   }
 
+  // 設定已寫入檔案。關掉連線池，避免 PostgreSQL 重啟時閒置連線打掛這個包裝行程。
+  try {
+    const db = require("../src/database/db");
+    await db.close();
+  } catch (closeErr) {
+    console.error(closeErr?.message || closeErr);
+  }
+
   fs.mkdirSync(path.join(mediamtxDir, "logs"), { recursive: true });
 
   const child = spawn(binPath, [generatedConfigPath], {
@@ -44,18 +52,32 @@ const main = async () => {
     windowsHide: true,
   });
 
+  let stopRequested = false;
+
+  const requestStop = (signal) => {
+    stopRequested = true;
+    child.kill(signal);
+  };
+
   child.on("error", (err) => {
     console.error("啟動 MediaMTX 失敗:", err.message);
     process.exit(1);
   });
 
   child.on("exit", (code, signal) => {
+    if (
+      stopRequested ||
+      signal === "SIGINT" ||
+      signal === "SIGTERM"
+    ) {
+      process.exit(0);
+    }
     if (code !== null && code !== 0) process.exit(code);
-    if (signal) process.exit(1);
+    process.exit(code ?? 0);
   });
 
-  process.on("SIGINT", () => child.kill("SIGINT"));
-  process.on("SIGTERM", () => child.kill("SIGTERM"));
+  process.on("SIGINT", () => requestStop("SIGINT"));
+  process.on("SIGTERM", () => requestStop("SIGTERM"));
 };
 
 main().catch((err) => {

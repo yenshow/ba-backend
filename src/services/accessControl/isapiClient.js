@@ -13,6 +13,8 @@ const { throwApiError } = require("../../utils/apiErrors");
 const ISAPI_DEPLOY_ID_REALTIME = 1;
 const CRLFCRLF = Buffer.from("\r\n\r\n");
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+/** 訂閱 XML heartbeat 為 30s；逾時未收到任何位元組視為長連線已死，關掉後由迴圈重連 */
+const SUBSCRIBE_IDLE_TIMEOUT_MS = 90_000;
 
 /* ---------- raw TCP HTTP（訂閱長連線） ---------- */
 
@@ -50,6 +52,7 @@ const rawHttpStream = ({
   body,
   keepAlive = false,
   requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  idleTimeoutMs = 0,
   timeoutLabel = "ISAPI 請求",
 }) =>
   new Promise((resolve, reject) => {
@@ -97,9 +100,27 @@ const rawHttpStream = ({
       if (remainder.length) stream.write(remainder);
 
       socket.removeAllListeners("data");
-      socket.on("data", (c) => stream.write(c));
+      if (idleTimeoutMs > 0) {
+        socket.setTimeout(idleTimeoutMs);
+        socket.on("timeout", () => {
+          socket.destroy(new Error(`ISAPI 訂閱閒置逾時（${idleTimeoutMs}ms）`));
+        });
+      }
+      socket.on("data", (c) => {
+        if (idleTimeoutMs > 0) socket.setTimeout(idleTimeoutMs);
+        stream.write(c);
+      });
       socket.on("end", () => stream.end());
-      socket.on("error", (e) => stream.destroy(e));
+      socket.on("error", (e) => {
+        if (!stream.destroyed) stream.destroy(e);
+      });
+      socket.on("close", () => {
+        if (!stream.destroyed) stream.destroy();
+      });
+      // 呼叫端 destroy／end 串流時必須關掉 TCP，避免舊連線仍 Established 又另開一條
+      stream.on("close", () => {
+        if (!socket.destroyed) socket.destroy();
+      });
 
       finish(() =>
         resolve({
@@ -128,7 +149,11 @@ const fetchDigestChallenge = async ({
     path: "/ISAPI/System/deviceInfo",
     requestTimeoutMs,
   });
-  await readStreamToBuffer(res.data);
+  try {
+    await readStreamToBuffer(res.data);
+  } finally {
+    if (res.data && !res.data.destroyed) res.data.destroy();
+  }
 
   if (res.status !== 401 || !res.headers["www-authenticate"]) {
     throw new Error(
@@ -149,6 +174,7 @@ const requestSubscribePost = (options) =>
     ...options,
     method: "POST",
     keepAlive: true,
+    idleTimeoutMs: SUBSCRIBE_IDLE_TIMEOUT_MS,
     timeoutLabel: "ISAPI 訂閱回應標頭",
   });
 
