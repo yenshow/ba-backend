@@ -671,7 +671,7 @@ async function ensureAccessSecurityLocationSystemType(pool) {
         ADD CONSTRAINT location_systems_system_type_check
         CHECK (system_type IN (
           'environment', 'lighting', 'hvac', 'air_circulation',
-          'people_counting', 'vehicle_access', 'drainage', 'power',
+          'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power',
           'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security'
         ));
     END
@@ -907,6 +907,168 @@ async function clearResolvedAlertIgnoredFields(pool) {
   return { cleared: result.rowCount || 0 };
 }
 
+async function ensureRollCallTables(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roll_call_rules (
+      id SERIAL PRIMARY KEY,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      name VARCHAR(100) NOT NULL,
+      window_start TIME NOT NULL,
+      window_end TIME NOT NULL,
+      weekdays SMALLINT[] NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (window_end > window_start),
+      CHECK (cardinality(weekdays) > 0)
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "roll_call_rules");
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_roll_call_rules_location
+    ON roll_call_rules(location_id)
+  `);
+  // 舊實驗欄位：簽到設備改由地點 system_config.device_ids，規則表不再存 device_ids
+  await pool.query(`
+    ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids
+  `);
+  await pool.query(`
+    DELETE FROM roll_call_rules WHERE location_id IS NULL
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'roll_call_rules'
+          AND column_name = 'location_id'
+          AND is_nullable = 'YES'
+      ) THEN
+        ALTER TABLE roll_call_rules ALTER COLUMN location_id SET NOT NULL;
+      END IF;
+    END $$
+  `);
+  // 應到改由 person_location_access；舊實驗表若存在則移除
+  await pool.query(`DROP TABLE IF EXISTS roll_call_rule_groups`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roll_call_sessions (
+      id SERIAL PRIMARY KEY,
+      rule_id INTEGER NOT NULL REFERENCES roll_call_rules(id) ON DELETE CASCADE,
+      session_date DATE NOT NULL,
+      status VARCHAR(16) NOT NULL CHECK (status IN ('open', 'closed')),
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      closed_at TIMESTAMPTZ,
+      stats_reset_at TIMESTAMPTZ,
+      UNIQUE (rule_id, session_date)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_roll_call_sessions_date
+    ON roll_call_sessions(session_date DESC)
+  `);
+  // 舊實驗欄位：時段改由 roll_call_rules.window_*，場次表不再存 window_start/end
+  await pool.query(`
+    ALTER TABLE roll_call_sessions
+      DROP COLUMN IF EXISTS window_start,
+      DROP COLUMN IF EXISTS window_end
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roll_call_attendance (
+      id SERIAL PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES roll_call_sessions(id) ON DELETE CASCADE,
+      person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+      employee_no VARCHAR(64) NOT NULL,
+      full_name VARCHAR(200),
+      status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'present', 'absent')),
+      source VARCHAR(16) CHECK (source IS NULL OR source IN ('face', 'manual')),
+      checked_in_at TIMESTAMPTZ,
+      event_id BIGINT,
+      UNIQUE (session_id, person_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_roll_call_attendance_session
+    ON roll_call_attendance(session_id)
+  `);
+  // 群組改即時 JOIN persons（同人流），不再冗餘存 person_group_id／group_name
+  await pool.query(`
+    ALTER TABLE roll_call_attendance
+      DROP COLUMN IF EXISTS person_group_id,
+      DROP COLUMN IF EXISTS group_name
+  `);
+  await pool.query(`
+    ALTER TABLE roll_call_sessions
+      ADD COLUMN IF NOT EXISTS stats_reset_at TIMESTAMPTZ
+  `);
+}
+
+async function normalizePersonDeviceSyncStatuses(pool) {
+  const tableCheck = await pool.query(`
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'person_device_sync_states'
+    LIMIT 1
+  `);
+  if (!tableCheck.rows?.length) return { updated: 0 };
+
+  const result = await pool.query(`
+    UPDATE person_device_sync_states
+    SET
+      user_info_status = CASE
+        WHEN user_info_status IN ('synced', 'unchanged') THEN 'success'
+        WHEN user_info_status IS NULL OR user_info_status IN ('pending', 'success', 'failed') THEN user_info_status
+        ELSE 'pending'
+      END,
+      face_status = CASE
+        WHEN face_status IN ('synced', 'unchanged') THEN 'success'
+        WHEN face_status IS NULL OR face_status IN ('pending', 'success', 'failed') THEN face_status
+        ELSE 'pending'
+      END,
+      card_status = CASE
+        WHEN card_status IN ('synced', 'unchanged') THEN 'success'
+        WHEN card_status IS NULL OR card_status IN ('pending', 'success', 'failed') THEN card_status
+        ELSE 'pending'
+      END,
+      fingerprint_status = CASE
+        WHEN fingerprint_status IN ('synced', 'unchanged') THEN 'success'
+        WHEN fingerprint_status IS NULL OR fingerprint_status IN ('pending', 'success', 'failed') THEN fingerprint_status
+        ELSE 'pending'
+      END
+    WHERE user_info_status IS NOT NULL AND user_info_status NOT IN ('pending', 'success', 'failed')
+       OR face_status IS NOT NULL AND face_status NOT IN ('pending', 'success', 'failed')
+       OR card_status IS NOT NULL AND card_status NOT IN ('pending', 'success', 'failed')
+       OR fingerprint_status IS NOT NULL AND fingerprint_status NOT IN ('pending', 'success', 'failed')
+  `);
+
+  // 持久化欄位僅允許 pending|success|failed|NULL
+  const statusCols = [
+    "user_info_status",
+    "face_status",
+    "card_status",
+    "fingerprint_status",
+  ];
+  for (const col of statusCols) {
+    const constraint = `chk_person_device_sync_states_${col}`;
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = '${constraint}'
+        ) THEN
+          ALTER TABLE person_device_sync_states
+            ADD CONSTRAINT ${constraint}
+            CHECK (
+              ${col} IS NULL
+              OR ${col} IN ('pending', 'success', 'failed')
+            );
+        END IF;
+      END $$
+    `);
+  }
+
+  return { updated: result.rowCount || 0 };
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -915,6 +1077,8 @@ async function applySchemaPatches(pool) {
   await ensureOperationalEventsTable(pool);
   await ensureVideoIntercomTypeCode(pool);
   await ensureAccessSecurityLocationSystemType(pool);
+  await ensureRollCallTables(pool);
+  const deviceSyncStatusNorm = await normalizePersonDeviceSyncStatuses(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
   await ensureAlertSipRingLinkagesTable(pool);
   await ensureAlertElevatorCallLinkagesTable(pool);
@@ -932,6 +1096,7 @@ async function applySchemaPatches(pool) {
   logger.info("schema patches 已套用", {
     module: "schemaPatches",
     clearedResolvedIgnored,
+    deviceSyncStatusNorm,
     energyRulesMigration,
     energyAlertRuleSync,
     migratedSensorModels,

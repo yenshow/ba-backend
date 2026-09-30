@@ -60,21 +60,24 @@ async function getLocationById(id) {
 }
 
 /**
- * 取得「人流統計（門禁來源）」可同步地點 + 入口/出口門禁設備（含名稱）
- * - syncable 定義：people_counting 且 entry_device_ids 長度 > 0
+ * 取得「人流統計（門禁來源）／時段簽到」可同步地點 + 入口/出口門禁設備（含名稱）
+ * - people_counting：entry_device_ids 或人流攝影機
+ * - roll_call：device_ids（對應為 entry_devices，無出口）
  * - 目的：前端不再對 /api/locations/:id 做 N 次請求
  * @returns {{ locations: Array<{ id: number, name: string, zone_name: string, entry_devices: Array<{id:number,name:string}>, exit_devices: Array<{id:number,name:string}> }> }}
  */
 async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
-  // 1) 可同步地點：門禁 entry 或人流攝影機 camera_device_ids
+  // 1) 可同步地點：門禁 entry、人流攝影機，或時段簽到 device_ids
   const rows = await db.query(
     `
       SELECT
         l.id,
         l.name,
         z.name AS zone_name,
+        ls.system_type,
         COALESCE(ls.system_config->'entry_device_ids', '[]'::jsonb) AS entry_device_ids,
         COALESCE(ls.system_config->'exit_device_ids', '[]'::jsonb) AS exit_device_ids,
+        COALESCE(ls.system_config->'device_ids', '[]'::jsonb) AS roll_call_device_ids,
         COALESCE(ls.system_config->'camera_device_ids', '[]'::jsonb) AS camera_device_ids,
         COALESCE(ls.system_config->'entry_camera_device_ids', '[]'::jsonb) AS entry_camera_device_ids,
         COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb) AS exit_camera_device_ids,
@@ -83,17 +86,27 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
       FROM locations l
       INNER JOIN zones z ON l.zone_id = z.id
       INNER JOIN location_systems ls
-        ON l.id = ls.location_id AND ls.system_type = 'people_counting'
-      WHERE COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
-         OR (
-           COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
-           AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
-           AND (
-             COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
-             OR COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
-             OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
-           )
-         )
+        ON l.id = ls.location_id
+       AND ls.system_type IN ('people_counting', 'roll_call')
+      WHERE (
+        ls.system_type = 'people_counting'
+        AND (
+          COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+          OR (
+            COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
+            AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
+            AND (
+              COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
+              OR COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
+              OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
+            )
+          )
+        )
+      )
+      OR (
+        ls.system_type = 'roll_call'
+        AND COALESCE(jsonb_array_length(ls.system_config->'device_ids'), 0) > 0
+      )
       ORDER BY z.name, l.name
     `,
     [],
@@ -120,19 +133,31 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
 
   for (const r of rows || []) {
     const locId = Number(r.id);
-    const entry = toIntList(r.entry_device_ids);
-    const exit = toIntList(r.exit_device_ids);
-    const cameras = Array.from(
-      new Set([
-        ...toIntList(r.camera_device_ids),
-        ...toIntList(r.entry_camera_device_ids),
-        ...toIntList(r.exit_camera_device_ids),
-      ]),
-    );
+    let entry = toIntList(r.entry_device_ids);
+    let exit = toIntList(r.exit_device_ids);
+    if (r.system_type === "roll_call") {
+      entry = toIntList(r.roll_call_device_ids);
+      exit = [];
+    }
+    const cameras =
+      r.system_type === "roll_call"
+        ? []
+        : Array.from(
+            new Set([
+              ...toIntList(r.camera_device_ids),
+              ...toIntList(r.entry_camera_device_ids),
+              ...toIntList(r.exit_camera_device_ids),
+            ]),
+          );
     entryIdsByLoc.set(locId, entry);
     exitIdsByLoc.set(locId, exit);
     cameraIdsByLoc.set(locId, cameras);
-    dataSourceByLoc.set(locId, String(r.data_source || "").trim());
+    dataSourceByLoc.set(
+      locId,
+      r.system_type === "roll_call"
+        ? "access_control"
+        : String(r.data_source || "").trim(),
+    );
     for (const id of entry) allAccessIds.add(id);
     for (const id of exit) allAccessIds.add(id);
     for (const id of cameras) allCameraIds.add(id);

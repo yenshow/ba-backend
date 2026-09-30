@@ -534,6 +534,7 @@ router.put(
   "/locations/:locationId/members",
   requireAnyPermission([
     "system.people_counting.sync.edit",
+    "system.roll_call.sync.edit",
     "system.vehicle_access.plate.manage",
   ]),
   validateIntegers("locationId"),
@@ -552,7 +553,10 @@ router.put(
 
 router.post(
   "/sync-location/:locationId",
-  requirePermission("system.people_counting.device_sync"),
+  requireAnyPermission([
+    "system.people_counting.device_sync",
+    "system.roll_call.device_sync",
+  ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const { warnings } = await personSyncJobService.syncLocation(
@@ -568,7 +572,10 @@ router.post(
 
 router.post(
   "/sync-location/:locationId/job",
-  requirePermission("system.people_counting.device_sync"),
+  requireAnyPermission([
+    "system.people_counting.device_sync",
+    "system.roll_call.device_sync",
+  ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const { jobId } = personSyncJobService.startSyncLocationJob(

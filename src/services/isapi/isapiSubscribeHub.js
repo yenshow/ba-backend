@@ -24,9 +24,14 @@ const PROFILES = [
 ];
 
 const PROFILE_FEATURE_KEYS = {
-  access_control: "people_counting",
-  people_counting: "people_counting",
-  vehicle_anpr: "vehicle_access",
+  access_control: ["people_counting", "roll_call"],
+  people_counting: ["people_counting"],
+  vehicle_anpr: ["vehicle_access"],
+};
+
+const profileFeatureKeys = (profile) => {
+  const mapped = PROFILE_FEATURE_KEYS[profile.key];
+  return Array.isArray(mapped) ? mapped : mapped ? [mapped] : [];
 };
 
 let hubStarted = false;
@@ -39,8 +44,9 @@ const getEnabledProfiles = (licensedFeatures) => {
     licensedFeatures.filter((key) => typeof key === "string"),
   );
   return PROFILES.filter((profile) => {
-    const featureKey = PROFILE_FEATURE_KEYS[profile.key];
-    return featureKey ? licensed.has(featureKey) : true;
+    const keys = profileFeatureKeys(profile);
+    if (keys.length === 0) return true;
+    return keys.some((key) => licensed.has(key));
   });
 };
 
@@ -159,8 +165,8 @@ async function refresh(options) {
 
 /** 依 license feature 刷新對應 ISAPI profile（供地點 CRUD 增量啟停） */
 async function refreshForFeature(featureKey, options = {}) {
-  const keys = PROFILES.filter(
-    (profile) => PROFILE_FEATURE_KEYS[profile.key] === featureKey,
+  const keys = PROFILES.filter((profile) =>
+    profileFeatureKeys(profile).includes(featureKey),
   ).map((profile) => profile.key);
   return refreshProfiles(keys, options);
 }

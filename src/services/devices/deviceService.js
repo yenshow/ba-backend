@@ -361,10 +361,12 @@ async function createDevice(deviceData, userId) {
     const featureKey =
       typeCode === "controller"
         ? null
-        : licenseQuotaService.resolveDeviceFeatureKey({
-            typeCode,
-            systemType: inputSystemType,
-          });
+        : typeCode === "access_control"
+          ? await licenseQuotaService.resolveAccessControlFeatureKey()
+          : licenseQuotaService.resolveDeviceFeatureKey({
+              typeCode,
+              systemType: inputSystemType,
+            });
 
     // 若能判定 feature，則做授權與 quota 檢查（openAll 時略過）
     if (featureKey) {

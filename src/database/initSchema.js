@@ -305,7 +305,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1082,7 +1082,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 人員 × 門禁設備：同步狀態（用於差異同步與 UI 顯示已同步/失敗）
+    // 人員 × 門禁設備：同步狀態（SSOT：pending|success|failed|NULL；見 syncStatusCodes.js）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_device_sync_states (
         id BIGSERIAL PRIMARY KEY,
@@ -1090,19 +1090,23 @@ async function initSchema() {
         employee_no VARCHAR(64) NOT NULL,
 
         user_info_hash TEXT,
-        user_info_status VARCHAR(16),
+        user_info_status VARCHAR(16)
+          CHECK (user_info_status IS NULL OR user_info_status IN ('pending', 'success', 'failed')),
         user_info_synced_at TIMESTAMPTZ,
 
         face_hash TEXT,
-        face_status VARCHAR(16),
+        face_status VARCHAR(16)
+          CHECK (face_status IS NULL OR face_status IN ('pending', 'success', 'failed')),
         face_synced_at TIMESTAMPTZ,
 
         card_hash TEXT,
-        card_status VARCHAR(16),
+        card_status VARCHAR(16)
+          CHECK (card_status IS NULL OR card_status IN ('pending', 'success', 'failed')),
         card_synced_at TIMESTAMPTZ,
 
         fingerprint_hash TEXT,
-        fingerprint_status VARCHAR(16),
+        fingerprint_status VARCHAR(16)
+          CHECK (fingerprint_status IS NULL OR fingerprint_status IN ('pending', 'success', 'failed')),
         fingerprint_synced_at TIMESTAMPTZ,
         fingerprint_detail JSONB,
 
@@ -1597,6 +1601,54 @@ async function initSchema() {
     schemaLogger.info("garment / pda_entrance 表已建立", {
       module: "initSchema",
     });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS roll_call_rules (
+        id SERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        window_start TIME NOT NULL,
+        window_end TIME NOT NULL,
+        weekdays SMALLINT[] NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (window_end > window_start),
+        CHECK (cardinality(weekdays) > 0)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "roll_call_rules");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_roll_call_rules_location
+      ON roll_call_rules(location_id);
+      CREATE TABLE IF NOT EXISTS roll_call_sessions (
+        id SERIAL PRIMARY KEY,
+        rule_id INTEGER NOT NULL REFERENCES roll_call_rules(id) ON DELETE CASCADE,
+        session_date DATE NOT NULL,
+        status VARCHAR(16) NOT NULL CHECK (status IN ('open', 'closed')),
+        opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        closed_at TIMESTAMPTZ,
+        stats_reset_at TIMESTAMPTZ,
+        UNIQUE (rule_id, session_date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roll_call_sessions_date
+      ON roll_call_sessions(session_date DESC);
+      CREATE TABLE IF NOT EXISTS roll_call_attendance (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES roll_call_sessions(id) ON DELETE CASCADE,
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        employee_no VARCHAR(64) NOT NULL,
+        full_name VARCHAR(200),
+        status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'present', 'absent')),
+        source VARCHAR(16) CHECK (source IS NULL OR source IN ('face', 'manual')),
+        checked_in_at TIMESTAMPTZ,
+        event_id BIGINT,
+        UNIQUE (session_id, person_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roll_call_attendance_session
+      ON roll_call_attendance(session_id);
+    `);
+    schemaLogger.info("roll_call 表已建立", { module: "initSchema" });
 
     await targetPool.end();
 

@@ -32,6 +32,7 @@ const environmentRoutes = require("./routes/environmentRoutes");
 const energyRoutes = require("./routes/energyRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
+const rollCallRoutes = require("./routes/rollCallRoutes");
 const elevatorRoutes = require("./routes/elevatorRoutes");
 const accessSecurityRoutes = require("./routes/accessSecurityRoutes");
 const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
@@ -176,6 +177,7 @@ app.use(
   requireFeature("people_counting"),
   peopleCountingRoutes,
 ); // 人流統計
+app.use("/api/roll-call", requireFeature("roll_call"), rollCallRoutes);
 app.use(
   "/api/elevator",
   requireFeature("elevator"),

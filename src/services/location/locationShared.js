@@ -24,6 +24,7 @@ const VALID_LOCATION_SYSTEM_TYPES = [
   "hvac",
   "air_circulation",
   "people_counting",
+  "roll_call",
   "vehicle_access",
   "drainage",
   "power",
@@ -349,6 +350,15 @@ function formatSystem(system) {
             Object.keys(spSmoke).length > 0
               ? spSmoke
               : undefined,
+        },
+      };
+    }
+
+    case "roll_call": {
+      return {
+        ...baseSystem,
+        config: {
+          deviceIds: deviceIdsFromDbSystemConfig(config),
         },
       };
     }
@@ -737,6 +747,7 @@ function warnSubscribeRefresh(logger, label, error) {
 
 const ISAPI_SUBSCRIBE_FEATURE_BY_SYSTEM_TYPE = {
   people_counting: "people_counting",
+  roll_call: "roll_call",
   vehicle_access: "vehicle_access",
 };
 
@@ -761,6 +772,7 @@ function refreshSubscribesForSystemType(systemType, logger) {
 function refreshAfterLocationOrZoneDelete(logger) {
   invalidateElevatorLocationCache();
   refreshSubscribesForSystemType("people_counting", logger);
+  refreshSubscribesForSystemType("roll_call", logger);
   refreshSubscribesForSystemType("vehicle_access", logger);
   refreshSubscribesForSystemType("elevator", logger);
 }

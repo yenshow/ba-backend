@@ -1,11 +1,12 @@
 const db = require("../../database/db");
+const licenseService = require("./licenseService");
 const { CONTROLLER_DEVICE_ID_SQL } = require("../location/controllerBindingUtils");
 
 /**
  * v1 quota 計數策略（避免先做 schema migration）：
  * - camera -> surveillance（依 devices.type_code）
  * - sensor -> environment
- * - access_control -> people_counting
+ * - access_control -> people_counting（已授權人流時）；只有 roll_call 時計入 roll_call
  * - controller（elevator/lighting/hvac/air_circulation/drainage/power/fire/emergency_rescue/smoke_alarm）-> 以 location_systems 綁定為準（系統內 DISTINCT 去重）
  */
 const DEVICE_TYPE_CODE_TO_FEATURE = {
@@ -56,9 +57,35 @@ const countControllersBySystemBinding = async (systemType) => {
   return Number(rows?.[0]?.count ?? 0);
 };
 
+const licenseHas = async (featureKey) => {
+  const license = await licenseService.getLicenseState();
+  return (
+    Array.isArray(license?.features) && license.features.includes(featureKey)
+  );
+};
+
+/** 門禁機：有人流授權時計入 people_counting；只有簽到時計入 roll_call；兩者都有時 roll_call 為 0 */
+const countAccessControlForFeature = async (featureKey) => {
+  const hasPeople = await licenseHas("people_counting");
+  const hasRoll = await licenseHas("roll_call");
+  if (featureKey === "people_counting") {
+    if (!hasPeople) return 0;
+    return countByDeviceTypeCode("access_control");
+  }
+  if (featureKey === "roll_call") {
+    if (hasPeople || !hasRoll) return 0;
+    return countByDeviceTypeCode("access_control");
+  }
+  return 0;
+};
+
 const getUsedDevicesCount = async (featureKey) => {
   const key = normalizeFeatureKey(featureKey);
   if (!key) return 0;
+
+  if (key === "people_counting" || key === "roll_call") {
+    return countAccessControlForFeature(key);
+  }
 
   // controller 類型（lighting/drainage/fire/emergency_rescue...）以系統綁定計數
   if (CONTROLLER_SYSTEM_TYPES.has(key)) {
@@ -88,6 +115,12 @@ const getUsageMap = async (featureKeys) => {
   return usage;
 };
 
+const resolveAccessControlFeatureKey = async () => {
+  if (await licenseHas("people_counting")) return "people_counting";
+  if (await licenseHas("roll_call")) return "roll_call";
+  return "people_counting";
+};
+
 const resolveDeviceFeatureKey = ({ typeCode, systemType } = {}) => {
   const code = normalizeFeatureKey(typeCode);
   if (!code) return null;
@@ -100,6 +133,7 @@ const resolveDeviceFeatureKey = ({ typeCode, systemType } = {}) => {
 module.exports = {
   DEVICE_TYPE_CODE_TO_FEATURE,
   resolveDeviceFeatureKey,
+  resolveAccessControlFeatureKey,
   getUsedDevicesCount,
   getUsageMap,
 };

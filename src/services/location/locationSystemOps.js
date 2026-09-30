@@ -227,6 +227,17 @@ function buildSystemConfig(systemType, config) {
         status_points: config.statusPoints || {},
       };
 
+    case "roll_call": {
+      const ids = deviceIdsFromApiSystemConfig(config);
+      if (ids.length === 0) {
+        throwApiError(
+          C.VALIDATION_REQUIRED,
+          "時段簽到地點必須綁定至少一台門禁機",
+        );
+      }
+      return { device_ids: ids };
+    }
+
     case "people_counting": {
       const {
         normalizeLogDisplayColumns,
@@ -584,6 +595,34 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
   }
 }
 
+async function assertRollCallAccessDevices(query, deviceIds) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(deviceIds) ? deviceIds : [])
+        .map((id) => Number(id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .map((n) => Math.trunc(n)),
+    ),
+  ];
+  if (ids.length === 0) {
+    throwApiError(C.VALIDATION_REQUIRED, "時段簽到地點必須綁定至少一台門禁機");
+  }
+  const rows = await query(
+    `SELECT id, type_code FROM devices WHERE id = ANY($1::int[])`,
+    [ids],
+  );
+  const byId = new Map((rows || []).map((row) => [Number(row.id), row]));
+  for (const id of ids) {
+    const row = byId.get(id);
+    if (!row) {
+      throwApiError(C.LOCATION_DEVICE_NOT_FOUND, `門禁機不存在：${id}`);
+    }
+    if (row.type_code !== "access_control") {
+      throwApiError(C.VALIDATION_REQUIRED, "時段簽到只能綁定門禁機");
+    }
+  }
+}
+
 /**
  * 建立系統（用於事務內部）
  */
@@ -602,6 +641,10 @@ async function createSystem(query, locationId, system) {
       C.VEHICLE_ACCESS_VALIDATION_FAILED,
       "YSCP 車輛資料源已關閉，請改用 ISAPI 車牌攝影機",
     );
+  }
+
+  if (systemType === "roll_call") {
+    await assertRollCallAccessDevices(query, systemConfig.device_ids);
   }
 
   if (systemType === "vehicle_access") {
@@ -645,6 +688,7 @@ async function createSystem(query, locationId, system) {
     });
   } else if (
     systemType === "people_counting" ||
+    systemType === "roll_call" ||
     systemType === "elevator"
   ) {
     shared.refreshSubscribesForSystemType(systemType, locationLogger);
@@ -721,6 +765,10 @@ async function updateSystem(query, systemId, system) {
     );
   }
 
+  if (targetSystemType === "roll_call") {
+    await assertRollCallAccessDevices(query, systemConfig.device_ids);
+  }
+
   if (targetSystemType === "vehicle_access") {
     systemConfig = applyVehicleAccessEpochOnSave(
       systemConfig,
@@ -773,6 +821,7 @@ async function updateSystem(query, systemId, system) {
     }
   } else if (
     targetSystemType === "people_counting" ||
+    targetSystemType === "roll_call" ||
     targetSystemType === "elevator"
   ) {
     shared.refreshSubscribesForSystemType(targetSystemType, locationLogger);
@@ -854,6 +903,9 @@ async function createLocationWithSystems(
             viewCategory,
             statusPoints,
           });
+          break;
+        case "roll_call":
+          assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
           break;
         case "people_counting":
           if (personGroupIds !== undefined)

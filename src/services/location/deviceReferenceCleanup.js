@@ -18,6 +18,11 @@ const CONTROLLER_SYSTEM_TYPES = new Set([
 
 /** 各 system_type 在 location_systems.system_config 內的設備 ID 欄位 */
 const LOCATION_DEVICE_FIELDS = {
+  roll_call: {
+    arrays: ["device_ids"],
+    roles: [],
+    scalars: [],
+  },
   people_counting: {
     arrays: [
       "entry_device_ids",

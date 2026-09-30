@@ -194,6 +194,13 @@ async function getDeviceIdsToSubscribe() {
       FROM location_systems ls
       WHERE ls.system_type = 'people_counting'
         AND COALESCE(jsonb_array_length(ls.system_config->'exit_device_ids'), 0) > 0
+
+      UNION
+
+      SELECT DISTINCT (jsonb_array_elements_text(ls.system_config->'device_ids'))::int AS id
+      FROM location_systems ls
+      WHERE ls.system_type = 'roll_call'
+        AND COALESCE(jsonb_array_length(ls.system_config->'device_ids'), 0) > 0
     `,
     [],
   );

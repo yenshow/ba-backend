@@ -13,6 +13,7 @@ const isapiCameraFdLibService = require("../peopleCounting/isapiCameraFdLibServi
 const personnelService = require("./personnelService");
 const logger = require("../../utils/logger").createLogger("PersonSyncService");
 const personDeviceSyncStateService = require("./personDeviceSyncStateService");
+const { normalizePersistedStatus, API: SYNC_STATUS } = require("./syncStatusCodes");
 const personSyncJobStore = require("./personSyncJobStore");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
@@ -251,44 +252,61 @@ function normalizePositiveIntIds(list) {
 }
 
 /**
- * 取得地點的 people_counting 設定（門禁 entry/exit 與／或攝影機 camera_device_ids）
+ * 取得地點可同步設備（people_counting 門禁／攝影機，或 roll_call 簽到門禁機）
  */
 async function getPeopleCountingDevicesForLocation(locationId) {
-  const rows = await db.query(
+  const pcRows = await db.query(
     "SELECT system_config FROM location_systems WHERE location_id = ? AND system_type = 'people_counting' LIMIT 1",
     [locationId],
   );
-  if (!rows || rows.length === 0) return null;
-  const config = rows[0].system_config;
-  const raw = typeof config === "string" ? JSON.parse(config) : config || {};
-  const entryDeviceIds = normalizePositiveIntIds(raw.entry_device_ids);
-  const exitDeviceIds = normalizePositiveIntIds(raw.exit_device_ids);
-  const {
-    resolvePeopleCountingCameraDevices,
-    isFaceRecognitionCameraMode,
-  } = require("../peopleCounting/peopleCountingConfig");
-  const cameras = resolvePeopleCountingCameraDevices(raw);
-  const cameraDeviceIds =
-    String(raw.data_source || "").trim() === "isapi_camera" &&
-    isFaceRecognitionCameraMode(raw.camera_mode)
-      ? cameras.cameraDeviceIds
-      : [];
-  const cameraChannelId = (() => {
-    const n = Number(raw.camera_channel_id);
-    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 1;
-  })();
-  if (
-    entryDeviceIds.length === 0 &&
-    exitDeviceIds.length === 0 &&
-    cameraDeviceIds.length === 0
-  ) {
-    return null;
+  if (pcRows && pcRows.length > 0) {
+    const config = pcRows[0].system_config;
+    const raw = typeof config === "string" ? JSON.parse(config) : config || {};
+    const entryDeviceIds = normalizePositiveIntIds(raw.entry_device_ids);
+    const exitDeviceIds = normalizePositiveIntIds(raw.exit_device_ids);
+    const {
+      resolvePeopleCountingCameraDevices,
+      isFaceRecognitionCameraMode,
+    } = require("../peopleCounting/peopleCountingConfig");
+    const cameras = resolvePeopleCountingCameraDevices(raw);
+    const cameraDeviceIds =
+      String(raw.data_source || "").trim() === "isapi_camera" &&
+      isFaceRecognitionCameraMode(raw.camera_mode)
+        ? cameras.cameraDeviceIds
+        : [];
+    const cameraChannelId = (() => {
+      const n = Number(raw.camera_channel_id);
+      return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 1;
+    })();
+    if (
+      entryDeviceIds.length > 0 ||
+      exitDeviceIds.length > 0 ||
+      cameraDeviceIds.length > 0
+    ) {
+      return {
+        entryDeviceIds,
+        exitDeviceIds,
+        cameraDeviceIds,
+        cameraChannelId,
+      };
+    }
   }
+
+  const rcRows = await db.query(
+    "SELECT system_config FROM location_systems WHERE location_id = ? AND system_type = 'roll_call' LIMIT 1",
+    [locationId],
+  );
+  if (!rcRows || rcRows.length === 0) return null;
+  const rcConfig = rcRows[0].system_config;
+  const rcRaw =
+    typeof rcConfig === "string" ? JSON.parse(rcConfig) : rcConfig || {};
+  const deviceIds = normalizePositiveIntIds(rcRaw.device_ids);
+  if (deviceIds.length === 0) return null;
   return {
-    entryDeviceIds,
-    exitDeviceIds,
-    cameraDeviceIds,
-    cameraChannelId,
+    entryDeviceIds: deviceIds,
+    exitDeviceIds: [],
+    cameraDeviceIds: [],
+    cameraChannelId: 1,
   };
 }
 
@@ -301,24 +319,33 @@ async function getLocationName(locationId) {
 }
 
 /**
- * 取得所有可同步的地點（people_counting：門禁入口或 ISAPI 攝影機）
+ * 取得所有可同步的地點（people_counting 門禁／攝影機，或 roll_call 簽到門禁機）
  */
 async function getSyncableLocations() {
   const rows = await db.query(
     `SELECT l.id, l.name, z.name AS zone_name
      FROM locations l
      INNER JOIN zones z ON l.zone_id = z.id
-     INNER JOIN location_systems ls ON l.id = ls.location_id AND ls.system_type = 'people_counting'
-     WHERE COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
-        OR (
-          COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
-          AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
-          AND (
-            COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
-            OR COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
-            OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
-          )
-        )
+     INNER JOIN location_systems ls ON l.id = ls.location_id
+     WHERE (
+       ls.system_type = 'people_counting'
+       AND (
+         COALESCE(jsonb_array_length(ls.system_config->'entry_device_ids'), 0) > 0
+         OR (
+           COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
+           AND COALESCE(ls.system_config->>'camera_mode', 'people_counting') = 'face_recognition'
+           AND (
+             COALESCE(jsonb_array_length(ls.system_config->'camera_device_ids'), 0) > 0
+             OR COALESCE(jsonb_array_length(ls.system_config->'entry_camera_device_ids'), 0) > 0
+             OR COALESCE(jsonb_array_length(ls.system_config->'exit_camera_device_ids'), 0) > 0
+           )
+         )
+       )
+     )
+     OR (
+       ls.system_type = 'roll_call'
+       AND COALESCE(jsonb_array_length(ls.system_config->'device_ids'), 0) > 0
+     )
      ORDER BY z.name, l.name`,
     [],
   );
@@ -567,9 +594,7 @@ async function syncPersonToDevice(
       faceUrl: isLocalUpload ? null : faceUrlForHash,
     });
     const lastHash = stateRow?.face_hash ? String(stateRow.face_hash) : null;
-    const lastStatus = stateRow?.face_status
-      ? String(stateRow.face_status)
-      : null;
+    const lastStatus = normalizePersistedStatus(stateRow?.face_status);
     const faceError = readStepErrorMessage(
       stateRow?.last_error_message,
       "face",
@@ -1449,9 +1474,7 @@ async function syncPersonFaceToCamera(
     faceUrl: isLocalUpload ? null : faceUrlRaw,
   });
   const lastHash = stateRow?.face_hash ? String(stateRow.face_hash) : null;
-  const lastStatus = stateRow?.face_status
-    ? String(stateRow.face_status)
-    : null;
+  const lastStatus = normalizePersistedStatus(stateRow?.face_status);
   if (
     lastStatus === "success" &&
     lastHash &&
@@ -1761,7 +1784,7 @@ async function syncLocation(locationId, reporter = null) {
   if (!devs) {
     throwApiError(
       C.PERSONNEL_SYNC_JOB_VALIDATION_FAILED,
-      "該地點未設定門禁入口設備或人流攝影機",
+      "該地點未設定門禁設備或人流攝影機",
     );
   }
 
@@ -2055,9 +2078,10 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     try {
       if (u.startsWith("/uploads/")) {
         const buf = await resolveFaceUrlToBuffer(u);
+        // 讀檔失敗時退回 URL meta hash，避免 desired=null → last_sync 被誤判 no_data
         hash = personDeviceSyncStateService.hashFace({
           faceBuffer: buf && buf.length > 0 ? buf : null,
-          faceUrl: null,
+          faceUrl: buf && buf.length > 0 ? null : u,
         });
       } else {
         hash = personDeviceSyncStateService.hashFace({
@@ -2098,42 +2122,22 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
           : step === "card"
             ? "card_synced_at"
             : "fingerprint_synced_at";
-    const hashKey =
-      step === "userInfo"
-        ? "user_info_hash"
-        : step === "face"
-          ? "face_hash"
-          : step === "card"
-            ? "card_hash"
-            : "fingerprint_hash";
     let lastAt = null;
     let hasFailed = false;
     let hasSuccess = false;
-    let successCount = 0;
-    let matchCount = 0;
     for (const r of rows) {
-      const st = r.row?.[statusKey] != null ? String(r.row[statusKey]) : "";
-      if (st === "failed") hasFailed = true;
-      if (st === "success") {
-        hasSuccess = true;
-        successCount += 1;
-        const hv = r.row?.[hashKey] != null ? String(r.row[hashKey]) : "";
-        if (desired != null && hv && hv === String(desired)) matchCount += 1;
-      }
+      const st = normalizePersistedStatus(r.row?.[statusKey]) || "";
+      if (st === SYNC_STATUS.FAILED) hasFailed = true;
+      if (st === SYNC_STATUS.SUCCESS) hasSuccess = true;
       const t = r.row?.[atKey] ? new Date(r.row[atKey]).getTime() : null;
       if (t != null && (lastAt == null || t > lastAt)) lastAt = t;
     }
-    if (desired == null) return { status: "no_data", at: null };
-    if (rows.length === 0) return { status: "pending", at: null };
-    if (hasFailed) return { status: "failed", at: lastAt };
-    if (
-      hasSuccess &&
-      successCount === rows.length &&
-      matchCount === rows.length
-    )
-      return { status: "unchanged", at: lastAt };
-    if (hasSuccess) return { status: "success", at: lastAt };
-    return { status: "pending", at: lastAt };
+    if (desired == null) return { status: SYNC_STATUS.NO_DATA, at: null };
+    if (rows.length === 0) return { status: SYNC_STATUS.PENDING, at: null };
+    const atIso = lastAt != null ? new Date(lastAt).toISOString() : null;
+    if (hasFailed) return { status: SYNC_STATUS.FAILED, at: atIso };
+    if (hasSuccess) return { status: SYNC_STATUS.SUCCESS, at: atIso };
+    return { status: SYNC_STATUS.PENDING, at: atIso };
   };
 
   const buildNeedsSync = async (person) => {
@@ -2190,27 +2194,27 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
       }
 
       const userOk =
-        String(row.user_info_status || "") === "success" &&
+        normalizePersistedStatus(row.user_info_status) === "success" &&
         String(row.user_info_hash || "") === desiredUserInfoHash;
       if (!userOk) steps.add("user_info");
 
       if (faceUrl) {
         const faceOk =
-          String(row.face_status || "") === "success" &&
+          normalizePersistedStatus(row.face_status) === "success" &&
           String(row.face_hash || "") === String(desiredFaceHash || "");
         if (!faceOk) steps.add("face");
       }
 
       if (cardNos.length) {
         const cardOk =
-          String(row.card_status || "") === "success" &&
+          normalizePersistedStatus(row.card_status) === "success" &&
           String(row.card_hash || "") === String(desiredCardHash || "");
         if (!cardOk) steps.add("card");
       }
 
       if (desiredFpHash) {
         const fpOk =
-          String(row.fingerprint_status || "") === "success" &&
+          normalizePersistedStatus(row.fingerprint_status) === "success" &&
           String(row.fingerprint_hash || "") === String(desiredFpHash || "");
         if (!fpOk) steps.add("fingerprint");
       }
@@ -2363,7 +2367,7 @@ function toCameraOnlyCandidateRow(row) {
 }
 
 function mergeFaceStepStatus(a, b) {
-  const rank = { failed: 4, pending: 3, success: 2, unchanged: 1, no_data: 0 };
+  const rank = { failed: 4, pending: 3, success: 2, no_data: 0 };
   const sa = String(a?.status || "no_data");
   const sb = String(b?.status || "no_data");
   const pick = (rank[sa] || 0) >= (rank[sb] || 0) ? a : b;

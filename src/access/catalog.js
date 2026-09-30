@@ -117,6 +117,27 @@ const SHARED_MODULES = [
     },
   },
   {
+    code: "system.roll_call",
+    name: "時段簽到",
+    sort_order: 13,
+    children: [
+      ...LOCATION_MUTATION_CHILDREN,
+      { code: "rule.edit", name: "規則編輯", sort_order: 4 },
+      { code: "attendance.mark", name: "當日名單更正", sort_order: 5 },
+      { code: "device_sync", name: "門禁設備同步", sort_order: 6 },
+      { code: "sync.edit", name: "門禁名單編輯", sort_order: 7 },
+      { code: "statistics.reset", name: "重置統計", sort_order: 8 },
+    ],
+    ui: {
+      id: 22,
+      icon: "people-counting",
+      description: "時段簽到（應到、實到、未到）",
+      category: "access-control",
+      routePrefix: "/access-control/roll-call",
+      featureKey: "roll_call",
+    },
+  },
+  {
     code: "system.environment",
     name: "環境品質",
     sort_order: 11,
@@ -387,6 +408,7 @@ const MODBUS_CONTROL_SCOPE_PERMISSION = {
 
 const LOCATION_TYPE_MODULE = {
   people_counting: "system.people_counting",
+  roll_call: "system.roll_call",
   environment: "system.environment",
   vehicle_access: "system.vehicle_access",
   lighting: "system.lighting",

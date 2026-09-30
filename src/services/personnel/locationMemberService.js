@@ -32,6 +32,14 @@ function isPeopleCountingSyncableConfig(cfg) {
   return resolvePeopleCountingCameraDevices(cfg).cameraDeviceIds.length > 0;
 }
 
+function isRollCallSyncableConfig(cfg) {
+  const deviceIds = Array.isArray(cfg.device_ids) ? cfg.device_ids : [];
+  return deviceIds.some((id) => {
+    const n = Number(id);
+    return Number.isFinite(n) && n > 0;
+  });
+}
+
 async function getLocationSystemSyncFlags(locationId) {
   const rows = await db.query(
     `
@@ -42,11 +50,15 @@ async function getLocationSystemSyncFlags(locationId) {
     [locationId],
   );
   let peopleCounting = false;
+  let rollCall = false;
   let vehiclePlates = false;
   for (const row of rows || []) {
     const cfg = parseSystemConfig(row.system_config);
     if (row.system_type === "people_counting") {
       if (isPeopleCountingSyncableConfig(cfg)) peopleCounting = true;
+    }
+    if (row.system_type === "roll_call") {
+      if (isRollCallSyncableConfig(cfg)) rollCall = true;
     }
     if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
       const entryCam = Array.isArray(cfg.entry_camera_device_ids)
@@ -58,7 +70,7 @@ async function getLocationSystemSyncFlags(locationId) {
       if (entryCam.length > 0 || exitCam.length > 0) vehiclePlates = true;
     }
   }
-  return { peopleCounting, vehiclePlates };
+  return { peopleCounting, rollCall, vehiclePlates };
 }
 
 async function ensureLocationExists(locationId) {
@@ -99,6 +111,9 @@ async function ensureLocationAllowsAccessMembers(locationId) {
     if (row.system_type === "people_counting") {
       if (isPeopleCountingSyncableConfig(cfg)) allowed = true;
     }
+    if (row.system_type === "roll_call") {
+      if (isRollCallSyncableConfig(cfg)) allowed = true;
+    }
     if (row.system_type === "vehicle_access" && cfg.data_source === "isapi_camera") {
       const entryCam = Array.isArray(cfg.entry_camera_device_ids)
         ? cfg.entry_camera_device_ids
@@ -112,7 +127,7 @@ async function ensureLocationAllowsAccessMembers(locationId) {
   if (!allowed) {
     throwApiError(
       C.PERSONNEL_VALIDATION_FAILED,
-      "此地點不支援名單管理（需設定人流門禁入口設備、人流攝影機或 ISAPI 車輛攝影機）",
+      "此地點不支援名單管理（需設定人流門禁／時段簽到門禁機、人流攝影機或 ISAPI 車輛攝影機）",
     );
   }
   return id;
@@ -157,7 +172,7 @@ async function triggerDeviceSyncAfterMemberApply(locationId) {
   const flags = await getLocationSystemSyncFlags(locationId);
   const meta = {};
 
-  if (flags.peopleCounting) {
+  if (flags.peopleCounting || flags.rollCall) {
     const started = triggerPeopleCountingSyncForLocation(locationId);
     if (started?.jobId) {
       meta.deviceSync = { triggered: true, jobId: started.jobId };

@@ -7,6 +7,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { resolveUploadFilePath } = require("../../utils/baDataPaths");
 const { mergeStepErrorMessage } = require("./personnelIsapiErrorUtils");
+const { normalizePersistedStatus } = require("./syncStatusCodes");
 
 const STEP_COLUMNS = {
   userInfo: { hash: "user_info_hash", status: "user_info_status", at: "user_info_synced_at" },
@@ -265,7 +266,7 @@ async function upsertStepState(params) {
 
   const did = Number(deviceId);
   const eno = String(employeeNo);
-  const st = status != null ? String(status) : null;
+  const st = status != null ? normalizePersistedStatus(status) : null;
   const h = hash != null ? String(hash) : null;
   const mergedError = await mergedLastError(did, eno, step, lastErrorMessage);
 
@@ -314,7 +315,7 @@ async function upsertFingerprintDetailState(params) {
   const did = Number(deviceId);
   const eno = String(employeeNo);
   const id = String(Number(fingerPrintID) || 1);
-  const st = status != null ? String(status) : null;
+  const st = status != null ? normalizePersistedStatus(status) : null;
   const h = hash != null ? String(hash) : null;
   const payload = JSON.stringify({ hash: h, status: st, at: syncedAt });
   const mergedError = await mergedLastError(

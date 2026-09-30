@@ -20,6 +20,10 @@ const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const sdkArmingService = require("../ladderSdk/sdkArmingService");
 const videoIntercomArmingService = require("../accessSecurity/videoIntercomArmingService");
 const { setCachedEffectiveFeatures } = require("./effectiveFeaturesCache");
+const {
+  startRollCallScheduler,
+  stopRollCallScheduler,
+} = require("../rollCall/rollCallScheduler");
 
 let elevatorArmed = false;
 let intercomArmed = false;
@@ -105,6 +109,10 @@ const reconcileBackgroundServices = async ({
     stopEnergyAggregationScheduler();
   }
 
+  const rollCallOn = licenseService.hasLicensedFeature(features, "roll_call");
+  if (rollCallOn) startRollCallScheduler();
+  else stopRollCallScheduler();
+
   const isapi = await isapiSubscribeHub.reconcile({ licensedFeatures: features });
   const elevator = await reconcileElevatorSdk(features);
   const intercom = await reconcileIntercomSdk(features);
@@ -114,6 +122,7 @@ const reconcileBackgroundServices = async ({
     monitoringTaskCount: monitoring.taskCount,
     environment: environmentOn ? "on" : "off",
     energy: energyOn ? "on" : "off",
+    rollCall: rollCallOn ? "on" : "off",
     isapi: isapi.profileKeys || [],
     elevator: elevator.armed ? "on" : "off",
     intercom: intercom.armed ? "on" : "off",
@@ -145,6 +154,7 @@ const stopLicensedBackgroundServices = async () => {
   await backgroundMonitor.stopMonitoring();
   stopEnvironmentAggregationScheduler();
   stopEnergyAggregationScheduler();
+  stopRollCallScheduler();
   isapiSubscribeHub.stop();
   sdkArmingService.stop();
   elevatorArmed = false;

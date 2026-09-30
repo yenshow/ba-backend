@@ -21,6 +21,7 @@ const MODULE_PERM_KEYS = {
   "system.alert_log": "alertLog",
   "system.operational_log": "operationalLog",
   "system.people_counting": "peopleCounting",
+  "system.roll_call": "rollCall",
   "system.environment": "environment",
   "system.vehicle_access": "vehicleAccess",
   "system.video_surveillance": "videoSurveillance",
