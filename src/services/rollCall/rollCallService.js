@@ -9,6 +9,7 @@ const logger = require("../../utils/logger").createLogger("rollCall");
 const {
   extractSubEventType,
   extractAccessEventIdentity,
+  shouldDisplayAccessEventPicture,
 } = require("../peopleCounting/accessControlLogLabels");
 const {
   UNGROUPED_GROUP_ID,
@@ -35,6 +36,12 @@ const enqueueReconcile = (fn) => {
     () => undefined,
   );
   return run;
+};
+
+const normalizeMediaPath = (raw) => {
+  const value = raw != null ? String(raw).trim() : "";
+  if (value === "") return undefined;
+  return value.startsWith("/") ? value : `/${value}`;
 };
 
 const taipeiParts = (date = new Date()) => {
@@ -335,7 +342,7 @@ const deleteRule = async (ruleId) => {
 };
 
 /**
- * 以完整清單取代某地點規則（地點表單草稿一次落庫）。
+ * 以完整清單取代某地點規則（地點表單草稿一次落庫；同一地點可多筆）。
  * body.rules: Array<{ id?, name, windowStart, windowEnd, weekdays, enabled }>
  */
 const replaceLocationRules = async (locationId, rulesInput) => {
@@ -345,6 +352,9 @@ const replaceLocationRules = async (locationId, rulesInput) => {
   }
   await assertLocationIsRollCall(id);
   const list = Array.isArray(rulesInput) ? rulesInput : [];
+  if (list.length === 0) {
+    throwApiError(C.VALIDATION_REQUIRED, "至少需要一筆時段規則");
+  }
   const parsed = list.map((item) =>
     parseRuleInput({ ...item, locationId: id }),
   );
@@ -371,31 +381,60 @@ const replaceLocationRules = async (locationId, rulesInput) => {
     }
   }
 
-  const existing = await db.query(
-    `SELECT id FROM roll_call_rules WHERE location_id = ?`,
-    [id],
-  );
-  const existingIds = new Set(
-    (existing || []).map((row) => Number(row.id)).filter((n) => Number.isFinite(n)),
-  );
-  const keepIds = new Set();
+  await db.transaction(async (tx) => {
+    const existing = await tx(
+      `SELECT id FROM roll_call_rules WHERE location_id = ?`,
+      [id],
+    );
+    const existingIds = new Set(
+      (existing || [])
+        .map((row) => Number(row.id))
+        .filter((n) => Number.isFinite(n)),
+    );
+    const keepIds = new Set();
 
-  for (const input of parsed) {
-    if (input.id && existingIds.has(input.id)) {
-      await updateRuleRow(input.id, input);
-      keepIds.add(input.id);
-    } else {
-      const ruleId = await insertRuleRow(id, input);
-      keepIds.add(ruleId);
+    for (const input of parsed) {
+      if (input.id && existingIds.has(input.id)) {
+        await tx(
+          `UPDATE roll_call_rules
+           SET name = ?, window_start = ?::time, window_end = ?::time,
+               weekdays = ?::smallint[], enabled = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND location_id = ?`,
+          [
+            input.name,
+            minutesToTime(input.startMin),
+            minutesToTime(input.endMin),
+            input.weekdays,
+            input.enabled,
+            input.id,
+            id,
+          ],
+        );
+        keepIds.add(input.id);
+      } else {
+        const rows = await tx(
+          `INSERT INTO roll_call_rules
+            (location_id, name, window_start, window_end, weekdays, enabled)
+           VALUES (?, ?, ?::time, ?::time, ?::smallint[], ?)
+           RETURNING id`,
+          [
+            id,
+            input.name,
+            minutesToTime(input.startMin),
+            minutesToTime(input.endMin),
+            input.weekdays,
+            input.enabled,
+          ],
+        );
+        keepIds.add(Number(rows[0].id));
+      }
     }
-  }
 
-  const toDelete = [...existingIds].filter((ruleId) => !keepIds.has(ruleId));
-  if (toDelete.length) {
-    await db.query(`DELETE FROM roll_call_rules WHERE id = ANY(?::int[])`, [
-      toDelete,
-    ]);
-  }
+    const toDelete = [...existingIds].filter((ruleId) => !keepIds.has(ruleId));
+    if (toDelete.length) {
+      await tx(`DELETE FROM roll_call_rules WHERE id = ANY(?::int[])`, [toDelete]);
+    }
+  });
 
   return listRules(id);
 };
@@ -835,10 +874,12 @@ const getSession = async (sessionId) => {
   const attendance = await db.query(
     `SELECT a.person_id, a.employee_no, a.full_name,
             p.person_group_id, pg.name AS group_name, p.face_url,
-            a.status, a.source, a.checked_in_at
+            a.status, a.source, a.checked_in_at,
+            e.picture_path AS event_picture_path, e.payload AS event_payload
      FROM roll_call_attendance a
      INNER JOIN persons p ON p.id = a.person_id
      LEFT JOIN person_groups pg ON pg.id = p.person_group_id
+     LEFT JOIN isapi_access_events e ON e.id = a.event_id
      WHERE a.session_id = ?
      ORDER BY
        CASE WHEN p.person_group_id IS NULL THEN 1 ELSE 0 END,
@@ -866,9 +907,15 @@ const getSession = async (sessionId) => {
         row.person_group_id != null && Number.isFinite(Number(row.person_group_id))
           ? Number(row.person_group_id)
           : UNGROUPED_GROUP_ID;
-      const faceUrl = row.face_url != null ? String(row.face_url).trim() : "";
-      const photoUrl =
-        faceUrl === "" ? undefined : faceUrl.startsWith("/") ? faceUrl : `/${faceUrl}`;
+      const photoUrl = normalizeMediaPath(row.face_url);
+      const eventPayload =
+        row.event_payload && typeof row.event_payload === "object" ? row.event_payload : {};
+      const eventPhotoUrl = shouldDisplayAccessEventPicture(
+        eventPayload,
+        row.event_picture_path,
+      )
+        ? normalizeMediaPath(row.event_picture_path)
+        : undefined;
       return {
         personId: Number(row.person_id),
         employeeNo: row.employee_no,
@@ -883,6 +930,8 @@ const getSession = async (sessionId) => {
         checkedInAt: row.checked_in_at,
         /** 與人流單位人員名單 photoUrl 同語意（persons.face_url） */
         photoUrl,
+        /** 簽到當次門禁事件抓拍（isapi_access_events.picture_path） */
+        eventPhotoUrl,
       };
     }),
   };
@@ -909,38 +958,62 @@ const markAttendance = async (sessionId, personId, status) => {
   return getSession(sessionId);
 };
 
-const getHistory = async ({ limit = 50, offset = 0 } = {}) => {
+const getHistory = async ({ limit = 50, offset = 0, startDate, endDate, locationId } = {}) => {
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 50));
   const safeOffset = Math.max(0, Number(offset) || 0);
   const parts = taipeiParts();
+  const start =
+    startDate != null && String(startDate).trim() !== ""
+      ? formatPgDate(startDate)
+      : parts.date;
+  const end =
+    endDate != null && String(endDate).trim() !== ""
+      ? formatPgDate(endDate)
+      : parts.date;
+  const locId =
+    locationId != null && Number.isFinite(Number(locationId)) && Number(locationId) > 0
+      ? Math.trunc(Number(locationId))
+      : null;
+
+  const params = [start, end];
+  let where = `s.session_date >= ?::date AND s.session_date <= ?::date`;
+  if (locId != null) {
+    where += ` AND r.location_id = ?`;
+    params.push(locId);
+  }
+
   const countRows = await db.query(
     `SELECT COUNT(*)::int AS cnt
-     FROM roll_call_sessions
-     WHERE session_date < ?::date`,
-    [parts.date],
+     FROM roll_call_sessions s
+     INNER JOIN roll_call_rules r ON r.id = s.rule_id
+     WHERE ${where}`,
+    params,
   );
   const rows = await db.query(
-    `SELECT s.id, s.session_date, s.status, r.name AS rule_name,
+    `SELECT s.id, s.session_date, s.status, r.name AS rule_name, r.location_id,
             l.name AS location_name, z.name AS zone_name
      FROM roll_call_sessions s
      INNER JOIN roll_call_rules r ON r.id = s.rule_id
      INNER JOIN locations l ON l.id = r.location_id
      INNER JOIN zones z ON z.id = l.zone_id
-     WHERE s.session_date < ?::date
+     WHERE ${where}
      ORDER BY s.session_date DESC, s.id DESC
      LIMIT ? OFFSET ?`,
-    [parts.date, safeLimit, safeOffset],
+    [...params, safeLimit, safeOffset],
   );
   const counts = await countBySession((rows || []).map((row) => Number(row.id)));
   return {
     total: Number(countRows?.[0]?.cnt) || 0,
     limit: safeLimit,
     offset: safeOffset,
+    startDate: start,
+    endDate: end,
     sessions: (rows || []).map((row) => ({
       id: Number(row.id),
       sessionDate: formatPgDate(row.session_date),
       status: row.status,
       ruleName: row.rule_name,
+      locationId: Number(row.location_id),
       locationName: row.location_name,
       zoneName: row.zone_name,
       ...(counts.get(Number(row.id)) || {
@@ -949,6 +1022,83 @@ const getHistory = async ({ limit = 50, offset = 0 } = {}) => {
         absentCount: 0,
       }),
     })),
+  };
+};
+
+/** 完整報表：區間內場次摘要＋名單列（對齊人流 Simulation 資料形狀） */
+const getReport = async ({ startDate, endDate, locationId } = {}) => {
+  const history = await getHistory({
+    limit: 200,
+    offset: 0,
+    startDate,
+    endDate,
+    locationId,
+  });
+  const sessions = history.sessions || [];
+  const sessionIds = sessions.map((s) => s.id);
+  if (sessionIds.length === 0) {
+    return { startDate: history.startDate, endDate: history.endDate, sessions: [], attendance: [] };
+  }
+
+  const sessionMeta = new Map(sessions.map((s) => [s.id, s]));
+  const attendanceRows = await db.query(
+    `SELECT a.session_id, a.person_id, a.employee_no, a.full_name,
+            p.person_group_id, pg.name AS group_name, p.face_url,
+            a.status, a.source, a.checked_in_at,
+            e.picture_path AS event_picture_path, e.payload AS event_payload
+     FROM roll_call_attendance a
+     INNER JOIN persons p ON p.id = a.person_id
+     LEFT JOIN person_groups pg ON pg.id = p.person_group_id
+     LEFT JOIN isapi_access_events e ON e.id = a.event_id
+     WHERE a.session_id = ANY(?::int[])
+     ORDER BY a.session_id, a.employee_no`,
+    [sessionIds],
+  );
+
+  const attendance = (attendanceRows || []).map((row) => {
+    const sessionId = Number(row.session_id);
+    const meta = sessionMeta.get(sessionId);
+    const groupId =
+      row.person_group_id != null && Number.isFinite(Number(row.person_group_id))
+        ? Number(row.person_group_id)
+        : UNGROUPED_GROUP_ID;
+    const photoUrl = normalizeMediaPath(row.face_url);
+    const eventPayload =
+      row.event_payload && typeof row.event_payload === "object" ? row.event_payload : {};
+    const eventPhotoUrl = shouldDisplayAccessEventPicture(
+      eventPayload,
+      row.event_picture_path,
+    )
+      ? normalizeMediaPath(row.event_picture_path)
+      : undefined;
+    return {
+      sessionId,
+      sessionDate: meta?.sessionDate || "",
+      locationId: meta?.locationId ?? 0,
+      zoneName: meta?.zoneName || "",
+      locationName: meta?.locationName || "",
+      ruleName: meta?.ruleName || "",
+      personId: Number(row.person_id),
+      employeeNo: row.employee_no || "",
+      fullName: row.full_name || "",
+      groupId,
+      groupName:
+        groupId === UNGROUPED_GROUP_ID
+          ? UNGROUPED_GROUP_NAME
+          : row.group_name || UNGROUPED_GROUP_NAME,
+      status: row.status,
+      source: row.source,
+      checkedInAt: row.checked_in_at,
+      photoUrl,
+      eventPhotoUrl,
+    };
+  });
+
+  return {
+    startDate: history.startDate,
+    endDate: history.endDate,
+    sessions,
+    attendance,
   };
 };
 
@@ -963,5 +1113,6 @@ module.exports = {
   getSession,
   markAttendance,
   getHistory,
+  getReport,
   reconcileTodayQueued,
 };

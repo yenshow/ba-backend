@@ -1,6 +1,7 @@
 /**
  * 人員門禁同步服務（同步執行，無佇列）
  * 依 person_location_access 取得有權限人員，對地點綁定之入口/出口設備同步：新增、更新（姓名與人臉）、刪除（僅平台曾同步過且已不在目標名單者）。資料有更新即同步到設備。
+ * 寫入節奏：步間延遲 + 每 N 人批次歇息；對 socket hang up 等暫態錯誤指數退避重試。
  */
 const path = require("path");
 const fs = require("fs").promises;
@@ -26,10 +27,20 @@ const {
   normalizeIsapiErrorMessage,
   isPermanentFaceModelingError,
   isPermanentCardEmployeeNoError,
+  isTransientIsapiNetworkError,
   readStepErrorMessage,
 } = require("./personnelIsapiErrorUtils");
 
-const SYNC_DELAY_MS = 300;
+/** 步間延遲：避免嵌入式門禁（含掌紋）被連續寫入壓垮 */
+const SYNC_DELAY_MS = 500;
+/** 每處理 N 人後多歇一段，給設備消化 */
+const SYNC_PERSON_BATCH_EVERY = 20;
+const SYNC_PERSON_BATCH_PAUSE_MS = 2000;
+/** 批次刪除 UserInfo 每批筆數（過大易 Device Busy） */
+const DELETE_USER_INFO_CHUNK_SIZE = 20;
+/** socket hang up／deviceBusy 等暫態錯誤重試次數（含首次） */
+const TRANSIENT_RETRY_ATTEMPTS = 3;
+const TRANSIENT_RETRY_BASE_MS = 800;
 
 // ========== sync 背景工作（DB 持久化） ==========
 // 需求：避免長時間同步造成 HTTP timeout；前端以 jobId 輪詢進度/結果。
@@ -360,10 +371,14 @@ async function fetchAllEmployeeNosFromDevice(deviceId) {
   let position = 0;
   const maxResults = 50;
   for (;;) {
-    const res = await accessControlService.searchUserInfo(deviceId, {
-      searchResultPosition: position,
-      maxResults,
-    });
+    const res = await withTransientRetry(
+      () =>
+        accessControlService.searchUserInfo(deviceId, {
+          searchResultPosition: position,
+          maxResults,
+        }),
+      { deviceId, stage: "searchUserInfo" },
+    );
     const list = res.list || [];
     for (const u of list) {
       if (u.employeeNo != null) result.push(String(u.employeeNo));
@@ -377,6 +392,108 @@ async function fetchAllEmployeeNosFromDevice(deviceId) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 對暫態網路／設備斷線錯誤做指數退避重試；業務永久錯直接拋出。
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @param {{ deviceId?: number, employeeNo?: string, stage?: string }} [meta]
+ * @returns {Promise<T>}
+ */
+async function withTransientRetry(fn, meta = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= TRANSIENT_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (
+        !isTransientIsapiNetworkError(err) ||
+        attempt >= TRANSIENT_RETRY_ATTEMPTS
+      ) {
+        throw err;
+      }
+      const waitMs = TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1);
+      logger.warn("ISAPI 暫態錯誤，準備重試", {
+        attempt,
+        maxAttempts: TRANSIENT_RETRY_ATTEMPTS,
+        waitMs,
+        deviceId: meta.deviceId ?? null,
+        employeeNo: meta.employeeNo ?? null,
+        stage: meta.stage ?? null,
+        error: toMessage(err),
+      });
+      await delay(waitMs);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * 設備 ISAPI 寫入／讀寫：暫態重試後再套用步間延遲。
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @param {{ deviceId?: number, employeeNo?: string, stage?: string }} [meta]
+ * @returns {Promise<T>}
+ */
+async function deviceOp(fn, meta = {}) {
+  const result = await withTransientRetry(fn, meta);
+  await delay(SYNC_DELAY_MS);
+  return result;
+}
+
+async function maybePauseAfterPersonOps(count) {
+  if (
+    SYNC_PERSON_BATCH_EVERY <= 0 ||
+    count <= 0 ||
+    count % SYNC_PERSON_BATCH_EVERY !== 0
+  ) {
+    return;
+  }
+  logger.info("人員同步批次歇息", {
+    personOps: count,
+    pauseMs: SYNC_PERSON_BATCH_PAUSE_MS,
+  });
+  await delay(SYNC_PERSON_BATCH_PAUSE_MS);
+}
+
+function chunkList(list, size) {
+  const items = Array.isArray(list) ? list : [];
+  const chunkSize = Math.max(1, Number(size) || 1);
+  const chunks = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+async function clearAccessSyncStatesForEmployees(deviceId, employeeNos) {
+  const nos = (employeeNos || []).map((x) => String(x)).filter(Boolean);
+  if (!nos.length) return;
+  try {
+    await db.query(
+      `UPDATE person_device_sync_states
+       SET user_info_status = NULL,
+           user_info_hash = NULL,
+           user_info_synced_at = NULL,
+           face_status = NULL,
+           face_hash = NULL,
+           face_synced_at = NULL,
+           card_status = NULL,
+           card_hash = NULL,
+           card_synced_at = NULL,
+           fingerprint_status = NULL,
+           fingerprint_hash = NULL,
+           fingerprint_synced_at = NULL,
+           fingerprint_detail = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE device_id = ? AND employee_no = ANY(?::text[])`,
+      [Number(deviceId), nos],
+    );
+  } catch (_e) {
+    // ignore cleanup failure; do not affect sync result
+  }
 }
 
 // validity → ISAPI Valid payload：accessControlHelpers 做 SSOT
@@ -490,13 +607,20 @@ async function syncPersonToDevice(
       try {
         const password = passwordForHash;
 
-        await accessControlService.updateUserInfo(deviceId, {
-          employeeNo: person.employeeNo,
-          name: person.name,
-          Valid: validPayload,
-          ...(password ? { password } : {}),
-        });
-        await delay(SYNC_DELAY_MS);
+        await deviceOp(
+          () =>
+            accessControlService.updateUserInfo(deviceId, {
+              employeeNo: person.employeeNo,
+              name: person.name,
+              Valid: validPayload,
+              ...(password ? { password } : {}),
+            }),
+          {
+            deviceId,
+            employeeNo: person.employeeNo,
+            stage: "userInfo",
+          },
+        );
         await personDeviceSyncStateService.upsertStepState({
           deviceId,
           employeeNo: person.employeeNo,
@@ -635,12 +759,15 @@ async function syncPersonToDevice(
           })
         : null;
       try {
-        await accessControlService.updateFace(
-          deviceId,
-          person.employeeNo,
-          imageBuffer,
+        await deviceOp(
+          () =>
+            accessControlService.updateFace(
+              deviceId,
+              person.employeeNo,
+              imageBuffer,
+            ),
+          { deviceId, employeeNo: person.employeeNo, stage: "face" },
         );
-        await delay(SYNC_DELAY_MS);
         await personDeviceSyncStateService.upsertStepState({
           deviceId,
           employeeNo: person.employeeNo,
@@ -705,14 +832,24 @@ async function syncPersonToDevice(
 
   if (!cardNos.length) {
     try {
-      const deviceCards = await accessControlService.searchCardInfoByEmployee(
-        deviceId,
-        person.employeeNo,
+      const deviceCards = await withTransientRetry(
+        () =>
+          accessControlService.searchCardInfoByEmployee(
+            deviceId,
+            person.employeeNo,
+          ),
+        { deviceId, employeeNo: person.employeeNo, stage: "cardSearch" },
       );
       for (const staleCardNo of deviceCards) {
         try {
-          await accessControlService.deleteCardInfo(deviceId, staleCardNo);
-          await delay(SYNC_DELAY_MS);
+          await deviceOp(
+            () => accessControlService.deleteCardInfo(deviceId, staleCardNo),
+            {
+              deviceId,
+              employeeNo: person.employeeNo,
+              stage: "cardDelete",
+            },
+          );
         } catch (deleteErr) {
           logger.warn("ISAPI 清除卡片失敗", {
             deviceId,
@@ -777,24 +914,37 @@ async function syncPersonToDevice(
     let cardSyncMessage = null;
     try {
       for (const cardNo of cardNos) {
-        await accessControlService.setCardInfo(deviceId, {
-          employeeNo: person.employeeNo,
-          cardNo,
-          cardType: "normalCard",
-        });
-        await delay(SYNC_DELAY_MS);
+        await deviceOp(
+          () =>
+            accessControlService.setCardInfo(deviceId, {
+              employeeNo: person.employeeNo,
+              cardNo,
+              cardType: "normalCard",
+            }),
+          { deviceId, employeeNo: person.employeeNo, stage: "cardSet" },
+        );
       }
       try {
-        const deviceCards = await accessControlService.searchCardInfoByEmployee(
-          deviceId,
-          person.employeeNo,
+        const deviceCards = await withTransientRetry(
+          () =>
+            accessControlService.searchCardInfoByEmployee(
+              deviceId,
+              person.employeeNo,
+            ),
+          { deviceId, employeeNo: person.employeeNo, stage: "cardSearch" },
         );
         const desiredSet = new Set(cardNos);
         for (const staleCardNo of deviceCards) {
           if (desiredSet.has(staleCardNo)) continue;
           try {
-            await accessControlService.deleteCardInfo(deviceId, staleCardNo);
-            await delay(SYNC_DELAY_MS);
+            await deviceOp(
+              () => accessControlService.deleteCardInfo(deviceId, staleCardNo),
+              {
+                deviceId,
+                employeeNo: person.employeeNo,
+                stage: "cardDeleteExtra",
+              },
+            );
           } catch (deleteErr) {
             cardSyncOk = false;
             cardSyncMessage = toMessage(deleteErr);
@@ -963,16 +1113,23 @@ async function syncPersonToDevice(
         })
       : null;
     try {
-      await accessControlService.setFingerPrint(deviceId, {
-        employeeNo: person.employeeNo,
-        fingerPrintID,
-        fingerType: fp?.fingerType || "normalFP",
-        fingerData,
-        enableCardReader: Array.isArray(fp?.enableCardReader)
-          ? fp.enableCardReader
-          : [1],
-      });
-      await delay(SYNC_DELAY_MS);
+      await deviceOp(
+        () =>
+          accessControlService.setFingerPrint(deviceId, {
+            employeeNo: person.employeeNo,
+            fingerPrintID,
+            fingerType: fp?.fingerType || "normalFP",
+            fingerData,
+            enableCardReader: Array.isArray(fp?.enableCardReader)
+              ? fp.enableCardReader
+              : [1],
+          }),
+        {
+          deviceId,
+          employeeNo: person.employeeNo,
+          stage: `fingerprint:${fingerPrintID}`,
+        },
+      );
       anyFpTouched = true;
       await personDeviceSyncStateService.upsertFingerprintDetailState({
         deviceId,
@@ -1190,6 +1347,7 @@ async function syncAccessDevicesWithPersons(
     }
 
     const { toSync, toAdd, toDelete } = cached;
+    let personWriteCount = 0;
 
     for (const p of toAdd) {
       const startedAt = reporter?.startOp
@@ -1214,6 +1372,8 @@ async function syncAccessDevicesWithPersons(
           startedAt,
           ok: true,
         });
+        personWriteCount += 1;
+        await maybePauseAfterPersonOps(personWriteCount);
       } catch (err) {
         const message = normalizeIsapiErrorMessage(toMessage(err));
         logger.warn("ISAPI 新增人員失敗", {
@@ -1260,6 +1420,8 @@ async function syncAccessDevicesWithPersons(
           startedAt,
           ok: true,
         });
+        personWriteCount += 1;
+        await maybePauseAfterPersonOps(personWriteCount);
       } catch (err) {
         const message = normalizeIsapiErrorMessage(toMessage(err));
         logger.warn("ISAPI 更新人員失敗", {
@@ -1294,11 +1456,78 @@ async function syncAccessDevicesWithPersons(
             stage: `batch:${toDelete.length}`,
           })
         : null;
-      try {
-        await accessControlService.deleteUserInfo(deviceId, {
-          employeeNoList: toDelete,
-        });
-        await delay(SYNC_DELAY_MS);
+      const deleteChunks = chunkList(toDelete, DELETE_USER_INFO_CHUNK_SIZE);
+      const deletedOk = [];
+      const deletedFailed = [];
+      let lastDeleteError = null;
+
+      for (let ci = 0; ci < deleteChunks.length; ci++) {
+        const chunk = deleteChunks[ci];
+        try {
+          await deviceOp(
+            () =>
+              accessControlService.deleteUserInfo(deviceId, {
+                employeeNoList: chunk,
+              }),
+            {
+              deviceId,
+              stage: `deleteUserInfo:${ci + 1}/${deleteChunks.length}`,
+            },
+          );
+          deletedOk.push(...chunk);
+          await clearAccessSyncStatesForEmployees(deviceId, chunk);
+          for (const no of chunk) {
+            const st = reporter?.startOp
+              ? reporter.startOp({
+                  employeeNo: String(no),
+                  deviceId,
+                  action: "delete",
+                  stage: "person",
+                })
+              : null;
+            reporter?.finishOp?.({
+              employeeNo: String(no),
+              deviceId,
+              action: "delete",
+              stage: "person",
+              startedAt: st,
+              ok: true,
+            });
+          }
+        } catch (err) {
+          const message = normalizeIsapiErrorMessage(toMessage(err));
+          lastDeleteError = message;
+          deletedFailed.push(...chunk);
+          logger.warn("ISAPI 刪除人員失敗（分批）", {
+            deviceId,
+            chunkIndex: ci + 1,
+            chunkTotal: deleteChunks.length,
+            count: chunk.length,
+            error: message,
+          });
+          for (const no of chunk) {
+            const st = reporter?.startOp
+              ? reporter.startOp({
+                  employeeNo: String(no),
+                  deviceId,
+                  action: "delete",
+                  stage: "person",
+                })
+              : null;
+            reporter?.finishOp?.({
+              employeeNo: String(no),
+              deviceId,
+              action: "delete",
+              stage: "person",
+              startedAt: st,
+              ok: false,
+              message,
+            });
+          }
+        }
+      }
+
+      if (deletedFailed.length === 0) {
         reporter?.finishOp?.({
           employeeNo: null,
           deviceId,
@@ -1307,63 +1536,22 @@ async function syncAccessDevicesWithPersons(
           startedAt,
           ok: true,
         });
-
-        // UI 需要逐筆結果（但刪除是 batch），成功時以同一批次訊息標記每個 employeeNo
-        for (const no of toDelete) {
-          const st = reporter?.startOp
-            ? reporter.startOp({
-                employeeNo: String(no),
-                deviceId,
-                action: "delete",
-                stage: "person",
-              })
-            : null;
-          reporter?.finishOp?.({
-            employeeNo: String(no),
-            deviceId,
-            action: "delete",
-            stage: "person",
-            startedAt: st,
-            ok: true,
-          });
-        }
-
-        // 同步狀態清理：人員已從設備刪除，避免未來誤用舊的 success/hash 判定「略過」
-        try {
-          await db.query(
-            `UPDATE person_device_sync_states
-             SET user_info_status = NULL,
-                 user_info_hash = NULL,
-                 user_info_synced_at = NULL,
-                 face_status = NULL,
-                 face_hash = NULL,
-                 face_synced_at = NULL,
-                 card_status = NULL,
-                 card_hash = NULL,
-                 card_synced_at = NULL,
-                 fingerprint_status = NULL,
-                 fingerprint_hash = NULL,
-                 fingerprint_synced_at = NULL,
-                 fingerprint_detail = NULL,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE device_id = ? AND employee_no = ANY(?::text[])`,
-            [Number(deviceId), toDelete.map((x) => String(x))],
-          );
-        } catch (_e) {
-          // ignore cleanup failure; do not affect sync result
-        }
-      } catch (err) {
-        const message = normalizeIsapiErrorMessage(toMessage(err));
+      } else {
+        const message =
+          lastDeleteError ||
+          `刪除部分失敗（成功 ${deletedOk.length}／失敗 ${deletedFailed.length}）`;
         logger.warn("ISAPI 刪除人員失敗", {
           deviceId,
           count: toDelete.length,
+          succeeded: deletedOk.length,
+          failed: deletedFailed.length,
           error: message,
         });
         warnings.push({
           type: "delete",
           deviceId,
           deviceName: deviceNameById.get(Number(deviceId)) || null,
-          message: `刪除失敗：${message}`,
+          message: `刪除失敗：${message}（成功 ${deletedOk.length}／失敗 ${deletedFailed.length}）`,
         });
         reporter?.finishOp?.({
           employeeNo: null,
@@ -1374,26 +1562,6 @@ async function syncAccessDevicesWithPersons(
           ok: false,
           message,
         });
-
-        for (const no of toDelete) {
-          const st = reporter?.startOp
-            ? reporter.startOp({
-                employeeNo: String(no),
-                deviceId,
-                action: "delete",
-                stage: "person",
-              })
-            : null;
-          reporter?.finishOp?.({
-            employeeNo: String(no),
-            deviceId,
-            action: "delete",
-            stage: "person",
-            startedAt: st,
-            ok: false,
-            message,
-          });
-        }
       }
     }
 
@@ -1503,22 +1671,33 @@ async function syncPersonFaceToCamera(
     // 曾同步過才先刪再傳，避免全新上傳多打 FDSearch
     if (stateRow?.face_status || stateRow?.face_hash) {
       try {
-        await isapiCameraFdLibService.deleteByCustomHumanId(
-          deviceId,
-          person.employeeNo,
+        await withTransientRetry(
+          () =>
+            isapiCameraFdLibService.deleteByCustomHumanId(
+              deviceId,
+              person.employeeNo,
+            ),
+          {
+            deviceId,
+            employeeNo: person.employeeNo,
+            stage: "fdLibDeleteBeforeUpload",
+          },
         );
       } catch (_e) {
         // 忽略：庫空或搜尋失敗時仍嘗試上傳
       }
     }
-    await isapiCameraFdLibService.pictureUpload(deviceId, {
-      employeeNo: person.employeeNo,
-      name: person.name,
-      imageBuffer,
-      FDID: libMeta?.FDID,
-      faceLibType: libMeta?.faceLibType,
-    });
-    await delay(SYNC_DELAY_MS);
+    await deviceOp(
+      () =>
+        isapiCameraFdLibService.pictureUpload(deviceId, {
+          employeeNo: person.employeeNo,
+          name: person.name,
+          imageBuffer,
+          FDID: libMeta?.FDID,
+          faceLibType: libMeta?.faceLibType,
+        }),
+      { deviceId, employeeNo: person.employeeNo, stage: "fdLibUpload" },
+    );
     await personDeviceSyncStateService.upsertStepState({
       deviceId,
       employeeNo: person.employeeNo,
@@ -1620,7 +1799,10 @@ async function syncCameraDevicesWithPersons(
 
     let libMeta = null;
     try {
-      libMeta = await isapiCameraFdLibService.ensureFaceLib(deviceId);
+      libMeta = await withTransientRetry(
+        () => isapiCameraFdLibService.ensureFaceLib(deviceId),
+        { deviceId, stage: "ensureFaceLib" },
+      );
     } catch (err) {
       const message = normalizeIsapiErrorMessage(toMessage(err));
       logger.warn("攝影機人臉庫準備失敗（跳過該設備）", {
@@ -1639,11 +1821,15 @@ async function syncCameraDevicesWithPersons(
 
     // faceContrast 為比對規則；失敗不應阻擋 pictureUpload（設備可能已用網頁設定，或 XML schema 不同）
     try {
-      await isapiCameraFdLibService.ensureFaceContrast(deviceId, {
-        channelId,
-        FDID: libMeta.FDID,
-        faceLibType: libMeta.faceLibType,
-      });
+      await withTransientRetry(
+        () =>
+          isapiCameraFdLibService.ensureFaceContrast(deviceId, {
+            channelId,
+            FDID: libMeta.FDID,
+            faceLibType: libMeta.faceLibType,
+          }),
+        { deviceId, stage: "ensureFaceContrast" },
+      );
     } catch (err) {
       const message = normalizeIsapiErrorMessage(toMessage(err));
       logger.warn("攝影機 faceContrast 設定失敗（仍繼續上傳人臉）", {
@@ -1667,6 +1853,7 @@ async function syncCameraDevicesWithPersons(
       reporter.__stateByEmployeeNo = stateMap;
     }
 
+    let personWriteCount = 0;
     for (const p of targetList || []) {
       const startedAt = reporter?.startOp
         ? reporter.startOp({
@@ -1689,6 +1876,8 @@ async function syncCameraDevicesWithPersons(
           startedAt,
           ok: true,
         });
+        personWriteCount += 1;
+        await maybePauseAfterPersonOps(personWriteCount);
       } catch (err) {
         const message = normalizeIsapiErrorMessage(toMessage(err));
         pushPersonSyncWarning(warnings, p, {
@@ -1726,8 +1915,10 @@ async function syncCameraDevicesWithPersons(
           })
         : null;
       try {
-        await isapiCameraFdLibService.deleteByCustomHumanId(deviceId, no);
-        await delay(SYNC_DELAY_MS);
+        await deviceOp(
+          () => isapiCameraFdLibService.deleteByCustomHumanId(deviceId, no),
+          { deviceId, employeeNo: String(no), stage: "fdLibDelete" },
+        );
         await db.query(
           `UPDATE person_device_sync_states
            SET face_status = NULL,

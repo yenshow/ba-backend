@@ -81,9 +81,7 @@ const SHARED_MODULES = [
     code: "system.operational_log",
     name: "營運事件",
     sort_order: 4,
-    children: [
-      { code: "report.export", name: "報表匯出", sort_order: 1 },
-    ],
+    children: [{ code: "report.export", name: "報表匯出", sort_order: 1 }],
     ui: {
       id: 19,
       icon: "maintenance",
@@ -130,7 +128,7 @@ const SHARED_MODULES = [
     ],
     ui: {
       id: 22,
-      icon: "people-counting",
+      icon: "rollCall",
       description: "時段簽到（應到、實到、未到）",
       category: "access-control",
       routePrefix: "/access-control/roll-call",

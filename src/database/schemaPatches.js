@@ -928,9 +928,68 @@ async function ensureRollCallTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_roll_call_rules_location
     ON roll_call_rules(location_id)
   `);
-  // 舊實驗欄位：簽到設備改由地點 system_config.device_ids，規則表不再存 device_ids
+  // 產品：單一地點可多條時段規則。清掉任何「僅 location_id」的 unique（含舊名／PG 預設名）
   await pool.query(`
-    ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids
+    DO $$
+    DECLARE
+      r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        WHERE t.relname = 'roll_call_rules'
+          AND c.contype = 'u'
+          AND (
+            c.conname IN (
+              'uq_roll_call_rules_location',
+              'roll_call_rules_location_id_key'
+            )
+            OR (
+              array_length(c.conkey, 1) = 1
+              AND EXISTS (
+                SELECT 1
+                FROM pg_attribute a
+                WHERE a.attrelid = c.conrelid
+                  AND a.attnum = c.conkey[1]
+                  AND a.attname = 'location_id'
+              )
+            )
+          )
+      LOOP
+        EXECUTE format('ALTER TABLE roll_call_rules DROP CONSTRAINT IF EXISTS %I', r.conname);
+      END LOOP;
+
+      FOR r IN
+        SELECT i.relname AS index_name
+        FROM pg_index x
+        JOIN pg_class i ON i.oid = x.indexrelid
+        JOIN pg_class t ON t.oid = x.indrelid
+        WHERE t.relname = 'roll_call_rules'
+          AND x.indisunique
+          AND NOT x.indisprimary
+          AND (
+            i.relname IN (
+              'uq_roll_call_rules_location',
+              'roll_call_rules_location_id_key'
+            )
+            OR (
+              (
+                SELECT COUNT(*) FROM unnest(x.indkey) AS k(attnum)
+              ) = 1
+              AND EXISTS (
+                SELECT 1
+                FROM pg_attribute a
+                WHERE a.attrelid = t.oid
+                  AND a.attnum = x.indkey[0]
+                  AND a.attname = 'location_id'
+              )
+            )
+          )
+      LOOP
+        EXECUTE format('DROP INDEX IF EXISTS %I', r.index_name);
+      END LOOP;
+    END $$
   `);
   await pool.query(`
     DELETE FROM roll_call_rules WHERE location_id IS NULL
@@ -948,7 +1007,9 @@ async function ensureRollCallTables(pool) {
       END IF;
     END $$
   `);
-  // 應到改由 person_location_access；舊實驗表若存在則移除
+  await pool.query(`
+    ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids
+  `);
   await pool.query(`DROP TABLE IF EXISTS roll_call_rule_groups`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS roll_call_sessions (

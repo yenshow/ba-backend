@@ -93,8 +93,24 @@ router.get(
     const history = await rollCallService.getHistory({
       limit: req.query.limit,
       offset: req.query.offset,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+      locationId: req.query.locationId,
     });
     res.sendSuccess(history);
+  }),
+);
+
+router.get(
+  "/report",
+  disableHttpCache,
+  asyncHandler(async (req, res) => {
+    const report = await rollCallService.getReport({
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+      locationId: req.query.locationId,
+    });
+    res.sendSuccess(report);
   }),
 );
 
