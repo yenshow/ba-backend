@@ -61,6 +61,29 @@ function setStatus(deviceId, status) {
   return { prevStatus: prev?.status ?? "offline", nextStatus };
 }
 
+/**
+ * 停用設備時強制標 offline（可廣播 WS）。
+ */
+function markDeviceOffline(deviceId, { broadcast = false } = {}) {
+  const id = Number(deviceId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { deviceId: id, changed: false };
+  }
+  const { prevStatus, nextStatus } = setStatus(id, "offline");
+  const changed = prevStatus !== nextStatus;
+  if (broadcast && changed) {
+    websocketService.emitBatchDeviceStatus([
+      {
+        system: "device",
+        sourceId: id,
+        deviceId: id,
+        status: nextStatus,
+      },
+    ]);
+  }
+  return { deviceId: id, changed, status: nextStatus };
+}
+
 function bumpFail(deviceId) {
   const prev = statusByDeviceId.get(deviceId);
   const prevFail = prev?.failCount ?? 0;
@@ -397,6 +420,7 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
       FROM devices d
       LEFT JOIN device_models dm ON dm.id = d.model_id
       ${where}
+        AND d.enabled IS TRUE
       ORDER BY d.id ASC
     `,
     params,
@@ -488,6 +512,7 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
       FROM devices d
       LEFT JOIN device_models dm ON dm.id = d.model_id
       WHERE d.id = ANY($1::int[])
+        AND d.enabled IS TRUE
       ORDER BY d.id ASC
     `,
     [ids],
@@ -612,6 +637,7 @@ module.exports = {
   checkAndBroadcastConnectivity,
   checkAndBroadcastConnectivityByDeviceIds,
   getConnectivitySnapshot,
+  markDeviceOffline,
   _internal: {
     statusByDeviceId,
     rtspOptionsProbe,

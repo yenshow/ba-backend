@@ -166,6 +166,7 @@ const getManageStationIds = async () => {
     FROM devices
     WHERE type_code = 'video_intercom'
       AND COALESCE(config->>'unitType', '') = 'manage'
+      AND enabled IS TRUE
     `,
   );
   return (rows || [])

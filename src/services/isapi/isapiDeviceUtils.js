@@ -44,10 +44,11 @@ async function listIsapiCapableDevices() {
     `
       SELECT d.id, d.name, d.type_code, d.config
       FROM devices d
-      WHERE (
-        d.type_code = 'access_control'
-        OR d.type_code = 'camera'
-      )
+      WHERE d.enabled IS TRUE
+        AND (
+          d.type_code = 'access_control'
+          OR d.type_code = 'camera'
+        )
       ORDER BY d.id ASC
     `,
   );

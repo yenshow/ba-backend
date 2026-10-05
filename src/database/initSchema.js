@@ -229,6 +229,7 @@ async function initSchema() {
 				location VARCHAR(255),
 				description TEXT,
 				config JSONB,
+				enabled BOOLEAN NOT NULL DEFAULT TRUE,
 				created_by INTEGER,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -243,6 +244,7 @@ async function initSchema() {
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_devices_type_code ON devices(type_code);
 			CREATE INDEX IF NOT EXISTS idx_devices_model_id ON devices(model_id);
+			CREATE INDEX IF NOT EXISTS idx_devices_enabled ON devices(enabled);
 			CREATE INDEX IF NOT EXISTS idx_devices_config ON devices USING GIN (config);
 		`);
 

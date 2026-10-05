@@ -159,10 +159,14 @@ router.get(
   "/",
   disableHttpCache,
   asyncHandler(async (req, res) => {
-    const { type_code, group, limit, offset, orderBy, order } = req.query;
+    const { type_code, group, enabled, limit, offset, orderBy, order } = req.query;
     const result = await deviceService.getDevices({
       type_code,
       group: group && String(group).trim() ? String(group).trim() : undefined,
+      enabled:
+        enabled === undefined || enabled === null || enabled === ""
+          ? undefined
+          : enabled,
       limit: limit ? parseInt(limit) : undefined,
       offset: offset ? parseInt(offset) : undefined,
       orderBy,

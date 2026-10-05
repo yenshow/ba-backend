@@ -137,9 +137,13 @@ const getLadderDeviceIds = async () => {
     [],
   );
 
-  return (rows || [])
+  const ids = (rows || [])
     .map((r) => Number(r.id))
     .filter((n) => Number.isFinite(n) && n > 0);
+  const {
+    filterEnabledDeviceIds,
+  } = require("../devices/deviceEnabledFilter");
+  return filterEnabledDeviceIds(ids);
 };
 
 const start = async () => {

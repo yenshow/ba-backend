@@ -561,7 +561,15 @@ async function refresh() {
   if (!started) {
     started = true;
   }
-  const subs = await getCameraSubscriptions();
+  const rawSubs = await getCameraSubscriptions();
+  const {
+    filterEnabledDeviceIds,
+  } = require("../devices/deviceEnabledFilter");
+  const enabledIds = await filterEnabledDeviceIds(
+    rawSubs.map((s) => s.deviceId),
+  );
+  const enabledSet = new Set(enabledIds);
+  const subs = rawSubs.filter((s) => enabledSet.has(s.deviceId));
   const nextKeys = new Set(subs.map(subKey));
   const prevKeys = new Set(runningSubs.map(subKey));
 

@@ -66,8 +66,18 @@ async function loadDeviceLocationMap() {
 
 async function getDeviceIdsToSubscribe() {
   const map = await loadDeviceLocationMap();
-  deviceLocationMap = map;
-  return Array.from(map.keys());
+  const {
+    filterEnabledDeviceIds,
+  } = require("../devices/deviceEnabledFilter");
+  const enabledIds = await filterEnabledDeviceIds(Array.from(map.keys()));
+  const enabledSet = new Set(enabledIds);
+  const filtered = new Map();
+  for (const [deviceId, targets] of map.entries()) {
+    if (!enabledSet.has(deviceId)) continue;
+    filtered.set(deviceId, targets);
+  }
+  deviceLocationMap = filtered;
+  return enabledIds;
 }
 
 async function getDeviceClient(deviceId) {

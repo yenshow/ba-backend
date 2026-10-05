@@ -209,7 +209,10 @@ async function getDeviceIdsToSubscribe() {
     const n = r.id != null ? parseInt(String(r.id), 10) : NaN;
     if (Number.isFinite(n)) ids.add(n);
   }
-  return Array.from(ids);
+  const {
+    filterEnabledDeviceIds,
+  } = require("../devices/deviceEnabledFilter");
+  return filterEnabledDeviceIds(Array.from(ids));
 }
 
 /**

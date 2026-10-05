@@ -24,3 +24,6 @@ mediamtx/mediamtx.generated.yml
 
 # 資料匯出測試輸出
 tmp/
+
+# 探測腳本產出報告（勿提交現場結果）
+scripts/reports/

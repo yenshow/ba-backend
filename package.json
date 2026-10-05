@@ -33,6 +33,7 @@
     "postgres:start": "node scripts/portable-postgres.js start",
     "postgres:stop": "node scripts/portable-postgres.js stop",
     "probe:isapi": "node scripts/isapiSubscribeProbe.js",
+    "probe:a21-energy": "node scripts/probeA21EnergyRegisters.js",
     "import:access-events": "node scripts/importAccessEventsFromDevice.js",
     "dedupe:access-events": "node scripts/dedupeAccessEvents.js",
     "sdk:build-isup": "powershell -ExecutionPolicy Bypass -File sdk/scripts/run-isup-listen.ps1 -BuildOnly",

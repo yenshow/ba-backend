@@ -19,6 +19,11 @@ const personSyncJobStore = require("./personSyncJobStore");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
+const {
+  resolveAccessCredentialCapabilities,
+  unionAccessCredentialCapabilities,
+  getAccessCredentialCapabilitiesByDeviceIds,
+} = require("../../utils/accessCredentialCapabilities");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 const { resolveCardNos } = require("../../utils/accessControlCardsUtils");
 const { assertSafeOutboundUrl } = require("../../utils/safeUrl");
@@ -547,6 +552,9 @@ async function syncPersonToDevice(
   options = {},
 ) {
   const forceUserInfo = Boolean(options?.forceUserInfo);
+  const credentials = resolveAccessCredentialCapabilities(
+    options?.credentials ?? null,
+  );
   const stateByEmployeeNo = reporter?.__stateByEmployeeNo || null;
   const stateRow =
     stateByEmployeeNo && person?.employeeNo != null
@@ -663,93 +671,20 @@ async function syncPersonToDevice(
     }
   }
 
-  const imageBuffer = await resolveFaceUrlToBuffer(person.face_url);
-  if (faceUrlRaw && (!imageBuffer || imageBuffer.length === 0)) {
-    const message = "平台大頭照無法讀取（檔案可能遺失或 URL 無效）";
-    logger.warn("解析 face_url 失敗（略過人臉寫入）", {
-      deviceId,
-      employeeNo: person.employeeNo,
-      face_url: faceUrlRaw.substring(0, 80),
-    });
-    pushPersonSyncWarning(warnings, person, {
-      type: "face",
-      deviceId,
-      message,
-    });
-    const startedAt = reporter?.startOp
-      ? reporter.startOp({
-          employeeNo: person.employeeNo,
-          deviceId,
-          action: "sync",
-          stage: "face",
-        })
-      : null;
-    await personDeviceSyncStateService.upsertStepState({
-      deviceId,
-      employeeNo: person.employeeNo,
-      step: "face",
-      status: "failed",
-      hash: personDeviceSyncStateService.hashFace({
-        faceBuffer: null,
-        faceUrl: faceUrlRaw,
-      }),
-      syncedAt: new Date(),
-      lastErrorMessage: message,
-    });
-    reporter?.finishOp?.({
-      employeeNo: person.employeeNo,
-      deviceId,
-      action: "sync",
-      stage: "face",
-      startedAt,
-      ok: false,
-      message,
-    });
-  }
-  if (imageBuffer && imageBuffer.length > 0) {
-    // 人臉同步 hash：
-    // - 本機 /uploads/...：用內容 hash（避免 URL 不變但內容被覆寫造成誤判）
-    // - 其他：維持以 face_url（或其 meta）判斷即可
-    const faceUrlForHash =
-      person?.face_url != null ? String(person.face_url).trim() : "";
-    const isLocalUpload = faceUrlForHash.startsWith("/uploads/");
-    const faceHash = personDeviceSyncStateService.hashFace({
-      faceBuffer: isLocalUpload ? imageBuffer : null,
-      faceUrl: isLocalUpload ? null : faceUrlForHash,
-    });
-    const lastHash = stateRow?.face_hash ? String(stateRow.face_hash) : null;
-    const lastStatus = normalizePersistedStatus(stateRow?.face_status);
-    const faceError = readStepErrorMessage(
-      stateRow?.last_error_message,
-      "face",
-    );
-    const faceUnchanged =
-      lastHash && faceHash && lastHash === faceHash;
-    if (lastStatus === "success" && faceUnchanged) {
-      reporter?.skipOp?.({
-        employeeNo: person.employeeNo,
-        deviceId,
-        action: "sync",
-        stage: "face",
-        message: "未變更",
-      });
-    } else if (
-      lastStatus === "failed" &&
-      faceUnchanged &&
-      isPermanentFaceModelingError(faceError)
-    ) {
-      logger.debug("ISAPI 人臉未變更，略過已知建模失敗", {
+  if (credentials.face) {
+    const imageBuffer = await resolveFaceUrlToBuffer(person.face_url);
+    if (faceUrlRaw && (!imageBuffer || imageBuffer.length === 0)) {
+      const message = "平台大頭照無法讀取（檔案可能遺失或 URL 無效）";
+      logger.warn("解析 face_url 失敗（略過人臉寫入）", {
         deviceId,
         employeeNo: person.employeeNo,
+        face_url: faceUrlRaw.substring(0, 80),
       });
-      reporter?.skipOp?.({
-        employeeNo: person.employeeNo,
+      pushPersonSyncWarning(warnings, person, {
+        type: "face",
         deviceId,
-        action: "sync",
-        stage: "face",
-        message: faceError,
+        message,
       });
-    } else {
       const startedAt = reporter?.startOp
         ? reporter.startOp({
             employeeNo: person.employeeNo,
@@ -758,69 +693,153 @@ async function syncPersonToDevice(
             stage: "face",
           })
         : null;
-      try {
-        await deviceOp(
-          () =>
-            accessControlService.updateFace(
+      await personDeviceSyncStateService.upsertStepState({
+        deviceId,
+        employeeNo: person.employeeNo,
+        step: "face",
+        status: "failed",
+        hash: personDeviceSyncStateService.hashFace({
+          faceBuffer: null,
+          faceUrl: faceUrlRaw,
+        }),
+        syncedAt: new Date(),
+        lastErrorMessage: message,
+      });
+      reporter?.finishOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "face",
+        startedAt,
+        ok: false,
+        message,
+      });
+    }
+    if (imageBuffer && imageBuffer.length > 0) {
+      // 人臉同步 hash：
+      // - 本機 /uploads/...：用內容 hash（避免 URL 不變但內容被覆寫造成誤判）
+      // - 其他：維持以 face_url（或其 meta）判斷即可
+      const faceUrlForHash =
+        person?.face_url != null ? String(person.face_url).trim() : "";
+      const isLocalUpload = faceUrlForHash.startsWith("/uploads/");
+      const faceHash = personDeviceSyncStateService.hashFace({
+        faceBuffer: isLocalUpload ? imageBuffer : null,
+        faceUrl: isLocalUpload ? null : faceUrlForHash,
+      });
+      const lastHash = stateRow?.face_hash ? String(stateRow.face_hash) : null;
+      const lastStatus = normalizePersistedStatus(stateRow?.face_status);
+      const faceError = readStepErrorMessage(
+        stateRow?.last_error_message,
+        "face",
+      );
+      const faceUnchanged =
+        lastHash && faceHash && lastHash === faceHash;
+      if (lastStatus === "success" && faceUnchanged) {
+        reporter?.skipOp?.({
+          employeeNo: person.employeeNo,
+          deviceId,
+          action: "sync",
+          stage: "face",
+          message: "未變更",
+        });
+      } else if (
+        lastStatus === "failed" &&
+        faceUnchanged &&
+        isPermanentFaceModelingError(faceError)
+      ) {
+        logger.debug("ISAPI 人臉未變更，略過已知建模失敗", {
+          deviceId,
+          employeeNo: person.employeeNo,
+        });
+        reporter?.skipOp?.({
+          employeeNo: person.employeeNo,
+          deviceId,
+          action: "sync",
+          stage: "face",
+          message: faceError,
+        });
+      } else {
+        const startedAt = reporter?.startOp
+          ? reporter.startOp({
+              employeeNo: person.employeeNo,
               deviceId,
-              person.employeeNo,
-              imageBuffer,
-            ),
-          { deviceId, employeeNo: person.employeeNo, stage: "face" },
-        );
-        await personDeviceSyncStateService.upsertStepState({
-          deviceId,
-          employeeNo: person.employeeNo,
-          step: "face",
-          status: "success",
-          hash: faceHash,
-          syncedAt: new Date(),
-          lastErrorMessage: null,
-        });
-        reporter?.finishOp?.({
-          employeeNo: person.employeeNo,
-          deviceId,
-          action: "sync",
-          stage: "face",
-          startedAt,
-          ok: true,
-        });
-      } catch (faceErr) {
-        const message = normalizeIsapiErrorMessage(toMessage(faceErr));
-        logger.warn("ISAPI 更新人臉失敗", {
-          deviceId,
-          employeeNo: person.employeeNo,
-          error: message,
-        });
-        pushPersonSyncWarning(warnings, person, {
-          type: "face",
-          deviceId,
-          deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
-          message,
-        });
-        await personDeviceSyncStateService.upsertStepState({
-          deviceId,
-          employeeNo: person.employeeNo,
-          step: "face",
-          status: "failed",
-          hash: faceHash,
-          syncedAt: new Date(),
-          lastErrorMessage: message,
-        });
-        reporter?.finishOp?.({
-          employeeNo: person.employeeNo,
-          deviceId,
-          action: "sync",
-          stage: "face",
-          startedAt,
-          ok: false,
-          message,
-        });
+              action: "sync",
+              stage: "face",
+            })
+          : null;
+        try {
+          await deviceOp(
+            () =>
+              accessControlService.updateFace(
+                deviceId,
+                person.employeeNo,
+                imageBuffer,
+              ),
+            { deviceId, employeeNo: person.employeeNo, stage: "face" },
+          );
+          await personDeviceSyncStateService.upsertStepState({
+            deviceId,
+            employeeNo: person.employeeNo,
+            step: "face",
+            status: "success",
+            hash: faceHash,
+            syncedAt: new Date(),
+            lastErrorMessage: null,
+          });
+          reporter?.finishOp?.({
+            employeeNo: person.employeeNo,
+            deviceId,
+            action: "sync",
+            stage: "face",
+            startedAt,
+            ok: true,
+          });
+        } catch (faceErr) {
+          const message = normalizeIsapiErrorMessage(toMessage(faceErr));
+          logger.warn("ISAPI 更新人臉失敗", {
+            deviceId,
+            employeeNo: person.employeeNo,
+            error: message,
+          });
+          pushPersonSyncWarning(warnings, person, {
+            type: "face",
+            deviceId,
+            deviceName: options?.deviceNameById?.get?.(Number(deviceId)) || null,
+            message,
+          });
+          await personDeviceSyncStateService.upsertStepState({
+            deviceId,
+            employeeNo: person.employeeNo,
+            step: "face",
+            status: "failed",
+            hash: faceHash,
+            syncedAt: new Date(),
+            lastErrorMessage: message,
+          });
+          reporter?.finishOp?.({
+            employeeNo: person.employeeNo,
+            deviceId,
+            action: "sync",
+            stage: "face",
+            startedAt,
+            ok: false,
+            message,
+          });
+        }
       }
     }
+  } else {
+    reporter?.skipOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "face",
+      message: "設備不支援人臉",
+    });
   }
 
   // 卡片同步：employeeNo -> cardNos（最多 5 張）
+  if (credentials.card) {
   const cardNos = resolveCardNos(ac);
   const cardsHash = personDeviceSyncStateService.hashCards({ cardNos });
   const lastHash = stateRow?.card_hash ? String(stateRow.card_hash) : null;
@@ -1022,8 +1041,27 @@ async function syncPersonToDevice(
       });
     }
   }
+  } else {
+    reporter?.skipOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "card",
+      message: "設備不支援卡片",
+    });
+  }
 
   // 指紋同步：FingerPrint/SetUp
+  if (!credentials.fingerprint) {
+    reporter?.skipOp?.({
+      employeeNo: person.employeeNo,
+      deviceId,
+      action: "sync",
+      stage: "fingerprint",
+      message: "設備不支援指紋",
+    });
+    return;
+  }
   const fps = Array.isArray(ac?.fingerprints) ? ac.fingerprints : [];
   const fingerprintHash = personDeviceSyncStateService.hashFingerprint({
     fingerprints: fps,
@@ -1251,6 +1289,8 @@ async function syncAccessDevicesWithPersons(
       normalizedDeviceIds,
     );
   const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
+  const credentialsByDeviceId =
+    await getAccessCredentialCapabilitiesByDeviceIds(normalizedDeviceIds);
   reporter?.setTotals?.({
     targetPersonsTotal: (targetList || []).length,
     deviceTotal: normalizedDeviceIds.length,
@@ -1363,6 +1403,7 @@ async function syncAccessDevicesWithPersons(
         await syncPersonToDevice(deviceId, p, warnings, reporter, {
           forceUserInfo: true,
           deviceNameById,
+          credentials: credentialsByDeviceId.get(Number(deviceId)),
         });
         reporter?.finishOp?.({
           employeeNo: p.employeeNo,
@@ -1411,6 +1452,7 @@ async function syncAccessDevicesWithPersons(
       try {
         await syncPersonToDevice(deviceId, p, warnings, reporter, {
           deviceNameById,
+          credentials: credentialsByDeviceId.get(Number(deviceId)),
         });
         reporter?.finishOp?.({
           employeeNo: p.employeeNo,
@@ -2245,11 +2287,18 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     ),
   ];
 
+  const credentialsByDeviceId =
+    await getAccessCredentialCapabilitiesByDeviceIds(ids);
+  const locationCaps = unionAccessCredentialCapabilities(
+    ids.map((id) => credentialsByDeviceId.get(id)),
+  );
+
   const employeeNos = list.map((p) => String(p.employee_no));
   const stateMaps = [];
   for (const did of ids) {
     stateMaps.push({
       deviceId: did,
+      caps: credentialsByDeviceId.get(did),
       map: await personDeviceSyncStateService.getStatesForDevice(
         did,
         employeeNos,
@@ -2290,8 +2339,17 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     return hash;
   };
 
+  const stepSupportedOnDevice = (caps, step) => {
+    if (step === "userInfo") return true;
+    if (step === "face") return caps?.face !== false;
+    if (step === "card") return caps?.card !== false;
+    if (step === "fingerprint") return caps?.fingerprint !== false;
+    return true;
+  };
+
   const aggStep = (eno, step, desired) => {
     const rows = stateMaps
+      .filter(({ caps }) => stepSupportedOnDevice(caps, step))
       .map(({ deviceId, map }) => ({
         deviceId,
         row: map.get(String(eno)) || null,
@@ -2358,29 +2416,36 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
 
     const faceUrl =
       person?.face_url != null ? String(person.face_url).trim() : "";
-    const desiredFaceHash = faceUrl
-      ? await computeDesiredFaceHash(faceUrl)
-      : null;
+    const desiredFaceHash =
+      locationCaps.face && faceUrl
+        ? await computeDesiredFaceHash(faceUrl)
+        : null;
 
     const cardNos = resolveCardNos(ac);
-    const desiredCardHash = cardNos.length
-      ? personDeviceSyncStateService.hashCards({ cardNos })
-      : null;
+    const desiredCardHash =
+      locationCaps.card && cardNos.length
+        ? personDeviceSyncStateService.hashCards({ cardNos })
+        : null;
 
     const fps = Array.isArray(ac?.fingerprints) ? ac.fingerprints : [];
-    const desiredFpHash = personDeviceSyncStateService.hashFingerprint({
-      fingerprints: fps,
-    });
+    const desiredFpHash = locationCaps.fingerprint
+      ? personDeviceSyncStateService.hashFingerprint({
+          fingerprints: fps,
+        })
+      : null;
 
     const steps = new Set();
-    for (const { map } of stateMaps) {
+    for (const { map, caps } of stateMaps) {
       const row = map.get(employeeNo) || null;
+      const supportFace = caps?.face !== false;
+      const supportCard = caps?.card !== false;
+      const supportFp = caps?.fingerprint !== false;
       // 若該設備完全沒有紀錄，一律視為需同步（避免「後來加資料但仍顯示成功」）
       if (!row) {
         steps.add("user_info");
-        if (faceUrl) steps.add("face");
-        if (cardNos.length) steps.add("card");
-        if (desiredFpHash) steps.add("fingerprint");
+        if (supportFace && faceUrl) steps.add("face");
+        if (supportCard && cardNos.length) steps.add("card");
+        if (supportFp && desiredFpHash) steps.add("fingerprint");
         continue;
       }
 
@@ -2389,21 +2454,21 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
         String(row.user_info_hash || "") === desiredUserInfoHash;
       if (!userOk) steps.add("user_info");
 
-      if (faceUrl) {
+      if (supportFace && faceUrl) {
         const faceOk =
           normalizePersistedStatus(row.face_status) === "success" &&
           String(row.face_hash || "") === String(desiredFaceHash || "");
         if (!faceOk) steps.add("face");
       }
 
-      if (cardNos.length) {
+      if (supportCard && cardNos.length) {
         const cardOk =
           normalizePersistedStatus(row.card_status) === "success" &&
           String(row.card_hash || "") === String(desiredCardHash || "");
         if (!cardOk) steps.add("card");
       }
 
-      if (desiredFpHash) {
+      if (supportFp && desiredFpHash) {
         const fpOk =
           normalizePersistedStatus(row.fingerprint_status) === "success" &&
           String(row.fingerprint_hash || "") === String(desiredFpHash || "");
@@ -2442,9 +2507,11 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
         : "";
     const cardNos = resolveCardNos(ac);
     const fps = Array.isArray(ac?.fingerprints) ? ac.fingerprints : [];
-    const fingerprintCount = fps.filter(
-      (fp) => fp && String(fp.fingerData || "").trim() !== "",
-    ).length;
+    const fingerprintCount = locationCaps.fingerprint
+      ? fps.filter(
+          (fp) => fp && String(fp.fingerData || "").trim() !== "",
+        ).length
+      : 0;
     const faceUrl = p?.face_url != null ? String(p.face_url).trim() : "";
     const employeeNo = String(p.employee_no);
     const n = needs[idx] || {
@@ -2461,9 +2528,9 @@ async function buildAccessSyncFieldsForPersons(persons, deviceIds) {
     return {
       employee_no: employeeNo,
       full_name: p.full_name || "",
-      has_face: faceUrl.length > 0,
+      has_face: locationCaps.face && faceUrl.length > 0,
       has_password: password.length > 0,
-      has_card: cardNos.length > 0,
+      has_card: locationCaps.card && cardNos.length > 0,
       fingerprint_count: fingerprintCount,
       needs_sync: needsSync,
       needs_sync_steps: needsSyncSteps,
@@ -2529,6 +2596,7 @@ async function getSyncCandidatesForLocation(locationId) {
     for (const s of cam.needs_sync_steps || []) needsSteps.add(s);
     return {
       ...row,
+      has_face: Boolean(row.has_face || cam.has_face),
       needs_sync: needsSteps.size > 0,
       needs_sync_steps: Array.from(needsSteps),
       last_sync: {

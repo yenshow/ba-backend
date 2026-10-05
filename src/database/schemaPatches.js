@@ -1130,6 +1130,17 @@ async function normalizePersonDeviceSyncStatuses(pool) {
   return { updated: result.rowCount || 0 };
 }
 
+/** 既有庫：devices.enabled（預設啟用；停用後略過背景訂閱／佈防／探測） */
+async function ensureDevicesEnabledColumn(pool) {
+  await pool.query(`
+    ALTER TABLE devices
+      ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_devices_enabled ON devices(enabled)
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -1137,6 +1148,7 @@ async function applySchemaPatches(pool) {
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
   await ensureVideoIntercomTypeCode(pool);
+  await ensureDevicesEnabledColumn(pool);
   await ensureAccessSecurityLocationSystemType(pool);
   await ensureRollCallTables(pool);
   const deviceSyncStatusNorm = await normalizePersonDeviceSyncStatuses(pool);
@@ -1174,6 +1186,7 @@ module.exports = {
   ensureExternalIntegrationTables,
   ensureOperationalEventsTable,
   ensureVideoIntercomTypeCode,
+  ensureDevicesEnabledColumn,
   ensureAccessSecurityLocationSystemType,
   ensureAlertAccessDoorDeviceIds,
   ensureAlertSipRingLinkagesTable,

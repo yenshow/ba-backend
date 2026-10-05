@@ -19,6 +19,14 @@ const DEVICE_MODEL_CATALOG = [
   { name: "YS AC-02F", typeCode: "access_control" },
   { name: "YS AC-07", typeCode: "access_control" },
   {
+    name: "YS K1T105AM",
+    typeCode: "access_control",
+    description: "純刷卡門禁機",
+    config: {
+      credentials: { face: false, fingerprint: false, card: true },
+    },
+  },
+  {
     name: "YS 9503",
     typeCode: "video_intercom",
     port: 8000,

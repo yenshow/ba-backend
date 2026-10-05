@@ -51,6 +51,11 @@ async function resolveDeviceConfig(deviceId, modbus, options = {}) {
     numericId > 0
   ) {
     try {
+      const { isDeviceEnabled } = require("../devices/deviceEnabledFilter");
+      if (!(await isDeviceEnabled(numericId))) {
+        return null;
+      }
+
       const cached = getCachedDeviceCfg(numericId);
       if (cached) return cached;
 

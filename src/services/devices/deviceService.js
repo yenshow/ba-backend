@@ -36,6 +36,88 @@ const {
 
 const deviceLogger = logger.createLogger("deviceService");
 
+const parseEnabledFlag = (value, fallback = true) => {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const s = value.trim().toLowerCase();
+    if (s === "true" || s === "1") return true;
+    if (s === "false" || s === "0") return false;
+  }
+  return fallback;
+};
+
+const normalizeDeviceRow = (device) => ({
+  ...device,
+  enabled: parseEnabledFlag(device?.enabled, true),
+  type_name: getDeviceTypeName(device.type_code),
+  config: parseConfig(device.config),
+});
+
+/**
+ * 啟用狀態變更後：刷新訂閱／佈防；停用時結清警報並標 offline。
+ */
+async function reconcileAfterDeviceEnabledChange(deviceId, enabled, userId = null) {
+  const id = Number(deviceId);
+  if (!Number.isFinite(id) || id <= 0) return;
+
+  try {
+    require("../location/locationShared").refreshAfterLocationOrZoneDelete(
+      deviceLogger,
+    );
+  } catch (e) {
+    deviceLogger.warn("設備啟用變更後訂閱刷新失敗", {
+      deviceId: id,
+      error: e?.message || String(e),
+    });
+  }
+
+  try {
+    const licenseRuntimeService = require("../license/licenseRuntimeService");
+    await licenseRuntimeService.reconcileIntercomArmingAfterDeviceChange();
+    await licenseRuntimeService.reconcileElevatorArmingAfterLocationChange();
+  } catch (e) {
+    deviceLogger.warn("設備啟用變更後佈防 reconcile 失敗", {
+      deviceId: id,
+      error: e?.message || String(e),
+    });
+  }
+
+  if (enabled === false) {
+    try {
+      const alertService = require("../alerts/alertService");
+      for (const source of [
+        alertService.ALERT_SOURCES.DEVICE,
+        alertService.ALERT_SOURCES.ENERGY,
+      ]) {
+        await alertService.updateAllAlertTypesStatus(
+          source,
+          id,
+          alertService.ALERT_STATUS.IGNORED,
+          userId,
+        );
+      }
+    } catch (e) {
+      deviceLogger.warn("停用設備時結清警報失敗", {
+        deviceId: id,
+        error: e?.message || String(e),
+      });
+    }
+
+    try {
+      require("./deviceConnectivityService").markDeviceOffline(id, {
+        broadcast: true,
+      });
+    } catch (e) {
+      deviceLogger.warn("停用設備時標 offline 失敗", {
+        deviceId: id,
+        error: e?.message || String(e),
+      });
+    }
+  }
+}
+
 /** 視訊對講 unitType 由型號 config 決定，設備表單不另選角色 */
 function applyVideoIntercomModelDefaults(config, modelConfig, modelPort) {
   const unitType = String(modelConfig?.unitType || "").trim();
@@ -185,6 +267,7 @@ async function getDevices(filters = {}) {
     const {
       type_code,
       group,
+      enabled,
       limit = 20,
       offset = 0,
       orderBy = "created_at",
@@ -210,6 +293,11 @@ async function getDevices(filters = {}) {
     if (group != null && group !== "") {
       query += " AND d.config->>'group' = ?";
       params.push(group);
+    }
+
+    if (enabled !== undefined && enabled !== null && enabled !== "") {
+      query += " AND d.enabled = ?";
+      params.push(parseEnabledFlag(enabled, true));
     }
 
     // 排序
@@ -244,15 +332,16 @@ async function getDevices(filters = {}) {
       countParams.push(group);
     }
 
+    if (enabled !== undefined && enabled !== null && enabled !== "") {
+      countQuery += " AND d.enabled = ?";
+      countParams.push(parseEnabledFlag(enabled, true));
+    }
+
     const countResult = await db.query(countQuery, countParams);
     const total = countResult[0].total;
 
     // 解析 config JSON
-    const devicesWithConfig = devices.map((device) => ({
-      ...device,
-      type_name: getDeviceTypeName(device.type_code),
-      config: parseConfig(device.config),
-    }));
+    const devicesWithConfig = devices.map((device) => normalizeDeviceRow(device));
 
     return {
       devices: devicesWithConfig,
@@ -292,9 +381,7 @@ async function getDeviceById(id) {
       throwApiError(C.DEVICE_NOT_FOUND, "設備不存在");
     }
 
-    const device = devices[0];
-    device.type_name = getDeviceTypeName(device.type_code);
-    device.config = parseConfig(device.config);
+    const device = normalizeDeviceRow(devices[0]);
 
     if (device.model_id) {
       device.model = {
@@ -324,7 +411,7 @@ async function getDeviceById(id) {
 // 創建設備
 async function createDevice(deviceData, userId) {
   try {
-    const { name, type_code, model_id, description, config } = deviceData;
+    const { name, type_code, model_id, description, config, enabled } = deviceData;
 
     // 驗證必填欄位
     if (!name || name.trim().length === 0) {
@@ -544,14 +631,16 @@ async function createDevice(deviceData, userId) {
     }
 
     // 建立設備
+    const enabledFlag = parseEnabledFlag(enabled, true);
     const result = await db.query(
-      "INSERT INTO devices (name, type_code, model_id, description, config, created_by) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+      "INSERT INTO devices (name, type_code, model_id, description, config, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
       [
         name.trim(),
         typeCode,
         model_id,
         description || null,
         stringifyConfig(config),
+        enabledFlag,
         userId || null,
       ],
     );
@@ -609,7 +698,7 @@ async function createDevice(deviceData, userId) {
 // 更新設備
 async function updateDevice(id, deviceData, userId) {
   try {
-    const { name, model_id, description, config, type_code } = deviceData;
+    const { name, model_id, description, config, type_code, enabled } = deviceData;
 
     // 檢查設備是否存在
     const existing = await db.query("SELECT * FROM devices WHERE id = ?", [id]);
@@ -618,6 +707,7 @@ async function updateDevice(id, deviceData, userId) {
     }
 
     const existingDevice = existing[0];
+    const prevEnabled = parseEnabledFlag(existingDevice.enabled, true);
 
     // 構建更新欄位
     const updates = [];
@@ -675,6 +765,11 @@ async function updateDevice(id, deviceData, userId) {
     if (description !== undefined) {
       updates.push("description = ?");
       params.push(description || null);
+    }
+
+    if (enabled !== undefined) {
+      updates.push("enabled = ?");
+      params.push(parseEnabledFlag(enabled, true));
     }
 
     if (config !== undefined) {
@@ -879,7 +974,7 @@ async function updateDevice(id, deviceData, userId) {
 
     // 構建變更的欄位列表
     const changes = {};
-    const fields = { name, type_code, model_id, description, config };
+    const fields = { name, type_code, model_id, description, config, enabled };
     Object.keys(fields).forEach((key) => {
       if (fields[key] !== undefined) {
         changes[key] = true;
@@ -893,7 +988,13 @@ async function updateDevice(id, deviceData, userId) {
       userId,
     });
 
-    if (
+    const nextEnabled = parseEnabledFlag(updatedDevice?.device?.enabled, true);
+    const enabledChanged =
+      enabled !== undefined && prevEnabled !== nextEnabled;
+
+    if (enabledChanged) {
+      await reconcileAfterDeviceEnabledChange(id, nextEnabled, userId);
+    } else if (
       String(updatedDevice?.device?.type_code || "") === "video_intercom" ||
       String(existingDevice?.type_code || "") === "video_intercom"
     ) {

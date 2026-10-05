@@ -171,6 +171,7 @@ async function checkEnvironmentLocations() {
             `SELECT d.id, d.config as device_config
              FROM devices d
              WHERE d.id = ANY($1::int[])
+               AND d.enabled IS TRUE
                AND d.type_code = 'sensor'
                AND d.config->>'protocol' = 'modbus'`,
             [deviceIdList],
