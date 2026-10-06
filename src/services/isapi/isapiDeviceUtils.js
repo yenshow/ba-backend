@@ -9,7 +9,7 @@ function hasIsapiCredentials(config) {
   return Boolean(cfg.host && cfg.username && cfg.password);
 }
 
-function resolveIsapiClientFromConfig(config, label = "設備") {
+function resolveIsapiClientFromConfig(config, label = "設備", typeCode) {
   const cfg = parseConfig(config) || {};
   if (!hasIsapiCredentials(cfg)) {
     throw createApiError(
@@ -19,14 +19,14 @@ function resolveIsapiClientFromConfig(config, label = "設備") {
   }
   return {
     config: cfg,
-    client: createIsapiClient(cfg),
+    client: createIsapiClient(cfg, { typeCode }),
   };
 }
 
 function resolveIsapiClientFromDeviceRow(row, label = "設備") {
   const deviceId = Number(row?.id);
   const cfg = parseConfig(row?.config) || {};
-  const { client } = resolveIsapiClientFromConfig(cfg, label);
+  const { client } = resolveIsapiClientFromConfig(cfg, label, row?.type_code);
   return {
     deviceId,
     device: {

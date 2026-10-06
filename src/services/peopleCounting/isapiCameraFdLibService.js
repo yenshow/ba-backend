@@ -3,7 +3,8 @@
  * 協定：ensureFaceLib → pictureUpload → faceContrast；與門禁 UserInfo 分流。
  *
  * 僅操作本平台庫（name=BA_FaceLib / customFaceLibID=BA_PC_FACELIB）。
- * 刪除人員必須帶 FDID+PID；禁止無參數 DELETE /ISAPI/Intelligent/FDLib。
+ * 刪除：DELETE /FDLib/{FDID}/picture/{customHumanID|PID}；拒收再後備 PUT FDDeleteData。
+ * 禁止無參數 DELETE /FDLib。
  */
 const crypto = require("crypto");
 const FormData = require("form-data");
@@ -101,6 +102,64 @@ function isCustomFaceLibIdFieldRejected(errOrText) {
   return /customFaceLibID/i.test(text) && !isCustomFaceLibIdRepeat(text);
 }
 
+/** 舊式 schema：FaceContrast 含 thresholdValue／FDLibList（能力集或現況 XML） */
+function supportsLegacyFaceContrastFdLib(currentXml, capsXml) {
+  const hay = `${capsXml || ""}\n${currentXml || ""}`;
+  if (/<FDLibList[\s/>]/i.test(hay)) return true;
+  if (/SupportFDLibList[^>]*opt="[^"]*\btrue\b/i.test(hay)) return true;
+  if (/<thresholdValue[\s>]/i.test(hay)) return true;
+  return false;
+}
+
+/**
+ * DeepinView 等：以 GET 現況合併 enable／QuickContrast.threshold 後 PUT（不可塞 FDLibList）
+ */
+function buildMergedFaceContrastXml(currentXml, { enable = true, threshold } = {}) {
+  let out = String(currentXml || "").trim();
+  if (!out || !/<FaceContrastList[\s>]/i.test(out)) {
+    throw createApiError(
+      C.PEOPLE_COUNTING_VALIDATION_FAILED,
+      "faceContrast 現況 XML 無效，無法合併設定",
+    );
+  }
+  if (/<enable>[\s\S]*?<\/enable>/i.test(out)) {
+    out = out.replace(
+      /<enable>[\s\S]*?<\/enable>/i,
+      `<enable>${enable ? "true" : "false"}</enable>`,
+    );
+  }
+  if (
+    threshold != null &&
+    /<QuickContrast>[\s\S]*?<threshold>[\s\S]*?<\/threshold>/i.test(out)
+  ) {
+    out = out.replace(
+      /(<QuickContrast>[\s\S]*?<threshold>)\s*[^<]*(\s*<\/threshold>)/i,
+      `$1${Math.trunc(Number(threshold))}$2`,
+    );
+  }
+  return out;
+}
+
+function buildLegacyFaceContrastXml({ channelId: _channelId, fdid, threshold }) {
+  return xmlDoc(
+    "FaceContrastList",
+    `  <FaceContrast>
+    <id>1</id>
+    <enable>true</enable>
+    <faceContrastType>faceContrast</faceContrastType>
+    <thresholdValue>${escapeXml(threshold)}</thresholdValue>
+    <FDLibList>
+      <FDLib>
+        <id>1</id>
+        <FDID>${escapeXml(fdid)}</FDID>
+        <thresholdValue>${escapeXml(threshold)}</thresholdValue>
+      </FDLib>
+    </FDLibList>
+    <faceSnapDataUpload>true</faceSnapDataUpload>
+  </FaceContrast>`,
+  );
+}
+
 function assertIsapiPayloadOk(data, context = "ISAPI") {
   const text = responseToText(data);
   if (!text) return;
@@ -150,7 +209,12 @@ async function getCameraDeviceAndClient(deviceId) {
       "攝影機連線設定不完整（缺少 host / username / password）",
     );
   }
-  return { device, client: createIsapiClient(device.config) };
+  return {
+    device,
+    client: createIsapiClient(device.config, {
+      typeCode: device.type_code || "camera",
+    }),
+  };
 }
 
 async function persistFdLibMeta(deviceId, meta) {
@@ -485,49 +549,122 @@ async function pictureUpload(deviceId, params) {
   }
 }
 
+function buildFdSearchXml({
+  searchID,
+  fdid,
+  employeeNo,
+  faceLibType = DEFAULT_FACE_LIB_TYPE,
+  includeFaceLibType = true,
+}) {
+  const typeLine = includeFaceLibType
+    ? `\n  <faceLibType>${escapeXml(String(faceLibType || DEFAULT_FACE_LIB_TYPE))}</faceLibType>`
+    : "";
+  return xmlDoc(
+    "FDSearchDescription",
+    `  <searchID>${escapeXml(searchID)}</searchID>
+  <searchResultPosition>0</searchResultPosition>
+  <maxResults>30</maxResults>
+  <FDID>${escapeXml(String(fdid))}</FDID>${typeLine}
+  <customHumanID>${escapeXml(String(employeeNo))}</customHumanID>`,
+  );
+}
+
+function parseFdSearchMatches(text) {
+  return [...pickBlocks(text, "MatchElement"), ...pickBlocks(text, "element")]
+    .map((block) => {
+      const PID = pickStr(
+        pickTag(block, "PID"),
+        pickTag(block, "pid"),
+        pickTag(block, "FPID"),
+      );
+      return PID
+        ? { PID, customHumanID: pickTag(block, "customHumanID") }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+/**
+ * 依工號搜尋臉庫紀錄。失敗時拋錯（呼叫端勿把失敗當成「庫中無人」）。
+ */
 async function searchByCustomHumanId(deviceId, employeeNo, libMeta = null) {
   const { client } = await getCameraDeviceAndClient(deviceId);
   const lib = libMeta || (await ensureFaceLib(deviceId));
   const searchID = `S${crypto.randomBytes(6).toString("hex")}`;
-  const xml = xmlDoc(
-    "FDSearchDescription",
-    `  <searchID>${escapeXml(searchID)}</searchID>
-  <searchResultPosition>1</searchResultPosition>
-  <maxResults>30</maxResults>
-  <FDID>${escapeXml(String(lib.FDID))}</FDID>
-  <customHumanID>${escapeXml(String(employeeNo))}</customHumanID>`,
-  );
-
-  try {
-    const res = await requestXml(client, {
+  const faceLibType = String(lib.faceLibType || DEFAULT_FACE_LIB_TYPE);
+  const postSearch = (includeFaceLibType) =>
+    requestXml(client, {
       method: "POST",
       path: PATHS.fdSearch,
-      xml,
+      xml: buildFdSearchXml({
+        searchID,
+        fdid: lib.FDID,
+        employeeNo,
+        faceLibType,
+        includeFaceLibType,
+      }),
     });
-    const text = responseToText(res.data);
-    return [...pickBlocks(text, "MatchElement"), ...pickBlocks(text, "element")]
-      .map((block) => {
-        const PID = pickStr(
-          pickTag(block, "PID"),
-          pickTag(block, "pid"),
-          pickTag(block, "FPID"),
-        );
-        return PID
-          ? { PID, customHumanID: pickTag(block, "customHumanID"), raw: block }
-          : null;
-      })
-      .filter(Boolean);
+
+  let res;
+  try {
+    res = await postSearch(true);
   } catch (err) {
-    logger.warn("FDSearch 失敗", {
+    if (!/badXmlContent|Invalid XML Content/i.test(errorText(err))) throw err;
+    logger.warn("FDSearch 拒收 faceLibType，改送不含該欄位", {
       deviceId,
       employeeNo,
       error: err?.message || String(err),
     });
-    return [];
+    res = await postSearch(false);
+  }
+  return parseFdSearchMatches(responseToText(res.data));
+}
+
+/** DELETE /FDLib/{FDID}/picture/{PID|customHumanID} */
+function buildFdLibPicturePath(fdid, pidOrHumanId) {
+  return `${PATHS.fdLib}/${encodeURIComponent(String(fdid))}/picture/${encodeURIComponent(String(pidOrHumanId))}`;
+}
+
+/** 後備：PUT FDDeleteData（須含 faceLibType，否則易 badXmlContent） */
+function buildFdDeleteDataXml({ fdid, pid, faceLibType = DEFAULT_FACE_LIB_TYPE }) {
+  return xmlDoc(
+    "FDDeleteData",
+    `  <FDID>${escapeXml(String(fdid))}</FDID>
+  <faceLibType>${escapeXml(String(faceLibType || DEFAULT_FACE_LIB_TYPE))}</faceLibType>
+  <deleteMode>byPID</deleteMode>
+  <PID>${escapeXml(String(pid))}</PID>`,
+  );
+}
+
+function isFdDeleteNotFoundError(errOrText) {
+  return /notFound|No results|doesNotExist|facePicNotExist|personNotExist|faceLibraryIDNotExis|\b404\b/i.test(
+    errorText(errOrText),
+  );
+}
+
+/** 優先 DELETE picture；非「找不到」則後備 PUT FDDeleteData */
+async function deleteOneFacePicture(client, { fdid, pid, faceLibType }) {
+  const path = buildFdLibPicturePath(fdid, pid);
+  try {
+    const res = await client.request({ method: "DELETE", path });
+    assertIsapiPayloadOk(res.data, path);
+    return { missing: false };
+  } catch (err) {
+    if (isFdDeleteNotFoundError(err)) return { missing: true };
+    logger.warn("DELETE picture 失敗，改試 PUT FDDeleteData", {
+      path,
+      error: err?.message || String(err),
+    });
+    await requestXml(client, {
+      method: "PUT",
+      path: PATHS.fdLib,
+      xml: buildFdDeleteDataXml({ fdid, pid, faceLibType }),
+    });
+    return { missing: false };
   }
 }
 
-/** 依工號搜尋 PID 後刪除；僅 PUT FDDeleteData byPID（必須帶 FDID） */
+/** 用工號 DELETE picture/{customHumanID}（不依賴 FDSearch） */
 async function deleteByCustomHumanId(deviceId, employeeNo, libMeta = null) {
   const lib = libMeta || (await ensureFaceLib(deviceId));
   const fdid = String(lib.FDID || "").trim();
@@ -537,27 +674,18 @@ async function deleteByCustomHumanId(deviceId, employeeNo, libMeta = null) {
       "缺少 FDID，拒絕刪除以免清空人臉庫",
     );
   }
-
-  const matches = await searchByCustomHumanId(deviceId, employeeNo, lib);
-  if (!matches.length) return { success: true, deleted: 0 };
+  const humanId = String(employeeNo || "").trim();
+  if (!humanId) {
+    throw createApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "缺少工號");
+  }
 
   const { client } = await getCameraDeviceAndClient(deviceId);
-  let deleted = 0;
-  for (const m of matches) {
-    const deleteXml = xmlDoc(
-      "FDDeleteData",
-      `  <FDID>${escapeXml(fdid)}</FDID>
-  <deleteMode>byPID</deleteMode>
-  <PID>${escapeXml(String(m.PID))}</PID>`,
-    );
-    await requestXml(client, {
-      method: "PUT",
-      path: PATHS.fdLib,
-      xml: deleteXml,
-    });
-    deleted += 1;
-  }
-  return { success: true, deleted };
+  const result = await deleteOneFacePicture(client, {
+    fdid,
+    pid: humanId,
+    faceLibType: String(lib.faceLibType || DEFAULT_FACE_LIB_TYPE),
+  });
+  return { success: true, deleted: result.missing ? 0 : 1 };
 }
 
 async function ensureFaceContrast(deviceId, options = {}) {
@@ -581,28 +709,30 @@ async function ensureFaceContrast(deviceId, options = {}) {
   );
   const fdid = String(lib.FDID);
   const { client } = await getCameraDeviceAndClient(deviceId);
+  const path = PATHS.faceContrast(channelId);
 
-  await requestXml(client, {
-    method: "PUT",
-    path: PATHS.faceContrast(channelId),
-    xml: xmlDoc(
-      "FaceContrastList",
-      `  <FaceContrast>
-    <id>1</id>
-    <enable>true</enable>
-    <faceContrastType>faceContrast</faceContrastType>
-    <thresholdValue>${escapeXml(threshold)}</thresholdValue>
-    <FDLibList>
-      <FDLib>
-        <id>1</id>
-        <FDID>${escapeXml(fdid)}</FDID>
-        <thresholdValue>${escapeXml(threshold)}</thresholdValue>
-      </FDLib>
-    </FDLibList>
-    <faceSnapDataUpload>true</faceSnapDataUpload>
-  </FaceContrast>`,
-    ),
-  });
+  const currentRes = await requestXml(client, { method: "GET", path });
+  const currentXml = responseToText(currentRes.data);
+  let capsXml = "";
+  try {
+    const capsRes = await requestXml(client, {
+      method: "GET",
+      path: `${path}/capabilities`,
+    });
+    capsXml = responseToText(capsRes.data);
+  } catch (e) {
+    logger.debug?.("faceContrast capabilities 略過", {
+      deviceId,
+      error: e?.message || String(e),
+    });
+  }
+
+  const useLegacy = supportsLegacyFaceContrastFdLib(currentXml, capsXml);
+  const xml = useLegacy
+    ? buildLegacyFaceContrastXml({ channelId, fdid, threshold })
+    : buildMergedFaceContrastXml(currentXml, { enable: true, threshold });
+
+  await requestXml(client, { method: "PUT", path, xml });
 
   await persistFdLibMeta(deviceId, {
     FDID: fdid,
@@ -610,9 +740,15 @@ async function ensureFaceContrast(deviceId, options = {}) {
     customFaceLibID: CUSTOM_FACE_LIB_ID,
     faceContrastChannelId: channelId,
     similarityThreshold: threshold,
+    faceContrastMode: useLegacy ? "fdlib_list" : "merged_current",
   });
 
-  return { success: true, FDID: fdid, channelId };
+  return {
+    success: true,
+    FDID: fdid,
+    channelId,
+    mode: useLegacy ? "fdlib_list" : "merged_current",
+  };
 }
 
 module.exports = {
@@ -620,4 +756,11 @@ module.exports = {
   pictureUpload,
   deleteByCustomHumanId,
   ensureFaceContrast,
+  searchByCustomHumanId,
+  // test / probe helpers
+  supportsLegacyFaceContrastFdLib,
+  buildMergedFaceContrastXml,
+  buildFdLibPicturePath,
+  buildFdDeleteDataXml,
+  buildFdSearchXml,
 };

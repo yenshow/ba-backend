@@ -47,7 +47,7 @@ function _buildLoggingValuesFromSensorParameters(sensorParameters, defaultRegist
     const dataType = param.modbusConfig?.dataType || "uint16";
     let length = Number(param.modbusConfig?.length);
     if (!Number.isFinite(length) || length < 1) {
-      length = dataType === "uint16" ? 1 : 2;
+      length = defaultLengthForDataType(dataType);
     }
     values.push({
       name: param.type,
@@ -117,8 +117,48 @@ async function getDeviceLoggingConfig(deviceId) {
   }
 }
 
+/** @param {string} dataType */
+function defaultLengthForDataType(dataType) {
+  const t = String(dataType || "uint16");
+  if (t === "uint16") return 1;
+  if (t === "float64_be" || t === "float64_le") return 4;
+  return 2;
+}
+
 /**
- * 將 Modbus 暫存器陣列解成數值（uint16 / uint32 BE|LE）
+ * IEEE-754 float32：2×uint16；be＝高字在前
+ * @param {number[]} regs
+ * @param {'be'|'le'} wordOrder
+ */
+function decodeFloat32(regs, wordOrder) {
+  if (!Array.isArray(regs) || regs.length < 2) return null;
+  const w = wordOrder === "be" ? [regs[0], regs[1]] : [regs[1], regs[0]];
+  const buf = Buffer.alloc(4);
+  buf.writeUInt16BE(Number(w[0]) & 0xffff, 0);
+  buf.writeUInt16BE(Number(w[1]) & 0xffff, 2);
+  return buf.readFloatBE(0);
+}
+
+/**
+ * IEEE-754 float64：4×uint16
+ * @param {number[]} regs
+ * @param {'be'|'le'} wordOrder
+ */
+function decodeFloat64(regs, wordOrder) {
+  if (!Array.isArray(regs) || regs.length < 4) return null;
+  const w =
+    wordOrder === "be"
+      ? regs.slice(0, 4)
+      : [regs[3], regs[2], regs[1], regs[0]];
+  const buf = Buffer.alloc(8);
+  for (let i = 0; i < 4; i++) {
+    buf.writeUInt16BE(Number(w[i]) & 0xffff, i * 2);
+  }
+  return buf.readDoubleBE(0);
+}
+
+/**
+ * 將 Modbus 暫存器陣列解成數值（uint16 / uint32 / float32 / float64 BE|LE）
  * @param {number|number[]} raw
  * @param {string} [dataType]
  */
@@ -133,6 +173,10 @@ function decodeRegisterValue(raw, dataType = "uint16") {
   if (dataType === "uint32_le" && raw.length >= 2) {
     return ((Number(raw[1]) & 0xffff) << 16) + (Number(raw[0]) & 0xffff);
   }
+  if (dataType === "float32_be") return decodeFloat32(raw, "be");
+  if (dataType === "float32_le") return decodeFloat32(raw, "le");
+  if (dataType === "float64_be") return decodeFloat64(raw, "be");
+  if (dataType === "float64_le") return decodeFloat64(raw, "le");
   return Number(raw[0]);
 }
 
@@ -172,4 +216,5 @@ module.exports = {
   invalidateDeviceLoggingConfig,
   applyConversion,
   decodeRegisterValue,
+  defaultLengthForDataType,
 };

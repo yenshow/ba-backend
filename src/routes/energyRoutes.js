@@ -86,6 +86,14 @@ router.get(
 );
 
 router.get(
+  "/dashboard/metering",
+  disableHttpCache,
+  asyncHandler(async (_req, res) => {
+    res.sendSuccess(await energyDashboardService.getMetering());
+  }),
+);
+
+router.get(
   "/dashboard/notifications",
   disableHttpCache,
   asyncHandler(async (req, res) => {

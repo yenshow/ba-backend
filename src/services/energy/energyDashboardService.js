@@ -450,10 +450,145 @@ async function getBreakdown() {
   return { totalEnergyKwh, systems };
 }
 
+const METERING_NUM_KEYS = [
+  "voltage_v1",
+  "voltage_v2",
+  "voltage_v3",
+  "voltage_avg",
+  "current_i1",
+  "current_i2",
+  "current_i3",
+  "current_avg",
+  "pf_1",
+  "pf_2",
+  "pf_3",
+  "pf_avg",
+  "active_power",
+  "active_power_p1",
+  "active_power_p2",
+  "active_power_p3",
+  "demand",
+  "frequency",
+  "load_type",
+  "run_hour",
+  "co2",
+  "cost",
+  "active_energy",
+  "total_energy",
+];
+
+/**
+ * 讀數超過此時間視為離線。
+ * 對齊預設 meter_stale（15 分）；設備管理「線上」是通訊狀態，與此不同。
+ */
+const METERING_ONLINE_MS = 15 * 60_000;
+
+function numOrNull(v) {
+  return typeof v === "number" && Number.isFinite(v) ? round3(v) : null;
+}
+
+/**
+ * 即時量測：納入能源監測之電表最新讀數（Energy 度數／Voltage／Current／PF／Power／Item）
+ */
+async function getMetering() {
+  const { config } = await energySettingsService.getSettings();
+  const ids = config.include_device_ids || [];
+
+  const devices =
+    ids.length === 0
+      ? []
+      : await db.query(
+          `SELECT d.id, d.name, d.location, d.config, dm.config AS model_config
+           FROM devices d
+           LEFT JOIN device_models dm ON dm.id = d.model_id
+           WHERE d.id = ANY($1::int[])`,
+          [ids],
+        );
+
+  const electricityDevices = (devices || []).filter(
+    (d) => parseDeviceConfig(d.model_config).meterKind === "electricity",
+  );
+  const electricityIds = electricityDevices.map((d) => d.id);
+
+  const latestRows = await energyReadingsService.getLatestReadings(electricityIds);
+  const latestMap = new Map();
+  for (const r of latestRows || []) {
+    const data = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
+    latestMap.set(Number(r.device_id), {
+      data,
+      recordedAt: r.recorded_at
+        ? new Date(r.recorded_at).toISOString()
+        : null,
+      recordedMs: r.recorded_at ? new Date(r.recorded_at).getTime() : 0,
+    });
+  }
+
+  const now = Date.now();
+  const meters = electricityDevices.map((d) => {
+    const cfg = parseDeviceConfig(d.config);
+    const systemKey = normalizeEnergyUsageSystemKey(cfg.energy_usage_system);
+    const latest = latestMap.get(d.id);
+    const data = latest?.data || {};
+    const values = {};
+    for (const key of METERING_NUM_KEYS) {
+      values[key] = numOrNull(data[key]);
+    }
+    return {
+      deviceId: d.id,
+      deviceName: d.name || `設備 #${d.id}`,
+      location: d.location || null,
+      systemKey,
+      systemName: getEnergyUsageSystemLabel(systemKey),
+      online: latest ? now - latest.recordedMs <= METERING_ONLINE_MS : false,
+      lastReadingAt: latest?.recordedAt ?? null,
+      voltage: {
+        v1: values.voltage_v1,
+        v2: values.voltage_v2,
+        v3: values.voltage_v3,
+        avg: values.voltage_avg,
+      },
+      current: {
+        i1: values.current_i1,
+        i2: values.current_i2,
+        i3: values.current_i3,
+        avg: values.current_avg,
+      },
+      powerFactor: {
+        pf1: values.pf_1,
+        pf2: values.pf_2,
+        pf3: values.pf_3,
+        avg: values.pf_avg,
+      },
+      activePower: {
+        p1: values.active_power_p1,
+        p2: values.active_power_p2,
+        p3: values.active_power_p3,
+        psum: values.active_power,
+      },
+      item: {
+        frequency: values.frequency,
+        loadType: values.load_type,
+        runHour: values.run_hour,
+        co2: values.co2,
+        cost: values.cost,
+      },
+      demandKw: values.demand,
+      activeEnergyKwh: values.active_energy,
+      totalActiveEnergyKwh: values.total_energy,
+    };
+  });
+
+  return {
+    meters,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 module.exports = {
   getDashboardSummary,
   getTrends,
   getDistribution,
   getRanking,
   getBreakdown,
+  getMetering,
 };

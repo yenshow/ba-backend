@@ -1691,14 +1691,28 @@ async function syncPersonFaceToCamera(
     faceHash &&
     lastHash === faceHash
   ) {
-    reporter?.skipOp?.({
-      employeeNo: person.employeeNo,
-      deviceId,
-      action: "sync",
-      stage: "face",
-      message: "未變更",
-    });
-    return;
+    // 設備確認仍有此人才能略過；搜尋失敗則維持略過（避免每次強制重傳）
+    let shouldSkip = true;
+    try {
+      const matches = await isapiCameraFdLibService.searchByCustomHumanId(
+        deviceId,
+        person.employeeNo,
+        libMeta,
+      );
+      shouldSkip = matches.length > 0;
+    } catch (_e) {
+      shouldSkip = true;
+    }
+    if (shouldSkip) {
+      reporter?.skipOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "sync",
+        stage: "face",
+        message: "未變更",
+      });
+      return;
+    }
   }
 
   const startedAt = reporter?.startOp

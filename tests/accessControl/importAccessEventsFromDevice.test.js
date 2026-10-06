@@ -10,8 +10,10 @@ const {
   parseSelection,
   toPayload,
   extractPictureUrl,
-  isImageBuffer,
 } = require("../../scripts/importAccessEventsFromDevice");
+const {
+  isImageBuffer,
+} = require("../../src/services/isapi/isapiEventBackfillCommon");
 
 const face = toPayload({
   major: 5,

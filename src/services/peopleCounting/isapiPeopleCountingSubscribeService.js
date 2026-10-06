@@ -25,6 +25,9 @@ const {
   parseFaceContrastEventPayload,
 } = require("./isapiFaceContrastXmlParser");
 const { persistFaceContrastEvent, attachPictureToFaceContrastEvent } = require("./isapiFaceContrastPersistence");
+const {
+  scheduleFaceContrastBackfill,
+} = require("./isapiFaceContrastBackfillService");
 const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
 
 const RE_CONNECT_DELAY_MS = 10000;
@@ -79,6 +82,9 @@ async function getCameraSubscriptions() {
     resolveFaceCameraDirection,
     CAMERA_MODE,
   } = require("./peopleCountingConfig");
+  const {
+    parseEventBackfillFields,
+  } = require("../isapi/isapiEventBackfillCommon");
 
   const rows = await db.query(
     `SELECT
@@ -109,6 +115,7 @@ async function getCameraSubscriptions() {
     const includeFaceContrast = isFace;
     const includePeopleCounting = !isFace;
     const deviceIds = cameras.cameraDeviceIds;
+    const backfill = parseEventBackfillFields(cfg);
 
     for (const deviceId of deviceIds) {
       if (!deviceId) continue;
@@ -122,6 +129,8 @@ async function getCameraSubscriptions() {
         includePeopleCounting,
         includeFaceContrast,
         direction,
+        eventBackfillEnabled: backfill.eventBackfillEnabled,
+        eventBackfillWindowSec: backfill.eventBackfillWindowSec,
       });
     }
   }
@@ -140,6 +149,12 @@ async function getCameraSubscriptions() {
         prev.includePeopleCounting || s.includePeopleCounting,
       includeFaceContrast: prev.includeFaceContrast || s.includeFaceContrast,
       direction: prev.direction || s.direction,
+      eventBackfillEnabled:
+        prev.eventBackfillEnabled || s.eventBackfillEnabled,
+      eventBackfillWindowSec: Math.max(
+        Number(prev.eventBackfillWindowSec) || 0,
+        Number(s.eventBackfillWindowSec) || 0,
+      ),
     });
   }
   return [...uniq.values()].filter(
@@ -159,7 +174,9 @@ async function getDeviceClient(deviceId) {
       "攝影機連線設定不完整（缺少 host / username / password）",
     );
   }
-  const client = createIsapiClient(device.config);
+  const client = createIsapiClient(device.config, {
+    typeCode: device.type_code,
+  });
   return { device, client };
 }
 
@@ -288,6 +305,16 @@ async function consumeEventStreamIncremental(
             personName: saved?.personName ?? faceParsed.personName,
             employeeNo: saved?.employeeNo ?? faceParsed.employeeNo,
             similarity: faceParsed.similarity,
+          });
+          scheduleFaceContrastBackfill({
+            locationId: context.locationId,
+            deviceId: context.deviceId,
+            channelId: faceParsed.channelId ?? context.channelId ?? 1,
+            direction: context.direction || null,
+            eventTime: faceParsed.eventTime,
+            enabled: Boolean(context.eventBackfillEnabled),
+            windowSec: context.eventBackfillWindowSec,
+            deviceIp: faceParsed.deviceIp || context.deviceIp || "",
           });
         } catch (err) {
           lastWrittenFaceEventId = null;
@@ -449,6 +476,7 @@ async function runSubscribeForCamera(sub, abortSignal) {
     locationId: sub.locationId,
     deviceId: sub.deviceId,
     deviceIp,
+    isapiPort: client.port,
     channelId: sub.channelId,
     includePeopleCounting,
     includeFaceContrast,
@@ -484,6 +512,8 @@ async function runSubscribeForCamera(sub, abortSignal) {
       includePeopleCounting,
       includeFaceContrast,
       direction,
+      eventBackfillEnabled: Boolean(sub.eventBackfillEnabled),
+      eventBackfillWindowSec: sub.eventBackfillWindowSec,
     },
     abortSignal,
   );

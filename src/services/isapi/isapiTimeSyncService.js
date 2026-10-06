@@ -44,7 +44,11 @@ function buildTimeSyncPayload(now = new Date()) {
 }
 
 async function syncDeviceConfig(config, meta = {}) {
-  const { client } = resolveIsapiClientFromConfig(config, meta.label || "設備");
+  const { client } = resolveIsapiClientFromConfig(
+    config,
+    meta.label || "設備",
+    meta.typeCode,
+  );
   const payload = buildTimeSyncPayload();
   const body = buildTimeSyncXml(payload);
   await client.request({
@@ -74,6 +78,7 @@ function resolveDeviceId(raw) {
 async function syncDeviceTime(deviceRow) {
   return syncDeviceConfig(deviceRow?.config, {
     label: deviceLabel(deviceRow?.type_code),
+    typeCode: deviceRow?.type_code,
     deviceId: resolveDeviceId(deviceRow?.id),
     deviceName: deviceRow?.name,
   });
@@ -120,6 +125,7 @@ async function syncOnConnect(device) {
   try {
     const r = await syncDeviceConfig(config, {
       label: deviceLabel(device?.type_code),
+      typeCode: device?.type_code,
       deviceId,
       deviceName: device?.name,
     });

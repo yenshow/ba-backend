@@ -25,6 +25,10 @@ const energyReadingSignature = (data, online) =>
     data: data && typeof data === "object" ? data : {},
   });
 
+/**
+ * 依參數逐點 batchRead（modbusBatchService 會合併連續區間，且單次 ≤125）。
+ * 勿對整段 min～max 一次讀：A21 等表計位址跨 0x0F00～0x3006，連讀必失敗。
+ */
 async function readMeterValues(enabledValues, deviceConfig, meta = {}) {
   const deviceValues = {};
   const registerTypes = [
@@ -36,37 +40,25 @@ async function readMeterValues(enabledValues, deviceConfig, meta = {}) {
 
   for (const { type: registerType, batchType } of registerTypes) {
     const group = enabledValues.filter(
-      (v) => (v.register_type || "holding") === registerType,
+      (v) =>
+        (v.register_type || "holding") === registerType &&
+        isValidEnergyParameterKey(v.name),
     );
     if (group.length === 0) continue;
 
-    let minAddress = group[0].address;
-    let maxAddress = group[0].address + (group[0].length || 1);
-    for (const vc of group) {
-      const endAddr = vc.address + (vc.length || 1);
-      minAddress = Math.min(minAddress, vc.address);
-      maxAddress = Math.max(maxAddress, endAddr);
-    }
-    const readLength = maxAddress - minAddress;
-    if (readLength <= 0) continue;
+    const requests = group.map((vc, idx) => ({
+      host: deviceConfig.host,
+      port: deviceConfig.port,
+      unitId: deviceConfig.unitId,
+      registerType: batchType,
+      address: Number(vc.address),
+      length: Math.max(1, Number(vc.length) || 1),
+      meta: { idx, name: vc.name },
+    }));
 
-    let modbusData;
+    let results;
     try {
-      const results = await modbusBatchService.batchRead([
-        {
-          host: deviceConfig.host,
-          port: deviceConfig.port,
-          unitId: deviceConfig.unitId,
-          registerType: batchType,
-          address: minAddress,
-          length: readLength,
-        },
-      ]);
-      const first = results?.[0];
-      if (!first || first.ok !== true) {
-        throw new Error(first?.error || "Modbus 讀取失敗");
-      }
-      modbusData = first.data;
+      results = await modbusBatchService.batchRead(requests);
     } catch (err) {
       logger.warn("讀取暫存器失敗", {
         deviceId: meta.deviceId,
@@ -76,23 +68,32 @@ async function readMeterValues(enabledValues, deviceConfig, meta = {}) {
         unitId: deviceConfig.unitId,
         error: err.message,
         registerType,
-        minAddress,
-        readLength,
+        paramCount: group.length,
       });
       continue;
     }
 
-    for (const valueConfig of group) {
-      if (!isValidEnergyParameterKey(valueConfig.name)) continue;
-      const relativeAddress = valueConfig.address - minAddress;
-      const len = valueConfig.length || 1;
+    for (let i = 0; i < group.length; i++) {
+      const valueConfig = group[i];
+      const result = results?.[i];
+      if (!result || result.ok !== true) {
+        if (result?.error) {
+          logger.warn("參數讀取失敗", {
+            deviceId: meta.deviceId,
+            name: valueConfig.name,
+            address: valueConfig.address,
+            error: result.error,
+          });
+        }
+        continue;
+      }
+      const modbusData = result.data;
+      const len = Math.max(1, Number(valueConfig.length) || 1);
       const rawValue =
-        Array.isArray(modbusData) &&
-        relativeAddress >= 0 &&
-        relativeAddress + len <= modbusData.length
+        Array.isArray(modbusData) && modbusData.length >= len
           ? len === 1
-            ? modbusData[relativeAddress]
-            : modbusData.slice(relativeAddress, relativeAddress + len)
+            ? modbusData[0]
+            : modbusData.slice(0, len)
           : null;
       if (rawValue === null || rawValue === undefined) continue;
       const converted = deviceLoggingConfig.applyConversion(

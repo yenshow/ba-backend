@@ -153,7 +153,12 @@ async function getCameraDeviceAndClient(deviceId) {
       "攝影機連線設定不完整",
     );
   }
-  return { device, client: createIsapiClient(device.config) };
+  return {
+    device,
+    client: createIsapiClient(device.config, {
+      typeCode: device.type_code || "camera",
+    }),
+  };
 }
 
 /**

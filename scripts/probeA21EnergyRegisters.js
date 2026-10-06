@@ -6,7 +6,8 @@
  *
  * BA 能源 ★：
  *   active_power  ← 0x1032 FLOAT32(W)  /1000 → kW
- *   active_energy ← 0x1400 FLOAT64(kWh)
+ *   active_energy ← 0x1400 FLOAT64(kWh)  // HMI 5121 輸入有效電能
+ *   total_energy  ← 0x1408 FLOAT64(kWh)  // HMI 5129 總有效電能
  *   demand        ← 0x3006 FLOAT32(W)  /1000 → kW
  *
  * 用法：
@@ -143,9 +144,22 @@ const FIELDS = [
 		ba: "active_energy",
 		required: true,
 		toBa: (v) => ({ value: v, unit: "kWh", transform: "value" }),
+		note: "HMI 5121 輸入有效電能",
 	},
 	{ key: "kwh_exp", label: "kWh_Exp", hex: 0x1404, length: 4, kind: "float64", unit: "kWh", group: "Energy" },
-	{ key: "kwh_total", label: "kWh_Total", hex: 0x1408, length: 4, kind: "float64", unit: "kWh", group: "Energy" },
+	{
+		key: "kwh_total",
+		label: "kWh_Total ★",
+		hex: 0x1408,
+		length: 4,
+		kind: "float64",
+		unit: "kWh",
+		group: "Energy",
+		ba: "total_energy",
+		required: true,
+		toBa: (v) => ({ value: v, unit: "kWh", transform: "value" }),
+		note: "HMI 5129 總有效電能",
+	},
 	{ key: "kwh_net", label: "kWh_Net", hex: 0x140c, length: 4, kind: "float64", unit: "kWh", group: "Energy" },
 	{ key: "kvarh_imp", label: "kVARh_IMP", hex: 0x1410, length: 4, kind: "float64", unit: "kVARh", group: "Energy" },
 	{ key: "kvarh_exp", label: "kVARh_Exp", hex: 0x1414, length: 4, kind: "float64", unit: "kVARh", group: "Energy" },
@@ -373,11 +387,12 @@ const buildMarkdown = (ctx) => {
 	lines.push("");
 	lines.push("```text");
 	lines.push("active_power   address=0x1032  dataType=float32_be  length=2  transform=value / 1000  # kW");
-	lines.push("active_energy  address=0x1400  dataType=float64_be  length=4  transform=value         # kWh");
+	lines.push("active_energy  address=0x1400  dataType=float64_be  length=4  transform=value         # kWh；HMI 5121 輸入");
+	lines.push("total_energy   address=0x1408  dataType=float64_be  length=4  transform=value         # kWh；HMI 5129 總");
 	lines.push("demand         address=0x3006  dataType=float32_be  length=2  transform=value / 1000  # kW");
 	lines.push("```");
 	lines.push("");
-	lines.push(`> 目前 BA catalog 僅 uint16／uint32；正式輪詢前需擴充 float 解碼。`);
+	lines.push(`> 型號請選 float64_be／float32_be；位址用 PDU（0x1400＝5120），勿填 HMI 1-based 5121。`);
 	lines.push("");
 
 	for (const group of GROUP_ORDER) {

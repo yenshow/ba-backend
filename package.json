@@ -49,6 +49,7 @@
     "test:isapi-picture-binding": "node tests/accessControl/isapiPictureBinding.test.js",
     "test:import-access-events": "node tests/accessControl/importAccessEventsFromDevice.test.js",
     "test:isapi-time-sync-on-connect": "node tests/isapi/isapiTimeSyncOnConnect.test.js",
+    "test:isapi-http-port": "node tests/isapi/resolveIsapiHttpPort.test.js",
     "yscp:resubscribe": "node scripts/yscpResubscribe.js",
     "external-data:test": "node scripts/externalData.js test",
     "external-data:fetch": "node scripts/externalData.js fetch",

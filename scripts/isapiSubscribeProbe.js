@@ -21,7 +21,7 @@ const {
 
 // ── 現場參數 ─────────────────────────────────────────────────────
 const SCRIPT_CONFIG = {
-  host: "192.168.2.103",
+  host: "192.168.2.212",
   port: 80,
   username: "admin",
   password: "Aa83124007",
@@ -119,7 +119,9 @@ const omitModelDataDeep = (node) => {
 
 /** 業務事件完整輸出（JSON pretty；XML 全文） */
 const formatEventDump = (payloadText, { omitModelData = true } = {}) => {
-  const text = String(payloadText || "").replace(/^\uFEFF/, "").trim();
+  const text = String(payloadText || "")
+    .replace(/^\uFEFF/, "")
+    .trim();
   if (!text) return "(empty)";
   if (text.startsWith("{") || text.startsWith("[")) {
     try {

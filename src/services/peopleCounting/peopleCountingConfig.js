@@ -4,6 +4,9 @@
 const { resolveStatsTimeRange } = require("../entryExit/resolveTimeOptions");
 const { parseStatsResetAtField } = require("../entryExit/locationStatsReset");
 const { ensureIntArray } = require("../location/locationShared");
+const {
+  parseEventBackfillFields,
+} = require("../isapi/isapiEventBackfillCommon");
 
 /** isapi_camera：人流統計（分區）｜人臉辨識（人員群組＋進／出攝影機） */
 const CAMERA_MODE = Object.freeze({
@@ -129,6 +132,7 @@ function parsePeopleCountingConfigFields(raw) {
     faceSimilarityThreshold: normalizeFaceSimilarityThreshold(
       cfg.face_similarity_threshold ?? cfg.faceSimilarityThreshold,
     ),
+    ...parseEventBackfillFields(cfg),
   };
 }
 

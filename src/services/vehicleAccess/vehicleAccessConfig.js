@@ -8,6 +8,9 @@ const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFea
 const { ensureIntArray } = require("../location/locationShared");
 const { parseStatsResetAtField } = require("../entryExit/locationStatsReset");
 const { parseLaneId } = require("./vehicleAccessHelpers");
+const {
+  parseEventBackfillFields,
+} = require("../isapi/isapiEventBackfillCommon");
 
 const OPERATION_MODES = ["construction_flow", "parking"];
 
@@ -42,6 +45,7 @@ function parseVehicleAccessConfigFields(raw) {
       statsEpochStartedAt != null ? String(statsEpochStartedAt) : null,
     statsResetAt: statsResetAt != null ? String(statsResetAt) : null,
     parkingCapacity,
+    ...parseEventBackfillFields(c),
   };
 }
 

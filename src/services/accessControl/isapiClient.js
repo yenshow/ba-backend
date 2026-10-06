@@ -15,6 +15,45 @@ const CRLFCRLF = Buffer.from("\r\n\r\n");
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 /** 訂閱 XML heartbeat 為 30s；逾時未收到任何位元組視為長連線已死，關掉後由迴圈重連 */
 const SUBSCRIBE_IDLE_TIMEOUT_MS = 90_000;
+/** 攝影機 config.port＝RTSP（常為 554）；ISAPI HTTP 預設 80 */
+const DEFAULT_ISAPI_HTTP_PORT = 80;
+
+const toValidPort = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const port = Math.trunc(n);
+  return port >= 1 && port <= 65535 ? port : null;
+};
+
+/** 攝影機：config.type=camera、type_code=camera，或具 rtsp_url */
+const isCameraDeviceConfig = (deviceConfig) => {
+  if (!deviceConfig || typeof deviceConfig !== "object") return false;
+  const type = String(
+    deviceConfig.type || deviceConfig.type_code || "",
+  )
+    .trim()
+    .toLowerCase();
+  if (type === "camera") return true;
+  return Boolean(String(deviceConfig.rtsp_url || "").trim());
+};
+
+/**
+ * 解析 ISAPI HTTP 連線埠。
+ * - 攝影機：忽略 RTSP `port`，用可選 `isapi_port`（NAT）或預設 80
+ * - 其餘：`port` 或缺省 80
+ * @param {object} [deviceConfig]
+ * @returns {number}
+ */
+function resolveIsapiHttpPort(deviceConfig) {
+  const cfg = deviceConfig || {};
+  const override = toValidPort(cfg.isapi_port);
+  if (override != null) return override;
+  if (isCameraDeviceConfig(cfg)) return DEFAULT_ISAPI_HTTP_PORT;
+  return toValidPort(cfg.port) ?? DEFAULT_ISAPI_HTTP_PORT;
+}
 
 /* ---------- raw TCP HTTP（訂閱長連線） ---------- */
 
@@ -277,16 +316,24 @@ function buildAuthHeader(challenge, method, uri, username, password) {
 /**
  * 建立 ISAPI 客戶端
  * @param {object} deviceConfig - devices.config：{ host, port?, username, password }
- * @returns {object} - { request(options), requestSubscribeStream(xmlBody, options) }
+ *   攝影機另含 rtsp_url；`port`＝RTSP，ISAPI 走 resolveIsapiHttpPort（預設 80）
+ * @param {{ typeCode?: string }} [options] - 傳 devices.type_code，避免僅靠 config 判斷
+ * @returns {object} - { request(options), requestSubscribeStream(xmlBody, options), baseURL, port }
  */
-function createIsapiClient(deviceConfig) {
-  const host = deviceConfig.host;
-  const port =
-    deviceConfig.port === undefined || deviceConfig.port === null
-      ? 80
-      : Number(deviceConfig.port) || 80;
-  const username = deviceConfig.username;
-  const password = deviceConfig.password;
+function createIsapiClient(deviceConfig, options = {}) {
+  const typeCode = String(options.typeCode || "").trim();
+  const cfg =
+    typeCode && deviceConfig && typeof deviceConfig === "object"
+      ? {
+          ...deviceConfig,
+          type: deviceConfig.type || typeCode,
+          type_code: deviceConfig.type_code || typeCode,
+        }
+      : deviceConfig || {};
+  const host = cfg.host;
+  const port = resolveIsapiHttpPort(cfg);
+  const username = cfg.username;
+  const password = cfg.password;
   const baseURL = port === 80 ? `http://${host}` : `http://${host}:${port}`;
 
   async function requestWithPreemptiveDigest(options) {
@@ -458,11 +505,14 @@ function createIsapiClient(deviceConfig) {
     request,
     requestSubscribeStream,
     baseURL,
+    port,
   };
 }
 
 module.exports = {
   createIsapiClient,
+  resolveIsapiHttpPort,
+  DEFAULT_ISAPI_HTTP_PORT,
   parseDigestChallenge,
   buildDigestResponse,
   buildAuthHeader,

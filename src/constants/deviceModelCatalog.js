@@ -92,9 +92,10 @@ const DEVICE_MODEL_CATALOG = [
     },
   },
   {
-    name: "數位電表範例",
+    name: "數位電表範例（A21 FLOAT）",
     typeCode: "sensor",
-    description: "能源管理電表範例（請依實際暫存器修改）",
+    description:
+      "A21-06-ADP-33 對照範例（Holding／IEEE-754 BE；請依實際型號調整）",
     config: {
       registerType: "holding",
       meterKind: "electricity",
@@ -102,19 +103,217 @@ const DEVICE_MODEL_CATALOG = [
         {
           type: "active_energy",
           modbusConfig: {
-            address: 0,
-            length: 2,
-            dataType: "uint32_be",
-            transform: "value / 100",
+            address: 0x1400,
+            length: 4,
+            dataType: "float64_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "total_energy",
+          modbusConfig: {
+            address: 0x1408,
+            length: 4,
+            dataType: "float64_be",
+            transform: "value",
           },
         },
         {
           type: "active_power",
           modbusConfig: {
-            address: 10,
-            length: 1,
-            dataType: "uint16",
-            transform: "value / 10",
+            address: 0x1032,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "demand",
+          modbusConfig: {
+            address: 0x3006,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "voltage_v1",
+          modbusConfig: {
+            address: 0x1000,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "voltage_v2",
+          modbusConfig: {
+            address: 0x1002,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "voltage_v3",
+          modbusConfig: {
+            address: 0x1004,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "voltage_avg",
+          modbusConfig: {
+            address: 0x1006,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "current_i1",
+          modbusConfig: {
+            address: 0x1010,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "current_i2",
+          modbusConfig: {
+            address: 0x1012,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "current_i3",
+          modbusConfig: {
+            address: 0x1014,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "current_avg",
+          modbusConfig: {
+            address: 0x1016,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "pf_1",
+          modbusConfig: {
+            address: 0x101c,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "pf_2",
+          modbusConfig: {
+            address: 0x101e,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "pf_3",
+          modbusConfig: {
+            address: 0x1020,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "pf_avg",
+          modbusConfig: {
+            address: 0x1022,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "active_power_p1",
+          modbusConfig: {
+            address: 0x102c,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "active_power_p2",
+          modbusConfig: {
+            address: 0x102e,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "active_power_p3",
+          modbusConfig: {
+            address: 0x1030,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "frequency",
+          modbusConfig: {
+            address: 0x101a,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "load_type",
+          modbusConfig: {
+            address: 0x10a0,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "run_hour",
+          modbusConfig: {
+            address: 0x0f00,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "co2",
+          modbusConfig: {
+            address: 0x0f06,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
+          },
+        },
+        {
+          type: "cost",
+          modbusConfig: {
+            address: 0x0f08,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value",
           },
         },
       ],

@@ -297,6 +297,11 @@ function buildSystemConfig(systemType, config) {
         ...(exitEventCam !== undefined
           ? { exit_event_camera_device_id: exitEventCam }
           : {}),
+        // 僅門禁／人臉適用；其餘資料源寫 false，避免切換模式後殘留開啟
+        event_backfill_enabled:
+          ((config.dataSource || "yscp") === "access_control" || isFace) &&
+          resetFields.eventBackfillEnabled === true,
+        event_backfill_window_sec: resetFields.eventBackfillWindowSec,
       };
     }
 
@@ -336,7 +341,9 @@ function buildSystemConfig(systemType, config) {
         : [];
       const {
         normalizeOperationMode,
+        parseVehicleAccessConfigFields,
       } = require("../vehicleAccess/vehicleAccessConfig");
+      const vaFields = parseVehicleAccessConfigFields(config);
       return {
         data_source:
           config.dataSource === "isapi_camera" ? "isapi_camera" : "yscp",
@@ -354,6 +361,10 @@ function buildSystemConfig(systemType, config) {
         exit_camera_device_ids: exitCam,
         camera_channel_id: ch,
         vehicle_group_ids: vehicleGroupIds,
+        event_backfill_enabled:
+          config.dataSource === "isapi_camera" &&
+          vaFields.eventBackfillEnabled === true,
+        event_backfill_window_sec: vaFields.eventBackfillWindowSec,
         log_display_columns: (() => {
           const cols = toStoredLogDisplayColumns(
             normalizeLogDisplayColumns(config.logDisplayColumns),

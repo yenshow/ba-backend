@@ -13,6 +13,12 @@ const {
 } = require("./isapiVehiclePersistence");
 const { ensureIntArray } = require("../location/locationShared");
 const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
+const {
+  scheduleVehicleEventBackfill,
+} = require("./isapiVehicleEventBackfillService");
+const {
+  parseEventBackfillFields,
+} = require("../isapi/isapiEventBackfillCommon");
 
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
@@ -47,10 +53,13 @@ async function loadDeviceLocationMap() {
     const cfg = r.system_config || {};
     const entryIds = ensureIntArray(cfg.entry_camera_device_ids);
     const exitIds = ensureIntArray(cfg.exit_camera_device_ids);
+    const backfill = parseEventBackfillFields(cfg);
     const target = {
       locationId: Number(r.location_id),
       locationName: r.location_name || "",
       zoneName: r.zone_name || "",
+      eventBackfillEnabled: backfill.eventBackfillEnabled,
+      eventBackfillWindowSec: backfill.eventBackfillWindowSec,
     };
     for (const deviceId of entryIds) {
       if (!map.has(deviceId)) map.set(deviceId, []);
@@ -89,7 +98,10 @@ async function getDeviceClient(deviceId) {
   ) {
     throw new Error("攝影機連線設定不完整");
   }
-  return { device, client: createIsapiClient(device.config) };
+  return {
+    device,
+    client: createIsapiClient(device.config, { typeCode: device.type_code }),
+  };
 }
 
 const CRLF = Buffer.from("\r\n");
@@ -155,6 +167,11 @@ async function consumeEventStreamIncremental(
           count: res.ids.length,
         });
         pendingPicture = { logIds: res.ids, attachFirstImage: true };
+        scheduleVehicleEventBackfill({
+          deviceId,
+          eventTime: parsed.dateTime,
+          locationTargets: targets,
+        });
       });
       return;
     }

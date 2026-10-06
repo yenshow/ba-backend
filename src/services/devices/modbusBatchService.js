@@ -173,68 +173,41 @@ async function batchRead(requests) {
     groups.get(groupKey).points.push({ address, length, idx, meta: r?.meta });
   });
 
+  /**
+   * 同一 device+registerType 的 ranges 必須串列讀取。
+   * 多電表／閘道並行 FC03 易逾時（A21：電能 0x1400、需量 0x3006 常被擠掉）。
+   * 不同 device 群組仍可並行。
+   */
   const groupEntries = Array.from(groups.values());
   await Promise.allSettled(
     groupEntries.map(async (g) => {
       const deviceKey = buildDeviceKey(g.deviceConfig);
       const ranges = coalesceToRanges(g.points);
 
-      await Promise.allSettled(
-        ranges.map(async (range) => {
-          const cacheKey = buildCacheKey(deviceKey, g.registerType, range.start, range.length);
+      for (const range of ranges) {
+        const cacheKey = buildCacheKey(deviceKey, g.registerType, range.start, range.length);
 
-          const shouldBypass = range.members.some((m) => bypassCacheByIndex.has(m.idx));
+        const shouldBypass = range.members.some((m) => bypassCacheByIndex.has(m.idx));
 
-          const cached = shouldBypass ? null : getCached(cacheKey);
-          if (cached) {
-            range.members.forEach((m) => {
-              results[m.idx] = {
-                ok: true,
-                data: cached.slice(m.offset, m.offset + m.length),
-                device: g.deviceConfig,
-                registerType: g.registerType,
-                address: m.address,
-                length: m.length,
-                meta: m.meta,
-              };
-            });
-            return;
-          }
+        const cached = shouldBypass ? null : getCached(cacheKey);
+        if (cached) {
+          range.members.forEach((m) => {
+            results[m.idx] = {
+              ok: true,
+              data: cached.slice(m.offset, m.offset + m.length),
+              device: g.deviceConfig,
+              registerType: g.registerType,
+              address: m.address,
+              length: m.length,
+              meta: m.meta,
+            };
+          });
+          continue;
+        }
 
-          if (!shouldBypass && inflight.has(cacheKey)) {
-            try {
-              const data = await inflight.get(cacheKey);
-              range.members.forEach((m) => {
-                results[m.idx] = {
-                  ok: true,
-                  data: data.slice(m.offset, m.offset + m.length),
-                  device: g.deviceConfig,
-                  registerType: g.registerType,
-                  address: m.address,
-                  length: m.length,
-                  meta: m.meta,
-                };
-              });
-            } catch (e) {
-              const msg = e?.message || String(e);
-              range.members.forEach((m) => {
-                results[m.idx] = { ok: false, error: msg, meta: m.meta };
-              });
-            }
-            return;
-          }
-
-          const p = (async () => {
-            const data = await readByType(g.registerType, range.start, range.length, g.deviceConfig);
-            setCached(cacheKey, data);
-            return data;
-          })();
-
-          if (!shouldBypass) {
-            inflight.set(cacheKey, p);
-          }
+        if (!shouldBypass && inflight.has(cacheKey)) {
           try {
-            const data = await p;
+            const data = await inflight.get(cacheKey);
             range.members.forEach((m) => {
               results[m.idx] = {
                 ok: true,
@@ -251,13 +224,43 @@ async function batchRead(requests) {
             range.members.forEach((m) => {
               results[m.idx] = { ok: false, error: msg, meta: m.meta };
             });
-          } finally {
-            if (!shouldBypass) {
-              inflight.delete(cacheKey);
-            }
           }
-        }),
-      );
+          continue;
+        }
+
+        const p = (async () => {
+          const data = await readByType(g.registerType, range.start, range.length, g.deviceConfig);
+          setCached(cacheKey, data);
+          return data;
+        })();
+
+        if (!shouldBypass) {
+          inflight.set(cacheKey, p);
+        }
+        try {
+          const data = await p;
+          range.members.forEach((m) => {
+            results[m.idx] = {
+              ok: true,
+              data: data.slice(m.offset, m.offset + m.length),
+              device: g.deviceConfig,
+              registerType: g.registerType,
+              address: m.address,
+              length: m.length,
+              meta: m.meta,
+            };
+          });
+        } catch (e) {
+          const msg = e?.message || String(e);
+          range.members.forEach((m) => {
+            results[m.idx] = { ok: false, error: msg, meta: m.meta };
+          });
+        } finally {
+          if (!shouldBypass) {
+            inflight.delete(cacheKey);
+          }
+        }
+      }
     }),
   );
 

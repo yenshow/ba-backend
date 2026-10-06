@@ -28,6 +28,9 @@ const {
 const {
   emitAccessControlEventFromPlaceContext,
 } = require("../peopleCounting/accessEventCameraResolver");
+const {
+  scheduleAccessEventBackfill,
+} = require("./isapiAccessEventBackfillService");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件 */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -332,6 +335,13 @@ async function consumeEventStreamIncremental(
         });
       }
       lastPendingFaceEventId = id;
+    }
+    if (id != null) {
+      scheduleAccessEventBackfill({
+        deviceId,
+        deviceIp: parsed.ipAddress || deviceIp || "",
+        eventTime: parsed.dateTime || new Date().toISOString(),
+      });
     }
     logger.debug("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };

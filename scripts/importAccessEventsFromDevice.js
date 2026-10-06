@@ -25,8 +25,15 @@ const {
 const {
   shouldQueueAccessEventPicture,
 } = require("../src/services/peopleCounting/accessControlLogLabels");
+const {
+  fetchAcsEvents,
+  toAcsEventPayload,
+  findExistingAccessEvent,
+} = require("../src/services/accessControl/isapiAcsEventQuery");
+const {
+  downloadIsapiPicture,
+} = require("../src/services/isapi/isapiEventBackfillCommon");
 
-const ACS_EVENT_PATH = "/ISAPI/AccessControl/AcsEvent?format=json";
 const PAGE_SIZE = 30;
 const MAX_PAGES = 200;
 
@@ -62,29 +69,11 @@ const ask = (rl, question) =>
     rl.question(question, (answer) => resolve(String(answer ?? "").trim()));
   });
 
-const asList = (value) => {
-  if (value == null) return [];
-  return Array.isArray(value) ? value : [value];
-};
-
+/** @deprecated 相容測試／舊呼叫；請用 toAcsEventPayload */
 const toPayload = (item) => {
-  const employee = String(item.employeeNoString ?? item.employeeNo ?? "").trim();
-  const name = String(item.name ?? item.personName ?? "").trim();
-  const serialNo = item.serialNo != null ? item.serialNo : null;
-  return {
-    majorEventType: Number(item.major ?? item.majorEventType),
-    subEventType: Number(item.minor ?? item.subEventType),
-    employeeNoString: employee,
-    employeeNo: employee,
-    personName: name,
-    cardNo: item.cardNo != null ? String(item.cardNo) : "",
-    serialNo,
-    doorNo: item.doorNo ?? null,
-    cardReaderNo: item.cardReaderNo ?? null,
-    currentVerifyMode: item.currentVerifyMode ?? "",
-    userType: item.userType ?? "",
-    cardType: item.cardType ?? null,
-  };
+  const payload = toAcsEventPayload(item);
+  const { pictureURL: _pictureURL, ...rest } = payload;
+  return rest;
 };
 
 const parseSelection = (text, max) => {
@@ -126,109 +115,16 @@ const extractPictureUrl = (item) => {
   return text || null;
 };
 
-const isImageBuffer = (buf) => {
-  if (!Buffer.isBuffer(buf) || buf.length < 8) return false;
-  if (buf[0] === 0xff && buf[1] === 0xd8) return true;
-  if (buf[0] === 0x89 && buf[1] === 0x50) return true;
-  return false;
-};
-
-const downloadEventPicture = async (client, pictureUrl) => {
-  const res = await client.request({
-    method: "GET",
-    path: pictureUrl,
-    responseType: "arraybuffer",
-  });
-  const buf = Buffer.isBuffer(res.data) ? res.data : Buffer.from(res.data || []);
-  return isImageBuffer(buf) ? buf : null;
-};
-
-const fetchAcsEvents = async (client, date) => {
-  const searchID = `ba-${Date.now()}`;
-  const startTime = `${date}T00:00:00+08:00`;
-  const endTime = `${date}T23:59:59+08:00`;
-  const events = [];
-  let position = 0;
-  let withPicture = true;
-
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const cond = {
-      searchID,
-      searchResultPosition: position,
-      maxResults: PAGE_SIZE,
-      major: 5,
-      minor: 0,
-      startTime,
-      endTime,
-    };
-    let res;
-    try {
-      res = await client.request({
-        method: "POST",
-        path: ACS_EVENT_PATH,
-        data: {
-          AcsEventCond: withPicture ? { ...cond, picEnable: true } : cond,
-        },
-      });
-    } catch (error) {
-      if (!withPicture) throw error;
-      withPicture = false;
+const fetchAcsEventsForDate = async (client, date) =>
+  fetchAcsEvents(client, {
+    startTime: `${date}T00:00:00+08:00`,
+    endTime: `${date}T23:59:59+08:00`,
+    pageSize: PAGE_SIZE,
+    maxPages: MAX_PAGES,
+    onPictureUnsupported: () => {
       console.warn("設備未支援查詢附圖，這次只匯入事件文字。");
-      page -= 1;
-      continue;
-    }
-    const body = res.data || {};
-    const acs = body.AcsEvent || body.acsEvent || body;
-    const infoList = asList(acs.InfoList || acs.infoList);
-    events.push(...infoList);
-    const status = String(acs.responseStatusStrg || acs.responseStatusString || "");
-    const matched = Number(acs.numOfMatches) || infoList.length;
-    if (infoList.length === 0 || status.toUpperCase() === "OK" || status.toUpperCase() === "NO MATCH") {
-      break;
-    }
-    const next = position + (matched > 0 ? matched : infoList.length);
-    if (next <= position) break;
-    position = next;
-  }
-
-  return events;
-};
-
-const findExisting = async (deviceId, eventTime, payload) => {
-  const serial = payload.serialNo != null ? String(payload.serialNo) : "";
-  const who = String(
-    payload.employeeNoString || payload.employeeNo || payload.personName || payload.cardNo || "",
-  ).trim();
-  const rows = await db.query(
-    `SELECT id, picture_path
-     FROM isapi_access_events
-     WHERE device_id = ?
-       AND date_trunc('second', event_time) = date_trunc('second', ?::timestamptz)
-       AND COALESCE(payload->>'subEventType', '') = ?
-       AND (
-         COALESCE(payload->>'serialNo', '') = ?
-         OR COALESCE(payload->>'serialNo', '') = ''
-         OR ? = ''
-       )
-       AND (
-         ? = ''
-         OR COALESCE(
-           NULLIF(payload->>'employeeNoString', ''),
-           NULLIF(payload->>'employeeNo', ''),
-           NULLIF(payload->>'personName', ''),
-           NULLIF(payload->>'cardNo', ''),
-           ''
-         ) IN ('', ?)
-       )
-     ORDER BY id
-     LIMIT 1`,
-    [deviceId, eventTime, String(payload.subEventType), serial, serial, who, who],
-  );
-  const row = rows?.[0];
-  if (!row) return { id: null, hasPicture: false };
-  const path = row.picture_path != null ? String(row.picture_path).trim() : "";
-  return { id: row.id, hasPicture: path !== "" };
-};
+    },
+  });
 
 const printTable = (rows) => {
   console.log("");
@@ -291,14 +187,18 @@ const main = async () => {
     const host = device.config?.host || "";
     console.log(`讀取 ${device.name}（${host}）${date} 的驗證事件…`);
 
-    const rawEvents = await fetchAcsEvents(client, date);
+    const rawEvents = await fetchAcsEventsForDate(client, date);
     const candidates = [];
     for (const item of rawEvents) {
-      const payload = toPayload(item);
+      const payload = toAcsEventPayload(item);
       if (!isProcessableEvent(payload)) continue;
       const eventTime = String(item.time || item.dateTime || "").trim();
       if (!eventTime) continue;
-      const existing = await findExisting(deviceId, eventTime, payload);
+      const existing = await findExistingAccessEvent(
+        deviceId,
+        eventTime,
+        payload,
+      );
       const pictureUrl = extractPictureUrl(item);
       candidates.push({
         index: candidates.length + 1,
@@ -375,7 +275,7 @@ const main = async () => {
       }
       if (!row.needsPicture) continue;
       try {
-        const picture = await downloadEventPicture(client, row.pictureUrl);
+        const picture = await downloadIsapiPicture(client, row.pictureUrl);
         if (!picture) {
           console.log(`  無抓拍  ${row.timeLabel}`);
           continue;
@@ -412,5 +312,4 @@ module.exports = {
   parseSelection,
   toPayload,
   extractPictureUrl,
-  isImageBuffer,
 };

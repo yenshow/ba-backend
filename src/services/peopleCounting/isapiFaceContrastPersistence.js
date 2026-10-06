@@ -77,8 +77,11 @@ async function persistFaceContrastEvent(options) {
       ? options.direction
       : null;
 
+  const source =
+    options.source === "backfill" ? "backfill" : "subscribe";
+
   const payload = {
-    source: "subscribe",
+    source,
     ...(direction ? { direction } : {}),
     ...(faceLibName ? { faceLibName } : {}),
     ...(pid ? { pid } : {}),
