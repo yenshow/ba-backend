@@ -54,7 +54,8 @@ function normalizeListTypeToApi(rawType) {
   const t = String(rawType || "").trim().toLowerCase();
   if (t === "whitelist" || t === "white" || t === "allowlist") return "allowList";
   if (t === "blacklist" || t === "black" || t === "blocklist") return "blockList";
-  return String(rawType || "").trim() || "allowList";
+  // 名單 CRUD：未知／空 → 預設白名單（勿把 ANPR 陌生語意寫進人員車牌）
+  return "allowList";
 }
 
 /** 設備寫入與 API 使用同一組 allowList／blockList 鍵名 */

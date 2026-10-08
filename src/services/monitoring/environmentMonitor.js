@@ -21,6 +21,7 @@ const logger = require("../../utils/logger");
 const {
   ENVIRONMENT_RAW_WRITE_INTERVAL_MS: RAW_WRITE_INTERVAL_MS,
 } = require("../../config/realtimeTiming");
+const { sqlAndEnabled } = require("../devices/deviceEnabledFilter");
 
 // 追蹤上次的設備狀態，只在狀態改變時才推送 WebSocket 事件（優化：減少不必要的推送）
 const lastDeviceStatus = new Map(); // key: `${system}:${sourceId}`, value: 'online' | 'offline'
@@ -171,9 +172,9 @@ async function checkEnvironmentLocations() {
             `SELECT d.id, d.config as device_config
              FROM devices d
              WHERE d.id = ANY($1::int[])
-               AND d.enabled IS TRUE
                AND d.type_code = 'sensor'
-               AND d.config->>'protocol' = 'modbus'`,
+               AND d.config->>'protocol' = 'modbus'
+               ${sqlAndEnabled("d.enabled")}`,
             [deviceIdList],
           );
     const deviceConfigMap = new Map(

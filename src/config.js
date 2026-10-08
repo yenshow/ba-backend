@@ -85,6 +85,8 @@ const server = {
 
 /** 產品版型號來自程式 catalog，不允許透過 API 修改。 */
 const deviceModelsLocked = isProduction;
+/** 設備啟用／停用僅開發環境；正式環境略過 enabled 閘門且不提供切換 UI */
+const deviceEnableFeature = !isProduction;
 
 /**
  * Modbus 配置
@@ -324,6 +326,7 @@ module.exports = {
   server,
   isProduction,
   deviceModelsLocked,
+  deviceEnableFeature,
   modbus,
   database,
   jwt,

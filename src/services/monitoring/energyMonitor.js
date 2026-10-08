@@ -14,6 +14,7 @@ const {
 } = require("../../config/realtimeTiming");
 const { parseConfig } = require("../../utils/deviceHelpers");
 const { isValidEnergyParameterKey } = require("../../constants/energyParameterCatalog");
+const { sqlAndEnabled } = require("../devices/deviceEnabledFilter");
 
 const lastRawWriteByDevice = new Map();
 /** 上次已推播的讀數簽章（deviceId → JSON）；相同則略過 energy:reading:new */
@@ -139,8 +140,8 @@ async function checkEnergyMeters() {
     `SELECT d.id, d.name, d.config as device_config
      FROM devices d
      WHERE d.id = ANY($1::int[])
-       AND d.enabled IS TRUE
-       AND d.type_code = 'sensor'`,
+       AND d.type_code = 'sensor'
+       ${sqlAndEnabled("d.enabled")}`,
     [includeIds],
   );
 

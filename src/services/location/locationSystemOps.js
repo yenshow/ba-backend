@@ -246,6 +246,7 @@ function buildSystemConfig(systemType, config) {
       const {
         parsePeopleCountingConfigFields,
         CAMERA_MODE,
+        normalizeDashboardLayout,
       } = require("../peopleCounting/peopleCountingConfig");
       const resetFields = parsePeopleCountingConfigFields(config);
       const isFace = resetFields.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
@@ -287,6 +288,9 @@ function buildSystemConfig(systemType, config) {
           );
           return cols.length > 0 ? cols : undefined;
         })(),
+        dashboard_layout: normalizeDashboardLayout(
+          config.dashboardLayout ?? config.dashboard_layout,
+        ),
         stats_reset_at: resetFields.statsResetAt ?? config.statsResetAt ?? undefined,
         ...(isFace
           ? { face_similarity_threshold: resetFields.faceSimilarityThreshold }

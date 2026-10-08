@@ -371,6 +371,7 @@ function formatSystem(system) {
         parsePeopleCountingConfigFields,
         parseOptionalEventCameraDeviceId,
         CAMERA_MODE,
+        normalizeDashboardLayout,
       } = require("../peopleCounting/peopleCountingConfig");
       const cameras = parsePeopleCountingConfigFields(config);
       const isFace = cameras.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
@@ -415,6 +416,7 @@ function formatSystem(system) {
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),
+          dashboardLayout: normalizeDashboardLayout(config.dashboard_layout),
           statsResetAt: config.stats_reset_at ?? undefined,
           entryEventCameraDeviceId: parseOptionalEventCameraDeviceId(
             config.entry_event_camera_device_id,

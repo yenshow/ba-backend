@@ -33,6 +33,9 @@ const {
 const {
   invalidateDeviceLoggingConfig,
 } = require("./deviceLoggingConfig");
+const {
+  isDeviceEnableFeatureActive,
+} = require("./deviceEnabledFilter");
 
 const deviceLogger = logger.createLogger("deviceService");
 
@@ -295,7 +298,12 @@ async function getDevices(filters = {}) {
       params.push(group);
     }
 
-    if (enabled !== undefined && enabled !== null && enabled !== "") {
+    if (
+      isDeviceEnableFeatureActive() &&
+      enabled !== undefined &&
+      enabled !== null &&
+      enabled !== ""
+    ) {
       query += " AND d.enabled = ?";
       params.push(parseEnabledFlag(enabled, true));
     }
@@ -332,7 +340,12 @@ async function getDevices(filters = {}) {
       countParams.push(group);
     }
 
-    if (enabled !== undefined && enabled !== null && enabled !== "") {
+    if (
+      isDeviceEnableFeatureActive() &&
+      enabled !== undefined &&
+      enabled !== null &&
+      enabled !== ""
+    ) {
       countQuery += " AND d.enabled = ?";
       countParams.push(parseEnabledFlag(enabled, true));
     }
@@ -630,8 +643,10 @@ async function createDevice(deviceData, userId) {
       }
     }
 
-    // 建立設備
-    const enabledFlag = parseEnabledFlag(enabled, true);
+    // 建立設備（正式環境一律啟用）
+    const enabledFlag = isDeviceEnableFeatureActive()
+      ? parseEnabledFlag(enabled, true)
+      : true;
     const result = await db.query(
       "INSERT INTO devices (name, type_code, model_id, description, config, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
       [
@@ -767,7 +782,7 @@ async function updateDevice(id, deviceData, userId) {
       params.push(description || null);
     }
 
-    if (enabled !== undefined) {
+    if (enabled !== undefined && isDeviceEnableFeatureActive()) {
       updates.push("enabled = ?");
       params.push(parseEnabledFlag(enabled, true));
     }

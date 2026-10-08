@@ -1,6 +1,7 @@
 /**
  * ISAPI 人臉比對解析（現場 DeepinView：eventType=alarmResult）
- * 僅認有 candidate 的比對結果。
+ * - 有 candidate：落地比對結果（matched=true，後續再依地點準確度門檻標失敗）
+ * - 無 candidate：落地為陌生人（matched=false），與設備本機「臉部比對結果」對齊
  */
 
 function firstOf(...vals) {
@@ -81,6 +82,14 @@ function extractBestCandidate(root) {
   return best;
 }
 
+/** 是否至少有一張臉（空比對／陌生人仍可落地） */
+function hasAlarmFaces(root) {
+  for (const block of asArray(root?.alarmResult)) {
+    if (asArray(block?.faces).length > 0) return true;
+  }
+  return false;
+}
+
 function parseFaceContrastEventPayload(raw) {
   if (raw == null) return null;
   const text = String(raw)
@@ -101,31 +110,51 @@ function parseFaceContrastEventPayload(raw) {
   if (String(eventType).toLowerCase() !== "alarmresult") return null;
   if (!root.alarmResult && !obj.alarmResult) return null;
 
-  const best = extractBestCandidate(root) || extractBestCandidate(obj);
-  // 無比對候選人：不落地（略過空 alarm／純抓拍）
-  if (!best) return null;
+  const eventTime = firstOf(
+    root.dateTime,
+    root.eventTime,
+    obj.dateTime,
+    obj.eventTime,
+  );
+  if (!eventTime) return null;
 
-  return {
+  const base = {
     eventType: "alarmResult",
-    eventTime: firstOf(
-      root.dateTime,
-      root.eventTime,
-      obj.dateTime,
-      obj.eventTime,
-    ),
+    eventTime,
     channelId: root.channelID ?? root.channelId ?? obj.channelID ?? null,
     deviceIp: firstOf(root.ipAddress, obj.ipAddress),
-    similarity: normalizeSimilarityPercent(best.similarity),
-    employeeNo: best.employeeNo || null,
-    personName: best.personName || null,
-    pid: best.pid || null,
-    certificateNumber: best.certificateNumber || null,
-    faceLibName: best.faceLibName || null,
-    matched: true,
+  };
+
+  const best = extractBestCandidate(root) || extractBestCandidate(obj);
+  if (best) {
+    return {
+      ...base,
+      similarity: normalizeSimilarityPercent(best.similarity),
+      employeeNo: best.employeeNo || null,
+      personName: best.personName || null,
+      pid: best.pid || null,
+      certificateNumber: best.certificateNumber || null,
+      faceLibName: best.faceLibName || null,
+      matched: true,
+    };
+  }
+
+  // 無候選人：陌生人（需有 faces，避免空 heartbeat 誤落）
+  if (!hasAlarmFaces(root) && !hasAlarmFaces(obj)) return null;
+  return {
+    ...base,
+    similarity: null,
+    employeeNo: null,
+    personName: null,
+    pid: null,
+    certificateNumber: null,
+    faceLibName: null,
+    matched: false,
   };
 }
 
 module.exports = {
   parseFaceContrastEventPayload,
   normalizeSimilarityPercent,
+  extractBestCandidate,
 };

@@ -106,6 +106,22 @@ function extractAccessEventIdentity(payload) {
   };
 }
 
+/**
+ * 驗證失敗（卡片／指紋／人臉）且無工號／姓名 → 顯示「陌生」。
+ * 不含酒精語意事件（2077–2079），避免覆寫「飲酒／醉酒」標籤。
+ */
+function resolveAccessStrangerDisplay({ sub, eventLabel, personName, employeeId }) {
+  const name = personName != null ? String(personName).trim() : "";
+  const no = employeeId != null ? String(employeeId).trim() : "";
+  const isStranger =
+    sub != null && FAIL_SUBS.has(Number(sub)) && !name && !no;
+  return {
+    isStranger,
+    personName: name || (isStranger ? "陌生" : "—"),
+    eventLabel: isStranger ? "陌生" : eventLabel,
+  };
+}
+
 function yscpEventLabel(eventType) {
   if (eventType === "entry") return "進入";
   if (eventType === "exit") return "離開";
@@ -158,6 +174,7 @@ module.exports = {
   extractSubEventType,
   extractAccessEventIdentity,
   resolveAccessControlEvent,
+  resolveAccessStrangerDisplay,
   resolveVerifyMethodKey,
   resolveVerifyMethodLabel,
   resolveOperationalAccessResult,
@@ -166,4 +183,5 @@ module.exports = {
   shouldQueueAccessEventPicture,
   shouldDisplayAccessEventPicture,
   yscpEventLabel,
+  FAIL_SUBS,
 };

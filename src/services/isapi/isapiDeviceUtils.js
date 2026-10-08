@@ -40,15 +40,16 @@ function resolveIsapiClientFromDeviceRow(row, label = "設備") {
 }
 
 async function listIsapiCapableDevices() {
+  const { sqlAndEnabled } = require("../devices/deviceEnabledFilter");
   const rows = await db.query(
     `
       SELECT d.id, d.name, d.type_code, d.config
       FROM devices d
-      WHERE d.enabled IS TRUE
-        AND (
+      WHERE (
           d.type_code = 'access_control'
           OR d.type_code = 'camera'
         )
+        ${sqlAndEnabled("d.enabled")}
       ORDER BY d.id ASC
     `,
   );

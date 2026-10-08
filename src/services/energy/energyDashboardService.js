@@ -41,6 +41,34 @@ function startOfLocalMonthUtc() {
   return new Date(startLocal - 8 * 3600 * 1000);
 }
 
+/** Asia/Taipei 當前整點起點（UTC Date） */
+function startOfLocalHourUtc(now = new Date()) {
+  const local = new Date(now.getTime() + 8 * 3600 * 1000);
+  const startLocal = Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate(),
+    local.getUTCHours(),
+    0,
+    0,
+    0,
+  );
+  return new Date(startLocal - 8 * 3600 * 1000);
+}
+
+/**
+ * 趨勢圖只顯示「已結束」的桶，避免當前進行中小時／日看起來像驟降。
+ * 今日 KPI 總量仍含 partial hour（見 getDashboardSummary）。
+ */
+function dropIncompleteBuckets(series, bucketType, now = new Date()) {
+  if (!Array.isArray(series) || series.length === 0) return series;
+  let cutoffMs = null;
+  if (bucketType === "hour") cutoffMs = startOfLocalHourUtc(now).getTime();
+  else if (bucketType === "day") cutoffMs = startOfLocalDayUtc().getTime();
+  else return series;
+  return series.filter((p) => new Date(p.timestamp).getTime() < cutoffMs);
+}
+
 function sumField(rows, field) {
   return rows.reduce((acc, r) => acc + (Number(r[field]) || 0), 0);
 }
@@ -198,8 +226,12 @@ async function getTrends(range = "day") {
     cur.waterM3 += Number(r.delta_water_m3) || 0;
     byBucket.set(key, cur);
   }
-  const series = Array.from(byBucket.values()).sort((a, b) =>
-    a.timestamp.localeCompare(b.timestamp),
+  const series = dropIncompleteBuckets(
+    Array.from(byBucket.values()).sort((a, b) =>
+      a.timestamp.localeCompare(b.timestamp),
+    ),
+    bucketType,
+    now,
   );
   return { range: normalized, bucketType, series, meta: { source } };
 }
@@ -475,6 +507,9 @@ const METERING_NUM_KEYS = [
   "cost",
   "active_energy",
   "total_energy",
+  "export_energy",
+  "reactive_power",
+  "apparent_power",
 ];
 
 /**
@@ -488,7 +523,7 @@ function numOrNull(v) {
 }
 
 /**
- * 即時量測：納入能源監測之電表最新讀數（Energy 度數／Voltage／Current／PF／Power／Item）
+ * 即時量測：納入能源監測之電表最新讀數（電能度數／PQS／Voltage／Current／PF／次要資訊）
  */
 async function getMetering() {
   const { config } = await energySettingsService.getSettings();
@@ -575,6 +610,9 @@ async function getMetering() {
       demandKw: values.demand,
       activeEnergyKwh: values.active_energy,
       totalActiveEnergyKwh: values.total_energy,
+      exportEnergyKwh: values.export_energy,
+      reactivePowerKvar: values.reactive_power,
+      apparentPowerKva: values.apparent_power,
     };
   });
 

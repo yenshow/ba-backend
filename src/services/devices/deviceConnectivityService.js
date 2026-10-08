@@ -12,6 +12,7 @@ const {
   resolveHcnetSdkPort,
 } = require("../../utils/deviceHelpers");
 const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
+const { sqlAndEnabled } = require("./deviceEnabledFilter");
 
 /**
  * In-memory connectivity snapshot.
@@ -419,8 +420,7 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
       SELECT d.id, d.type_code, d.config, dm.config AS model_config, dm.port AS model_port
       FROM devices d
       LEFT JOIN device_models dm ON dm.id = d.model_id
-      ${where}
-        AND d.enabled IS TRUE
+      ${where}${sqlAndEnabled("d.enabled")}
       ORDER BY d.id ASC
     `,
     params,
@@ -512,7 +512,7 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
       FROM devices d
       LEFT JOIN device_models dm ON dm.id = d.model_id
       WHERE d.id = ANY($1::int[])
-        AND d.enabled IS TRUE
+      ${sqlAndEnabled("d.enabled")}
       ORDER BY d.id ASC
     `,
     [ids],

@@ -160,13 +160,14 @@ const startDeviceLoop = async (deviceId) => {
 };
 
 const getManageStationIds = async () => {
+  const { sqlAndEnabled } = require("../devices/deviceEnabledFilter");
   const rows = await db.query(
     `
     SELECT id
     FROM devices
     WHERE type_code = 'video_intercom'
       AND COALESCE(config->>'unitType', '') = 'manage'
-      AND enabled IS TRUE
+      ${sqlAndEnabled("enabled")}
     `,
   );
   return (rows || [])

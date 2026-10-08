@@ -5,10 +5,13 @@
  *   FLOAT32（2 暫存器）／FLOAT64（4 暫存器），預設字序 Big-Endian（手冊 0x000F bit0=0）。
  *
  * BA 能源 ★：
- *   active_power  ← 0x1032 FLOAT32(W)  /1000 → kW
- *   active_energy ← 0x1400 FLOAT64(kWh)  // HMI 5121 輸入有效電能
- *   total_energy  ← 0x1408 FLOAT64(kWh)  // HMI 5129 總有效電能
- *   demand        ← 0x3006 FLOAT32(W)  /1000 → kW
+ *   active_power    ← 0x1032 FLOAT32(W)  /1000 → kW
+ *   reactive_power  ← 0x103A FLOAT32(VAR)/1000 → kVAR
+ *   apparent_power  ← 0x1042 FLOAT32(VA) /1000 → kVA
+ *   active_energy   ← 0x1400 FLOAT64(kWh)  // HMI 5121 輸入有效電能
+ *   export_energy   ← 0x1404 FLOAT64(kWh)  // HMI 5125 輸出有效電能
+ *   total_energy    ← 0x1408 FLOAT64(kWh)  // HMI 5129 總有效電能
+ *   demand          ← 0x3006 FLOAT32(W)  /1000 → kW
  *
  * 用法：
  *   node scripts/probeA21EnergyRegisters.js <host> [port=502] [unitId=1]
@@ -106,11 +109,33 @@ const FIELDS = [
 	{ key: "q1", label: "Q1", hex: 0x1034, length: 2, kind: "float32", unit: "VAR", group: "Reactive_Power" },
 	{ key: "q2", label: "Q2", hex: 0x1036, length: 2, kind: "float32", unit: "VAR", group: "Reactive_Power" },
 	{ key: "q3", label: "Q3", hex: 0x1038, length: 2, kind: "float32", unit: "VAR", group: "Reactive_Power" },
-	{ key: "qsum", label: "Qsum", hex: 0x103a, length: 2, kind: "float32", unit: "VAR", group: "Reactive_Power" },
+	{
+		key: "qsum",
+		label: "Qsum ★",
+		hex: 0x103a,
+		length: 2,
+		kind: "float32",
+		unit: "VAR",
+		group: "Reactive_Power",
+		ba: "reactive_power",
+		required: true,
+		toBa: (v) => ({ value: v / 1000, unit: "kVAR", transform: "value / 1000" }),
+	},
 	{ key: "s1", label: "S1", hex: 0x103c, length: 2, kind: "float32", unit: "VA", group: "Apparent_Power" },
 	{ key: "s2", label: "S2", hex: 0x103e, length: 2, kind: "float32", unit: "VA", group: "Apparent_Power" },
 	{ key: "s3", label: "S3", hex: 0x1040, length: 2, kind: "float32", unit: "VA", group: "Apparent_Power" },
-	{ key: "ssum", label: "Ssum", hex: 0x1042, length: 2, kind: "float32", unit: "VA", group: "Apparent_Power" },
+	{
+		key: "ssum",
+		label: "Ssum ★",
+		hex: 0x1042,
+		length: 2,
+		kind: "float32",
+		unit: "VA",
+		group: "Apparent_Power",
+		ba: "apparent_power",
+		required: true,
+		toBa: (v) => ({ value: v / 1000, unit: "kVA", transform: "value / 1000" }),
+	},
 
 	{ key: "ang_v2_v1", label: "V2:V1", hex: 0x1080, length: 2, kind: "float32", unit: "°", group: "Phase" },
 	{ key: "ang_v3_v1", label: "V3:V1", hex: 0x1082, length: 2, kind: "float32", unit: "°", group: "Phase" },
@@ -146,7 +171,7 @@ const FIELDS = [
 		toBa: (v) => ({ value: v, unit: "kWh", transform: "value" }),
 		note: "HMI 5121 輸入有效電能",
 	},
-	{ key: "kwh_exp", label: "kWh_Exp", hex: 0x1404, length: 4, kind: "float64", unit: "kWh", group: "Energy" },
+	{ key: "kwh_exp", label: "kWh_Exp ★", hex: 0x1404, length: 4, kind: "float64", unit: "kWh", group: "Energy", ba: "export_energy", required: true, toBa: (v) => ({ value: v, unit: "kWh", transform: "value" }), note: "HMI 5125 輸出有效電能" },
 	{
 		key: "kwh_total",
 		label: "kWh_Total ★",
@@ -386,10 +411,13 @@ const buildMarkdown = (ctx) => {
 	lines.push(`## 建議型號設定（須平台支援 float）`);
 	lines.push("");
 	lines.push("```text");
-	lines.push("active_power   address=0x1032  dataType=float32_be  length=2  transform=value / 1000  # kW");
-	lines.push("active_energy  address=0x1400  dataType=float64_be  length=4  transform=value         # kWh；HMI 5121 輸入");
-	lines.push("total_energy   address=0x1408  dataType=float64_be  length=4  transform=value         # kWh；HMI 5129 總");
-	lines.push("demand         address=0x3006  dataType=float32_be  length=2  transform=value / 1000  # kW");
+	lines.push("active_power    address=0x1032  dataType=float32_be  length=2  transform=value / 1000  # kW");
+	lines.push("reactive_power  address=0x103A  dataType=float32_be  length=2  transform=value / 1000  # kVAR");
+	lines.push("apparent_power  address=0x1042  dataType=float32_be  length=2  transform=value / 1000  # kVA");
+	lines.push("active_energy   address=0x1400  dataType=float64_be  length=4  transform=value         # kWh；HMI 5121 輸入");
+	lines.push("export_energy   address=0x1404  dataType=float64_be  length=4  transform=value         # kWh；HMI 5125 輸出");
+	lines.push("total_energy    address=0x1408  dataType=float64_be  length=4  transform=value         # kWh；HMI 5129 總");
+	lines.push("demand          address=0x3006  dataType=float32_be  length=2  transform=value / 1000  # kW");
 	lines.push("```");
 	lines.push("");
 	lines.push(`> 型號請選 float64_be／float32_be；位址用 PDU（0x1400＝5120），勿填 HMI 1-based 5121。`);

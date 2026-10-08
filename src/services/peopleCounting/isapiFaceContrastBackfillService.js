@@ -37,26 +37,32 @@ function parseFcSearchResult(xml) {
   const out = [];
   for (const el of elements) {
     const snapTime = pickTag(el, "snapTime");
+    if (!snapTime) continue;
     const matchInfo = pickBlocks(el, "FaceMatchInfo")[0] || "";
-    if (!matchInfo) continue;
-    const name = pickTag(matchInfo, "name");
-    const similarityRaw = pickTag(matchInfo, "similarity");
+    const name = matchInfo ? pickTag(matchInfo, "name") : null;
+    const similarityRaw = matchInfo ? pickTag(matchInfo, "similarity") : null;
     const similarity =
       similarityRaw != null && similarityRaw !== ""
         ? Number(similarityRaw)
         : null;
-    const pid = pickTag(matchInfo, "PID") || pickTag(matchInfo, "pid");
-    const faceLibName =
-      pickTag(matchInfo, "FDname") || pickTag(matchInfo, "FDLibName");
-    const customHumanID =
-      pickTag(matchInfo, "customHumanID") ||
-      pickTag(matchInfo, "employeeNo") ||
-      null;
+    const pid = matchInfo
+      ? pickTag(matchInfo, "PID") || pickTag(matchInfo, "pid")
+      : null;
+    const faceLibName = matchInfo
+      ? pickTag(matchInfo, "FDname") || pickTag(matchInfo, "FDLibName")
+      : null;
+    const customHumanID = matchInfo
+      ? pickTag(matchInfo, "customHumanID") ||
+        pickTag(matchInfo, "employeeNo") ||
+        null
+      : null;
     const snapPicURL =
       pickTag(el, "snapPicURL") ||
       pickTag(el, "facePicURL") ||
-      pickTag(matchInfo, "picURL");
-    if (!snapTime || (!name && !pid && !customHumanID)) continue;
+      (matchInfo ? pickTag(matchInfo, "picURL") : null);
+    const hasIdentity = Boolean(name || pid || customHumanID);
+    // 有 FaceMatchInfo 卻無身分 → 略過；無 MatchInfo → 陌生人抓拍
+    if (matchInfo && !hasIdentity) continue;
     out.push({
       eventTime:
         snapTime.includes("+") || snapTime.endsWith("Z")
@@ -68,6 +74,7 @@ function parseFcSearchResult(xml) {
       similarity: Number.isFinite(similarity) ? similarity : null,
       faceLibName: faceLibName || null,
       picturePath: toIsapiUrlPath(snapPicURL),
+      matched: hasIdentity,
     });
   }
   return {
@@ -112,6 +119,7 @@ async function fetchFcSearchMatches(client, start, end) {
 async function findExistingFaceEvent(deviceId, eventTime, row) {
   const who = String(row.employeeNo || row.personName || "").trim();
   const pid = row.pid != null ? String(row.pid).trim() : "";
+  const isStranger = !who && !pid;
   const rows = await db.query(
     `SELECT id, picture_path
      FROM isapi_face_contrast_events
@@ -126,10 +134,17 @@ async function findExistingFaceEvent(deviceId, eventTime, row) {
              OR COALESCE(NULLIF(person_name, ''), '') = ?
            )
          )
+         OR (
+           ?::boolean
+           AND matched = false
+           AND COALESCE(NULLIF(employee_no, ''), '') = ''
+           AND COALESCE(NULLIF(person_name, ''), '') = ''
+           AND COALESCE(NULLIF(pid, ''), '') = ''
+         )
        )
      ORDER BY id ASC
      LIMIT 1`,
-    [deviceId, eventTime, pid, pid, who, who, who],
+    [deviceId, eventTime, pid, pid, who, who, who, isStranger],
   );
   const r = rows?.[0];
   if (!r) return { id: null, hasPicture: false };
@@ -179,7 +194,7 @@ async function runBackfill(job) {
       employeeNo: row.employeeNo,
       personName: row.personName,
       pid: row.pid,
-      matched: true,
+      matched: row.matched !== false,
       faceLibName: row.faceLibName,
       direction: direction || null,
       source: "backfill",

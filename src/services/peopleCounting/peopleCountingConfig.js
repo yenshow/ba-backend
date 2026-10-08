@@ -14,7 +14,23 @@ const CAMERA_MODE = Object.freeze({
   FACE_RECOGNITION: "face_recognition",
 });
 
+/** 主畫面排版：事件＋群組｜群組＋人員卡片 */
+const DASHBOARD_LAYOUT = Object.freeze({
+  EVENTS_GROUPS: "events_groups",
+  GROUP_CARDS: "group_cards",
+});
+
 const DEFAULT_FACE_SIMILARITY_THRESHOLD = 50;
+
+/**
+ * @param {unknown} raw
+ * @returns {"events_groups"|"group_cards"}
+ */
+function normalizeDashboardLayout(raw) {
+  const s = String(raw ?? "").trim();
+  if (s === DASHBOARD_LAYOUT.GROUP_CARDS) return DASHBOARD_LAYOUT.GROUP_CARDS;
+  return DASHBOARD_LAYOUT.EVENTS_GROUPS;
+}
 
 /**
  * @param {unknown} raw
@@ -201,8 +217,10 @@ function enrichOptionsWithStatsReset(cfg, options = {}) {
 
 module.exports = {
   CAMERA_MODE,
+  DASHBOARD_LAYOUT,
   DEFAULT_FACE_SIMILARITY_THRESHOLD,
   normalizeCameraMode,
+  normalizeDashboardLayout,
   isFaceRecognitionCameraMode,
   normalizeFaceSimilarityThreshold,
   resolvePeopleCountingCameraDevices,

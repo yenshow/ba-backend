@@ -119,9 +119,36 @@ const DEVICE_MODEL_CATALOG = [
           },
         },
         {
+          type: "export_energy",
+          modbusConfig: {
+            address: 0x1404,
+            length: 4,
+            dataType: "float64_be",
+            transform: "value",
+          },
+        },
+        {
           type: "active_power",
           modbusConfig: {
             address: 0x1032,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "reactive_power",
+          modbusConfig: {
+            address: 0x103a,
+            length: 2,
+            dataType: "float32_be",
+            transform: "value / 1000",
+          },
+        },
+        {
+          type: "apparent_power",
+          modbusConfig: {
+            address: 0x1042,
             length: 2,
             dataType: "float32_be",
             transform: "value / 1000",

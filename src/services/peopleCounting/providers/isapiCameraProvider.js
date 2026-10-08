@@ -401,10 +401,14 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
     const matched = Boolean(r.matched);
     const deviceName =
       deviceNameById.get(ensureInt(r.device_id)) || r.device_ip || "";
-    const personName =
+    const rawName =
       (r.platform_name != null ? String(r.platform_name).trim() : "") ||
       (r.person_name != null ? String(r.person_name).trim() : "") ||
-      "—";
+      "";
+    const employeeId =
+      r.employee_no != null && String(r.employee_no).trim()
+        ? String(r.employee_no).trim()
+        : null;
     const direction =
       r.direction === "entry" || r.direction === "exit" ? r.direction : null;
     const eventType = !matched
@@ -418,19 +422,26 @@ async function getFaceContrastSiteLogs(siteId, deviceIds, options = {}) {
       r.similarity != null && Number.isFinite(Number(r.similarity))
         ? Number(r.similarity)
         : null;
+    // 無身分＝陌生人；有身分但未達準確度門檻＝失敗（仍顯示姓名）
+    const isStranger = !matched && !rawName && !employeeId;
+    const personName = rawName || (isStranger ? "陌生" : "—");
+    const eventLabel =
+      eventType === "entry"
+        ? "進入"
+        : eventType === "exit"
+          ? "離開"
+          : isStranger
+            ? "陌生"
+            : "失敗";
     return {
       id: `fc-cam-${r.id}`,
       personId: r.person_id != null ? Number(r.person_id) : null,
       personName,
       unitId: r.person_group_id != null ? Number(r.person_group_id) : null,
       unitName: r.group_name != null ? String(r.group_name).trim() : "",
-      employeeId:
-        r.employee_no != null && String(r.employee_no).trim()
-          ? String(r.employee_no).trim()
-          : null,
+      employeeId,
       eventType,
-      eventLabel:
-        eventType === "entry" ? "進入" : eventType === "exit" ? "離開" : "失敗",
+      eventLabel,
       verifyMethod: "人臉",
       similarity,
       timestamp: r.event_time,

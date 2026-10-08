@@ -1,10 +1,11 @@
 /**
  * ISAPI 攝影機佈防訂閱服務（subscribeEvent 長連線）
  * - people_counting：訂 PeopleCounting → isapi_people_counting_events
- * - face_recognition：訂 faceCapture + alarmResult → 僅落地有候選人的 alarmResult
+ * - face_recognition：訂 faceCapture + alarmResult → 落地 alarmResult（有／無候選人）
  *
  * faceCapture：部分機型需訂閱才會推人臉／比對串流；平台不解析、不寫入。
- * alarmResult 有候選人時落地，multipart 後續 image part 寫入 picture_path。
+ * alarmResult：有候選人→比對成功候選（再依地點準確度門檻標失敗）；無候選人→陌生人。
+ * multipart 後續 image part 寫入 picture_path。
  * 人流僅落地 statisticalMethods=realTime 之分區列。
  */
 const db = require("../../database/db");
@@ -51,7 +52,7 @@ function buildSubscribeXml(
     </Event>`);
   }
   if (includeFaceContrast) {
-    // faceCapture：現場機型需訂才會推 alarmResult；業務仍只落地有候選人的比對
+    // faceCapture：現場機型需訂才會推 alarmResult；業務落地有／無候選人的比對
     events.push(`
     <Event>
       <type>faceCapture</type>
@@ -274,7 +275,7 @@ async function consumeEventStreamIncremental(
       return;
     }
 
-    // 人臉比對：僅 face_recognition 落地 alarmResult（有候選人）
+    // 人臉比對：face_recognition 落地 alarmResult（含陌生人）
     if (context.includeFaceContrast) {
       const faceParsed = parseFaceContrastEventPayload(raw);
       if (faceParsed?.eventTime) {

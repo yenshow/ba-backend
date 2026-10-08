@@ -25,10 +25,14 @@ async function resolveDeviceDisplayName(deviceId) {
   return name || null;
 }
 
+const ALLOW_LIST_TYPES = new Set(["allowlist", "whitelist", "white"]);
+const BLOCK_LIST_TYPES = new Set(["blocklist", "blacklist", "black"]);
+
+/** @returns {1|0|null} 1 放行／0 拒絕／null 陌生（含 unknown、空、未辨識） */
 function listTypeToAllowResult(listType) {
   const t = String(listType || "").trim().toLowerCase();
-  if (t === "allowlist" || t === "white") return 1;
-  if (t === "blocklist" || t === "black") return 0;
+  if (ALLOW_LIST_TYPES.has(t)) return 1;
+  if (BLOCK_LIST_TYPES.has(t)) return 0;
   return null;
 }
 
@@ -272,4 +276,5 @@ module.exports = {
   attachLicensePlatePicture,
   runFanOutPictureBackfillOnce,
   invalidateLocationIngestCache,
+  listTypeToAllowResult,
 };

@@ -10,6 +10,7 @@ const { getDeviceNameByIds } = require("../../../utils/deviceHelpers");
 const {
   extractSubEventType,
   resolveAccessControlEvent,
+  resolveAccessStrangerDisplay,
   resolveVerifyMethodLabel,
   shouldDisplayAccessEventPicture,
 } = require("../accessControlLogLabels");
@@ -175,15 +176,21 @@ async function getAccessControlSiteLogs(options = {}) {
       (rowDeviceId != null ? idToDeviceName.get(rowDeviceId) : null) ||
       row.device_ip ||
       "";
+    const stranger = resolveAccessStrangerDisplay({
+      sub,
+      eventLabel,
+      personName: personInfo?.personName || devicePersonName || "",
+      employeeId,
+    });
     return {
       id: `isapi-${row.id}`,
       personId: personInfo?.personId ?? null,
-      personName: personInfo?.personName || devicePersonName || "—",
+      personName: stranger.personName,
       unitId: personInfo?.unitId ?? null,
       unitName: personInfo?.unitName ?? "",
       employeeId: employeeId || null,
       eventType,
-      eventLabel,
+      eventLabel: stranger.eventLabel,
       verifyMethod: verifyMethodLabel,
       timestamp: row.event_time,
       deviceScreenshotUrl: shouldDisplayAccessEventPicture(
