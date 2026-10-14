@@ -123,17 +123,4 @@ router.get(
   }),
 );
 
-router.put(
-  "/sessions/:id/attendance/:personId",
-  requirePermission("system.roll_call.attendance.mark"),
-  asyncHandler(async (req, res) => {
-    const session = await rollCallService.markAttendance(
-      Number(req.params.id),
-      Number(req.params.personId),
-      req.body?.status,
-    );
-    res.sendSuccess({ session });
-  }),
-);
-
 module.exports = router;

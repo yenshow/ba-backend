@@ -14,7 +14,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 
 const IMPORT_HEADERS = [
-  "工號",
+  "ID",
   "姓名",
   "有效起始日",
   "有效結束日",
@@ -25,7 +25,7 @@ const IMPORT_HEADERS = [
 
 const IMPORT_TEMPLATE_ROWS = [
   {
-    工號: "A0001",
+    ID: "A0001",
     姓名: "王小明",
     有效起始日: "2026-01-01",
     有效結束日: "2030-12-31",
@@ -34,7 +34,7 @@ const IMPORT_TEMPLATE_ROWS = [
     車牌: "ABC1234,XYZ5678",
   },
   {
-    工號: "A0002",
+    ID: "A0002",
     姓名: "林小華",
     有效起始日: "",
     有效結束日: "",
@@ -133,7 +133,8 @@ async function rowsFromExcelBuffer(excelBuffer) {
   return rows;
 }
 
-const getEmployeeNoFromRow = (row) => pick(row, ["工號", "員工編號", "employeeNo"]);
+const getEmployeeNoFromRow = (row) =>
+  pick(row, ["ID", "工號", "員工編號", "employeeNo"]);
 const getFullNameFromRow = (row) => pick(row, ["姓名", "fullName", "名字"]);
 const getValidBeginFromRow = (row) =>
   pick(row, ["有效起始日", "有效起", "有效起始", "beginTime"]);
@@ -155,7 +156,13 @@ function parseLicensePlatesFromCell(raw) {
 
 /**
  * 批次匯入（Excel + 選填圖片 zip）
- * @returns {{ created: number, createdIds: Array<{ id: number, employeeNo: string }>, errors?: Array<{ row: number, employeeNo?: string, message: string }> }}
+ * @returns {{
+ *   created: number,
+ *   updated: number,
+ *   createdIds: Array<{ id: number, employeeNo: string }>,
+ *   updatedIds: Array<{ id: number, employeeNo: string }>,
+ *   errors?: Array<{ row: number, employeeNo?: string, message: string }>
+ * }}
  */
 async function executeBatchImport({
   excelBuffer,
@@ -177,7 +184,8 @@ async function executeBatchImport({
     }
   }
 
-  const created = [];
+  const createdIds = [];
+  const updatedIds = [];
   const errors = [];
 
   for (let i = 0; i < rows.length; i++) {
@@ -199,7 +207,7 @@ async function executeBatchImport({
     const licensePlates = parseLicensePlatesFromCell(licensePlatesRaw);
 
     if (!employeeNo) {
-      errors.push({ row: i + 2, message: "員工編號不能為空" });
+      errors.push({ row: i + 2, message: "ID 不能為空" });
       continue;
     }
     if (!fullName) {
@@ -222,56 +230,49 @@ async function executeBatchImport({
         await personnelService.replacePersonLicensePlates(person.id, licensePlates);
       }
 
-      created.push({ id: person.id, employeeNo: person.employee_no });
+      const beginStr =
+        validBeginRaw != null ? String(validBeginRaw).trim() : "";
+      const endStr = validEndRaw != null ? String(validEndRaw).trim() : "";
+      const hasBegin = Boolean(beginStr);
+      const hasEnd = Boolean(endStr);
+      if ((hasBegin && !hasEnd) || (!hasBegin && hasEnd)) {
+        throwApiError(
+          C.PERSONNEL_IMPORT_VALIDATION_FAILED,
+          "有效期限需同時提供「有效起始日」與「有效結束日」",
+        );
+      }
 
-      {
-        const beginStr =
-          validBeginRaw != null ? String(validBeginRaw).trim() : "";
-        const endStr = validEndRaw != null ? String(validEndRaw).trim() : "";
-        const hasBegin = Boolean(beginStr);
-        const hasEnd = Boolean(endStr);
-        if ((hasBegin && !hasEnd) || (!hasBegin && hasEnd)) {
-          throwApiError(
-            C.PERSONNEL_IMPORT_VALIDATION_FAILED,
-            "有效期限需同時提供「有效起始日」與「有效結束日」",
-          );
-        }
+      const password =
+        passwordRaw != null && String(passwordRaw).trim() !== ""
+          ? String(passwordRaw).trim()
+          : null;
+      const cardNo =
+        cardNoRaw != null && String(cardNoRaw).trim() !== ""
+          ? String(cardNoRaw).trim()
+          : null;
+      const shouldDefaultLongTerm = !isUpdate && !hasBegin && !hasEnd;
+      const shouldWriteAccess =
+        password || cardNo || (hasBegin && hasEnd) || shouldDefaultLongTerm;
 
-        const password =
-          passwordRaw != null && String(passwordRaw).trim() !== ""
-            ? String(passwordRaw).trim()
-            : null;
-        const cardNo =
-          cardNoRaw != null && String(cardNoRaw).trim() !== ""
-            ? String(cardNoRaw).trim()
-            : null;
-
-        const shouldDefaultLongTerm = !isUpdate && !hasBegin && !hasEnd;
-
-        const shouldWriteAnything =
-          password || cardNo || (hasBegin && hasEnd) || shouldDefaultLongTerm;
-        if (shouldWriteAnything) {
-          const payload = {
-            validity:
-              hasBegin && hasEnd
-                ? { longTerm: false, beginTime: beginStr, endTime: endStr }
-                : shouldDefaultLongTerm
-                  ? { longTerm: true }
-                  : undefined,
-            password,
+      if (shouldWriteAccess) {
+        const payload = {};
+        if (hasBegin && hasEnd) {
+          payload.validity = {
+            longTerm: false,
+            beginTime: beginStr,
+            endTime: endStr,
           };
-          if (cardNo) {
-            payload.cards = [{ cardNo, source: "manual" }];
-          }
-          await personnelService.setPersonAccessControlConfig(person.id, payload);
+        } else if (shouldDefaultLongTerm) {
+          payload.validity = { longTerm: true };
         }
+        // 空欄不帶 password，避免更新時誤清既有密碼
+        if (password) payload.password = password;
+        if (cardNo) payload.cards = [{ cardNo, source: "manual" }];
+        await personnelService.setPersonAccessControlConfig(person.id, payload);
       }
 
       if (zipIndex.size > 0) {
-        const candidateNames = listPersonnelImportZipCandidateNames(
-          fullName,
-          employeeNo,
-        );
+        const candidateNames = listPersonnelImportZipCandidateNames(employeeNo);
         const entry =
           candidateNames
             .map((n) => zipIndex.get(String(n).toLowerCase()))
@@ -279,36 +280,37 @@ async function executeBatchImport({
 
         if (entry) {
           const buffer = entry.getData();
-          if (!buffer || buffer.length <= 0) {
-            continue;
-          }
-          if (buffer.length > PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES) {
-            throwApiError(
-              C.PERSONNEL_IMPORT_VALIDATION_FAILED,
-              `圖片檔案過大（需 ≤ ${formatPersonnelFaceImportSourceMaxSizeLabel()}）`,
+          if (buffer && buffer.length > 0) {
+            if (buffer.length > PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES) {
+              throwApiError(
+                C.PERSONNEL_IMPORT_VALIDATION_FAILED,
+                `圖片檔案過大（需 ≤ ${formatPersonnelFaceImportSourceMaxSizeLabel()}）`,
+              );
+            }
+
+            const normalized = await normalizeFaceImage(buffer);
+            const { finalPath, faceUrl } = resolveUniquePersonnelFacePath(
+              personnelUploadsDir,
+              employeeNo,
             );
-          }
 
-          const normalized = await normalizeFaceImage(buffer);
-          const { finalPath, faceUrl } = resolveUniquePersonnelFacePath(
-            personnelUploadsDir,
-            fullName ?? "",
-            employeeNo,
-          );
-
-          await fs.writeFile(finalPath, normalized.buffer);
-          try {
-            // 舊檔清理由 personnelService.updatePerson 統一處理
-            await personnelService.updatePerson(person.id, { faceUrl });
-          } catch (err) {
-            // 若 DB 更新失敗，回收剛寫入的檔案避免孤兒檔
+            await fs.writeFile(finalPath, normalized.buffer);
             try {
-              await fs.unlink(finalPath);
-            } catch (_e) {}
-            throw err;
+              // 舊檔清理由 personnelService.updatePerson 統一處理
+              await personnelService.updatePerson(person.id, { faceUrl });
+            } catch (err) {
+              try {
+                await fs.unlink(finalPath);
+              } catch (_e) {}
+              throw err;
+            }
           }
         }
       }
+
+      const idRow = { id: person.id, employeeNo: person.employee_no };
+      if (isUpdate) updatedIds.push(idRow);
+      else createdIds.push(idRow);
     } catch (err) {
       errors.push({
         row: i + 2,
@@ -320,8 +322,10 @@ async function executeBatchImport({
   }
 
   return {
-    created: created.length,
-    createdIds: created,
+    created: createdIds.length,
+    updated: updatedIds.length,
+    createdIds,
+    updatedIds,
     errors: errors.length > 0 ? errors : undefined,
   };
 }

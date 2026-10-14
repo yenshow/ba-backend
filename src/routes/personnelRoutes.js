@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
 const personnelService = require("../services/personnel/personnelService");
+const locationMemberService = require("../services/personnel/locationMemberService");
 const personLicensePlateService = require("../services/personnel/personLicensePlateService");
 const personSyncJobService = require("../services/personnel/personSyncJobService");
 const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadService");
@@ -22,12 +23,22 @@ const {
   authenticate,
   requirePermission,
   requireAnyPermission,
+  attachEffectivePermissions,
 } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
 const logger = require("../utils/logger");
 const C = require("../utils/apiErrorCodes");
 const { createApiError, throwApiError } = require("../utils/apiErrors");
+
+/** 粗閘門後依地點 system_type 對應子權限（admin 略過） */
+const assertLocationAccessByKind = async (req, locationId, kind) => {
+  const permissions = await attachEffectivePermissions(req);
+  await locationMemberService.assertLocationScopedAccessPermission(locationId, kind, {
+    role: req.user?.role,
+    permissions,
+  });
+};
 
 const router = express.Router();
 
@@ -540,6 +551,7 @@ router.put(
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
+    await assertLocationAccessByKind(req, locationId, "members");
     const memberPersonIds = req.body?.memberPersonIds;
     const result = await personnelService.replaceLocationMembers(
       locationId,
@@ -559,9 +571,9 @@ router.post(
   ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
-    const { warnings } = await personSyncJobService.syncLocation(
-      parseInt(req.params.locationId, 10),
-    );
+    const locationId = parseInt(req.params.locationId, 10);
+    await assertLocationAccessByKind(req, locationId, "device_sync");
+    const { warnings } = await personSyncJobService.syncLocation(locationId);
     res.sendSuccess({ warnings });
   }),
 );
@@ -578,9 +590,9 @@ router.post(
   ]),
   validateIntegers("locationId"),
   asyncHandler(async (req, res) => {
-    const { jobId } = personSyncJobService.startSyncLocationJob(
-      parseInt(req.params.locationId, 10),
-    );
+    const locationId = parseInt(req.params.locationId, 10);
+    await assertLocationAccessByKind(req, locationId, "device_sync");
+    const { jobId } = personSyncJobService.startSyncLocationJob(locationId);
     res.sendSuccess({ jobId }, 202);
   }),
 );
@@ -713,7 +725,9 @@ router.post(
     res.sendSuccess(
       {
         created: result.created,
+        updated: result.updated,
         createdIds: result.createdIds,
+        updatedIds: result.updatedIds,
         errors: result.errors,
       },
       201,

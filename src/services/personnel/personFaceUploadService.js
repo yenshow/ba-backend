@@ -46,7 +46,6 @@ async function finalizeFaceUpload({
   const person = await personnelService.getPersonById(pid);
   const { finalPath, faceUrl } = resolveUniquePersonnelFacePath(
     personnelUploadsDir,
-    person.full_name ?? "",
     person.employee_no ?? "",
     { excludePath: tempPath },
   );

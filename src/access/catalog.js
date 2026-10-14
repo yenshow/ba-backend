@@ -121,10 +121,9 @@ const SHARED_MODULES = [
     children: [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "rule.edit", name: "規則編輯", sort_order: 4 },
-      { code: "attendance.mark", name: "當日名單更正", sort_order: 5 },
-      { code: "device_sync", name: "門禁設備同步", sort_order: 6 },
-      { code: "sync.edit", name: "門禁名單編輯", sort_order: 7 },
-      { code: "statistics.reset", name: "重置統計", sort_order: 8 },
+      { code: "device_sync", name: "門禁設備同步", sort_order: 5 },
+      { code: "sync.edit", name: "門禁名單編輯", sort_order: 6 },
+      { code: "statistics.reset", name: "重置統計", sort_order: 7 },
     ],
     ui: {
       id: 22,

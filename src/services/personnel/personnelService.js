@@ -887,8 +887,10 @@ async function updatePerson(id, data) {
 function normalizeIsapiTimeString(value) {
   const s = String(value || "").trim();
   if (!s) return null;
-  // 支援 yyyy-mm-dd（from <input type="date">）
+  // 支援 yyyy-mm-dd（from <input type="date">／批次匯入範例）→ 補 00:00:00
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00`;
+  // 支援 yyyy-mm-ddThh:mm → 補秒
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return `${s}:00`;
   // 支援 yyyy-mm-ddThh:mm:ss（不含 Z/millis）
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) return s;
   // 支援 ISO，統一轉為不含毫秒與 Z 的格式

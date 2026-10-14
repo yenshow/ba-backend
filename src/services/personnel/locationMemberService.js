@@ -73,6 +73,41 @@ async function getLocationSystemSyncFlags(locationId) {
   return { peopleCounting, rollCall, vehiclePlates };
 }
 
+/** 地點名單編輯：僅該地點實際具備的系統所對應之子權限 */
+function resolveMemberEditPermissionCodes(flags) {
+  const codes = [];
+  if (flags?.peopleCounting) codes.push("system.people_counting.sync.edit");
+  if (flags?.rollCall) codes.push("system.roll_call.sync.edit");
+  if (flags?.vehiclePlates) codes.push("system.vehicle_access.plate.manage");
+  return codes;
+}
+
+/** 門禁設備同步：僅人流／時段簽到地點 */
+function resolveDeviceSyncPermissionCodes(flags) {
+  const codes = [];
+  if (flags?.peopleCounting) codes.push("system.people_counting.device_sync");
+  if (flags?.rollCall) codes.push("system.roll_call.device_sync");
+  return codes;
+}
+
+/**
+ * 共用 personnel 端點粗閘門後，依地點 system_type 再核對子權限（admin 略過）
+ * @param {"members"|"device_sync"} kind
+ * @param {{ role?: string, permissions?: string[] }} user
+ */
+async function assertLocationScopedAccessPermission(locationId, kind, user) {
+  if (user?.role === "admin") return;
+  const flags = await getLocationSystemSyncFlags(locationId);
+  const allowed =
+    kind === "device_sync"
+      ? resolveDeviceSyncPermissionCodes(flags)
+      : resolveMemberEditPermissionCodes(flags);
+  const held = Array.isArray(user?.permissions) ? user.permissions : [];
+  if (allowed.length === 0 || !allowed.some((code) => held.includes(code))) {
+    throwApiError(C.PERMISSION_DENIED, "權限不足");
+  }
+}
+
 async function ensureLocationExists(locationId) {
   const id = Number.parseInt(String(locationId), 10);
   if (!Number.isFinite(id)) {
@@ -380,6 +415,10 @@ async function onPersonStatusChange(personId, prevStatus, nextStatus) {
 
 module.exports = {
   ensureLocationAllowsAccessMembers,
+  getLocationSystemSyncFlags,
+  resolveMemberEditPermissionCodes,
+  resolveDeviceSyncPermissionCodes,
+  assertLocationScopedAccessPermission,
   getPersonIdsByLocationId,
   getPersonsByLocationIdPaged,
   replaceLocationMembers,

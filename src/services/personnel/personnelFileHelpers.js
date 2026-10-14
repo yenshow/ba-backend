@@ -18,7 +18,7 @@ function formatPersonnelFaceImportSourceMaxSizeLabel() {
 
 const PERSONNEL_FACE_ALLOWED_MIME = new Set(["image/jpeg", "image/jpg"]);
 
-/** 檔名片段：去空白、移除檔名非法字元（不含 + 分隔符） */
+/** 檔名片段：去空白、移除檔名非法字元 */
 function sanitizePersonnelPart(value) {
   return String(value == null ? "" : value)
     .trim()
@@ -26,32 +26,26 @@ function sanitizePersonnelPart(value) {
     .replace(/\s+/g, "");
 }
 
-/** 落地／zip 比對基底：`姓名_工號` */
-function buildPersonnelFaceBasename(fullName, employeeNo) {
-  const namePart = sanitizePersonnelPart(fullName);
+/**
+ * 大頭照檔名基底（SSOT）：僅工號／ID。
+ * 工號建立後鎖定，不因改名而失效；較「姓名_工號」精簡。
+ */
+function buildPersonnelFaceBasename(employeeNo) {
   const noPart = sanitizePersonnelPart(employeeNo);
-  if (!namePart || !noPart) return null;
-  return `${namePart}_${noPart}`;
+  return noPart || null;
 }
 
-function buildPersonnelFilename(fullName, employeeNo, ext) {
-  const base = buildPersonnelFaceBasename(fullName, employeeNo);
+function buildPersonnelFilename(employeeNo, ext) {
+  const base = buildPersonnelFaceBasename(employeeNo);
   if (base) return `${base.slice(0, 120)}${ext}`;
   return `face_${Date.now()}_${crypto.randomBytes(4).toString("hex")}${ext}`;
 }
 
-/** 批次 zip 內圖片檔名候選（小寫比對）：`姓名_工號` 或 `工號` */
-function listPersonnelImportZipCandidateNames(fullName, employeeNo) {
-  const base = buildPersonnelFaceBasename(fullName, employeeNo);
-  const names = [];
-  if (base) {
-    names.push(`${base}.jpeg`, `${base}.jpg`);
-  }
+/** 批次 zip 內圖片檔名候選（小寫比對）：僅 `工號.jpg`／`.jpeg` */
+function listPersonnelImportZipCandidateNames(employeeNo) {
   const noPart = sanitizePersonnelPart(employeeNo);
-  if (noPart) {
-    names.push(`${noPart}.jpeg`, `${noPart}.jpg`);
-  }
-  return names;
+  if (!noPart) return [];
+  return [`${noPart}.jpeg`, `${noPart}.jpg`];
 }
 
 function readFileHeaderBytes(filePath, maxBytes = 32) {
@@ -80,17 +74,16 @@ function safeUnlink(filePath) {
 }
 
 /**
- * 解析不重複的大頭照落地路徑（檔名：`姓名_工號.jpg`，衝突時加 _N 後綴）。
+ * 解析不重複的大頭照落地路徑（檔名：`工號.jpg`，衝突時加 _N 後綴）。
  */
 function resolveUniquePersonnelFacePath(
   personnelUploadsDir,
-  fullName,
   employeeNo,
   options = {},
 ) {
   const excludePath = options.excludePath || null;
   const ext = ".jpg";
-  const desiredName = buildPersonnelFilename(fullName, employeeNo, ext);
+  const desiredName = buildPersonnelFilename(employeeNo, ext);
   let finalFilename = desiredName;
   let finalPath = path.join(personnelUploadsDir, finalFilename);
   let n = 0;

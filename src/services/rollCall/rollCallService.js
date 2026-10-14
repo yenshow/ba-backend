@@ -498,12 +498,11 @@ const applyFaceMatches = async (
     const employeeNo = extractAccessEventIdentity(payload).employeeNo;
     if (!employeeNo) continue;
     const row = byNo.get(employeeNo);
-    if (!row || row.source === "manual" || row.status === "present") continue;
+    if (!row || row.status === "present") continue;
     const updated = await db.query(
       `UPDATE roll_call_attendance
        SET status = 'present', source = 'face', checked_in_at = ?, event_id = ?
        WHERE id = ?
-         AND source IS DISTINCT FROM 'manual'
          AND status <> 'present'
        RETURNING id`,
       [event.event_time, event.id, row.id],
@@ -887,7 +886,6 @@ const getSession = async (sessionId) => {
        a.employee_no`,
     [sessionId],
   );
-  const parts = taipeiParts();
   const sessionDate = formatPgDate(session.session_date);
   return {
     id: Number(session.id),
@@ -900,7 +898,6 @@ const getSession = async (sessionId) => {
     windowStart: formatTime(session.window_start),
     windowEnd: formatTime(session.window_end),
     status: session.status,
-    canMark: sessionDate === parts.date,
     ...tally,
     attendance: (attendance || []).map((row) => {
       const groupId =
@@ -935,27 +932,6 @@ const getSession = async (sessionId) => {
       };
     }),
   };
-};
-
-const markAttendance = async (sessionId, personId, status) => {
-  if (status !== "present" && status !== "absent") {
-    throwApiError(C.VALIDATION_REQUIRED, "狀態須為已簽到或未到");
-  }
-  const session = await getSession(sessionId);
-  if (!session.canMark) {
-    throwApiError(C.VALIDATION_REQUIRED, "只能更正當日名單");
-  }
-  const updated = await db.query(
-    `UPDATE roll_call_attendance
-     SET status = ?,
-         source = 'manual',
-         checked_in_at = CASE WHEN ? = 'present' THEN CURRENT_TIMESTAMP ELSE NULL END
-     WHERE session_id = ? AND person_id = ?
-     RETURNING person_id`,
-    [status, status, sessionId, personId],
-  );
-  if (!updated?.length) throwApiError(C.NOT_FOUND, "名單中沒有這個人");
-  return getSession(sessionId);
 };
 
 const getHistory = async ({ limit = 50, offset = 0, startDate, endDate, locationId } = {}) => {
@@ -1111,7 +1087,6 @@ module.exports = {
   getToday,
   resetLocationToday,
   getSession,
-  markAttendance,
   getHistory,
   getReport,
   reconcileTodayQueued,
