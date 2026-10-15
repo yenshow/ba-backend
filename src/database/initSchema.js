@@ -1374,7 +1374,9 @@ async function initSchema() {
         event_type VARCHAR(32) NOT NULL DEFAULT 'access_control' CHECK (event_type IN (
           'access_control','energy','operational','vehicle','alerts','environment'
         )),
-        push_time TIME NOT NULL,
+        push_mode VARCHAR(16) NOT NULL DEFAULT 'fixed' CHECK (push_mode IN ('fixed','realtime')),
+        push_time TIME,
+        push_interval_seconds INTEGER,
         db_type VARCHAR(16) NOT NULL CHECK (db_type IN ('postgres','sqlserver','mysql')),
         host TEXT NOT NULL,
         port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
@@ -1387,7 +1389,16 @@ async function initSchema() {
         options_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(event_type)
+        UNIQUE(event_type),
+        CONSTRAINT external_sync_configs_push_schedule_check CHECK (
+          (push_mode = 'fixed' AND push_time IS NOT NULL)
+          OR (
+            push_mode = 'realtime'
+            AND push_interval_seconds IS NOT NULL
+            AND push_interval_seconds >= 3
+            AND push_interval_seconds <= 1800
+          )
+        )
       )
     `);
     await createUpdatedAtTrigger(targetPool, "external_sync_configs");

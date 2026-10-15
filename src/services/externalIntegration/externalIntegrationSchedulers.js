@@ -4,9 +4,13 @@ const db = require("../../database/db");
 const recordExportService = require("./recordExportService");
 const { runExternalSyncOnce } = require("./externalSyncService");
 const {
+  ZONE,
+  PUSH_MODE_REALTIME,
   computeNextDailyRunAt,
   computeNextExportRunAt,
   normalizeScheduleFreq,
+  clampPushIntervalSeconds,
+  nextRealtimeRunAt,
 } = require("./exportSchedule");
 
 function createFixedScheduler({ logger: schedLogger, loadJobs }) {
@@ -18,7 +22,49 @@ function createFixedScheduler({ logger: schedLogger, loadJobs }) {
     timers.clear();
   };
 
-  const scheduleNext = async () => {
+  const armTimer = (job, nextAt) => {
+    if (timers.has(job.key)) {
+      clearTimeout(timers.get(job.key));
+      timers.delete(job.key);
+    }
+
+    const nowMs = DateTime.now().setZone(ZONE).toMillis();
+    const delayMs = Math.max(1000, nextAt.toMillis() - nowMs);
+    schedLogger?.info?.("已排程任務", {
+      key: job.key,
+      nextAt: nextAt.toISO(),
+      inMs: delayMs,
+    });
+
+    const timer = setTimeout(async () => {
+      timers.delete(job.key);
+      try {
+        await job.run();
+      } catch (err) {
+        schedLogger?.warn?.("排程任務執行失敗", {
+          key: job.key,
+          error: err?.message || String(err),
+        });
+      }
+      if (stopped) return;
+      if (typeof job.nextAfterRun === "function") {
+        try {
+          armTimer(job, job.nextAfterRun());
+        } catch (err) {
+          schedLogger?.warn?.("重排單一任務失敗", {
+            key: job.key,
+            error: err?.message || String(err),
+          });
+        }
+        return;
+      }
+      await scheduleAll();
+    }, delayMs);
+
+    timers.set(job.key, timer);
+  };
+
+  const scheduleAll = async () => {
     clearAll();
     if (stopped) return;
 
@@ -35,93 +81,103 @@ function createFixedScheduler({ logger: schedLogger, loadJobs }) {
       return;
     }
 
-    const zone = "Asia/Taipei";
-    const nowMs = DateTime.now().setZone(zone).toMillis();
-
     for (const job of jobs) {
-      const next = job.nextAt;
-      const delayMs = Math.max(1000, next.toMillis() - nowMs);
-      schedLogger?.info?.("已排程任務", {
-        key: job.key,
-        nextAt: next.toISO(),
-        inMs: delayMs,
-      });
-
-      const timer = setTimeout(async () => {
-        try {
-          await job.run();
-        } catch (err) {
-          schedLogger?.warn?.("排程任務執行失敗", {
-            key: job.key,
-            error: err?.message || String(err),
-          });
-        }
-        if (!stopped) await scheduleNext();
-      }, delayMs);
-
-      timers.set(job.key, timer);
+      armTimer(job, job.nextAt);
     }
   };
 
   const start = () => {
     stopped = false;
-    void scheduleNext();
+    void scheduleAll();
     return {
       stop: () => {
         stopped = true;
         clearAll();
       },
-      reschedule: () => void scheduleNext(),
+      reschedule: () => void scheduleAll(),
     };
   };
 
-  return { start, scheduleNext };
+  return { start, scheduleNext: scheduleAll };
 }
 
 const externalSyncLogger = logger.createLogger("externalSyncScheduler");
 const recordExportLogger = logger.createLogger("recordExportScheduler");
-
-let externalSyncHandle = null;
-let recordExportHandle = null;
 
 function startExternalSync() {
   const scheduler = createFixedScheduler({
     logger: externalSyncLogger,
     loadJobs: async () => {
       const rows = await db.query(
-        "SELECT event_type, push_time FROM external_sync_configs ORDER BY id ASC",
+        `SELECT event_type, push_mode, push_time, push_interval_seconds
+         FROM external_sync_configs
+         ORDER BY id ASC`,
         [],
       );
       if (!rows?.length) return [];
 
+      const jobs = [];
       const byTime = new Map();
+
       for (const row of rows) {
-        const time = String(row.push_time).slice(0, 5);
+        if (String(row.push_mode ?? "").trim().toLowerCase() === PUSH_MODE_REALTIME) {
+          const intervalSeconds = clampPushIntervalSeconds(row.push_interval_seconds);
+          const eventType = row.event_type;
+          jobs.push({
+            key: `external-sync-rt-${eventType}`,
+            nextAt: nextRealtimeRunAt(intervalSeconds),
+            nextAfterRun: () => nextRealtimeRunAt(intervalSeconds),
+            run: async () => {
+              try {
+                await runExternalSyncOnce(eventType);
+              } catch (err) {
+                externalSyncLogger.warn("資料庫對接執行失敗", {
+                  eventType,
+                  error: err?.message || String(err),
+                });
+              }
+            },
+          });
+          continue;
+        }
+
+        const time = String(row.push_time ?? "").slice(0, 5);
+        if (!/^\d{2}:\d{2}$/.test(time)) {
+          externalSyncLogger.warn("略過無效固定推播時間", {
+            eventType: row.event_type,
+            pushTime: row.push_time,
+          });
+          continue;
+        }
         if (!byTime.has(time)) byTime.set(time, []);
         byTime.get(time).push(row.event_type);
       }
 
-      return [...byTime.entries()].map(([timeHHmm, eventTypes]) => ({
-        key: `external-sync-${timeHHmm}`,
-        nextAt: computeNextDailyRunAt(timeHHmm),
-        run: async () => {
-          for (const eventType of eventTypes) {
-            try {
-              await runExternalSyncOnce(eventType);
-            } catch (err) {
-              externalSyncLogger.warn("資料庫對接執行失敗", {
-                eventType,
-                error: err?.message || String(err),
-              });
+      for (const [timeHHmm, eventTypes] of byTime.entries()) {
+        jobs.push({
+          key: `external-sync-${timeHHmm}`,
+          nextAt: computeNextDailyRunAt(timeHHmm),
+          nextAfterRun: () => computeNextDailyRunAt(timeHHmm),
+          run: async () => {
+            for (const eventType of eventTypes) {
+              try {
+                await runExternalSyncOnce(eventType);
+              } catch (err) {
+                externalSyncLogger.warn("資料庫對接執行失敗", {
+                  eventType,
+                  error: err?.message || String(err),
+                });
+              }
             }
-          }
-        },
-      }));
+          },
+        });
+      }
+
+      return jobs;
     },
   });
 
-  externalSyncHandle = scheduler.start();
-  return externalSyncHandle;
+  return scheduler.start();
 }
 
 function startRecordExport() {
@@ -153,31 +209,35 @@ function startRecordExport() {
         byKey.get(key).ruleIds.push(rule.id);
       }
 
-      return [...byKey.values()].map((group) => ({
-        key: group.key,
-        nextAt: computeNextExportRunAt({
-          scheduleFreq: group.freq,
-          scheduleDay: group.day,
-          timeHHmm: group.timeHHmm,
-        }),
-        run: async () => {
-          for (const ruleId of group.ruleIds) {
-            try {
-              await recordExportService.runRecordExportRule(ruleId);
-            } catch (err) {
-              recordExportLogger.warn("記錄轉存規則執行失敗", {
-                ruleId,
-                error: err?.message || String(err),
-              });
+      return [...byKey.values()].map((group) => {
+        const resolveNext = () =>
+          computeNextExportRunAt({
+            scheduleFreq: group.freq,
+            scheduleDay: group.day,
+            timeHHmm: group.timeHHmm,
+          });
+        return {
+          key: group.key,
+          nextAt: resolveNext(),
+          nextAfterRun: resolveNext,
+          run: async () => {
+            for (const ruleId of group.ruleIds) {
+              try {
+                await recordExportService.runRecordExportRule(ruleId);
+              } catch (err) {
+                recordExportLogger.warn("記錄轉存規則執行失敗", {
+                  ruleId,
+                  error: err?.message || String(err),
+                });
+              }
             }
-          }
-        },
-      }));
+          },
+        };
+      });
     },
   });
 
-  recordExportHandle = scheduler.start();
-  return recordExportHandle;
+  return scheduler.start();
 }
 
 module.exports = {

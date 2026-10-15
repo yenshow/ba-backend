@@ -7,6 +7,13 @@ const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const { getAdapter, requireEventType, listEventTypes } = require("./eventTypeRegistry");
 const { normalizeOptionsGrain } = require("./eventAdapters");
+const {
+  PUSH_MODE_FIXED,
+  PUSH_MODE_REALTIME,
+  MIN_PUSH_INTERVAL_SECONDS,
+  MAX_PUSH_INTERVAL_SECONDS,
+  normalizePushMode,
+} = require("./exportSchedule");
 
 function parseOptionsJson(rawOptions) {
   if (rawOptions != null && typeof rawOptions === "object" && !Array.isArray(rawOptions)) {
@@ -51,6 +58,41 @@ function requirePushTime(value) {
     throwApiError(C.VALIDATION_CUSTOM, "推播時間格式必須為 HH:mm", { statusCode: 400 });
   }
   return v;
+}
+
+function requirePushIntervalSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    throwApiError(C.VALIDATION_CUSTOM, "推播間隔必須為數字", { statusCode: 400 });
+  }
+  const sec = Math.trunc(n);
+  if (sec < MIN_PUSH_INTERVAL_SECONDS || sec > MAX_PUSH_INTERVAL_SECONDS) {
+    throwApiError(
+      C.VALIDATION_CUSTOM,
+      `推播間隔必須介於 ${MIN_PUSH_INTERVAL_SECONDS} 秒～${MAX_PUSH_INTERVAL_SECONDS / 60} 分鐘`,
+      { statusCode: 400 },
+    );
+  }
+  return sec;
+}
+
+function resolvePushSchedule(payload) {
+  const pushMode = normalizePushMode(payload.pushMode);
+  if (!pushMode) {
+    throwApiError(C.VALIDATION_CUSTOM, "推播方式不正確", { statusCode: 400 });
+  }
+  if (pushMode === PUSH_MODE_REALTIME) {
+    return {
+      pushMode,
+      pushTime: null,
+      pushIntervalSeconds: requirePushIntervalSeconds(payload.pushIntervalSeconds),
+    };
+  }
+  return {
+    pushMode,
+    pushTime: requirePushTime(payload.pushTime),
+    pushIntervalSeconds: null,
+  };
 }
 
 function validateMappings(adapter, mappings) {
@@ -211,10 +253,19 @@ function mapConfigRow(config, mapRows) {
     };
   }
   const options = parseOptionsJson(config.options_json);
+  const pushMode = normalizePushMode(config.push_mode) || PUSH_MODE_FIXED;
+  const pushTimeRaw =
+    config.push_time != null ? String(config.push_time).slice(0, 5) : "";
+  const intervalRaw = Number(config.push_interval_seconds);
   return {
     id: config.id,
     eventType: config.event_type,
-    pushTime: String(config.push_time).slice(0, 5),
+    pushMode,
+    pushTime: pushMode === PUSH_MODE_FIXED ? pushTimeRaw : "",
+    pushIntervalSeconds:
+      pushMode === PUSH_MODE_REALTIME && Number.isFinite(intervalRaw)
+        ? Math.trunc(intervalRaw)
+        : null,
     dbType: config.db_type,
     host: config.host,
     port: config.port,
@@ -271,7 +322,7 @@ async function upsertConfig(payload) {
     throwApiError(C.VALIDATION_CUSTOM, "資料庫類型不正確", { statusCode: 400 });
   }
 
-  const pushTime = requirePushTime(payload.pushTime);
+  const { pushMode, pushTime, pushIntervalSeconds } = resolvePushSchedule(payload);
   const host = requireNonEmpty(payload.host, "伺服器 IP/網域");
   const port = requirePort(payload.port);
   const databaseName = requireNonEmpty(payload.database, "資料庫名稱");
@@ -302,11 +353,13 @@ async function upsertConfig(payload) {
     const upsertRows = await q(
       `
         INSERT INTO external_sync_configs
-          (event_type, push_time, db_type, host, port, database_name, username, password_enc, target_table, options_json)
+          (event_type, push_mode, push_time, push_interval_seconds, db_type, host, port, database_name, username, password_enc, target_table, options_json)
         VALUES
-          (?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+          (?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
         ON CONFLICT (event_type) DO UPDATE
-        SET push_time = EXCLUDED.push_time,
+        SET push_mode = EXCLUDED.push_mode,
+            push_time = EXCLUDED.push_time,
+            push_interval_seconds = EXCLUDED.push_interval_seconds,
             db_type = EXCLUDED.db_type,
             host = EXCLUDED.host,
             port = EXCLUDED.port,
@@ -320,7 +373,9 @@ async function upsertConfig(payload) {
       `,
       [
         eventType,
+        pushMode,
         pushTime,
+        pushIntervalSeconds,
         dbType,
         host,
         port,

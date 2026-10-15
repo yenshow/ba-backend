@@ -54,7 +54,6 @@ router.put(
   "/configs",
   validateRequired(
     "eventType",
-    "pushTime",
     "dbType",
     "host",
     "port",

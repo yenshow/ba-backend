@@ -86,7 +86,9 @@ async function ensureExternalIntegrationTables(pool) {
     CREATE TABLE IF NOT EXISTS external_sync_configs (
       id SERIAL PRIMARY KEY,
       event_type VARCHAR(32) NOT NULL DEFAULT 'access_control',
-      push_time TIME NOT NULL,
+      push_mode VARCHAR(16) NOT NULL DEFAULT 'fixed',
+      push_time TIME,
+      push_interval_seconds INTEGER,
       db_type VARCHAR(16) NOT NULL CHECK (db_type IN ('postgres','sqlserver','mysql')),
       host TEXT NOT NULL,
       port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
@@ -110,6 +112,18 @@ async function ensureExternalIntegrationTables(pool) {
       ADD COLUMN IF NOT EXISTS options_json JSONB NOT NULL DEFAULT '{}'::jsonb
   `);
   await pool.query(`
+    ALTER TABLE external_sync_configs
+      ADD COLUMN IF NOT EXISTS push_mode VARCHAR(16) NOT NULL DEFAULT 'fixed'
+  `);
+  await pool.query(`
+    ALTER TABLE external_sync_configs
+      ADD COLUMN IF NOT EXISTS push_interval_seconds INTEGER
+  `);
+  await pool.query(`
+    ALTER TABLE external_sync_configs
+      ALTER COLUMN push_time DROP NOT NULL
+  `);
+  await pool.query(`
     DO $$
     DECLARE r record;
     BEGIN
@@ -120,8 +134,13 @@ async function ensureExternalIntegrationTables(pool) {
         WHERE rel.relname = 'external_sync_configs'
           AND con.contype = 'c'
           AND (
-            con.conname = 'external_sync_configs_event_type_check'
+            con.conname IN (
+              'external_sync_configs_event_type_check',
+              'external_sync_configs_push_mode_check',
+              'external_sync_configs_push_schedule_check'
+            )
             OR pg_get_constraintdef(con.oid) ILIKE '%event_type%'
+            OR pg_get_constraintdef(con.oid) ILIKE '%push_mode%'
           )
       LOOP
         EXECUTE format('ALTER TABLE external_sync_configs DROP CONSTRAINT %I', r.cname);
@@ -129,6 +148,20 @@ async function ensureExternalIntegrationTables(pool) {
       ALTER TABLE external_sync_configs
         ADD CONSTRAINT external_sync_configs_event_type_check
         CHECK (event_type IN ${EVENT_TYPE_CHECK});
+      ALTER TABLE external_sync_configs
+        ADD CONSTRAINT external_sync_configs_push_mode_check
+        CHECK (push_mode IN ('fixed','realtime'));
+      ALTER TABLE external_sync_configs
+        ADD CONSTRAINT external_sync_configs_push_schedule_check
+        CHECK (
+          (push_mode = 'fixed' AND push_time IS NOT NULL)
+          OR (
+            push_mode = 'realtime'
+            AND push_interval_seconds IS NOT NULL
+            AND push_interval_seconds >= 3
+            AND push_interval_seconds <= 1800
+          )
+        );
     END $$;
   `);
   await createUpdatedAtTrigger(pool, "external_sync_configs");

@@ -1,6 +1,6 @@
 /**
  * 轉存排程：頻率（daily／weekly／monthly）＋錨點日 00:00 資料窗
- * 對接（sync）不使用本模組，維持每日 push_time。
+ * 對接（sync）固定推播共用 computeNextDailyRunAt；即時推播由 scheduler 以間隔重排。
  *
  * 資料窗半開 [prev, curr)：curr＝最近已到（含今日）的排程日 00:00；
  * prev＝上一週期同錨點。觸發時刻 HH:mm 只影響 nextAt，不影響窗。
@@ -9,6 +9,34 @@ const { DateTime } = require("luxon");
 
 const ZONE = "Asia/Taipei";
 const FREQS = new Set(["daily", "weekly", "monthly"]);
+
+/** 資料庫對接推播 */
+const PUSH_MODE_FIXED = "fixed";
+const PUSH_MODE_REALTIME = "realtime";
+const MIN_PUSH_INTERVAL_SECONDS = 3;
+const MAX_PUSH_INTERVAL_SECONDS = 1800;
+
+function normalizePushMode(raw) {
+  const v = String(raw ?? PUSH_MODE_FIXED).trim().toLowerCase();
+  if (v === PUSH_MODE_REALTIME) return PUSH_MODE_REALTIME;
+  if (!v || v === PUSH_MODE_FIXED) return PUSH_MODE_FIXED;
+  return "";
+}
+
+function clampPushIntervalSeconds(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return MIN_PUSH_INTERVAL_SECONDS;
+  return Math.min(
+    MAX_PUSH_INTERVAL_SECONDS,
+    Math.max(MIN_PUSH_INTERVAL_SECONDS, Math.trunc(n)),
+  );
+}
+
+function nextRealtimeRunAt(intervalSeconds, now = DateTime.now().setZone(ZONE)) {
+  const base =
+    now instanceof DateTime ? now.setZone(ZONE) : DateTime.fromJSDate(now).setZone(ZONE);
+  return base.plus({ seconds: clampPushIntervalSeconds(intervalSeconds) });
+}
 
 function normalizeScheduleFreq(raw) {
   const v = String(raw ?? "daily").trim().toLowerCase();
@@ -137,6 +165,13 @@ function computeNextDailyRunAt(timeHHmm, zone = ZONE) {
 
 module.exports = {
   ZONE,
+  PUSH_MODE_FIXED,
+  PUSH_MODE_REALTIME,
+  MIN_PUSH_INTERVAL_SECONDS,
+  MAX_PUSH_INTERVAL_SECONDS,
+  normalizePushMode,
+  clampPushIntervalSeconds,
+  nextRealtimeRunAt,
   normalizeScheduleFreq,
   normalizeScheduleDay,
   resolveExportWindow,

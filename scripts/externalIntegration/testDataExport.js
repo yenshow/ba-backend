@@ -200,6 +200,7 @@ const cmdSetup = async (argv) => {
 
   await externalSyncService.upsertConfig({
     eventType,
+    pushMode: "fixed",
     pushTime: "23:59",
     dbType: "postgres",
     host: config.database.host,
