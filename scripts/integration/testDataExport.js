@@ -66,7 +66,7 @@ const resolveEventType = (argv, fallback = "access_control") => {
 
 const printHelp = () => {
   console.log(`
-用法: node scripts/externalIntegration/testDataExport.js <command> [options]
+用法: node scripts/integration/testDataExport.js <command> [options]
 
 commands:
   all      一鍵：門禁 setup/seed/sync → energy／operational 對接煙測

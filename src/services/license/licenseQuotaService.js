@@ -35,6 +35,18 @@ const normalizeFeatureKey = (v) => {
 };
 
 const countByDeviceTypeCode = async (typeCode) => {
+  // NVR 為 camera 分類（config.is_nvr／型號 category=nvr），不計 surveillance 配額
+  if (String(typeCode || "").toLowerCase() === "camera") {
+    const rows = await db.query(
+      `SELECT COUNT(*)::int AS count
+       FROM devices d
+       LEFT JOIN device_models dm ON dm.id = d.model_id
+       WHERE d.type_code = 'camera'
+         AND COALESCE(d.config->>'is_nvr', 'false') <> 'true'
+         AND COALESCE(dm.category_code, '') <> 'nvr'`,
+    );
+    return Number(rows?.[0]?.count ?? 0);
+  }
   const rows = await db.query(
     `SELECT COUNT(*)::int AS count
      FROM devices d

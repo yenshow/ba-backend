@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const {
   getCatalogModulesForProfile,
   LOCATION_TYPE_MODULE,
-} = require("../src/access/catalog.js");
+} = require("../../src/access/catalog.js");
 
 const MODULE_PERM_KEYS = {
   "system.home": "home",
@@ -147,13 +147,13 @@ ${permBody}
 const targets = [
   {
     profile: "central",
-    path: join(__dirname, "../../ba-frontend-central/app/config/permissionCodes.ts"),
+    path: join(__dirname, "../../../ba-frontend-central/app/config/permissionCodes.ts"),
   },
   {
     profile: "construction",
     path: join(
       __dirname,
-      "../../ba-frontend-construction/app/config/permissionCodes.ts",
+      "../../../ba-frontend-construction/app/config/permissionCodes.ts",
     ),
   },
 ];

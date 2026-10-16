@@ -19,21 +19,21 @@ const {
   getPostgresPort,
   getOfflineArchivePath,
   isPostgresDownloaded,
-} = require("./postgres-common");
+} = require("../lib/postgres-common");
 const {
   log,
   execWithUtf8OnWindows,
   prepareWindowsDirAcl,
   prepareWindowsPostgresDataLayout,
   ensurePgHbaTrustRules,
-} = require("./postgres-exec-windows");
+} = require("../lib/postgres-exec-windows");
 const {
   startPortablePostgres,
   verifyPsqlReady,
   PSQL_HOST,
   PSQL_COMMON_ARGS,
-} = require("./start-portable-postgres-lib");
-const { ensureRuntimeDataLayout } = require("../src/utils/baDataPaths");
+} = require("../lib/start-portable-postgres-lib");
+const { ensureRuntimeDataLayout } = require("../../src/utils/baDataPaths");
 
 function ensureDirSync(dirPath) {
   if (!fs.existsSync(dirPath)) {

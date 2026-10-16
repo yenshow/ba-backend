@@ -17,10 +17,10 @@ const path = require("path");
 const {
   resolveProductCode,
   serviceNames,
-} = require("./windows-product-services");
+} = require("../lib/windows-product-services");
 const pgSvc = require("./postgres-windows-service");
-const { DATA_DIR } = require("./postgres-common");
-const { ensurePgHbaTrustRules } = require("./postgres-exec-windows");
+const { DATA_DIR } = require("../lib/postgres-common");
+const { ensurePgHbaTrustRules } = require("../lib/postgres-exec-windows");
 
 function run(file, args, opts = {}) {
   const r = spawnSync(file, args, {

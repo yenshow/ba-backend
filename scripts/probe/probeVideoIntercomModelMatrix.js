@@ -8,7 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { invokeBridge } = require("../src/services/ladderSdk/sdkBridgeClient");
+const { invokeBridge } = require("../../src/services/ladderSdk/sdkBridgeClient");
 
 const PASSWORD = "Aa83124007";
 const PORT = 8000;

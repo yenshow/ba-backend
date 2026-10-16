@@ -10,7 +10,7 @@
 
 /* eslint-disable no-console */
 
-const { invokeBridge } = require("../src/services/ladderSdk/sdkBridgeClient");
+const { invokeBridge } = require("../../src/services/ladderSdk/sdkBridgeClient");
 
 const SCRIPT_CONFIG = {
   host: "192.168.2.27",

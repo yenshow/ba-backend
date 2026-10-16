@@ -336,6 +336,12 @@ async function checkSingleDeviceConnectivity(deviceRow) {
   const modelPort = deviceRow?.model_port;
 
   if (typeCode === "camera") {
+    if (cfg?.is_nvr === true) {
+      const host = String(cfg?.host || "").trim();
+      const port = Number(cfg?.port ?? modelPort ?? 80);
+      await tcpPortHealthCheck(host, port);
+      return { deviceId, ok: true, nextStatus: "online" };
+    }
     const rtspUrl = String(cfg?.rtsp_url || "").trim();
     if (!rtspUrl) {
       throw createApiError(

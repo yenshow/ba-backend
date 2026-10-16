@@ -8,7 +8,7 @@
  */
 async function generateMediaMtxConfig() {
   // eslint-disable-next-line global-require
-  const sync = require("../src/services/communication/mediaMTXConfigSyncService");
+  const sync = require("../../src/services/communication/mediaMTXConfigSyncService");
   const { pathsCount } = await sync.generateConfigFile();
   console.log(`已產生 mediamtx\\mediamtx.generated.yml（paths=${pathsCount}）`);
   return { pathsCount };

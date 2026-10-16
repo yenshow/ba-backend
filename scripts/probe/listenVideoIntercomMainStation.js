@@ -16,7 +16,7 @@
 
 const {
   spawnArmingProcess,
-} = require("../src/services/ladderSdk/sdkBridgeClient");
+} = require("../../src/services/ladderSdk/sdkBridgeClient");
 
 // ── 現場參數（管理中心主機）─────────────────────────────────────
 const SCRIPT_CONFIG = {

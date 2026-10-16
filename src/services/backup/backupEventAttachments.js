@@ -11,7 +11,13 @@ const getAttachmentBackupDir = (subdir) => {
   return path.join(root, subdir);
 };
 
-const copyPictureToBackup = (picturePath, subdir) => {
+/**
+ * @param {string} picturePath
+ * @param {string} subdir 相對 BACKUP_ROOT（可含路徑，如 people_counting/attachments）
+ * @param {string} [namePrefix] 檔名前綴（防合併目錄撞名）
+ * @returns {string|null} 相對 BACKUP_ROOT 路徑
+ */
+const copyPictureToBackup = (picturePath, subdir, namePrefix = "") => {
   const normalized = String(picturePath || "").trim();
   if (!normalized) return null;
 
@@ -23,20 +29,32 @@ const copyPictureToBackup = (picturePath, subdir) => {
     fs.mkdirSync(destDir, { recursive: true });
   }
 
-  const basename = path.basename(src);
+  const prefix = String(namePrefix || "");
+  const basename = `${prefix}${path.basename(src)}`;
   const dest = path.join(destDir, basename);
   if (!fs.existsSync(dest)) {
     fs.copyFileSync(src, dest);
   }
-  return `${subdir}/${basename}`;
+  return `${subdir}/${basename}`.replace(/\\/g, "/");
 };
 
-const copyPicturesForRows = (rows, subdir, picturePathField = "picture_path") => {
+/**
+ * @param {object[]} rows
+ * @param {string} subdir
+ * @param {string} [picturePathField]
+ * @param {string} [namePrefix]
+ */
+const copyPicturesForRows = (
+  rows,
+  subdir,
+  picturePathField = "picture_path",
+  namePrefix = "",
+) => {
   const backupPaths = new Map();
   for (const row of rows || []) {
     const url = row?.[picturePathField];
     if (!url || backupPaths.has(url)) continue;
-    const backupRel = copyPictureToBackup(url, subdir);
+    const backupRel = copyPictureToBackup(url, subdir, namePrefix);
     if (backupRel) backupPaths.set(url, backupRel);
   }
   return backupPaths;

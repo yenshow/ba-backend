@@ -4,12 +4,12 @@
  * 直接呼叫 Artemis eventService API，不依賴後端 service / .env。
  *
  * 用法（於 ba-backend 目錄，先修改下方 SCRIPT_CONFIG）：
- *   node scripts/yscpResubscribe.js
+ *   node scripts/ops/yscpResubscribe.js
  *   npm run yscp:resubscribe
  *
  * 僅取消／僅訂閱：
- *   node scripts/yscpResubscribe.js --unsubscribe-only
- *   node scripts/yscpResubscribe.js --subscribe-only
+ *   node scripts/ops/yscpResubscribe.js --unsubscribe-only
+ *   node scripts/ops/yscpResubscribe.js --subscribe-only
  */
 
 /* eslint-disable no-console */

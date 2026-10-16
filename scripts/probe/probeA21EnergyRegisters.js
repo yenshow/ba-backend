@@ -14,7 +14,7 @@
  *   demand          ← 0x3006 FLOAT32(W)  /1000 → kW
  *
  * 用法：
- *   node scripts/probeA21EnergyRegisters.js <host> [port=502] [unitId=1]
+ *   node scripts/probe/probeA21EnergyRegisters.js <host> [port=502] [unitId=1]
  *   npm run probe:a21-energy -- 192.168.2.211 502 1
  *
  * 環境變數：
@@ -38,7 +38,7 @@ const writeMd = process.env.A21_MD !== "0";
 
 if (!host) {
 	console.log(`
-用法: node scripts/probeA21EnergyRegisters.js <host> [port=502] [unitId=1]
+用法: node scripts/probe/probeA21EnergyRegisters.js <host> [port=502] [unitId=1]
 
 範例:
   npm run probe:a21-energy -- 192.168.2.211 502 1
@@ -365,7 +365,7 @@ const defaultMdPath = () => {
 		.replace(/[:.]/g, "-")
 		.replace("T", "_")
 		.slice(0, 19);
-	const dir = path.join(__dirname, "reports");
+	const dir = path.join(__dirname, '../reports');
 	return path.join(dir, `a21-energy-probe-${stamp}.md`);
 };
 
@@ -381,7 +381,7 @@ const buildMarkdown = (ctx) => {
 	lines.push(`- **設備**：\`${host}:${port}\`　Unit ID=\`${unitId}\``);
 	lines.push(`- **解碼**：IEEE-754 **FLOAT32／FLOAT64**，字序 **${bestOrder.toUpperCase()}**`);
 	lines.push(`- **手冊**：A21-06-ADP-33 Modbus Register List TC V1.11`);
-	lines.push(`- **腳本**：\`ba-backend/scripts/probeA21EnergyRegisters.js\``);
+	lines.push(`- **腳本**：\`ba-backend/scripts/probe/probeA21EnergyRegisters.js\``);
 	lines.push("");
 	lines.push(`## 結論`);
 	lines.push("");

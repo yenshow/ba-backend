@@ -20,7 +20,7 @@ const {
   getProjectDir,
   getPostgresDataDir,
   getPostgresLogDir,
-} = require("../src/utils/baDataPaths");
+} = require("../../src/utils/baDataPaths");
 
 const PROJECT_DIR = getProjectDir();
 const POSTGRES_DIR = path.join(PROJECT_DIR, "postgres");

@@ -184,7 +184,7 @@ const run = () => {
 
   // 腳本重排（歷史特殊情形，非正式路徑）
   {
-    const { planReassignByOrder } = require("../../scripts/repairAccessEventPictures");
+    const { planReassignByOrder } = require("../../scripts/ops/repairAccessEventPictures");
     const mk = (id, sub, pic, t) => ({
       id,
       device_ip: "10.0.0.1",

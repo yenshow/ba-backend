@@ -62,6 +62,57 @@ const validateDeviceConfig = (config, typeCode) => {
       break;
 
     case "camera": {
+      const isNvr = config.is_nvr === true;
+      config.is_nvr = isNvr;
+
+      if (isNvr) {
+        const host =
+          config.host && typeof config.host === "string" ? config.host.trim() : "";
+        if (!host) {
+          deviceConfigInvalid("NVR 攝影機需要 host (string)");
+        }
+        config.host = host;
+
+        let port = 80;
+        if (config.port !== undefined && config.port !== null && config.port !== "") {
+          port = Number(config.port);
+          if (Number.isNaN(port) || port < 1 || port > 65535) {
+            deviceConfigInvalid("NVR 的 port 必須為 1–65535 的數字（Web 管理埠）");
+          }
+        }
+        config.port = port;
+
+        if (config.use_https !== undefined && typeof config.use_https !== "boolean") {
+          deviceConfigInvalid("NVR 的 use_https 必須為布林值");
+        }
+        const useHttps = config.use_https === true;
+        config.use_https = useHttps;
+
+        let webUrl =
+          config.web_url && typeof config.web_url === "string"
+            ? config.web_url.trim()
+            : "";
+        if (!webUrl) {
+          const scheme = useHttps ? "https" : "http";
+          const omitDefaultPort =
+            (useHttps && port === 443) || (!useHttps && port === 80);
+          webUrl = omitDefaultPort
+            ? `${scheme}://${host}/`
+            : `${scheme}://${host}:${port}/`;
+        }
+        const lower = webUrl.toLowerCase();
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+          deviceConfigInvalid(
+            "NVR 的 web_url 須以 http:// 或 https:// 開頭（瀏覽器回放入口）",
+          );
+        }
+        config.web_url = webUrl;
+        delete config.rtsp_url;
+        delete config.nvr_device_id;
+        delete config.nvr_channel;
+        break;
+      }
+
       const rtspUrl =
         config.rtsp_url && typeof config.rtsp_url === "string"
           ? config.rtsp_url.trim()
@@ -77,6 +128,34 @@ const validateDeviceConfig = (config, typeCode) => {
           deviceConfigInvalid("camera 類型的 port 必須為 1–65535 的數字");
         }
       }
+      if (
+        config.nvr_device_id !== undefined &&
+        config.nvr_device_id !== null &&
+        config.nvr_device_id !== ""
+      ) {
+        const nvrId = Number(config.nvr_device_id);
+        if (!Number.isInteger(nvrId) || nvrId < 1) {
+          deviceConfigInvalid("camera 的 nvr_device_id 必須為正整數");
+        }
+        config.nvr_device_id = nvrId;
+      } else {
+        delete config.nvr_device_id;
+      }
+      if (
+        config.nvr_channel !== undefined &&
+        config.nvr_channel !== null &&
+        config.nvr_channel !== ""
+      ) {
+        const ch = Number(config.nvr_channel);
+        if (!Number.isInteger(ch) || ch < 1 || ch > 256) {
+          deviceConfigInvalid("camera 的 nvr_channel 必須為 1–256 的整數");
+        }
+        config.nvr_channel = ch;
+      } else {
+        delete config.nvr_channel;
+      }
+      delete config.web_url;
+      delete config.use_https;
       break;
     }
 

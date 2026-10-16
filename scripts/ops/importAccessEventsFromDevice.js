@@ -7,32 +7,32 @@
  * 人臉事件（sub 75／76）若設備有 pictureURL，會一併下載寫入；已入庫但沒有圖的列也會補圖。
  *
  *   cd ba-backend
- *   node scripts/importAccessEventsFromDevice.js
- *   node scripts/importAccessEventsFromDevice.js --device 1 --date 2026-09-23
- *   node scripts/importAccessEventsFromDevice.js --device 1 --date 2026-09-23 --indexes 1,3,5-8 --apply
- *   node scripts/importAccessEventsFromDevice.js --device 1 --date 2026-09-23 --all --apply
+ *   node scripts/ops/importAccessEventsFromDevice.js
+ *   node scripts/ops/importAccessEventsFromDevice.js --device 1 --date 2026-09-23
+ *   node scripts/ops/importAccessEventsFromDevice.js --device 1 --date 2026-09-23 --indexes 1,3,5-8 --apply
+ *   node scripts/ops/importAccessEventsFromDevice.js --device 1 --date 2026-09-23 --all --apply
  */
 /* eslint-disable no-console */
 
 const readline = require("readline");
-const db = require("../src/database/db");
-const accessControlService = require("../src/services/accessControl/accessControlService");
+const db = require("../../src/database/db");
+const accessControlService = require("../../src/services/accessControl/accessControlService");
 const {
   persistIsapiEvent,
   isProcessableEvent,
   attachPictureToEvent,
-} = require("../src/services/accessControl/isapiSubscribeService");
+} = require("../../src/services/accessControl/isapiSubscribeService");
 const {
   shouldQueueAccessEventPicture,
-} = require("../src/services/peopleCounting/accessControlLogLabels");
+} = require("../../src/services/peopleCounting/accessControlLogLabels");
 const {
   fetchAcsEvents,
   toAcsEventPayload,
   findExistingAccessEvent,
-} = require("../src/services/accessControl/isapiAcsEventQuery");
+} = require("../../src/services/accessControl/isapiAcsEventQuery");
 const {
   downloadIsapiPicture,
-} = require("../src/services/isapi/isapiEventBackfillCommon");
+} = require("../../src/services/isapi/isapiEventBackfillCommon");
 
 const PAGE_SIZE = 30;
 const MAX_PAGES = 200;

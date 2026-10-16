@@ -9,7 +9,7 @@ const fs = require("fs");
 const {
   getMediamtxDir,
   getMediamtxGeneratedConfigPath,
-} = require("../src/utils/baDataPaths");
+} = require("../../src/utils/baDataPaths");
 const { generateMediaMtxConfig } = require("./generate-mediamtx-config");
 
 const mediamtxDir = getMediamtxDir();
@@ -38,7 +38,7 @@ const main = async () => {
 
   // 設定已寫入檔案。關掉連線池，避免 PostgreSQL 重啟時閒置連線打掛這個包裝行程。
   try {
-    const db = require("../src/database/db");
+    const db = require("../../src/database/db");
     await db.close();
   } catch (closeErr) {
     console.error(closeErr?.message || closeErr);

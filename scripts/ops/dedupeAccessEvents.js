@@ -4,12 +4,12 @@
  * 保留列沒有圖時，改掛另一列的 picture_path。不加 --apply 只預覽。
  *
  *   cd ba-backend
- *   node scripts/dedupeAccessEvents.js
- *   node scripts/dedupeAccessEvents.js --apply
+ *   node scripts/ops/dedupeAccessEvents.js
+ *   node scripts/ops/dedupeAccessEvents.js --apply
  */
 /* eslint-disable no-console */
 
-const db = require("../src/database/db");
+const db = require("../../src/database/db");
 
 const LIST_SQL = `
 WITH base AS (

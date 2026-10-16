@@ -2,9 +2,9 @@
  * 特殊情形：歷史門禁附圖 FIFO 錯綁修復（非正式執行期；新事件靠單槽即可）
  *
  *   cd ba-backend
- *   node scripts/repairAccessEventPictures.js --fix-from-files
- *   node scripts/repairAccessEventPictures.js --fix-from-files --apply
- *   node scripts/repairAccessEventPictures.js --inspect --limit 500
+ *   node scripts/ops/repairAccessEventPictures.js --fix-from-files
+ *   node scripts/ops/repairAccessEventPictures.js --fix-from-files --apply
+ *   node scripts/ops/repairAccessEventPictures.js --inspect --limit 500
  *
  * 流程：磁碟 …_{id}.jpg 掛回（含指紋列）→ pending 重排給人臉。報表在 uploads/repair-reports/。
  */
@@ -15,7 +15,7 @@ const {
   shouldQueueAccessEventPicture,
   shouldDisplayAccessEventPicture,
   extractAccessEventIdentity,
-} = require("../src/services/peopleCounting/accessControlLogLabels");
+} = require("../../src/services/peopleCounting/accessControlLogLabels");
 
 const normPath = (p) => {
   const s = p != null ? String(p).trim() : "";
@@ -111,11 +111,11 @@ const planReassignByOrder = (rows) => {
 module.exports = { planReassignByOrder, normPath, coercePayload };
 
 if (require.main === module) {
-  const db = require("../src/database/db");
+  const db = require("../../src/database/db");
   const {
     resolveUploadFilePath,
     getUploadsDir,
-  } = require("../src/utils/baDataPaths");
+  } = require("../../src/utils/baDataPaths");
 
   const parseArgs = (argv) => {
     const get = (flag) => {
@@ -323,9 +323,9 @@ if (require.main === module) {
       return;
     }
     console.log(`用法:
-  node scripts/repairAccessEventPictures.js --fix-from-files
-  node scripts/repairAccessEventPictures.js --fix-from-files --apply
-  node scripts/repairAccessEventPictures.js --inspect --limit 500`);
+  node scripts/ops/repairAccessEventPictures.js --fix-from-files
+  node scripts/ops/repairAccessEventPictures.js --fix-from-files --apply
+  node scripts/ops/repairAccessEventPictures.js --inspect --limit 500`);
   };
 
   main()

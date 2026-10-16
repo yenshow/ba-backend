@@ -25,10 +25,15 @@ const {
   transformEnvironmentReadingsToReportFormat,
 } = require("./environmentReadingsReportFormat");
 const {
+  collectAccessEmployeeNos,
   transformIsapiAccessEventsToReportFormat,
   transformIsapiFaceContrastEventsToReportFormat,
   transformIsapiPeopleCountingToReportFormat,
 } = require("./isapiEventsReportFormat");
+const {
+  loadPeopleCountingBackupContext,
+  loadPersonsByEmployeeNos,
+} = require("./loadPeopleCountingBackupContext");
 const {
   transformLadderSdkEventsToReportFormat,
 } = require("./ladderSdkEventsReportFormat");
@@ -206,24 +211,35 @@ async function runBackup() {
       });
     }
 
+    const peopleCountingCtx = await loadPeopleCountingBackupContext();
+
     const accessDelete = buildDeleteSql("isapi_access_events", "event_time");
     const peopleAccessIsapiResult = await runBackupJob(
       `${peopleModuleLabel}門禁（ISAPI）`,
-      async () =>
-        backupService.backupTableDual({
+      async () => {
+        const accessRows =
+          await backupService.getIsapiAccessEventsForBackup(archiveBeforeDate);
+        const personByEmployeeNo = await loadPersonsByEmployeeNos(
+          collectAccessEmployeeNos(accessRows),
+        );
+        return backupService.backupTableDual({
           tableName: "isapi_access_events",
-          rows: await backupService.getIsapiAccessEventsForBackup(
-            archiveBeforeDate,
-          ),
+          rows: accessRows,
           dateField: "event_time",
           category: "peopleCounting",
-          csvTransform: transformIsapiAccessEventsToReportFormat,
-          attachmentSubdir: "access-events",
+          csvTransform: (dayRows) =>
+            transformIsapiAccessEventsToReportFormat(dayRows, {
+              accessByDeviceId: peopleCountingCtx.accessByDeviceId,
+              personByEmployeeNo,
+            }),
+          attachmentSubdir: "people_counting/attachments",
+          attachmentNamePrefix: "access_",
           selectColdTimestampsSql: `SELECT event_time FROM isapi_access_events WHERE event_time < $1`,
           selectColdParams: [deleteBeforeDate],
           selectPicturesForDay: (start, end) => selectAccessPictures(start, end),
           ...accessDelete,
-        }),
+        });
+      },
     );
 
     const cameraDelete = buildDeleteSql(
@@ -253,22 +269,37 @@ async function runBackup() {
     );
     const peopleFaceContrastIsapiResult = await runBackupJob(
       `${peopleModuleLabel}人臉比對（ISAPI）`,
-      async () =>
-        backupService.backupTableDual({
-          tableName: "isapi_face_contrast_events",
-          rows: await backupService.getIsapiFaceContrastEventsForBackup(
+      async () => {
+        const faceRows =
+          await backupService.getIsapiFaceContrastEventsForBackup(
             archiveBeforeDate,
-          ),
+          );
+        const employeeNos = (faceRows || [])
+          .map((r) =>
+            r.employee_no != null ? String(r.employee_no).trim() : "",
+          )
+          .filter(Boolean);
+        const personByEmployeeNo =
+          await loadPersonsByEmployeeNos(employeeNos);
+        return backupService.backupTableDual({
+          tableName: "isapi_face_contrast_events",
+          rows: faceRows,
           dateField: "event_time",
           category: "peopleCounting",
-          csvTransform: transformIsapiFaceContrastEventsToReportFormat,
-          attachmentSubdir: "face-contrast-events",
+          csvTransform: (dayRows) =>
+            transformIsapiFaceContrastEventsToReportFormat(dayRows, {
+              faceByDeviceId: peopleCountingCtx.faceByDeviceId,
+              personByEmployeeNo,
+            }),
+          attachmentSubdir: "people_counting/attachments",
+          attachmentNamePrefix: "face_",
           selectColdTimestampsSql: `SELECT event_time FROM isapi_face_contrast_events WHERE event_time < $1`,
           selectColdParams: [deleteBeforeDate],
           selectPicturesForDay: (start, end) =>
             selectFaceContrastPictures(start, end),
           ...faceContrastDelete,
-        }),
+        });
+      },
     );
 
     let vehicleYscpResult = { skipped: true };
@@ -314,7 +345,8 @@ async function runBackup() {
         dateField: "trigger_time",
         category: "vehicleAccess",
         csvTransform: transformVehicleAccessToReportFormat,
-        attachmentSubdir: "vehicle-events",
+        attachmentSubdir: "vehicle_access/attachments",
+        attachmentNamePrefix: "vehicle_",
         selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND data_source = 'isapi_camera'`,
         selectColdParams: [deleteBeforeDate],
         selectPicturesForDay: (start, end) =>

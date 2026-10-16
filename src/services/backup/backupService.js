@@ -192,6 +192,7 @@ async function backupTableDual(options) {
     category = "default",
     csvTransform = null,
     attachmentSubdir = null,
+    attachmentNamePrefix = "",
     picturePathField = "picture_path",
     selectColdTimestampsSql,
     selectColdParams = [],
@@ -221,6 +222,7 @@ async function backupTableDual(options) {
         dayRows,
         attachmentSubdir,
         picturePathField,
+        attachmentNamePrefix,
       );
       transformInput = dayRows.map((row) => {
         const url = row?.[picturePathField];

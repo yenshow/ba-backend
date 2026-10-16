@@ -1,130 +1,9 @@
 /**
- * 人流統計備份 CSV 報表格式
- * 與頁面一致：
- * 1. 進出統計：日期、區域-地點、進場人數、出場人數、在場人數
- * 2. 單位統計：日期、區域-地點、單位名稱、進場人數、出場人數、在場人數
- * 3. 進出紀錄（完整報表明細）：區域-地點、人員群組、ID、姓名、出入口名稱、方式、刷卡時間、事件
+ * YSCP 人流統計備份 CSV：與 UI 完整報表同三區塊／欄位（含圖片路徑）
  */
-const DETAIL_LOG_HEADERS = [
-  "區域-地點",
-  "人員群組",
-  "ID",
-  "姓名",
-  "出入口名稱",
-  "方式",
-  "刷卡時間",
-  "事件",
-];
-
 const {
-  formatDateTimeZhTW,
-  formatDateZhTW,
-  formatZoneLocation,
-} = require("./reportFormatUtils");
-const { computeTransitionStats } = require("../entryExit/stats");
-
-const sep = "\x00";
-
-function groupByDayLocation(rows) {
-  const groups = new Map();
-  for (const r of rows) {
-    const dateStr = formatDateZhTW(r.swip_card_rev_time);
-    const zoneLoc = formatZoneLocation(r.zone_name, r.location_name);
-    const key = `${dateStr}${sep}${zoneLoc}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(r);
-  }
-  return groups;
-}
-
-/** 進出統計：每日每區一列，5 欄（日期、區域-地點、進場人數、出場人數、在場人數） */
-function buildStatsSection(rows, directionMap) {
-  const groups = groupByDayLocation(rows);
-  const sortedKeys = [...groups.keys()].sort((a, b) => {
-    const [dA, zA] = a.split(sep);
-    const [dB, zB] = b.split(sep);
-    return dA.localeCompare(dB) || zA.localeCompare(zB);
-  });
-  const sectionRows = [];
-  for (const key of sortedKeys) {
-    const idx = key.indexOf(sep);
-    const dateStr = key.slice(0, idx);
-    const zoneLoc = key.slice(idx + sep.length);
-    const recs = groups.get(key);
-    const sorted = [...recs].sort(
-      (a, b) => new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
-    );
-    const getDirection = (r) => directionMap.get(Number(r.physical_id));
-    const { entryCount, exitCount, currentCount } = computeTransitionStats(
-      sorted,
-      {
-        getKey: (r) => (r.person_id === -1 ? null : r.person_id),
-        getDirection,
-        getTime: (r) => r.swip_card_rev_time,
-        sortByTime: false,
-      },
-    );
-    sectionRows.push({
-      日期: dateStr,
-      "區域-地點": zoneLoc,
-      進場人數: String(entryCount),
-      出場人數: String(exitCount),
-      在場人數: String(currentCount),
-    });
-  }
-  return sectionRows;
-}
-
-/** 單位統計：依日期+區域+單位分組，每組進場/出場/在場人數 */
-function buildUnitStatsSection(rows, directionMap) {
-  const groups = groupByDayLocation(rows);
-  const sortedKeys = [...groups.keys()].sort((a, b) => {
-    const [dA, zA] = a.split(sep);
-    const [dB, zB] = b.split(sep);
-    return dA.localeCompare(dB) || zA.localeCompare(zB);
-  });
-  const sectionRows = [];
-  for (const key of sortedKeys) {
-    const idx = key.indexOf(sep);
-    const dateStr = key.slice(0, idx);
-    const zoneLoc = key.slice(idx + sep.length);
-    const recs = groups.get(key);
-    const byUnit = new Map();
-    for (const r of recs) {
-      const raw = (r.unit_name ?? "").trim();
-      if (!raw) continue;
-      if (!byUnit.has(raw)) byUnit.set(raw, []);
-      byUnit.get(raw).push(r);
-    }
-    const unitNames = [...byUnit.keys()].sort();
-    for (const unitName of unitNames) {
-      const unitRecs = byUnit.get(unitName);
-      const sorted = [...unitRecs].sort(
-        (a, b) =>
-          new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
-      );
-      const getDirection = (r) => directionMap.get(Number(r.physical_id));
-      const { entryCount, exitCount, currentCount } = computeTransitionStats(
-        sorted,
-        {
-          getKey: (r) => (r.person_id === -1 ? null : r.person_id),
-          getDirection,
-          getTime: (r) => r.swip_card_rev_time,
-          sortByTime: false,
-        },
-      );
-      sectionRows.push({
-        日期: dateStr,
-        "區域-地點": zoneLoc,
-        單位名稱: unitName,
-        進場人數: String(entryCount),
-        出場人數: String(exitCount),
-        在場人數: String(currentCount),
-      });
-    }
-  }
-  return sectionRows;
-}
+  buildPeopleCountingReportSections,
+} = require("./peopleCountingBackupSections");
 
 function eventLabelFromDirection(dir) {
   if (dir === "entry") return "進入";
@@ -132,103 +11,34 @@ function eventLabelFromDirection(dir) {
   return "失敗";
 }
 
-/** 進出紀錄（完整報表明細）：8 欄（不含方向） */
-function buildDetailSection(rows, doorNameMap, directionMap) {
-  const groups = groupByDayLocation(rows);
-  const sortedKeys = [...groups.keys()].sort((a, b) => {
-    const [dA, zA] = a.split(sep);
-    const [dB, zB] = b.split(sep);
-    return dA.localeCompare(dB) || zA.localeCompare(zB);
-  });
-  const result = [];
-  for (const key of sortedKeys) {
-    const zoneLoc = key.slice(key.indexOf(sep) + sep.length);
-    const recs = groups.get(key);
-    const sorted = [...recs].sort(
-      (a, b) => new Date(a.swip_card_rev_time) - new Date(b.swip_card_rev_time),
-    );
-    for (const r of sorted) {
-      const physicalId = r.physical_id != null ? Number(r.physical_id) : null;
-      const dir = directionMap.get(physicalId);
-      const doorName =
-        physicalId != null ? (doorNameMap.get(physicalId) || "") : "";
-      result.push({
-        "區域-地點": zoneLoc,
-        人員群組: (r.unit_name ?? "").trim() || "—",
-        ID: "—",
-        姓名: r.person_name ?? "—",
-        出入口名稱: doorName?.trim() || "—",
-        方式: "—",
-        刷卡時間: formatDateTimeZhTW(r.swip_card_rev_time),
-        事件: eventLabelFromDirection(dir),
-      });
-    }
-  }
-  return result.sort((a, b) =>
-    (b.刷卡時間 || "").localeCompare(a.刷卡時間 || ""),
-  );
-}
-
 function transformPeopleCountingToReportFormat(
   rows,
   doorNameMap = new Map(),
   directionMap = new Map(),
 ) {
-  if (!rows || rows.length === 0) {
+  const normalized = (rows || []).map((r) => {
+    const physicalId = r.physical_id != null ? Number(r.physical_id) : null;
+    const dir = directionMap.get(physicalId);
+    const doorName =
+      physicalId != null ? doorNameMap.get(physicalId) || "" : "";
     return {
-      sections: [
-        {
-          title: "進出統計",
-          headers: ["日期", "區域-地點", "進場人數", "出場人數", "在場人數"],
-          rows: [],
-        },
-        {
-          title: "單位統計",
-          headers: [
-            "日期",
-            "區域-地點",
-            "單位名稱",
-            "進場人數",
-            "出場人數",
-            "在場人數",
-          ],
-          rows: [],
-        },
-        {
-          title: "進出紀錄",
-          headers: [...DETAIL_LOG_HEADERS],
-          rows: [],
-        },
-      ],
+      eventTime: r.swip_card_rev_time,
+      zoneName: r.zone_name,
+      locationName: r.location_name,
+      groupName: (r.unit_name ?? "").trim(),
+      personName: r.person_name ?? "",
+      doorName,
+      verifyMethod: "",
+      similarity: null,
+      eventLabel: eventLabelFromDirection(dir),
+      direction: dir === "entry" || dir === "exit" ? dir : null,
+      personKey: r.person_id === -1 ? null : r.person_id,
+      picturePath: r.backup_picture_path ?? r.picture_path ?? "",
     };
-  }
-
-  return {
-    sections: [
-      {
-        title: "進出統計",
-        headers: ["日期", "區域-地點", "進場人數", "出場人數", "在場人數"],
-        rows: buildStatsSection(rows, directionMap),
-      },
-      {
-        title: "單位統計",
-        headers: [
-          "日期",
-          "區域-地點",
-          "單位名稱",
-          "進場人數",
-          "出場人數",
-          "在場人數",
-        ],
-        rows: buildUnitStatsSection(rows, directionMap),
-      },
-      {
-        title: "進出紀錄",
-        headers: [...DETAIL_LOG_HEADERS],
-        rows: buildDetailSection(rows, doorNameMap, directionMap),
-      },
-    ],
-  };
+  });
+  return buildPeopleCountingReportSections(normalized, {
+    statsMode: "transition",
+  });
 }
 
 module.exports = {

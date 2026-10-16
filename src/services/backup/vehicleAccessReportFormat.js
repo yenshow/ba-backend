@@ -1,9 +1,5 @@
 /**
- * 車輛進出備份 CSV 報表格式
- * 與前端完整報表一致：
- * 1. 進出統計：日期、區域-地點、進場車輛、出場車輛、在場車輛
- * 2. 群組統計：日期、區域-地點、群組名稱、進場車輛、出場車輛、在場車輛
- * 3. 過車紀錄：區域-地點、人員群組、車主名稱、車牌、車道名稱、過車時間、放行結果
+ * 車輛進出備份 CSV：與前端完整報表同三區塊／欄位（含圖片路徑）
  */
 
 const {
@@ -19,6 +15,27 @@ const {
 
 const sep = "\x00";
 
+const STATS_HEADERS = ["日期", "區域-地點", "進場車輛", "出場車輛", "在場車輛"];
+const GROUP_STATS_HEADERS = [
+  "日期",
+  "區域-地點",
+  "群組",
+  "進場車輛",
+  "出場車輛",
+  "在場車輛",
+];
+/** 與 UI 完整報表匯出一致（固定欄＋預設顯示欄＋圖片路徑） */
+const DETAIL_HEADERS = [
+  "區域-地點",
+  "群組",
+  "車牌",
+  "車道",
+  "車主名稱",
+  "放行結果",
+  "時間",
+  "圖片路徑",
+];
+
 function groupByDayLocation(rows) {
   const groups = new Map();
   for (const r of rows) {
@@ -31,7 +48,6 @@ function groupByDayLocation(rows) {
   return groups;
 }
 
-/** 進場/出場/在場：transition（車牌為主體） */
 function countEntryExit(recs) {
   const sorted = [...recs].sort(
     (a, b) => new Date(a.trigger_time) - new Date(b.trigger_time),
@@ -48,7 +64,6 @@ function countEntryExit(recs) {
   return { entry: entryCount, exit: exitCount, current: currentCount };
 }
 
-/** 進出統計：每日每區一列，5 欄 */
 function buildStatsSection(rows) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
@@ -74,7 +89,6 @@ function buildStatsSection(rows) {
   return sectionRows;
 }
 
-/** 群組統計：依日期+區域+車輛群組分組（不含空群組名稱） */
 function buildGroupStatsSection(rows) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
@@ -95,14 +109,13 @@ function buildGroupStatsSection(rows) {
       if (!byGroup.has(name)) byGroup.set(name, []);
       byGroup.get(name).push(r);
     }
-    const groupNames = [...byGroup.keys()].sort();
-    for (const groupName of groupNames) {
+    for (const groupName of [...byGroup.keys()].sort()) {
       const unitRecs = byGroup.get(groupName);
       const { entry, exit, current } = countEntryExit(unitRecs);
       sectionRows.push({
         日期: dateStr,
         "區域-地點": zoneLoc,
-        群組名稱: groupName,
+        群組: groupName,
         進場車輛: String(entry),
         出場車輛: String(exit),
         在場車輛: String(current),
@@ -112,7 +125,6 @@ function buildGroupStatsSection(rows) {
   return sectionRows;
 }
 
-/** 過車紀錄：每筆一列；放行結果含進出方向 */
 function buildDetailSection(rows) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
@@ -138,44 +150,29 @@ function buildDetailSection(rows) {
           : r.allow_result === 0
             ? "拒絕"
             : "陌生";
+      const pic =
+        r.backup_picture_path ?? r.picture_path ?? "";
       result.push({
-        "區域-地點": zoneLoc,
-        人員群組: (r.vehicle_list_name ?? "").trim() || "－",
-        車主名稱: (r.owner_name ?? "").trim() || "－",
-        車牌: (r.license_plate ?? "").trim() || "－",
-        車道名稱: (r.lane_name ?? "").trim() || "－",
-        過車時間: formatDateTimeZhTW(r.trigger_time),
+        "區域-地點": zoneLoc || "—",
+        群組: (r.vehicle_list_name ?? "").trim() || "—",
+        車牌: (r.license_plate ?? "").trim() || "—",
+        車道: (r.lane_name ?? "").trim() || "—",
+        車主名稱: (r.owner_name ?? "").trim() || "—",
         放行結果: allowLabel,
-        附圖路徑: r.backup_picture_path ?? r.picture_path ?? "",
+        時間: formatDateTimeZhTW(r.trigger_time),
+        圖片路徑: (pic && String(pic).trim()) || "—",
       });
     }
   }
-  return result.sort((a, b) =>
-    (b.過車時間 || "").localeCompare(a.過車時間 || ""),
-  );
+  return result.sort((a, b) => (b.時間 || "").localeCompare(a.時間 || ""));
 }
-
-const SECTION_HEADERS = {
-  stats: ["日期", "區域-地點", "進場車輛", "出場車輛", "在場車輛"],
-  group: ["日期", "區域-地點", "群組名稱", "進場車輛", "出場車輛", "在場車輛"],
-  detail: [
-    "區域-地點",
-    "人員群組",
-    "車主名稱",
-    "車牌",
-    "車道名稱",
-    "過車時間",
-    "放行結果",
-    "附圖路徑",
-  ],
-};
 
 function emptySections() {
   return {
     sections: [
-      { title: "進出統計", headers: SECTION_HEADERS.stats, rows: [] },
-      { title: "群組統計", headers: SECTION_HEADERS.group, rows: [] },
-      { title: "過車紀錄", headers: SECTION_HEADERS.detail, rows: [] },
+      { title: "進出統計", headers: [...STATS_HEADERS], rows: [] },
+      { title: "群組統計", headers: [...GROUP_STATS_HEADERS], rows: [] },
+      { title: "過車紀錄", headers: [...DETAIL_HEADERS], rows: [] },
     ],
   };
 }
@@ -187,17 +184,17 @@ function transformVehicleAccessToReportFormat(rows) {
     sections: [
       {
         title: "進出統計",
-        headers: SECTION_HEADERS.stats,
+        headers: [...STATS_HEADERS],
         rows: buildStatsSection(rows),
       },
       {
         title: "群組統計",
-        headers: SECTION_HEADERS.group,
+        headers: [...GROUP_STATS_HEADERS],
         rows: buildGroupStatsSection(rows),
       },
       {
         title: "過車紀錄",
-        headers: SECTION_HEADERS.detail,
+        headers: [...DETAIL_HEADERS],
         rows: buildDetailSection(rows),
       },
     ],

@@ -182,7 +182,7 @@ const SHARED_MODULES = [
     ui: {
       id: 8,
       icon: "surveillance",
-      description: "影像監視與錄影管理（整合 RTSP）",
+      description: "影像即時監看（RTSP→WebRTC）；回放外開所屬 NVR 網頁",
       category: "access-control",
       routePrefix: "/access-control/surveillance",
       featureKey: "surveillance",

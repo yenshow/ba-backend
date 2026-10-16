@@ -14,7 +14,7 @@ const fs = require("fs");
 const {
   inviteIndoorBroadcast,
   resolveBroadcastAudioPath,
-} = require("../src/services/accessSecurity/sipInviteService");
+} = require("../../src/services/accessSecurity/sipInviteService");
 
 const SCRIPT_CONFIG = {
   sipHost: "192.168.2.78",

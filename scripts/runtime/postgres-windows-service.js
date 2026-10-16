@@ -17,8 +17,8 @@ const {
   getBinPath,
   isPostgresDownloaded,
   isDatabaseInitialized,
-} = require("./postgres-common");
-const { resolveProductCode, serviceNames } = require("./windows-product-services");
+} = require("../lib/postgres-common");
+const { resolveProductCode, serviceNames } = require("../lib/windows-product-services");
 
 const isWin = process.platform === "win32";
 

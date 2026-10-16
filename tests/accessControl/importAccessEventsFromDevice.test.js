@@ -10,7 +10,7 @@ const {
   parseSelection,
   toPayload,
   extractPictureUrl,
-} = require("../../scripts/importAccessEventsFromDevice");
+} = require("../../scripts/ops/importAccessEventsFromDevice");
 const {
   isImageBuffer,
 } = require("../../src/services/isapi/isapiEventBackfillCommon");

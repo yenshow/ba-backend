@@ -367,6 +367,13 @@ const DEVICE_MODEL_CATALOG = [
     },
   },
   {
+    name: "通用 NVR",
+    typeCode: "camera",
+    categoryCode: "nvr",
+    port: 80,
+    description: "網路錄影機（攝影機分類；建檔＋外開 Web 回放）",
+  },
+  {
     name: "TP-Link",
     typeCode: "camera",
     description: "通用 RTSP 攝影機",

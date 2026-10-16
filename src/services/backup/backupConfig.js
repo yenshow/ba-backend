@@ -21,9 +21,9 @@ function getBackupConfig() {
     directories: {
       root,
       alerts: path.join(root, "alerts"),
-      environmentReadings: path.join(root, "environment_readings"),
-      energyReadings: path.join(root, "energy_readings"),
-      operationalEvents: path.join(root, "operational_events"),
+      environmentReadings: path.join(root, "environment"),
+      energyReadings: path.join(root, "energy"),
+      operationalEvents: path.join(root, "operational"),
       peopleCounting: path.join(root, "people_counting"),
       vehicleAccess: path.join(root, "vehicle_access"),
       elevator: path.join(root, "elevator"),

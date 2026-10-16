@@ -3,13 +3,13 @@
  * 精靈①／②用的手動 postmaster（非 SCM）。
  * 若已登錄 SCM 服務，請改由 postgres-windows-service.js start，勿與此搶 DATA_DIR。
  *
- *   node scripts/portable-postgres.js start
- *   node scripts/portable-postgres.js stop
+ *   node scripts/runtime/portable-postgres.js start
+ *   node scripts/runtime/portable-postgres.js stop
  */
 const {
   startPortablePostgres,
   stopPortablePostgres,
-} = require("./start-portable-postgres-lib");
+} = require("../lib/start-portable-postgres-lib");
 
 const command = String(process.argv[2] || "")
   .trim()

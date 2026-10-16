@@ -4,7 +4,7 @@
  * Runbook：docs/10-setting/faq-troubleshooting.md
  *
  * 用法（測人臉時請先停掉後端佈防，避免搶連線）：
- *   node scripts/isapiSubscribeProbe.js
+ *   node scripts/probe/isapiSubscribeProbe.js
  *   npm run probe:isapi
  *
  * 現場參數優先用環境變數覆寫 SCRIPT_CONFIG（見 runbook §2.3）。
@@ -17,7 +17,7 @@
 
 const {
   createIsapiClient,
-} = require("../src/services/accessControl/isapiClient");
+} = require("../../src/services/accessControl/isapiClient");
 
 // ── 現場參數 ─────────────────────────────────────────────────────
 const SCRIPT_CONFIG = {
@@ -28,7 +28,12 @@ const SCRIPT_CONFIG = {
   /** "all"（門禁）| "list"（PeopleCounting／人臉攝影機） */
   subscribeMode: "list",
   channelId: 1,
-  eventTypes: ["PeopleCounting", "faceCapture", "alarmResult"],
+  eventTypes: [
+    "PeopleCounting",
+    "faceCapture",
+    "alarmResult",
+    "AccessControllerEvent",
+  ],
   heartbeat: null,
   xmlNs: "http://www.hikvision.com/ver20/XMLSchema",
   maxParts: 20,

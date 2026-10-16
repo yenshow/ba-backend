@@ -17,6 +17,9 @@ const {
 const {
   emitAccessControlEventFromPlaceContext,
 } = require("../peopleCounting/accessEventCameraResolver");
+const {
+  downloadIsapiPicture,
+} = require("../isapi/isapiEventBackfillCommon");
 
 const ISAPI_PATHS = {
   userInfoSearch: "/ISAPI/AccessControl/UserInfo/Search?format=json",
@@ -30,6 +33,11 @@ const ISAPI_PATHS = {
   cardInfoSearch: "/ISAPI/AccessControl/CardInfo/Search?format=json",
   cardInfoDelete: "/ISAPI/AccessControl/CardInfo/Delete?format=json",
   fingerPrintSetUp: "/ISAPI/AccessControl/FingerPrint/SetUp?format=json",
+  /** 舊／部分型號；正式「查詳細指紋」以 FingerPrintUpload 為準 */
+  fingerPrintSearch: "/ISAPI/AccessControl/FingerPrint/Search?format=json",
+  /** 分頁查詢指紋詳細（含 fingerData）；status=NoFP 表示查詢結束 */
+  fingerPrintUpload: "/ISAPI/AccessControl/FingerPrintUpload?format=json",
+  fingerPrintCount: "/ISAPI/AccessControl/FingerPrint/Count?format=json",
   captureFingerPrint: "/ISAPI/AccessControl/CaptureFingerPrint",
 };
 
@@ -53,7 +61,7 @@ function buildRemoteControlDoorXml(cmd) {
 </RemoteControlDoor>`;
 }
 
-/** 從 UserInfo 中只保留文檔指定欄位 */
+/** 從 UserInfo 中只保留文檔指定欄位（含 password：Search 有回才帶） */
 const USER_INFO_FIELDS = [
   "employeeNo",
   "name",
@@ -62,6 +70,7 @@ const USER_INFO_FIELDS = [
   "doorRight",
   "RightPlan",
   "faceURL",
+  "password",
 ];
 
 const CRLF = Buffer.from("\r\n");
@@ -213,26 +222,23 @@ async function getDeviceAndClient(deviceId) {
 }
 
 /**
- * 取得設備上所有人員資料（分頁由設備端處理）
- * @param {number} deviceId
- * @param {object} options - { searchResultPosition = 0, maxResults = 50 }
- * @returns {Promise<{ list, totalMatches, numOfMatches }>} - list 為簡化欄位
+ * 以既有 ISAPI client 搜尋人員（可直連、不必有平台 devices 列）
+ * @param {{ request: Function }} client
+ * @param {object} [options] - { searchResultPosition = 0, maxResults = 50 }
  */
-async function searchUserInfo(deviceId, options = {}) {
-  const { client } = await getDeviceAndClient(deviceId);
+async function searchUserInfoWithClient(client, options = {}) {
   const searchResultPosition = options.searchResultPosition ?? 0;
   const maxResults = options.maxResults ?? 50;
-  const body = {
-    UserInfoSearchCond: {
-      searchID: "1",
-      searchResultPosition,
-      maxResults,
-    },
-  };
   const res = await client.request({
     method: "POST",
     path: ISAPI_PATHS.userInfoSearch,
-    data: body,
+    data: {
+      UserInfoSearchCond: {
+        searchID: "1",
+        searchResultPosition,
+        maxResults,
+      },
+    },
   });
   const search = res.data?.UserInfoSearch;
   if (!search) {
@@ -254,6 +260,16 @@ async function searchUserInfo(deviceId, options = {}) {
     totalMatches: search.totalMatches ?? list.length,
     numOfMatches: search.numOfMatches ?? list.length,
   };
+}
+
+/**
+ * 取得設備上所有人員資料（分頁由設備端處理）
+ * @param {number} deviceId
+ * @param {object} [options] - { searchResultPosition = 0, maxResults = 50 }
+ */
+async function searchUserInfo(deviceId, options = {}) {
+  const { client } = await getDeviceAndClient(deviceId);
+  return searchUserInfoWithClient(client, options);
 }
 
 /**
@@ -486,6 +502,198 @@ async function captureFingerPrint(deviceId, options = {}) {
 }
 
 /**
+ * 從 FingerPrintUpload／Search 回應抽出指紋模板列表
+ * @param {object} data
+ * @returns {Array<{ employeeNo: string, fingerPrintID: number, fingerType: string, fingerData: string }>}
+ */
+function extractFingerPrintsFromSearchResponse(data) {
+  const out = [];
+  const push = (node) => {
+    if (!node || typeof node !== "object") return;
+    const fingerData =
+      node.fingerData != null
+        ? String(node.fingerData).trim()
+        : node.FingerData != null
+          ? String(node.FingerData).trim()
+          : "";
+    if (!fingerData) return;
+    const employeeNo =
+      node.employeeNo != null
+        ? String(node.employeeNo).trim()
+        : node.EmployeeNo != null
+          ? String(node.EmployeeNo).trim()
+          : "";
+    const fpIdRaw = node.fingerPrintID ?? node.FingerPrintID ?? 1;
+    const fingerPrintID = Number(fpIdRaw);
+    const fingerType =
+      node.fingerType != null
+        ? String(node.fingerType)
+        : node.FingerType != null
+          ? String(node.FingerType)
+          : "normalFP";
+    out.push({
+      employeeNo,
+      fingerPrintID: Number.isFinite(fingerPrintID) ? fingerPrintID : 1,
+      fingerType: fingerType || "normalFP",
+      fingerData,
+    });
+  };
+
+  const walk = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (node.fingerData != null || node.FingerData != null) {
+      push(node);
+      return;
+    }
+    if (node.FingerPrint) walk(node.FingerPrint);
+    if (node.FingerPrintList) walk(node.FingerPrintList);
+    if (node.FingerPrintInfo) walk(node.FingerPrintInfo);
+    if (node.MatchList) walk(node.MatchList);
+  };
+  walk(data);
+  return out;
+}
+
+function readFingerPrintInfoStatus(data) {
+  const info = data?.FingerPrintInfo ?? data?.FingerPrintSearch ?? data;
+  if (!info || typeof info !== "object") return "";
+  return info.status != null ? String(info.status).trim() : "";
+}
+
+/**
+ * 查詢指定工號指紋詳細（FingerPrintUpload）。
+ * 多數型號要求 FingerPrintCond.employeeNo（字串），缺則 MessageParametersLack；
+ * 再以 fingerPrintID 1～10 逐筆查（status=NoFP 表示該 ID 無指紋）。
+ * @param {{ request: Function }} client
+ * @param {string} employeeNo
+ * @returns {Promise<Array<{ employeeNo: string, fingerPrintID: number, fingerType: string, fingerData: string }>>}
+ */
+async function searchFingerPrintByEmployeeWithClient(client, employeeNo) {
+  const eno = employeeNo != null ? String(employeeNo).trim() : "";
+  if (!eno) return [];
+
+  const result = [];
+  const seen = new Set();
+  const pushBatch = (payload) => {
+    const status = readFingerPrintInfoStatus(payload);
+    if (status === "NoFP") return { status, added: 0 };
+    const batch = extractFingerPrintsFromSearchResponse(payload);
+    let added = 0;
+    for (const fp of batch) {
+      const key = `${fp.fingerPrintID}:${fp.fingerData.slice(0, 32)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(fp);
+      added += 1;
+    }
+    return { status, added };
+  };
+
+  // 1) 扁平 employeeNo + 分頁（部分型號）
+  let position = 0;
+  const maxResults = 30;
+  const searchID = String(Date.now());
+  for (let page = 0; page < 20; page += 1) {
+    try {
+      const res = await client.request({
+        method: "POST",
+        path: ISAPI_PATHS.fingerPrintUpload,
+        data: {
+          FingerPrintCond: {
+            searchID,
+            searchResultPosition: position,
+            maxResults,
+            employeeNo: eno,
+          },
+        },
+      });
+      const payload = res?.data ?? res;
+      const { status, added } = pushBatch(payload);
+      if (status === "NoFP") break;
+      if (added === 0 && page === 0) break;
+      position += Math.max(added, 1);
+      const total =
+        payload?.FingerPrintInfo?.totalMatches ??
+        payload?.FingerPrintInfo?.TotalMatches;
+      if (Number.isFinite(Number(total)) && position >= Number(total)) break;
+      if (added === 0) break;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      // 扁平分頁不被接受時改走 fingerPrintID 逐筆
+      if (page === 0 && /MessageParametersLack|badJsonContent|Invalid Content/i.test(msg)) {
+        break;
+      }
+      throw err;
+    }
+  }
+
+  if (result.length > 0) return result;
+
+  // 2) 依 fingerPrintID 逐筆（文件常見：employeeNo + fingerPrintID）
+  for (let fingerPrintID = 1; fingerPrintID <= 10; fingerPrintID += 1) {
+    try {
+      const res = await client.request({
+        method: "POST",
+        path: ISAPI_PATHS.fingerPrintUpload,
+        data: {
+          FingerPrintCond: {
+            searchID: `${searchID}-${fingerPrintID}`,
+            employeeNo: eno,
+            fingerPrintID,
+          },
+        },
+      });
+      const { status } = pushBatch(res?.data ?? res);
+      if (status === "NoFP") continue;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      // 該 ID 無指紋時部分型號回錯，略過；真正缺 employeeNo 才往外拋
+      if (/NoFP|notExist|Invalid Operation/i.test(msg)) continue;
+      if (fingerPrintID === 1 && /MessageParametersLack/i.test(msg)) throw err;
+      continue;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 查詢設備上指定工號的指紋模板列表
+ * @param {number} deviceId
+ * @param {string} employeeNo
+ */
+async function searchFingerPrintByEmployee(deviceId, employeeNo) {
+  const { client } = await getDeviceAndClient(deviceId);
+  return searchFingerPrintByEmployeeWithClient(client, employeeNo);
+}
+
+/**
+ * @param {{ request: Function }} client
+ * @param {string} faceURL
+ * @returns {Promise<Buffer|null>}
+ */
+async function downloadUserFaceImageWithClient(client, faceURL) {
+  const url = faceURL != null ? String(faceURL).trim() : "";
+  if (!url) return null;
+  return downloadIsapiPicture(client, url);
+}
+
+/**
+ * 依 UserInfo.faceURL 下載人臉圖（失敗回 null）
+ * @param {number} deviceId
+ * @param {string} faceURL
+ */
+async function downloadUserFaceImage(deviceId, faceURL) {
+  const { client } = await getDeviceAndClient(deviceId);
+  return downloadUserFaceImageWithClient(client, faceURL);
+}
+
+/**
  * 上傳指紋模板並綁定 employeeNo（FingerPrint/SetUp）
  * @param {number} deviceId
  * @param {object} fingerPrintCfg - { employeeNo, fingerPrintID, fingerType, fingerData, enableCardReader? }
@@ -545,6 +753,8 @@ const extractCardNosFromSearchResponse = (data) => {
     }
     if (typeof node !== "object") return;
     if (node.cardNo != null || node.CardNo != null) push(node);
+    // 回應常見包在 CardInfoSearch 內，必須下鑽
+    if (node.CardInfoSearch) walk(node.CardInfoSearch);
     if (node.CardInfo) walk(node.CardInfo);
     if (node.CardInfoList) walk(node.CardInfoList);
     if (node.MatchList) walk(node.MatchList);
@@ -554,28 +764,59 @@ const extractCardNosFromSearchResponse = (data) => {
 };
 
 /**
+ * @param {{ request: Function }} client
+ * @param {string} employeeNo
+ * @returns {Promise<string[]>}
+ */
+async function searchCardInfoByEmployeeWithClient(client, employeeNo) {
+  const eno = employeeNo != null ? String(employeeNo).trim() : "";
+  if (!eno) return [];
+
+  const result = [];
+  let position = 0;
+  const maxResults = 50;
+  const searchID = String(Date.now());
+  const seen = new Set();
+
+  for (let page = 0; page < 20; page += 1) {
+    const res = await client.request({
+      method: "POST",
+      path: ISAPI_PATHS.cardInfoSearch,
+      data: {
+        CardInfoSearchCond: {
+          searchID,
+          searchResultPosition: position,
+          maxResults,
+          EmployeeNoList: [{ employeeNo: eno }],
+        },
+      },
+    });
+    const payload = res?.data ?? res;
+    const batch = extractCardNosFromSearchResponse(payload);
+    for (const cardNo of batch) {
+      if (seen.has(cardNo)) continue;
+      seen.add(cardNo);
+      result.push(cardNo);
+    }
+    if (batch.length === 0) break;
+    position += batch.length;
+    const search = payload?.CardInfoSearch ?? payload;
+    const total = search?.totalMatches ?? search?.TotalMatches;
+    if (Number.isFinite(Number(total)) && position >= Number(total)) break;
+    if (batch.length < maxResults) break;
+  }
+
+  return result;
+}
+
+/**
  * 查詢設備上指定工號的卡片卡號列表
  * @param {number} deviceId
  * @param {string} employeeNo
  */
 async function searchCardInfoByEmployee(deviceId, employeeNo) {
   const { client } = await getDeviceAndClient(deviceId);
-  const eno = employeeNo != null ? String(employeeNo).trim() : "";
-  if (!eno) return [];
-
-  const res = await client.request({
-    method: "POST",
-    path: ISAPI_PATHS.cardInfoSearch,
-    data: {
-      CardInfoSearchCond: {
-        searchID: String(Date.now()),
-        searchResultPosition: 0,
-        maxResults: 50,
-        EmployeeNoList: [{ employeeNo: eno }],
-      },
-    },
-  });
-  return extractCardNosFromSearchResponse(res?.data ?? res);
+  return searchCardInfoByEmployeeWithClient(client, employeeNo);
 }
 
 /**
@@ -699,6 +940,7 @@ async function controlRemoteDoor(deviceId, options = {}) {
 module.exports = {
   getDeviceAndClient,
   searchUserInfo,
+  searchUserInfoWithClient,
   updateUserInfo,
   deleteUserInfo,
   updateFace,
@@ -706,7 +948,12 @@ module.exports = {
   captureCardInfo,
   setCardInfo,
   searchCardInfoByEmployee,
+  searchCardInfoByEmployeeWithClient,
   deleteCardInfo,
+  searchFingerPrintByEmployee,
+  searchFingerPrintByEmployeeWithClient,
+  downloadUserFaceImage,
+  downloadUserFaceImageWithClient,
   captureFingerPrint,
   setFingerPrint,
   controlRemoteDoor,

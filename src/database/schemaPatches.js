@@ -643,8 +643,32 @@ async function ensureEnergyTables(pool) {
   `);
 }
 
-/** 既有庫：設備／型號 type_code 加 video_intercom */
+/** 既有庫：曾用 type_code=nvr 者遷移為 camera＋category/is_nvr，再收斂 CHECK */
+async function migrateLegacyNvrTypeCodeToCamera(pool) {
+  if (!pool) return;
+  await pool.query(`
+    DO $do$
+    BEGIN
+      IF to_regclass('public.device_models') IS NOT NULL THEN
+        UPDATE device_models
+        SET type_code = 'camera',
+            category_code = COALESCE(NULLIF(TRIM(category_code), ''), 'nvr')
+        WHERE type_code = 'nvr';
+      END IF;
+      IF to_regclass('public.devices') IS NOT NULL THEN
+        UPDATE devices
+        SET type_code = 'camera',
+            config = COALESCE(config, '{}'::jsonb) || '{"is_nvr": true}'::jsonb
+        WHERE type_code = 'nvr';
+      END IF;
+    END
+    $do$;
+  `);
+}
+
+/** 既有庫：設備／型號 type_code CHECK 對齊固定清單（含 video_intercom） */
 async function ensureVideoIntercomTypeCode(pool) {
+  await migrateLegacyNvrTypeCodeToCamera(pool);
   await pool.query(`
     DO $do$
     DECLARE
@@ -1218,6 +1242,7 @@ module.exports = {
   ensureEnergyTables,
   ensureExternalIntegrationTables,
   ensureOperationalEventsTable,
+  migrateLegacyNvrTypeCodeToCamera,
   ensureVideoIntercomTypeCode,
   ensureDevicesEnabledColumn,
   ensureAccessSecurityLocationSystemType,

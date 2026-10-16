@@ -4,10 +4,10 @@
  * 使用方式：npm run test:sdk-ladder-door-list
  * 參數直接改下方 CONFIG，無需設定環境變數。
  */
-const { invokeBridge } = require("../src/services/ladderSdk/sdkBridgeClient");
+const { invokeBridge } = require("../../src/services/ladderSdk/sdkBridgeClient");
 const {
   enrichLadderCardName,
-} = require("../src/services/ladderSdk/sdkCardService");
+} = require("../../src/services/ladderSdk/sdkCardService");
 
 // ===== 本機測試設定（直接改這裡）=====
 const CONFIG = {

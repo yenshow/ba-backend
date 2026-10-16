@@ -1,6 +1,6 @@
 /**
  * 門禁機 AcsEvent 歷史查詢（JSON，與攝影機 FCSearch／Traffic 路徑不同）
- * 供訂閱補齊與 scripts/importAccessEventsFromDevice 共用，避免兩套查詢漂移。
+ * 供訂閱補齊與 scripts/ops/importAccessEventsFromDevice 共用，避免兩套查詢漂移。
  */
 const db = require("../../database/db");
 

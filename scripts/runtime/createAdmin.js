@@ -1,5 +1,5 @@
-const userService = require("../src/services/platform/userService");
-const db = require("../src/database/db");
+const userService = require("../../src/services/platform/userService");
+const db = require("../../src/database/db");
 
 const ADMIN_USERNAME = "admin";
 const ADMIN_PASSWORD = "Aa83124007";
