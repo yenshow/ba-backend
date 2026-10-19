@@ -147,6 +147,20 @@ function resolveOperationalAccessSemantics(payload, { deviceRole } = {}) {
   return "門禁事件";
 }
 
+/**
+ * 攝影機人臉比對（face_recognition）營運事件摘要用語意
+ * 複用門禁 sub 75／76＋進／出場角色，與 resolveOperationalAccessSemantics 一致
+ */
+function resolveFaceContrastOperationalAction({ matched, direction } = {}) {
+  return resolveOperationalAccessSemantics(
+    { subEventType: matched ? 75 : 76 },
+    {
+      deviceRole:
+        direction === "entry" || direction === "exit" ? direction : null,
+    },
+  );
+}
+
 /** 門禁事件調閱跳窗文案（進入／離開／失敗） */
 function resolveAccessEventPopupLabel(payload, { deviceRole } = {}) {
   const sub = extractSubEventType(payload);
@@ -179,6 +193,7 @@ module.exports = {
   resolveVerifyMethodLabel,
   resolveOperationalAccessResult,
   resolveOperationalAccessSemantics,
+  resolveFaceContrastOperationalAction,
   resolveAccessEventPopupLabel,
   shouldQueueAccessEventPicture,
   shouldDisplayAccessEventPicture,

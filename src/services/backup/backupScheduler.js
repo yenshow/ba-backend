@@ -1,5 +1,5 @@
 /**
- * 備份排程：雙層保留、按日 CSV、每日定時觸發
+ * 備份排程：雙層保留、按日歸檔（CSV／xlsx）、每日定時觸發
  */
 
 const { createDailyLocalScheduler } = require("../../utils/dailyLocalScheduler");
@@ -17,6 +17,10 @@ const db = require("../../database/db");
 const { transformAlertsToReportFormat } = require("./alertsReportFormat");
 const {
   transformPeopleCountingToReportFormat,
+  collectAccessEmployeeNos,
+  transformIsapiAccessEventsToReportFormat,
+  transformIsapiFaceContrastEventsToReportFormat,
+  transformIsapiPeopleCountingToReportFormat,
 } = require("./peopleCountingReportFormat");
 const {
   transformVehicleAccessToReportFormat,
@@ -24,12 +28,6 @@ const {
 const {
   transformEnvironmentReadingsToReportFormat,
 } = require("./environmentReadingsReportFormat");
-const {
-  collectAccessEmployeeNos,
-  transformIsapiAccessEventsToReportFormat,
-  transformIsapiFaceContrastEventsToReportFormat,
-  transformIsapiPeopleCountingToReportFormat,
-} = require("./isapiEventsReportFormat");
 const {
   loadPeopleCountingBackupContext,
   loadPersonsByEmployeeNos,

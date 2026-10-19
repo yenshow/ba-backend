@@ -81,6 +81,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const result = await rollCallService.resetLocationToday(
       Number(req.params.locationId),
+      { actorUserId: req.user?.id ?? null },
     );
     res.sendSuccess(result);
   }),

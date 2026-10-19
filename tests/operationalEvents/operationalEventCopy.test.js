@@ -11,9 +11,65 @@ const {
   summaryIntercom,
   resolveIntercomEventLabel,
   summaryBarrierControlWrite,
+  summaryRollCall,
 } = require("../../src/services/operationalEvents/operationalEventCopy");
+const {
+  resolveFaceContrastOperationalAction,
+} = require("../../src/services/peopleCounting/accessControlLogLabels");
 
 const run = () => {
+  // 攝影機人臉：通過／失敗／方向
+  assert.equal(
+    resolveFaceContrastOperationalAction({
+      matched: true,
+      direction: "entry",
+    }),
+    "人臉通過（進場）",
+  );
+  assert.equal(
+    resolveFaceContrastOperationalAction({
+      matched: true,
+      direction: "exit",
+    }),
+    "人臉通過（出場）",
+  );
+  assert.equal(
+    resolveFaceContrastOperationalAction({ matched: true }),
+    "人臉通過",
+  );
+  assert.equal(
+    resolveFaceContrastOperationalAction({ matched: false }),
+    "人臉驗證失敗",
+  );
+
+  // 時段簽到
+  assert.equal(
+    summaryRollCall({
+      action: "人臉簽到",
+      placeLabel: "遠岫 - 宿舍門口",
+      detail: "王小明",
+      ruleName: "晚點名",
+    }),
+    "遠岫 - 宿舍門口：人臉簽到（晚點名） → 王小明",
+  );
+  assert.equal(
+    summaryRollCall({
+      action: "場次結場",
+      placeLabel: "遠岫 - 宿舍門口",
+      detail: "未到 3 人",
+      ruleName: "晚點名",
+    }),
+    "遠岫 - 宿舍門口：場次結場（晚點名） → 未到 3 人",
+  );
+  assert.equal(
+    summaryRollCall({
+      action: "重置統計",
+      placeLabel: "遠岫 - 宿舍門口",
+      detail: "2 場次",
+    }),
+    "遠岫 - 宿舍門口：重置統計 → 2 場次",
+  );
+
   // 門禁：有名／僅工號／皆空
   assert.equal(
     summaryAccessEvent({

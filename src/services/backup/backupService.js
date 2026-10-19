@@ -1,9 +1,11 @@
 /**
- * 備份服務：雙層保留（歸檔 CSV + 延後刪除 DB）、按日分檔
+ * 備份服務：雙層保留（歸檔 CSV／xlsx + 延後刪除 DB）、按日分檔
+ * 人流／車輛三區塊報表寫 xlsx（雙工作表）；其餘仍為 CSV
  */
 
 const fs = require("fs");
 const path = require("path");
+const ExcelJS = require("exceljs");
 const db = require("../../database/db");
 const { getBackupConfig } = require("./backupConfig");
 const logger = require("../../utils/logger");
@@ -12,6 +14,7 @@ const {
   groupRowsByDayKey,
   dayKeyToUtcRange,
   buildDayCsvFilename,
+  buildDayXlsxFilename,
   toDayKey,
 } = require("./backupDayUtils");
 const {
@@ -22,6 +25,64 @@ const {
 const backupLogger = logger.createLogger("backupService");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
+
+// --- 三區塊報表 → xlsx 雙工作表 ---
+
+const sanitizeSheetName = (name) => {
+  const raw = String(name || "明細").trim() || "明細";
+  return raw.replace(/[\\/*?:\[\]]/g, "_").slice(0, 31);
+};
+
+const appendStackedSections = (sheet, sections, opts = {}) => {
+  const includeSectionTitles = opts.includeSectionTitles !== false;
+  let rowIdx = 1;
+  for (let i = 0; i < sections.length; i += 1) {
+    const section = sections[i];
+    if (!section) continue;
+    if (i > 0) rowIdx += 1;
+    const { title, headers = [], rows = [] } = section;
+    if (includeSectionTitles && title) {
+      const titleRow = sheet.getRow(rowIdx);
+      titleRow.getCell(1).value = title;
+      titleRow.font = { bold: true };
+      rowIdx += 1;
+    }
+    const headerRow = sheet.getRow(rowIdx);
+    headers.forEach((header, col) => {
+      headerRow.getCell(col + 1).value = header;
+    });
+    headerRow.font = { bold: true };
+    rowIdx += 1;
+    for (const row of rows) {
+      const dataRow = sheet.getRow(rowIdx);
+      headers.forEach((header, col) => {
+        const v = row?.[header];
+        dataRow.getCell(col + 1).value = v == null ? "" : String(v);
+      });
+      rowIdx += 1;
+    }
+  }
+};
+
+async function writeReportSectionsXlsx(filepath, sections) {
+  const list = Array.isArray(sections) ? sections : [];
+  const workbook = new ExcelJS.Workbook();
+  const statsSheet = workbook.addWorksheet("統計");
+  appendStackedSections(statsSheet, list.slice(0, 2), {
+    includeSectionTitles: true,
+  });
+  const detailSection = list[2];
+  if (detailSection) {
+    const detailSheet = workbook.addWorksheet(
+      sanitizeSheetName(detailSection.title || "明細"),
+    );
+    appendStackedSections(detailSheet, [detailSection], {
+      includeSectionTitles: false,
+    });
+  }
+  await workbook.xlsx.writeFile(filepath);
+  return { filepath, size: fs.statSync(filepath).size };
+}
 
 // --- CSV 匯出 ---
 
@@ -49,31 +110,34 @@ function rowsToCsvContent(rows) {
   return csvContent;
 }
 
-function sectionsToCsvContent(sections) {
-  const BOM = "\uFEFF";
-  const parts = [];
-  for (const { title, headers, rows } of sections) {
-    parts.push(title);
-    parts.push(headers.join(","));
-    for (const row of rows) {
-      const values = headers.map((h) => escapeCsvCell(row[h]));
-      parts.push(values.join(","));
-    }
-  }
-  return BOM + parts.join("\n");
+function dayBackupCandidatePaths(outputDir, tableName, dayKey) {
+  return [
+    path.join(outputDir, buildDayXlsxFilename(tableName, dayKey)),
+    path.join(outputDir, buildDayCsvFilename(tableName, dayKey)),
+  ];
+}
+
+function hasValidDayBackup(outputDir, tableName, dayKey) {
+  return dayBackupCandidatePaths(outputDir, tableName, dayKey).some((filepath) =>
+    validateBackup(filepath),
+  );
 }
 
 async function exportRowsToDayCsv(tableName, csvData, outputDir, dayKey) {
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
-  const filepath = path.join(outputDir, buildDayCsvFilename(tableName, dayKey));
   if (csvData && Array.isArray(csvData.sections)) {
-    return writeCsvFile(filepath, sectionsToCsvContent(csvData.sections));
+    const filepath = path.join(
+      outputDir,
+      buildDayXlsxFilename(tableName, dayKey),
+    );
+    return writeReportSectionsXlsx(filepath, csvData.sections);
   }
   if (!csvData?.length) {
     return null;
   }
+  const filepath = path.join(outputDir, buildDayCsvFilename(tableName, dayKey));
   return writeCsvFile(filepath, rowsToCsvContent(csvData));
 }
 
@@ -84,13 +148,19 @@ function getCategoryDir(category) {
   );
 }
 
-async function validateBackup(filepath) {
+function validateBackup(filepath) {
   try {
-    if (!filepath?.endsWith(".csv") || !fs.existsSync(filepath)) {
+    if (!filepath || !fs.existsSync(filepath)) {
       return false;
     }
-    const content = fs.readFileSync(filepath, "utf8");
-    return content.length > 0 && content.includes(",");
+    if (filepath.endsWith(".xlsx")) {
+      return fs.statSync(filepath).size > 0;
+    }
+    if (filepath.endsWith(".csv")) {
+      const content = fs.readFileSync(filepath, "utf8");
+      return content.length > 0 && content.includes(",");
+    }
+    return false;
   } catch {
     return false;
   }
@@ -131,8 +201,7 @@ async function purgeColdDays({
   let deletedTotal = 0;
 
   for (const dayKey of dayKeys) {
-    const csvPath = path.join(outputDir, buildDayCsvFilename(tableName, dayKey));
-    if (!(await validateBackup(csvPath))) {
+    if (!hasValidDayBackup(outputDir, tableName, dayKey)) {
       continue;
     }
 
@@ -211,8 +280,7 @@ async function backupTableDual(options) {
   const byDay = groupRowsByDayKey(archiveRows, dateField, timezone);
 
   for (const [dayKey, dayRows] of byDay.entries()) {
-    const csvPath = path.join(outputDir, buildDayCsvFilename(tableName, dayKey));
-    if (await validateBackup(csvPath)) {
+    if (hasValidDayBackup(outputDir, tableName, dayKey)) {
       continue;
     }
 
@@ -241,7 +309,7 @@ async function backupTableDual(options) {
         outputDir,
         dayKey,
       );
-      if (written?.filepath && (await validateBackup(written.filepath))) {
+      if (written?.filepath && validateBackup(written.filepath)) {
         exportedCount += dayRows.length;
         files.push(written.filepath);
       }

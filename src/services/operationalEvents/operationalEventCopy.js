@@ -264,6 +264,25 @@ const summaryPeopleCounting = ({
 };
 
 /**
+ * 時段簽到（roll_call）
+ * action 例：人臉簽到／場次結場／重置統計；有規則名則加括號
+ */
+const summaryRollCall = ({
+  action,
+  placeLabel = null,
+  detail = null,
+  ruleName = null,
+}) => {
+  const rule = ruleName != null ? String(ruleName).trim() : "";
+  const base = (action != null && String(action).trim()) || "時段簽到";
+  return formatBusinessSummary({
+    placeLabel,
+    action: rule ? `${base}（${rule}）` : base,
+    detail,
+  });
+};
+
+/**
  * 車輛過車
  * allowResult === 0 → 過車拒絕；1 → 過車；其餘維持過車
  */
@@ -374,6 +393,7 @@ module.exports = {
   summaryBarrierControlWrite,
   summaryAccessEvent,
   summaryPeopleCounting,
+  summaryRollCall,
   summaryVehicle,
   summaryElevator,
   summaryIntercom,

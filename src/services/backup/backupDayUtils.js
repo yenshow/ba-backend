@@ -59,6 +59,7 @@ const groupRowsByDayKey = (rows, dateField, timezone) => {
 };
 
 const buildDayCsvFilename = (tableName, dayKey) => `${tableName}_${dayKey}.csv`;
+const buildDayXlsxFilename = (tableName, dayKey) => `${tableName}_${dayKey}.xlsx`;
 
 module.exports = {
   getRetentionCutoffs,
@@ -66,4 +67,5 @@ module.exports = {
   dayKeyToUtcRange,
   groupRowsByDayKey,
   buildDayCsvFilename,
+  buildDayXlsxFilename,
 };

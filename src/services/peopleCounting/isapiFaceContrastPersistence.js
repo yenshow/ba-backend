@@ -2,10 +2,21 @@
  * ISAPI 攝影機人臉比對（alarmResult）事件落地
  * 進出語意：由進場／出場攝影機設備歸屬決定（與門禁 entry/exit device 相同）
  * 附圖：multipart 先事件後圖，由訂閱端呼叫 attachPictureToFaceContrastEvent
+ * 營運事件：投影至 operational_events（event_kind=access，accessKind=face）
  */
 const db = require("../../database/db");
 const websocketService = require("../websocket/websocketService");
 const { writeIsapiUploadPicture } = require("../../utils/isapiUploadPicture");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const {
+  summaryAccessEvent,
+} = require("../operationalEvents/operationalEventCopy");
+const {
+  loadPlaceContextByLocationId,
+} = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  resolveFaceContrastOperationalAction,
+} = require("./accessControlLogLabels");
 
 function safeInt(v) {
   const n = Number(v);
@@ -133,6 +144,46 @@ async function persistFaceContrastEvent(options) {
     websocketService.emitIsapiFaceContrastEvent(wsPayload);
   } catch (_e) {
     // WS 失敗不影響落地
+  }
+
+  if (id != null) {
+    const placeCtx = await loadPlaceContextByLocationId(locationId);
+    const action = resolveFaceContrastOperationalAction({
+      matched,
+      direction,
+    });
+    void operationalEventService.recordEvent({
+      source: "people_counting",
+      event_kind: "access",
+      created_at:
+        storedAt instanceof Date
+          ? storedAt.toISOString()
+          : String(storedAt),
+      location_id: locationId,
+      device_id: deviceId,
+      message: summaryAccessEvent({
+        personName,
+        employeeNo,
+        placeLabel: placeCtx.placeLabel,
+        action,
+      }),
+      ref_table: "isapi_face_contrast_events",
+      ref_id: id,
+      payload: {
+        accessKind: "face",
+        deviceIp,
+        deviceId,
+        eventType,
+        deviceRole: direction,
+        personName,
+        employeeNo,
+        verifyMethod: "face",
+        result: matched ? "pass" : "fail",
+        similarity,
+        pid,
+        faceLibName,
+      },
+    });
   }
 
   return wsPayload;

@@ -16,6 +16,13 @@ const {
   UNGROUPED_GROUP_NAME,
   groupPersonsByPersonGroup,
 } = require("../../utils/personGroupUtils");
+const operationalEventService = require("../operationalEvents/operationalEventService");
+const {
+  summaryRollCall,
+} = require("../operationalEvents/operationalEventCopy");
+const {
+  loadPlaceContextByLocationId,
+} = require("../operationalEvents/operationalEventPlaceContext");
 
 const WEEKDAY_MAP = {
   Mon: 1,
@@ -455,12 +462,58 @@ const snapshotAttendance = async (sessionId, locationId) => {
   }
 };
 
+/** 簽到地點 → 營運事件地點／system_id */
+const loadRollCallOeContext = async (locationId) => {
+  const place = await loadPlaceContextByLocationId(locationId);
+  const id = place.locationId;
+  if (!id) return { ...place, systemId: null };
+  const rows = await db.query(
+    `SELECT id FROM location_systems
+     WHERE location_id = ? AND system_type = 'roll_call'
+     LIMIT 1`,
+    [id],
+  );
+  const systemId = Number(rows?.[0]?.id);
+  return {
+    ...place,
+    systemId: Number.isFinite(systemId) && systemId > 0 ? systemId : null,
+  };
+};
+
+const recordRollCallOperationalEvent = (input = {}) => {
+  void operationalEventService.recordEvent({
+    source: "roll_call",
+    event_kind: "access",
+    created_at: input.created_at,
+    location_id: input.locationId ?? null,
+    system_id: input.systemId ?? null,
+    device_id: input.deviceId ?? null,
+    message: summaryRollCall({
+      action: input.action,
+      placeLabel: input.placeLabel ?? null,
+      detail: input.detail ?? null,
+      ruleName: input.ruleName ?? null,
+    }),
+    actor_user_id: input.actorUserId ?? null,
+    ref_table: input.refTable ?? null,
+    ref_id: input.refId ?? null,
+    payload: {
+      accessKind: "roll_call",
+      rollCallAction: input.rollCallAction,
+      ...(input.payloadExtra && typeof input.payloadExtra === "object"
+        ? input.payloadExtra
+        : {}),
+    },
+  });
+};
+
 const applyFaceMatches = async (
   sessionId,
   deviceIds,
   startIso,
   endIso,
   statsResetAt = null,
+  oeCtx = null,
 ) => {
   if (!deviceIds.length) return;
   let effectiveStart = startIso;
@@ -472,7 +525,7 @@ const applyFaceMatches = async (
     }
   }
   const events = await db.query(
-    `SELECT id, event_time, payload
+    `SELECT id, device_id, event_time, payload
      FROM isapi_access_events
      WHERE device_id = ANY(?::int[])
        AND event_time >= ?
@@ -481,7 +534,7 @@ const applyFaceMatches = async (
     [deviceIds, effectiveStart, endIso],
   );
   const attendance = await db.query(
-    `SELECT id, employee_no, status, source
+    `SELECT id, employee_no, full_name, status, source
      FROM roll_call_attendance
      WHERE session_id = ?`,
     [sessionId],
@@ -495,7 +548,8 @@ const applyFaceMatches = async (
     const payload =
       event.payload && typeof event.payload === "object" ? event.payload : {};
     if (extractSubEventType(payload) !== 75) continue;
-    const employeeNo = extractAccessEventIdentity(payload).employeeNo;
+    const identity = extractAccessEventIdentity(payload);
+    const employeeNo = identity.employeeNo;
     if (!employeeNo) continue;
     const row = byNo.get(employeeNo);
     if (!row || row.status === "present") continue;
@@ -510,23 +564,87 @@ const applyFaceMatches = async (
     if (updated?.length) {
       row.status = "present";
       row.source = "face";
+      if (oeCtx) {
+        const personName =
+          (row.full_name != null && String(row.full_name).trim()) ||
+          identity.personName ||
+          null;
+        const who = personName || employeeNo;
+        const deviceId =
+          event.device_id != null && Number.isFinite(Number(event.device_id))
+            ? Number(event.device_id)
+            : null;
+        recordRollCallOperationalEvent({
+          created_at:
+            event.event_time != null
+              ? new Date(event.event_time).toISOString()
+              : undefined,
+          locationId: oeCtx.locationId,
+          systemId: oeCtx.systemId,
+          deviceId,
+          placeLabel: oeCtx.placeLabel,
+          ruleName: oeCtx.ruleName,
+          action: "人臉簽到",
+          detail: who,
+          rollCallAction: "check_in",
+          refTable: "roll_call_attendance",
+          refId: Number(updated[0].id),
+          payloadExtra: {
+            sessionId,
+            ruleId: oeCtx.ruleId ?? null,
+            accessEventId: Number(event.id),
+            personName,
+            employeeNo,
+            verifyMethod: "face",
+            result: "pass",
+          },
+        });
+      }
     }
   }
 };
 
-const closeSession = async (sessionId) => {
+const closeSession = async (sessionId, oeCtx = null) => {
+  const pendingRows = await db.query(
+    `SELECT COUNT(*)::int AS n
+     FROM roll_call_attendance
+     WHERE session_id = ? AND status = 'pending'`,
+    [sessionId],
+  );
+  const absentCount = Number(pendingRows?.[0]?.n) || 0;
+  const closed = await db.query(
+    `UPDATE roll_call_sessions
+     SET status = 'closed', closed_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status = 'open'
+     RETURNING id`,
+    [sessionId],
+  );
   await db.query(
     `UPDATE roll_call_attendance
      SET status = 'absent'
      WHERE session_id = ? AND status = 'pending'`,
     [sessionId],
   );
-  await db.query(
-    `UPDATE roll_call_sessions
-     SET status = 'closed', closed_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND status = 'open'`,
-    [sessionId],
-  );
+  // 僅首次結場寫入（避免排程重跑重複投影）
+  if (oeCtx && closed?.length) {
+    recordRollCallOperationalEvent({
+      locationId: oeCtx.locationId,
+      systemId: oeCtx.systemId,
+      placeLabel: oeCtx.placeLabel,
+      ruleName: oeCtx.ruleName,
+      action: "場次結場",
+      detail: absentCount > 0 ? `未到 ${absentCount} 人` : "應到皆已簽到",
+      rollCallAction: "session_close",
+      refTable: "roll_call_sessions",
+      refId: sessionId,
+      payloadExtra: {
+        sessionId,
+        ruleId: oeCtx.ruleId ?? null,
+        absentCount,
+        result: "closed",
+      },
+    });
+  }
 };
 
 const ensureSession = async (rule, dateStr) => {
@@ -568,15 +686,24 @@ const reconcileRule = async (rule, deviceIds, now = new Date()) => {
   );
   const startIso = taipeiInstant(parts.date, startMin);
   const endIso = taipeiInstant(parts.date, endMin);
+  const oePlace = await loadRollCallOeContext(Number(rule.location_id));
+  const oeCtx = {
+    locationId: oePlace.locationId,
+    systemId: oePlace.systemId,
+    placeLabel: oePlace.placeLabel,
+    ruleId: rule.id != null ? Number(rule.id) : null,
+    ruleName: rule.name != null ? String(rule.name).trim() : null,
+  };
   await applyFaceMatches(
     sessionId,
     deviceIds,
     startIso,
     endIso,
     sessionMeta?.[0]?.stats_reset_at || null,
+    oeCtx,
   );
   if (Date.now() >= Date.parse(endIso)) {
-    await closeSession(sessionId);
+    await closeSession(sessionId, oeCtx);
   }
 };
 
@@ -792,7 +919,7 @@ const getToday = async () => {
   };
 };
 
-const resetLocationToday = async (locationId) => {
+const resetLocationToday = async (locationId, options = {}) => {
   const id = Number(locationId);
   if (!Number.isFinite(id) || id <= 0) {
     throwApiError(C.VALIDATION_REQUIRED, "地點無效");
@@ -824,6 +951,30 @@ const resetLocationToday = async (locationId) => {
     );
     await snapshotAttendance(sessionId, id);
   }
+  const resetSessionCount = (sessions || []).length;
+  const oePlace = await loadRollCallOeContext(id);
+  const actorUserId =
+    options.actorUserId != null && Number.isFinite(Number(options.actorUserId))
+      ? Number(options.actorUserId)
+      : null;
+  recordRollCallOperationalEvent({
+    created_at: resetAt.toISOString(),
+    locationId: oePlace.locationId,
+    systemId: oePlace.systemId,
+    placeLabel: oePlace.placeLabel,
+    action: "重置統計",
+    detail:
+      resetSessionCount > 0 ? `${resetSessionCount} 場次` : "無今日場次",
+    rollCallAction: "stats_reset",
+    actorUserId,
+    refTable: "locations",
+    refId: id,
+    payloadExtra: {
+      resetSessionCount,
+      statsResetAt: resetAt.toISOString(),
+      result: "reset",
+    },
+  });
   const rules = await db.query(
     `SELECT r.*, ls.system_config
      FROM roll_call_rules r
@@ -843,7 +994,7 @@ const resetLocationToday = async (locationId) => {
     }
   }
   return {
-    resetSessionCount: (sessions || []).length,
+    resetSessionCount,
     statsResetAt: resetAt.toISOString(),
   };
 };
