@@ -39,74 +39,12 @@ const {
 
 const deviceLogger = logger.createLogger("deviceService");
 
-const isNvrCameraConfig = (config) => config?.is_nvr === true;
-
 /** 依型號 category_code=nvr 對齊 config.is_nvr */
 const applyCameraNvrFlagFromModel = (config, categoryCode) => {
   if (!config || typeof config !== "object") return;
   const isNvrCategory = String(categoryCode || "").trim().toLowerCase() === "nvr";
   config.is_nvr = isNvrCategory;
 };
-
-/** 攝影機若掛 NVR，確認目標為 is_nvr 攝影機（型號分類 nvr） */
-async function assertCameraNvrReference(config) {
-  const nvrId = config?.nvr_device_id;
-  if (nvrId == null) return;
-  if (isNvrCameraConfig(config)) {
-    throwApiError(C.DEVICE_CONFIG_INVALID, "NVR 設備不可再掛載所屬 NVR");
-  }
-  const rows = await db.query(
-    `
-    SELECT d.id, d.type_code, d.config, dm.category_code
-    FROM devices d
-    LEFT JOIN device_models dm ON dm.id = d.model_id
-    WHERE d.id = ?
-    LIMIT 1
-    `,
-    [nvrId],
-  );
-  if (rows.length === 0) {
-    throwApiError(C.DEVICE_NOT_FOUND, `所屬 NVR 設備不存在（id=${nvrId}）`);
-  }
-  const row = rows[0];
-  if (String(row.type_code || "").toLowerCase() !== "camera") {
-    throwApiError(
-      C.DEVICE_CONFIG_INVALID,
-      `nvr_device_id 必須指向攝影機設備（id=${nvrId}）`,
-    );
-  }
-  const cfg = parseConfig(row.config) || {};
-  const category = String(row.category_code || "").trim().toLowerCase();
-  if (!isNvrCameraConfig(cfg) && category !== "nvr") {
-    throwApiError(
-      C.DEVICE_CONFIG_INVALID,
-      `nvr_device_id 必須指向 NVR 分類攝影機（id=${nvrId}）`,
-    );
-  }
-}
-
-/** 刪除 NVR 攝影機前：若仍有其他攝影機引用則 409 */
-async function assertNvrNotReferencedByCameras(nvrId) {
-  const rows = await db.query(
-    `
-    SELECT COUNT(*)::int AS count
-    FROM devices
-    WHERE type_code = 'camera'
-      AND id <> ?
-      AND (config->>'nvr_device_id') ~ '^[0-9]+$'
-      AND (config->>'nvr_device_id')::int = ?
-    `,
-    [nvrId, nvrId],
-  );
-  const count = Number(rows?.[0]?.count ?? 0);
-  if (count > 0) {
-    throwApiError(
-      C.CONFLICT,
-      `無法刪除 NVR：仍有 ${count} 台攝影機掛載此設備，請先解除關聯`,
-      { details: { nvrDeviceId: nvrId, cameraCount: count } },
-    );
-  }
-}
 
 const parseEnabledFlag = (value, fallback = true) => {
   if (value === undefined || value === null) return fallback;
@@ -611,9 +549,6 @@ async function createDevice(deviceData, userId) {
 
     // 驗證配置
     validateDeviceConfig(config, typeCode);
-    if (typeCode === "camera") {
-      await assertCameraNvrReference(config);
-    }
 
     // 驗證 logging 配置（如果提供）
     if (config.logging) {
@@ -901,9 +836,6 @@ async function updateDevice(id, deviceData, userId) {
 
       // 驗證配置
       validateDeviceConfig(config, typeCode);
-      if (typeCode === "camera") {
-        await assertCameraNvrReference(config);
-      }
 
       // 驗證 logging 配置（如果提供）
       if (config.logging) {
@@ -1139,10 +1071,6 @@ async function deleteDevice(id, userId = null) {
 
     const isCamera = String(devices[0]?.type_code || "").toLowerCase() === "camera";
     const isVideoIntercom = String(devices[0]?.type_code || "") === "video_intercom";
-    const existingCfg = parseConfig(devices[0]?.config) || {};
-    if (isCamera && isNvrCameraConfig(existingCfg)) {
-      await assertNvrNotReferencedByCameras(id);
-    }
 
     // 先自地點設定／警報聯動移除引用，並刷新 ISAPI／梯控訂閱（避免訂閱已刪設備 ID）
     try {

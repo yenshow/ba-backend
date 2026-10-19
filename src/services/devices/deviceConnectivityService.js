@@ -337,9 +337,19 @@ async function checkSingleDeviceConnectivity(deviceRow) {
 
   if (typeCode === "camera") {
     if (cfg?.is_nvr === true) {
-      const host = String(cfg?.host || "").trim();
-      const port = Number(cfg?.port ?? modelPort ?? 80);
-      await tcpPortHealthCheck(host, port);
+      const p = Promise.race([
+        isapiHealthCheck(cfg, { defaultPort: Number(modelPort) || 80 }),
+        new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                createApiError(C.DEVICE_CONNECTIVITY_ISAPI_TIMEOUT, "ISAPI 連線超時"),
+              ),
+            CONNECTIVITY_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+      await p;
       return { deviceId, ok: true, nextStatus: "online" };
     }
     const rtspUrl = String(cfg?.rtsp_url || "").trim();

@@ -4,6 +4,7 @@ const deviceService = require("../services/devices/deviceService");
 const { FIXED_DEVICE_TYPES } = require("../constants/deviceTypes");
 const deviceModelService = require("../services/devices/deviceModelService");
 const deviceStreamService = require("../services/devices/deviceStreamService");
+const nvrStreamService = require("../services/devices/nvrStreamService");
 const deviceConnectivityService = require("../services/devices/deviceConnectivityService");
 const config = require("../config");
 const C = require("../utils/apiErrorCodes");
@@ -226,6 +227,88 @@ router.get(
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id);
     const result = await deviceStreamService.getStreamStatus(id);
+    res.sendSuccess(result);
+  }),
+);
+
+// ========== NVR 虛擬通道（ISAPI 通道／即時／回放）==========
+router.get(
+  "/:id/nvr/channels",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const result = await nvrStreamService.listChannels(id);
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/:id/nvr/channels/:proxyChannelId/stream/start",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
+  validateIntegers("id", "proxyChannelId"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const proxyChannelId = parseInt(req.params.proxyChannelId, 10);
+    const result = await nvrStreamService.startChannelStream(id, proxyChannelId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/:id/nvr/channels/:proxyChannelId/stream/stop",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
+  validateIntegers("id", "proxyChannelId"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const proxyChannelId = parseInt(req.params.proxyChannelId, 10);
+    const result = await nvrStreamService.stopChannelStream(id, proxyChannelId);
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/:id/nvr/search",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const result = await nvrStreamService.searchRecordings(id, req.body || {});
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/:id/nvr/playback/start",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const result = await nvrStreamService.startPlayback(id, req.body || {});
+    res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/:id/nvr/playback/stop",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const sessionId = req.body?.sessionId || req.body?.session_id;
+    const result = await nvrStreamService.stopPlayback(id, sessionId);
     res.sendSuccess(result);
   }),
 );

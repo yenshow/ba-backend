@@ -28,6 +28,7 @@ node scripts/ops/importPersonnelFromDevice.js --host <ip> --password <pwd>
 
 # 探測
 npm run probe:isapi
+npm run probe:nvr
 npm run probe:a21-energy
 npm run probe:video-intercom
 

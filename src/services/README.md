@@ -17,7 +17,7 @@
 | `peopleCounting/` | 人流 API、sync、providers；ISAPI 攝影機訂閱、臉庫、人臉比對落地 |
 | `vehicleAccess/` | 車輛進出 API、ISAPI 訂閱／持久化／設備代理、車牌同步 |
 | `entryExit/` | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
-| `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測 |
+| `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測、NVR ISAPI／虛擬通道串流（`nvrIsapiService`／`nvrStreamService`） |
 | `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
 | `alerts/` | 警報 CRUD、規則、Email、聯動（DO／攝影機／門禁全開／SIP 語音廣播／電梯呼梯 1F） |
 | `accessSecurity/` | 門禁保全：戶別、層 1 listen、層 2 SIP 語音廣播（`sipInviteService`／`g711Audio`／`rtpSender`） |

@@ -33,6 +33,7 @@
     "postgres:start": "node scripts/runtime/portable-postgres.js start",
     "postgres:stop": "node scripts/runtime/portable-postgres.js stop",
     "probe:isapi": "node scripts/probe/isapiSubscribeProbe.js",
+    "probe:nvr": "node scripts/probe/probeNvrIsapi.js",
     "probe:a21-energy": "node scripts/probe/probeA21EnergyRegisters.js",
     "import:access-events": "node scripts/ops/importAccessEventsFromDevice.js",
     "dedupe:access-events": "node scripts/ops/dedupeAccessEvents.js",
