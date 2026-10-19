@@ -152,6 +152,135 @@ async function readDiscreteBitRange(deviceConfig, start, end, options = {}) {
   }
 }
 
+/**
+ * 讀取 statusPoints 物件中每個鍵對應的點位（可每點獨立 deviceId），失敗的鍵略過。
+ * 同 device+registerType 由 batchRead 合併範圍並共用 snapshot cache。
+ */
+async function readAllStatusPoints(statusPoints, cfgDeviceId, cfgModbus) {
+  const modbusBatchService = require("../devices/modbusBatchService");
+  const raw = {};
+  if (!statusPoints || typeof statusPoints !== "object") {
+    return raw;
+  }
+
+  const reqs = [];
+  for (const key of Object.keys(statusPoints)) {
+    const def = statusPoints[key];
+    if (!def || typeof def !== "object") continue;
+    const registerType = normalizeRegisterType(def);
+    const address = Number(def.address);
+    const length = def.length != null ? Number(def.length) : 1;
+    if (!Number.isFinite(address) || address < 0) {
+      raw[key] = undefined;
+      continue;
+    }
+    if (!ALLOWED_REGISTER_TYPES.has(registerType)) {
+      raw[key] = undefined;
+      continue;
+    }
+
+    let pointDeviceConfig = null;
+    try {
+      const ownId = def.deviceId != null && def.deviceId !== "";
+      pointDeviceConfig = ownId
+        ? await resolveDeviceConfig(Number(def.deviceId), def.modbus || null)
+        : await resolveDeviceConfig(cfgDeviceId, cfgModbus);
+    } catch (_) {
+      pointDeviceConfig = null;
+    }
+
+    if (!pointDeviceConfig) {
+      raw[key] = undefined;
+      continue;
+    }
+
+    reqs.push({
+      host: pointDeviceConfig.host,
+      port: pointDeviceConfig.port,
+      unitId: pointDeviceConfig.unitId,
+      registerType,
+      address,
+      length,
+      meta: { pointKey: key },
+    });
+  }
+
+  if (reqs.length === 0) {
+    return raw;
+  }
+
+  const results = await modbusBatchService.batchRead(reqs);
+  for (const r of results) {
+    const k = r?.meta?.pointKey;
+    if (!k) continue;
+    if (r.ok) {
+      const v = r.data?.[0];
+      if (typeof v === "boolean") raw[k] = v;
+      else if (typeof v === "number") raw[k] = v !== 0;
+      else raw[k] = Boolean(v);
+    } else {
+      raw[k] = undefined;
+    }
+  }
+
+  return raw;
+}
+
+async function hasResolvableDeviceForPoints(
+  statusPoints,
+  cfgDeviceId,
+  cfgModbus,
+) {
+  const keys = Object.keys(statusPoints || {}).filter(
+    (k) => statusPoints[k] && typeof statusPoints[k] === "object",
+  );
+  if (keys.length === 0) {
+    try {
+      return Boolean(await resolveDeviceConfig(cfgDeviceId, cfgModbus));
+    } catch (_) {
+      return false;
+    }
+  }
+  for (const key of keys) {
+    const def = statusPoints[key];
+    let c = null;
+    try {
+      const ownId = def.deviceId != null && def.deviceId !== "";
+      c = ownId
+        ? await resolveDeviceConfig(Number(def.deviceId), def.modbus || null)
+        : await resolveDeviceConfig(cfgDeviceId, cfgModbus);
+    } catch (_) {
+      c = null;
+    }
+    if (c) return true;
+  }
+  return false;
+}
+
+/** running===true → alarm；其餘依連線／讀值 → warning／normal（煙霧／求救／空氣循環） */
+function deriveRunningAlarmUiStatus(
+  rawMerged,
+  hadDeviceConfig,
+  pointKeysConfigured,
+  rawRead,
+) {
+  if (!hadDeviceConfig) return "warning";
+  if (!pointKeysConfigured || pointKeysConfigured.length === 0) {
+    return "warning";
+  }
+
+  const src = rawRead && typeof rawRead === "object" ? rawRead : rawMerged;
+  const anyRead = pointKeysConfigured.some(
+    (k) => src[k] !== undefined && src[k] !== null,
+  );
+  if (!anyRead) return "warning";
+
+  if (rawMerged.running === true) {
+    return "alarm";
+  }
+  return "normal";
+}
+
 module.exports = {
   DEVICE_CFG_CACHE_TTL,
   ALLOWED_REGISTER_TYPES,
@@ -161,6 +290,9 @@ module.exports = {
   resolveDeviceConfig,
   normalizeRegisterType,
   deriveConnectivityUiStatus,
+  deriveRunningAlarmUiStatus,
   parseZoneIdsQuery,
   readDiscreteBitRange,
+  readAllStatusPoints,
+  hasResolvableDeviceForPoints,
 };

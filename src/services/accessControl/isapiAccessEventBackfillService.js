@@ -23,9 +23,11 @@ const {
   downloadIsapiPicture,
   mergeEventBackfillPrefs,
 } = require("../isapi/isapiEventBackfillCommon");
-
-/** 延遲載入，避免與 isapiSubscribeService 循環依賴 */
-const getSubscribePersistence = () => require("./isapiSubscribeService");
+const {
+  persistIsapiEvent,
+  isProcessableEvent,
+  attachPictureToEvent,
+} = require("./isapiAccessEventPersistence");
 
 const PAGE_SIZE = 30;
 const MAX_PAGES = 10;
@@ -88,11 +90,6 @@ async function runBackfill({ deviceId, eventTime, windowSec, deviceIp }) {
     pageSize: PAGE_SIZE,
     maxPages: MAX_PAGES,
   });
-  const {
-    persistIsapiEvent,
-    isProcessableEvent,
-    attachPictureToEvent,
-  } = getSubscribePersistence();
   let inserted = 0;
   for (const item of items) {
     const payload = toAcsEventPayload(item);

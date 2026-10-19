@@ -23,6 +23,9 @@ const {
 const {
   loadPlaceContextByLocationId,
 } = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  normalizeRollCallStatLabels,
+} = require("../entryExit/statLabels");
 
 const WEEKDAY_MAP = {
   Mon: 1,
@@ -115,8 +118,19 @@ const normalizeWeekdays = (list) => {
   return days;
 };
 
+const parseSystemConfig = (config) => {
+  if (typeof config === "string") {
+    try {
+      return JSON.parse(config) || {};
+    } catch {
+      return {};
+    }
+  }
+  return config && typeof config === "object" ? config : {};
+};
+
 const parseDeviceIds = (config) => {
-  const raw = typeof config === "string" ? JSON.parse(config) : config || {};
+  const raw = parseSystemConfig(config);
   return normalizeIds(raw.device_ids);
 };
 
@@ -902,11 +916,13 @@ const getToday = async () => {
     const sessionUnits =
       primary?.id != null ? unitsMap.get(primary.id) || [] : [];
     const units = sessionUnits.length > 0 ? sessionUnits : rosterUnits;
+    const cfg = parseSystemConfig(location.system_config);
     locationPayloads.push({
       locationId,
       name: location.name,
       zoneName: location.zone_name,
-      deviceIds: parseDeviceIds(location.system_config),
+      deviceIds: normalizeIds(cfg.device_ids),
+      statLabels: normalizeRollCallStatLabels(cfg.stat_labels),
       sessions: sessionSummaries,
       /** 對齊人流 units：id／name／currentCount／totalCount */
       units,

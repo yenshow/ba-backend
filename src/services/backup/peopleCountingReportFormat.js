@@ -18,17 +18,16 @@ const {
   shouldDisplayAccessEventPicture,
 } = require("../peopleCounting/accessControlLogLabels");
 
+const {
+  DEFAULT_PEOPLE_COUNTING_STAT_LABELS,
+  normalizePeopleCountingStatLabels,
+  resolveSharedPeopleCountingStatLabels,
+  entryExitReportHeaders,
+  mapEntryExitStatsRow,
+} = require("../entryExit/statLabels");
+
 const sep = "\x00";
 
-const STATS_HEADERS = ["日期", "區域-地點", "進場人數", "出場人數", "在場人數"];
-const GROUP_STATS_HEADERS = [
-  "日期",
-  "區域-地點",
-  "群組",
-  "進場人數",
-  "出場人數",
-  "在場人數",
-];
 const DETAIL_HEADERS = [
   "區域-地點",
   "群組",
@@ -40,6 +39,18 @@ const DETAIL_HEADERS = [
   "時間",
   "圖片路徑",
 ];
+
+function resolvePeopleCountingLabels(opts = {}) {
+  if (opts.statLabels) {
+    return normalizePeopleCountingStatLabels(opts.statLabels);
+  }
+  if (Array.isArray(opts.statLabelsList) && opts.statLabelsList.length > 0) {
+    return resolveSharedPeopleCountingStatLabels(
+      opts.statLabelsList.map((x) => normalizePeopleCountingStatLabels(x)),
+    );
+  }
+  return { ...DEFAULT_PEOPLE_COUNTING_STAT_LABELS };
+}
 
 const dash = (v) => {
   const s = v == null ? "" : String(v).trim();
@@ -53,11 +64,12 @@ const formatSimilarity = (v) => {
   return `${n}%`;
 };
 
-function emptyPeopleCountingSections() {
+function emptyPeopleCountingSections(labels = DEFAULT_PEOPLE_COUNTING_STAT_LABELS) {
+  const { statsHeaders, groupStatsHeaders } = entryExitReportHeaders(labels);
   return {
     sections: [
-      { title: "進出統計", headers: [...STATS_HEADERS], rows: [] },
-      { title: "群組統計", headers: [...GROUP_STATS_HEADERS], rows: [] },
+      { title: "進出統計", headers: [...statsHeaders], rows: [] },
+      { title: "群組統計", headers: [...groupStatsHeaders], rows: [] },
       { title: "進出紀錄", headers: [...DETAIL_HEADERS], rows: [] },
     ],
   };
@@ -114,7 +126,7 @@ function countDelta(recs) {
   };
 }
 
-function buildStatsSection(rows, statsMode) {
+function buildStatsSection(rows, statsMode, labels) {
   const groups = groupByDayLocation(rows);
   const sectionRows = [];
   for (const key of sortedDayLocationKeys(groups)) {
@@ -124,18 +136,23 @@ function buildStatsSection(rows, statsMode) {
     const recs = groups.get(key);
     const { entryCount, exitCount, currentCount } =
       statsMode === "delta" ? countDelta(recs) : countTransition(recs);
-    sectionRows.push({
-      日期: dateStr,
-      "區域-地點": zoneLoc,
-      進場人數: String(entryCount),
-      出場人數: String(exitCount),
-      在場人數: String(currentCount),
-    });
+    sectionRows.push(
+      mapEntryExitStatsRow(
+        {
+          date: dateStr,
+          zoneLocation: zoneLoc,
+          entryCount,
+          exitCount,
+          currentCount,
+        },
+        labels,
+      ),
+    );
   }
   return sectionRows;
 }
 
-function buildGroupStatsSection(rows, statsMode) {
+function buildGroupStatsSection(rows, statsMode, labels) {
   const groups = groupByDayLocation(rows);
   const sectionRows = [];
   for (const key of sortedDayLocationKeys(groups)) {
@@ -156,14 +173,19 @@ function buildGroupStatsSection(rows, statsMode) {
         statsMode === "delta"
           ? countDelta(groupRecs)
           : countTransition(groupRecs);
-      sectionRows.push({
-        日期: dateStr,
-        "區域-地點": zoneLoc,
-        群組: groupName,
-        進場人數: String(entryCount),
-        出場人數: String(exitCount),
-        在場人數: String(currentCount),
-      });
+      sectionRows.push(
+        mapEntryExitStatsRow(
+          {
+            date: dateStr,
+            zoneLocation: zoneLoc,
+            groupName,
+            entryCount,
+            exitCount,
+            currentCount,
+          },
+          labels,
+        ),
+      );
     }
   }
   return sectionRows;
@@ -201,26 +223,30 @@ function buildDetailSection(rows) {
  *   statsMode?: 'transition'|'delta',
  *   statsRows?: object[],
  *   detailRows?: object[],
+ *   statLabels?: object,
+ *   statLabelsList?: object[],
  * }} [opts]
  */
 function buildPeopleCountingReportSections(normalizedRows, opts = {}) {
   const statsMode = opts.statsMode === "delta" ? "delta" : "transition";
+  const labels = resolvePeopleCountingLabels(opts);
+  const { statsHeaders, groupStatsHeaders } = entryExitReportHeaders(labels);
   const statsSource = opts.statsRows ?? normalizedRows ?? [];
   const detailSource = opts.detailRows ?? normalizedRows ?? [];
   if (statsSource.length === 0 && detailSource.length === 0) {
-    return emptyPeopleCountingSections();
+    return emptyPeopleCountingSections(labels);
   }
   return {
     sections: [
       {
         title: "進出統計",
-        headers: [...STATS_HEADERS],
-        rows: buildStatsSection(statsSource, statsMode),
+        headers: [...statsHeaders],
+        rows: buildStatsSection(statsSource, statsMode, labels),
       },
       {
         title: "群組統計",
-        headers: [...GROUP_STATS_HEADERS],
-        rows: buildGroupStatsSection(statsSource, statsMode),
+        headers: [...groupStatsHeaders],
+        rows: buildGroupStatsSection(statsSource, statsMode, labels),
       },
       {
         title: "進出紀錄",
@@ -243,6 +269,7 @@ function transformPeopleCountingToReportFormat(
   rows,
   doorNameMap = new Map(),
   directionMap = new Map(),
+  reportOpts = {},
 ) {
   const normalized = (rows || []).map((r) => {
     const physicalId = r.physical_id != null ? Number(r.physical_id) : null;
@@ -266,6 +293,7 @@ function transformPeopleCountingToReportFormat(
   });
   return buildPeopleCountingReportSections(normalized, {
     statsMode: "transition",
+    ...reportOpts,
   });
 }
 
@@ -355,6 +383,8 @@ function transformIsapiAccessEventsToReportFormat(rows, ctx = {}) {
 
   return buildPeopleCountingReportSections(normalized, {
     statsMode: "transition",
+    statLabels: ctx.statLabels,
+    statLabelsList: ctx.statLabelsList,
   });
 }
 
@@ -440,10 +470,12 @@ function transformIsapiFaceContrastEventsToReportFormat(rows, ctx = {}) {
 
   return buildPeopleCountingReportSections(normalized, {
     statsMode: "transition",
+    statLabels: ctx.statLabels,
+    statLabelsList: ctx.statLabelsList,
   });
 }
 
-function transformIsapiPeopleCountingToReportFormat(rows) {
+function transformIsapiPeopleCountingToReportFormat(rows, reportOpts = {}) {
   const forStats = [];
   const forDetail = [];
   for (const r of rows || []) {
@@ -493,6 +525,7 @@ function transformIsapiPeopleCountingToReportFormat(rows) {
     statsMode: "delta",
     statsRows: forStats,
     detailRows: forDetail,
+    ...reportOpts,
   });
 }
 

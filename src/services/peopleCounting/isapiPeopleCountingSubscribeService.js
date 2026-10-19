@@ -7,6 +7,7 @@
  * alarmResult：有候選人→比對成功候選（再依地點準確度門檻標失敗）；無候選人→陌生人。
  * multipart 後續 image part 寫入 picture_path。
  * 人流僅落地 statisticalMethods=realTime 之分區列。
+ * 長連線骨架：../isapi/isapiSubscribeLoop
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
@@ -17,6 +18,10 @@ const logger = require("../../utils/logger").createLogger(
   "ISAPI PeopleCounting Subscribe",
 );
 const {
+  createSubscribeManager,
+  consumeMultipartEventStream,
+} = require("../isapi/isapiSubscribeLoop");
+const {
   parsePeopleCountingEventXml,
 } = require("./isapiPeopleCountingXmlParser");
 const {
@@ -25,13 +30,14 @@ const {
 const {
   parseFaceContrastEventPayload,
 } = require("./isapiFaceContrastXmlParser");
-const { persistFaceContrastEvent, attachPictureToFaceContrastEvent } = require("./isapiFaceContrastPersistence");
+const {
+  persistFaceContrastEvent,
+  attachPictureToFaceContrastEvent,
+} = require("./isapiFaceContrastPersistence");
 const {
   scheduleFaceContrastBackfill,
 } = require("./isapiFaceContrastBackfillService");
 const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
-
-const RE_CONNECT_DELAY_MS = 10000;
 
 function ensureInt(v) {
   const n = Number(v);
@@ -181,9 +187,6 @@ async function getDeviceClient(deviceId) {
   return { device, client };
 }
 
-const CRLF = Buffer.from("\r\n");
-const CRLFCRLF = Buffer.from("\r\n\r\n");
-
 function subKey(sub) {
   return `${sub.locationId}:${sub.deviceId}:${sub.channelId}:pc=${sub.includePeopleCounting ? 1 : 0}:fc=${sub.includeFaceContrast ? 1 : 0}:dir=${sub.direction || "-"}`;
 }
@@ -194,27 +197,8 @@ async function consumeEventStreamIncremental(
   context,
   abortSignal,
 ) {
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
-  const rawBoundary = boundaryMatch
-    ? (boundaryMatch[1] || boundaryMatch[2]).trim()
-    : null;
-  if (!rawBoundary) {
-    return new Promise((resolve, reject) => {
-      stream.on("data", () => {});
-      stream.on("error", reject);
-      stream.on("end", () => resolve());
-      stream.on("close", () => resolve());
-    });
-  }
-
-  const boundary = rawBoundary.replace(/^["']|["']$/g, "");
-  const sep = Buffer.from(`--${boundary}`, "utf8");
-  const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
-  let buffer = Buffer.alloc(0);
   /** @type {number|null} 剛寫入的人臉比對事件，供下一 image part 補圖 */
   let lastWrittenFaceEventId = null;
-  /** 依序處理 multipart，避免事件寫入未完成就丟附圖 */
-  let processChain = Promise.resolve();
 
   const processPart = async (headerStr, body) => {
     const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
@@ -380,86 +364,19 @@ async function consumeEventStreamIncremental(
     }
   };
 
-  const tryConsumeOnePart = () => {
-    let start = buffer.indexOf(sepWithCRLF);
-    let skip = sepWithCRLF.length;
-    if (start === -1) {
-      if (
-        buffer.length >= sep.length &&
-        buffer.slice(0, sep.length).equals(sep)
-      ) {
-        start = 0;
-        skip = sep.length;
-      } else {
-        return false;
-      }
-    } else if (start > 0) {
-      buffer = buffer.slice(start);
-      start = 0;
-      skip = sepWithCRLF.length;
-    }
-
-    const afterBoundary = buffer.slice(skip);
-    const headEnd = afterBoundary.indexOf(CRLFCRLF);
-    if (headEnd === -1) return false;
-    const headerStr = afterBoundary.slice(0, headEnd).toString("utf8");
-    const bodyStart = skip + headEnd + CRLFCRLF.length;
-    const contentLengthMatch = headerStr.match(/Content-Length:\s*(\d+)/i);
-    const contentLength = contentLengthMatch
-      ? parseInt(contentLengthMatch[1], 10)
-      : 0;
-    let bodyEnd;
-    if (contentLength > 0) {
-      bodyEnd = bodyStart + contentLength;
-      if (bodyEnd > buffer.length) return false;
-    } else {
-      const nextB = buffer.indexOf(sepWithCRLF, bodyStart);
-      const nextB2 = buffer.indexOf(sep, bodyStart);
-      const next =
-        nextB !== -1
-          ? nextB2 !== -1
-            ? Math.min(nextB, nextB2)
-            : nextB
-          : nextB2;
-      if (next === -1) return false;
-      bodyEnd = next;
-      const trim =
-        buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d ? 2 : 0;
-      if (trim) bodyEnd -= trim;
-    }
-    const body = buffer.slice(bodyStart, bodyEnd);
-    processChain = processChain
-      .then(() => processPart(headerStr, body))
-      .catch((err) => {
-        logger.warn("[ISAPI PeopleCounting] 處理事件片段失敗", {
-          locationId: context.locationId,
-          deviceId: context.deviceId,
-          error: err?.message || String(err),
-        });
+  await consumeMultipartEventStream({
+    stream,
+    contentType,
+    abortSignal,
+    preferContentLength: true,
+    onPart: processPart,
+    onPartError: (err) => {
+      logger.warn("[ISAPI PeopleCounting] 處理事件片段失敗", {
+        locationId: context.locationId,
+        deviceId: context.deviceId,
+        error: err?.message || String(err),
       });
-    buffer = buffer.slice(bodyEnd);
-    return true;
-  };
-
-  return new Promise((resolve, reject) => {
-    const abortHandler = () => {
-      try {
-        stream.destroy(new Error("ABORTED"));
-      } catch (_e) {}
-    };
-    if (abortSignal) {
-      if (abortSignal.aborted) abortHandler();
-      else abortSignal.addEventListener("abort", abortHandler, { once: true });
-    }
-
-    stream.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length > 0 && tryConsumeOnePart()) {}
-      if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
-    });
-    stream.on("error", reject);
-    stream.on("end", () => resolve());
-    stream.on("close", () => resolve());
+    },
   });
 }
 
@@ -525,73 +442,7 @@ async function runSubscribeForCamera(sub, abortSignal) {
   });
 }
 
-async function subscribeLoop(sub, abortSignal) {
-  for (;;) {
-    if (abortSignal?.aborted) return;
-    try {
-      await runSubscribeForCamera(sub, abortSignal);
-    } catch (e) {
-      if (abortSignal?.aborted) return;
-      if (e && (e.code === "ABORTED" || String(e.message).includes("ABORTED")))
-        return;
-      logger.warn("[ISAPI PeopleCounting] 佈防訂閱失敗，將重試", {
-        locationId: sub.locationId,
-        deviceId: sub.deviceId,
-        includePeopleCounting: Boolean(sub.includePeopleCounting),
-        includeFaceContrast: Boolean(sub.includeFaceContrast),
-        error: e?.message || String(e),
-      });
-    }
-    if (abortSignal?.aborted) return;
-    await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
-  }
-}
-
-/** @type {Map<string, { controller: AbortController, startedAt: number }>} */
-const subLoopControllers = new Map();
-
-let started = false;
-let runningSubs = [];
-
-function startLoopForSub(sub) {
-  const key = subKey(sub);
-  if (subLoopControllers.has(key)) return;
-  const controller = new AbortController();
-  subLoopControllers.set(key, { controller, startedAt: Date.now() });
-  subscribeLoop(sub, controller.signal);
-}
-
-function stopLoopForSub(sub) {
-  const key = subKey(sub);
-  const entry = subLoopControllers.get(key);
-  if (!entry) return;
-  try {
-    entry.controller.abort();
-  } catch (_e) {}
-  subLoopControllers.delete(key);
-}
-
-async function start() {
-  if (started) return;
-  await refresh();
-}
-
-function stop() {
-  started = false;
-  const subsToStop = [...runningSubs];
-  runningSubs = [];
-  for (const sub of subsToStop) {
-    stopLoopForSub(sub);
-  }
-}
-
-/**
- * 重新計算需訂閱的攝影機，增量啟停訂閱迴圈
- */
-async function refresh() {
-  if (!started) {
-    started = true;
-  }
+async function listEnabledSubs() {
   const rawSubs = await getCameraSubscriptions();
   const {
     filterEnabledDeviceIds,
@@ -600,38 +451,51 @@ async function refresh() {
     rawSubs.map((s) => s.deviceId),
   );
   const enabledSet = new Set(enabledIds);
-  const subs = rawSubs.filter((s) => enabledSet.has(s.deviceId));
-  const nextKeys = new Set(subs.map(subKey));
-  const prevKeys = new Set(runningSubs.map(subKey));
-
-  const toStart = subs.filter((sub) => !prevKeys.has(subKey(sub)));
-  const toStop = runningSubs.filter((sub) => !nextKeys.has(subKey(sub)));
-
-  for (const sub of toStop) stopLoopForSub(sub);
-  for (const sub of toStart) startLoopForSub(sub);
-
-  runningSubs = subs;
-  if (toStart.length > 0 || toStop.length > 0) {
-    logger.info("[ISAPI PeopleCounting] 訂閱刷新", {
-      count: subs.length,
-      start: toStart.length,
-      stop: toStop.length,
-    });
-  } else {
-    logger.debug("[ISAPI PeopleCounting] 訂閱刷新（無變更）", {
-      count: subs.length,
-    });
-  }
-  return { started: true, subs: [...runningSubs] };
+  return rawSubs.filter((s) => enabledSet.has(s.deviceId));
 }
 
-function getSubscribeStatus() {
-  return { started, subs: [...runningSubs] };
-}
+const manager = createSubscribeManager({
+  logger,
+  keyOf: subKey,
+  listTargets: listEnabledSubs,
+  runOnce: runSubscribeForCamera,
+  refreshPolicy: "eager",
+  // 串流結束已在 runSubscribeForCamera 內記錄
+  onReconnectError: (sub, error) => {
+    logger.warn("[ISAPI PeopleCounting] 佈防訂閱失敗，將重試", {
+      locationId: sub.locationId,
+      deviceId: sub.deviceId,
+      includePeopleCounting: Boolean(sub.includePeopleCounting),
+      includeFaceContrast: Boolean(sub.includeFaceContrast),
+      error: error?.message || String(error),
+    });
+  },
+  onRefresh: ({ targets, toStart, toStop }) => {
+    if (toStart.length > 0 || toStop.length > 0) {
+      logger.info("[ISAPI PeopleCounting] 訂閱刷新", {
+        count: targets.length,
+        start: toStart.length,
+        stop: toStop.length,
+      });
+    } else {
+      logger.debug("[ISAPI PeopleCounting] 訂閱刷新（無變更）", {
+        count: targets.length,
+      });
+    }
+  },
+  buildStatus: ({ started, targets }) => ({
+    started,
+    subs: [...targets],
+  }),
+  buildRefreshResult: ({ started, targets }) => ({
+    started,
+    subs: [...targets],
+  }),
+});
 
 module.exports = {
-  start,
-  stop,
-  refresh,
-  getSubscribeStatus,
+  start: manager.start,
+  stop: manager.stop,
+  refresh: manager.refresh,
+  getSubscribeStatus: manager.getSubscribeStatus,
 };

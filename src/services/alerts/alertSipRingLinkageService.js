@@ -3,101 +3,33 @@
  * device_ids 空＝全部室內機並行；有值＝指定室內機並行
  */
 const db = require("../../database/db");
-const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
 const { alertIndoorDevice } = require("../accessSecurity/sipInviteService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const { summaryIntercom } = require("../operationalEvents/operationalEventCopy");
 const licenseService = require("../license/licenseService");
+const {
+  normalizeIdList,
+  createRuleLinkageCrud,
+} = require("./alertLinkageHelpers");
 
 /** 延遲載入，避免與 accessSecurityService 循環引用 */
 const resolveLocationByIndoorDeviceId = (...args) =>
-  require("../accessSecurity/accessSecurityService").resolveLocationByIndoorDeviceId(...args);
+  require("../accessSecurity/accessSecurityService").resolveLocationByIndoorDeviceId(
+    ...args,
+  );
 
 const logger = createLogger("alertSipRingLinkage");
 const MAX_DEVICE_IDS = 100;
 
-const normalizeId = (v) => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const crud = createRuleLinkageCrud({
+  tableName: "alert_sip_ring_linkages",
+  idsColumn: "device_ids",
+  payloadIdsKey: "device_ids",
+  maxIds: MAX_DEVICE_IDS,
+});
 
-const normalizeIdList = (v, maxLen = MAX_DEVICE_IDS) => {
-  if (!Array.isArray(v)) return [];
-  const ids = v.map(normalizeId).filter(Boolean);
-  return [...new Set(ids)].slice(0, maxLen);
-};
-
-const parsePgIntArray = (v) => {
-  if (Array.isArray(v)) return normalizeIdList(v);
-  if (typeof v !== "string") return [];
-  const inner = v.trim().replace(/^\s*\{|\}\s*$/g, "");
-  if (!inner) return [];
-  return normalizeIdList(inner.split(","));
-};
-
-const normalizeRow = (row) => {
-  if (!row) return row;
-  return {
-    ...row,
-    device_ids: parsePgIntArray(row.device_ids),
-  };
-};
-
-async function getByRuleId(ruleId) {
-  const rid = normalizeId(ruleId);
-  if (!rid) return null;
-  const rows = await db.query(
-    `SELECT * FROM alert_sip_ring_linkages WHERE rule_id = ? LIMIT 1`,
-    [rid],
-  );
-  return normalizeRow(rows?.[0] || null);
-}
-
-async function getByRuleIds(ruleIds) {
-  const ids = Array.isArray(ruleIds)
-    ? [...new Set(ruleIds.map(normalizeId).filter(Boolean))]
-    : [];
-  if (ids.length === 0) return [];
-  const rows = await db.query(
-    `SELECT * FROM alert_sip_ring_linkages WHERE rule_id = ANY(?)`,
-    [ids],
-  );
-  return (rows || []).map(normalizeRow);
-}
-
-async function upsertForRule(ruleId, payload, userId = null) {
-  const rid = normalizeId(ruleId);
-  if (!rid) throwApiError(C.ALERT_LINKAGE_RULE_ID_INVALID, "rule_id 不合法");
-  const enabled = payload?.enabled !== undefined ? Boolean(payload.enabled) : true;
-  const deviceIds = normalizeIdList(payload?.device_ids, MAX_DEVICE_IDS);
-
-  const rows = await db.query(
-    `
-    INSERT INTO alert_sip_ring_linkages (rule_id, enabled, device_ids, created_by)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT (rule_id)
-    DO UPDATE SET
-      enabled = EXCLUDED.enabled,
-      device_ids = EXCLUDED.device_ids,
-      updated_at = CURRENT_TIMESTAMP
-    RETURNING *
-    `,
-    [rid, enabled, deviceIds, userId != null ? Number(userId) : null],
-  );
-  return normalizeRow(rows?.[0] || null);
-}
-
-async function deleteForRule(ruleId) {
-  const rid = normalizeId(ruleId);
-  if (!rid) return { deleted: 0 };
-  const rows = await db.query(
-    `DELETE FROM alert_sip_ring_linkages WHERE rule_id = ? RETURNING id`,
-    [rid],
-  );
-  return { deleted: rows?.length || 0 };
-}
+const { getByRuleId, getByRuleIds, upsertForRule, deleteForRule } = crud;
 
 const INDOOR_DEVICE_SELECT = `
   SELECT id, name, type_code, config
@@ -107,7 +39,7 @@ const INDOOR_DEVICE_SELECT = `
 `;
 
 async function loadIndoorRingTargets(selectedIds) {
-  const list = normalizeIdList(selectedIds);
+  const list = normalizeIdList(selectedIds, MAX_DEVICE_IDS);
   if (list.length > 0) {
     const rows = await db.query(
       `${INDOOR_DEVICE_SELECT} AND id = ANY(?) ORDER BY id`,

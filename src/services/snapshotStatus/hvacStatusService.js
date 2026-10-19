@@ -14,6 +14,7 @@ const {
   ALLOWED_REGISTER_TYPES,
   resolveDeviceConfig,
   normalizeRegisterType,
+  hasResolvableDeviceForPoints,
   deriveConnectivityUiStatus: deriveUiStatus,
 } = require("./modbusSnapshotHelpers");
 const systemAlert = require("../alerts/systemAlertHelper");
@@ -119,37 +120,6 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     raw[k] = value;
   }
   return raw;
-}
-
-async function hasResolvableDeviceForPoints(
-  statusPoints,
-  cfgDeviceId,
-  cfgModbus,
-) {
-  const keys = Object.keys(statusPoints || {}).filter(
-    (k) => statusPoints[k] && typeof statusPoints[k] === "object",
-  );
-  if (keys.length === 0) {
-    try {
-      return Boolean(await resolveDeviceConfig(cfgDeviceId, cfgModbus));
-    } catch (_) {
-      return false;
-    }
-  }
-  for (const key of keys) {
-    const def = statusPoints[key];
-    let c = null;
-    try {
-      const ownId = def.deviceId != null && def.deviceId !== "";
-      c = ownId
-        ? await resolveDeviceConfig(Number(def.deviceId), def.modbus || null)
-        : await resolveDeviceConfig(cfgDeviceId, cfgModbus);
-    } catch (_) {
-      c = null;
-    }
-    if (c) return true;
-  }
-  return false;
 }
 
 async function syncConnectivityAlert(

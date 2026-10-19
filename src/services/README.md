@@ -11,7 +11,7 @@
 | `location/` | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
 | `elevator/` | 電梯地點、運行態、樓層授權、梯控同步 job |
 | `ladderSdk/` | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
-| `snapshotStatus/` | Modbus 快照型子系統：`*StatusService` + 背景 `snapshotTaskRegistry` |
+| `snapshotStatus/` | Modbus 快照型子系統：`createModbusSnapshotStatusService`（排水／消防／電力／煙霧／求救／空氣循環）+ `modbusSnapshotHelpers`；`lighting`／`hvac` 仍獨立；背景見 `monitoring/snapshotTaskRegistry` |
 | `environment/` | 環境讀數、衍生指標、彙總排程 |
 | `energy/` | 能源讀數、設定、差分彙總／TOU、Dashboard、契約／Insight 評估 |
 | `peopleCounting/` | 人流 API、sync、providers；ISAPI 攝影機訂閱、臉庫、人臉比對落地 |
@@ -19,12 +19,12 @@
 | `entryExit/` | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測、NVR ISAPI／虛擬通道串流（`nvrIsapiService`／`nvrStreamService`） |
 | `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
-| `alerts/` | 警報 CRUD、規則、Email、聯動（DO／攝影機／門禁全開／SIP 語音廣播／電梯呼梯 1F） |
+| `alerts/` | 警報 CRUD、規則、Email、聯動（DO＝`alertLinkageService`；攝影機／門禁／SIP／電梯 CRUD 樣板＝`alertLinkageHelpers`） |
 | `accessSecurity/` | 門禁保全：戶別、層 1 listen、層 2 SIP 語音廣播（`sipInviteService`／`g711Audio`／`rtpSender`） |
 | `operationalEvents/` | 查寫／文案／hooks／retention |
-| `backup/` | 備份排程與各系統報表格式 |
+| `backup/` | 備份排程；薄報表 `simpleReportFormats`；厚報表 `peopleCountingReportFormat`／`vehicleAccessReportFormat` |
 | `accessControl/` | 門禁 ISAPI 業務、Digest、佈防訂閱／事件寫入 |
-| `isapi/` | 佈防訂閱中心 `isapiSubscribeHub` |
+| `isapi/` | 佈防訂閱中心 `isapiSubscribeHub`；長連線骨架 `isapiSubscribeLoop`（reconnect／controller map／multipart）；校時／backfill common。域內 subscribe 只留 profile（設備清單、XML、事件過濾、寫入） |
 | `externalData/` | YSCP／外部 DB handler 與車輛群組彙總 |
 | `externalIntegration/` | 資料庫對接／記錄轉存（`externalSync`、`recordExport`） |
 | `communication/` | MediaMTX 串流（license `surveillance`） |

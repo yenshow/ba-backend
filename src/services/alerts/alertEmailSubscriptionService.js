@@ -1,11 +1,7 @@
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
-
-const normalizeId = (v) => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const { normalizeId } = require("./alertLinkageHelpers");
 
 async function getByRuleId(ruleId) {
   const rid = normalizeId(ruleId);

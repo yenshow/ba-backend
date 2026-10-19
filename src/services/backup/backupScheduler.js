@@ -14,7 +14,13 @@ const environmentAggregationService = require("../environment/environmentAggrega
 const runtimeConfigService = require("../platform/runtimeConfigService");
 const effectiveFeaturesCache = require("../license/effectiveFeaturesCache");
 const db = require("../../database/db");
-const { transformAlertsToReportFormat } = require("./alertsReportFormat");
+const {
+  transformAlertsToReportFormat,
+  transformEnvironmentReadingsToReportFormat,
+  transformEnergyReadingsToReportFormat,
+  transformOperationalEventsToReportFormat,
+  transformLadderSdkEventsToReportFormat,
+} = require("./simpleReportFormats");
 const {
   transformPeopleCountingToReportFormat,
   collectAccessEmployeeNos,
@@ -26,21 +32,12 @@ const {
   transformVehicleAccessToReportFormat,
 } = require("./vehicleAccessReportFormat");
 const {
-  transformEnvironmentReadingsToReportFormat,
-} = require("./environmentReadingsReportFormat");
-const {
   loadPeopleCountingBackupContext,
   loadPersonsByEmployeeNos,
 } = require("./loadPeopleCountingBackupContext");
 const {
-  transformLadderSdkEventsToReportFormat,
-} = require("./ladderSdkEventsReportFormat");
-const {
-  transformEnergyReadingsToReportFormat,
-} = require("./energyReadingsReportFormat");
-const {
-  transformOperationalEventsToReportFormat,
-} = require("./operationalEventsReportFormat");
+  loadNormalizedStatLabelsForSystemType,
+} = require("../entryExit/statLabels");
 const energyReadingsService = require("../energy/energyReadingsService");
 const logger = require("../../utils/logger");
 const {
@@ -171,6 +168,10 @@ async function runBackup() {
     const peopleModuleLabel =
       getModuleDisplayNameByCode("system.people_counting") ?? "門禁管理";
 
+    const peopleStatLabelsList =
+      await loadNormalizedStatLabelsForSystemType("people_counting");
+    const peopleReportOpts = { statLabelsList: peopleStatLabelsList };
+
     let peopleYscpResult = { skipped: true };
     if (yscpPeopleFeature.isEnabled()) {
       await runOptionalSync(`${peopleModuleLabel}（YSCP）`, [
@@ -201,6 +202,7 @@ async function runBackup() {
               rows,
               doorNameMap,
               directionMap,
+              peopleReportOpts,
             ),
           selectColdTimestampsSql: `SELECT swip_card_rev_time FROM people_counting_logs WHERE swip_card_rev_time < $1`,
           selectColdParams: [deleteBeforeDate],
@@ -229,6 +231,7 @@ async function runBackup() {
             transformIsapiAccessEventsToReportFormat(dayRows, {
               accessByDeviceId: peopleCountingCtx.accessByDeviceId,
               personByEmployeeNo,
+              ...peopleReportOpts,
             }),
           attachmentSubdir: "people_counting/attachments",
           attachmentNamePrefix: "access_",
@@ -254,7 +257,11 @@ async function runBackup() {
           ),
           dateField: "event_time",
           category: "peopleCounting",
-          csvTransform: transformIsapiPeopleCountingToReportFormat,
+          csvTransform: (dayRows) =>
+            transformIsapiPeopleCountingToReportFormat(
+              dayRows,
+              peopleReportOpts,
+            ),
           selectColdTimestampsSql: `SELECT event_time FROM isapi_people_counting_events WHERE event_time < $1`,
           selectColdParams: [deleteBeforeDate],
           ...cameraDelete,
@@ -288,6 +295,7 @@ async function runBackup() {
             transformIsapiFaceContrastEventsToReportFormat(dayRows, {
               faceByDeviceId: peopleCountingCtx.faceByDeviceId,
               personByEmployeeNo,
+              ...peopleReportOpts,
             }),
           attachmentSubdir: "people_counting/attachments",
           attachmentNamePrefix: "face_",
@@ -299,6 +307,10 @@ async function runBackup() {
         });
       },
     );
+
+    const vehicleStatLabelsList =
+      await loadNormalizedStatLabelsForSystemType("vehicle_access");
+    const vehicleReportOpts = { statLabelsList: vehicleStatLabelsList };
 
     let vehicleYscpResult = { skipped: true };
     if (yscpVehicleFeature.isEnabled()) {
@@ -320,7 +332,8 @@ async function runBackup() {
           ),
           dateField: "trigger_time",
           category: "vehicleAccess",
-          csvTransform: transformVehicleAccessToReportFormat,
+          csvTransform: (dayRows) =>
+            transformVehicleAccessToReportFormat(dayRows, vehicleReportOpts),
           selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND COALESCE(data_source, 'yscp') = 'yscp'`,
           selectColdParams: [deleteBeforeDate],
           ...vehicleYscpDelete,
@@ -342,7 +355,8 @@ async function runBackup() {
         ),
         dateField: "trigger_time",
         category: "vehicleAccess",
-        csvTransform: transformVehicleAccessToReportFormat,
+        csvTransform: (dayRows) =>
+          transformVehicleAccessToReportFormat(dayRows, vehicleReportOpts),
         attachmentSubdir: "vehicle_access/attachments",
         attachmentNamePrefix: "vehicle_",
         selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND data_source = 'isapi_camera'`,

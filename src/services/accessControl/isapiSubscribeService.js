@@ -1,36 +1,29 @@
 /**
  * 門禁 ISAPI 佈防訂閱服務
  * 後端主動向門禁設備 POST subscribeEvent，建立長連線接收事件，寫入 isapi_access_events 並推送 WebSocket。
- * 含：事件過濾／寫入／附圖（原 isapiEventPersistence）
+ * 落地：./isapiAccessEventPersistence；長連線骨架：../isapi/isapiSubscribeLoop
  */
 const db = require("../../database/db");
 const accessControlService = require("./accessControlService");
 const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
+const {
+  createSubscribeManager,
+  consumeMultipartEventStream,
+} = require("../isapi/isapiSubscribeLoop");
 const logger = require("../../utils/logger").createLogger("ISAPI Subscribe");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
-const { writeIsapiUploadPicture } = require("../../utils/isapiUploadPicture");
-const operationalEventService = require("../operationalEvents/operationalEventService");
 const {
-  summaryAccessEvent,
-} = require("../operationalEvents/operationalEventCopy");
-const {
-  loadPlaceContextByAccessDeviceId,
-} = require("../operationalEvents/operationalEventPlaceContext");
-const {
-  resolveOperationalAccessSemantics,
-  resolveVerifyMethodKey,
-  resolveOperationalAccessResult,
-  extractSubEventType,
-  extractAccessEventIdentity,
   shouldQueueAccessEventPicture,
 } = require("../peopleCounting/accessControlLogLabels");
 const {
-  emitAccessControlEventFromPlaceContext,
-} = require("../peopleCounting/accessEventCameraResolver");
-const {
   scheduleAccessEventBackfill,
 } = require("./isapiAccessEventBackfillService");
+const {
+  isProcessableEvent,
+  persistIsapiEvent,
+  attachPictureToEvent,
+} = require("./isapiAccessEventPersistence");
 
 /** 訂閱全部事件（eventMode=all），寫入時仍僅處理 major=5 且 sub 為門禁驗證／酒精事件 */
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -39,146 +32,8 @@ const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <eventMode>all</eventMode>
 </SubscribeEvent>`;
 
-const RE_CONNECT_DELAY_MS = 10000;
-
-/** 人臉辨識成功/失敗、酒精檢測正常/飲酒/醉酒 等 */
-const SUB_TYPES_PROCESS = new Set([1, 9, 38, 39, 75, 76, 2077, 2078, 2079]);
-
-/** 各設備訂閱迴圈控制器（refresh/stop 時中止串流） */
-const deviceLoopControllers = new Map();
-
-/**
- * 是否為要寫入 DB 的門禁事件（major=5 且 sub 為上述種類）
- * @param {object} ac - AccessControllerEvent 巢狀物件
- */
-function isProcessableEvent(ac) {
-  if (!ac || Number(ac.majorEventType) !== 5) return false;
-  return SUB_TYPES_PROCESS.has(Number(ac.subEventType));
-}
-
-/**
- * 寫入一筆門禁事件（附圖由訂閱串流依「先 JSON 後圖」以 attachPictureToEvent 補上）
- * @returns {Promise<{ inserted: boolean, id?: number }>}
- */
-async function persistIsapiEvent(options) {
-  const {
-    deviceId = null,
-    deviceIp = "",
-    eventTime,
-    eventType = "AccessControllerEvent",
-    payload,
-  } = options;
-
-  if (!isProcessableEvent(payload)) return { inserted: false };
-
-  const rows = await db.query(
-    `INSERT INTO isapi_access_events (device_id, device_ip, event_time, event_type, payload, file_count, picture_path)
-     VALUES (?, ?, ?, ?, ?, 0, NULL) RETURNING id`,
-    [
-      deviceId != null &&
-      Number.isFinite(Number(deviceId)) &&
-      Number(deviceId) > 0
-        ? Number(deviceId)
-        : null,
-      deviceIp,
-      eventTime || new Date().toISOString(),
-      eventType,
-      JSON.stringify(payload || {}),
-    ],
-  );
-  const id = rows?.[0]?.id ?? null;
-  const placeCtx = deviceId
-    ? await loadPlaceContextByAccessDeviceId(deviceId)
-    : { placeLabel: null, locationId: null, systemId: null, deviceRole: null };
-  emitAccessControlEventFromPlaceContext(placeCtx, {
-    source: "isapi",
-    deviceId: deviceId || null,
-    isapiPayload: payload,
-  });
-  if (id != null) {
-    const ac = payload || {};
-    const { personName, employeeNo, cardNo } = extractAccessEventIdentity(ac);
-    const subEventType = extractSubEventType(ac) ?? ac.subEventType;
-    const action = resolveOperationalAccessSemantics(ac, {
-      deviceRole: placeCtx.deviceRole,
-    });
-    void operationalEventService.recordEvent({
-      source: "people_counting",
-      event_kind: "access",
-      created_at: eventTime || new Date().toISOString(),
-      location_id: placeCtx.locationId,
-      system_id: placeCtx.systemId,
-      device_id: deviceId || null,
-      message: summaryAccessEvent({
-        personName,
-        employeeNo,
-        placeLabel: placeCtx.placeLabel,
-        action,
-      }),
-      ref_table: "isapi_access_events",
-      ref_id: id,
-      payload: {
-        accessKind: "door",
-        deviceIp,
-        deviceId: deviceId || null,
-        eventType,
-        majorEventType: ac.majorEventType,
-        subEventType,
-        deviceRole: placeCtx.deviceRole,
-        personName,
-        employeeNo,
-        cardNo,
-        verifyMethod: resolveVerifyMethodKey(ac),
-        result: resolveOperationalAccessResult(ac),
-      },
-    });
-  }
-  return { inserted: true, id };
-}
-
-/**
- * 為剛寫入的門禁事件補上附圖（僅人臉列；已有圖則略過）。
- * 主事件寫入時已推 WS；此處只落庫，不再二次 emit。
- */
-async function attachPictureToEvent(eventId, pictureBuffer) {
-  if (
-    eventId == null ||
-    !Buffer.isBuffer(pictureBuffer) ||
-    pictureBuffer.length === 0
-  )
-    return;
-  const rows = await db.query(
-    `SELECT device_ip, event_time, payload, picture_path
-     FROM isapi_access_events WHERE id = ?`,
-    [eventId],
-  );
-  const row = rows?.[0];
-  if (!row) return;
-  const payload =
-    row.payload != null && typeof row.payload === "object" ? row.payload : {};
-  const hasPicture =
-    row.picture_path != null && String(row.picture_path).trim() !== "";
-  if (hasPicture || !shouldQueueAccessEventPicture(payload)) {
-    logger.warn("[ISAPI] 拒絕附圖綁定（事件類型不符或已有圖）", {
-      eventId,
-      subEventType: payload.subEventType,
-      hasPicture,
-    });
-    return;
-  }
-  const saved = writeIsapiUploadPicture({
-    subdir: "access-events",
-    deviceKey: row.device_ip,
-    eventTime: row.event_time,
-    recordId: eventId,
-    pictureBuffer,
-  });
-  if (!saved) return;
-  await db.query(
-    `UPDATE isapi_access_events SET picture_path = ?, file_count = 1 WHERE id = ?`,
-    [saved.picturePath, eventId],
-  );
-}
+/** 訂閱長連線仍在讀取的設備（與 deviceIds 不同：迴圈在跑不代表 socket 還在） */
+const connectedDeviceIds = new Set();
 
 /**
  * 取得需訂閱的門禁設備 ID 列表（people_counting 地點的 entry_device_ids、exit_device_ids 去重）
@@ -287,8 +142,6 @@ async function handleEvent(parsed, deviceIp, deviceId = null) {
   return id ?? null;
 }
 
-const CRLFCRLF = Buffer.from("\r\n\r\n");
-
 /**
  * 長連線 multipart 串流解析（順序：先 JSON 事件、後圖）。依 boundary 切 part、Content-Length 讀 body。
  */
@@ -299,26 +152,8 @@ async function consumeEventStreamIncremental(
   deviceId,
   abortSignal,
 ) {
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
-  const rawBoundary = boundaryMatch
-    ? (boundaryMatch[1] || boundaryMatch[2]).trim()
-    : null;
-  if (!rawBoundary) {
-    return new Promise((resolve, reject) => {
-      stream.on("data", () => {});
-      stream.on("error", reject);
-      stream.on("end", () => resolve());
-      stream.on("close", () => resolve());
-    });
-  }
-
-  const boundary = rawBoundary.replace(/^["']|["']$/g, "");
-  const sep = Buffer.from(`--${boundary}`, "utf8");
-  const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
-  let buffer = Buffer.alloc(0);
   /** 僅人臉事件佔槽；指紋等 JSON 不清除。新人臉覆蓋並 warn。 */
   let lastPendingFaceEventId = null;
-  let partQueue = Promise.resolve();
 
   const processParsedEvent = async (parsed) => {
     if (!parsed) return;
@@ -346,142 +181,59 @@ async function consumeEventStreamIncremental(
     logger.debug("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };
 
-  const enqueuePart = (headerStr, body) => {
-    partQueue = partQueue
-      .then(async () => {
-        const ct =
-          (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
-        const name =
-          (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) ||
-            [])[1] || "";
-        const rawBody = body
-          .toString("utf8")
-          .replace(/^\uFEFF/, "")
-          .trim();
-        if (
-          /application\/json/i.test(ct) ||
-          (rawBody.length > 0 && rawBody[0] === "{")
-        ) {
-          const parsed = parseEventJson(rawBody);
-          if (parsed) await processParsedEvent(parsed);
+  await consumeMultipartEventStream({
+    stream,
+    contentType,
+    abortSignal,
+    preferContentLength: true,
+    onPart: async (headerStr, body) => {
+      const ct =
+        (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+      const name =
+        (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) ||
+          [])[1] || "";
+      const rawBody = body
+        .toString("utf8")
+        .replace(/^\uFEFF/, "")
+        .trim();
+      if (
+        /application\/json/i.test(ct) ||
+        (rawBody.length > 0 && rawBody[0] === "{")
+      ) {
+        const parsed = parseEventJson(rawBody);
+        if (parsed) await processParsedEvent(parsed);
+        return;
+      }
+      if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
+        const eventId = lastPendingFaceEventId;
+        if (eventId == null) {
+          logger.warn("[ISAPI] 收到附圖但無待綁定事件", {
+            deviceId,
+            deviceIp,
+          });
           return;
         }
-        if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
-          const eventId = lastPendingFaceEventId;
-          if (eventId == null) {
-            logger.warn("[ISAPI] 收到附圖但無待綁定事件", {
-              deviceId,
-              deviceIp,
-            });
-            return;
-          }
-          lastPendingFaceEventId = null;
-          await attachPictureToEvent(eventId, body);
-        }
-      })
-      .catch((err) => {
-        logger.warn("[ISAPI] 處理事件片段失敗", {
+        lastPendingFaceEventId = null;
+        await attachPictureToEvent(eventId, body);
+      }
+    },
+    onPartError: (err) => {
+      logger.warn("[ISAPI] 處理事件片段失敗", {
+        deviceId,
+        deviceIp,
+        error: err?.message || String(err),
+      });
+    },
+    onBeforeResolve: () => {
+      if (lastPendingFaceEventId != null) {
+        logger.warn("[ISAPI] 串流結束仍有未配對附圖的事件", {
           deviceId,
           deviceIp,
-          error: err?.message || String(err),
+          eventId: lastPendingFaceEventId,
         });
-      });
-  };
-
-  const tryConsumeOnePart = () => {
-    // 找 part 起點：\r\n--boundary 或 開頭 --boundary
-    let start = buffer.indexOf(sepWithCRLF);
-    let skip = sepWithCRLF.length;
-    if (start === -1) {
-      if (
-        buffer.length >= sep.length &&
-        buffer.slice(0, sep.length).equals(sep)
-      ) {
-        start = 0;
-        skip = sep.length;
-      } else {
-        return false;
+        lastPendingFaceEventId = null;
       }
-    } else if (start > 0) {
-      buffer = buffer.slice(start);
-      start = 0;
-      skip = sepWithCRLF.length;
-    } else {
-      skip = sepWithCRLF.length;
-    }
-    const afterBoundary = buffer.slice(skip);
-    const headEnd = afterBoundary.indexOf(CRLFCRLF);
-    if (headEnd === -1) return false;
-    const headerStr = afterBoundary.slice(0, headEnd).toString("utf8");
-    const bodyStart = skip + headEnd + CRLFCRLF.length;
-    const contentLengthMatch = headerStr.match(/Content-Length:\s*(\d+)/i);
-    const contentLength = contentLengthMatch
-      ? parseInt(contentLengthMatch[1], 10)
-      : 0;
-    let bodyEnd;
-    if (contentLength > 0) {
-      bodyEnd = bodyStart + contentLength;
-      if (bodyEnd > buffer.length) return false;
-    } else {
-      const nextB = buffer.indexOf(sepWithCRLF, bodyStart);
-      const nextB2 = buffer.indexOf(sep, bodyStart);
-      const next =
-        nextB !== -1
-          ? nextB2 !== -1
-            ? Math.min(nextB, nextB2)
-            : nextB
-          : nextB2;
-      if (next === -1) return false;
-      bodyEnd = next;
-      const trim =
-        buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d ? 2 : 0;
-      if (trim) bodyEnd -= trim;
-    }
-    const body = buffer.slice(bodyStart, bodyEnd);
-    enqueuePart(headerStr, body);
-    buffer = buffer.slice(bodyEnd);
-    return true;
-  };
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      partQueue
-        .then(() => {
-          if (lastPendingFaceEventId != null) {
-            logger.warn("[ISAPI] 串流結束仍有未配對附圖的事件", {
-              deviceId,
-              deviceIp,
-              eventId: lastPendingFaceEventId,
-            });
-            lastPendingFaceEventId = null;
-          }
-          resolve();
-        })
-        .catch(() => resolve());
-    };
-
-    const abortHandler = () => {
-      try {
-        // 強制關閉 stream，讓 consume 結束並觸發重連迴圈退出
-        stream.destroy(new Error("ABORTED"));
-      } catch (_e) {}
-    };
-    if (abortSignal) {
-      if (abortSignal.aborted) abortHandler();
-      else abortSignal.addEventListener("abort", abortHandler, { once: true });
-    }
-
-    stream.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length > 0 && tryConsumeOnePart()) {}
-      if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
-    });
-    stream.on("error", reject);
-    stream.on("end", finish);
-    stream.on("close", finish);
+    },
   });
 }
 
@@ -516,125 +268,49 @@ async function runSubscribeForDevice(deviceId, abortSignal) {
   }
 }
 
-/**
- * 單一設備訂閱迴圈：連線 → 讀取 → 結束後延遲重連
- */
-async function subscribeLoop(deviceId, abortSignal) {
-  for (;;) {
-    if (abortSignal?.aborted) return;
-    try {
-      await runSubscribeForDevice(deviceId, abortSignal);
-      if (abortSignal?.aborted) return;
-      logger.warn("[ISAPI] 訂閱串流結束，將重連", { deviceId });
-    } catch (e) {
-      if (abortSignal?.aborted) return;
-      if (e && (e.code === "ABORTED" || String(e.message).includes("ABORTED")))
-        return;
-      logger.warn("[ISAPI] 訂閱連線中斷，將重連", {
-        deviceId,
-        error: e?.message || String(e),
-        statusCode: e?.statusCode ?? null,
-      });
-    }
-    if (abortSignal?.aborted) return;
-    await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
-  }
-}
-
-let started = false;
-/** 目前訂閱中的設備 ID 列表（start 時寫入，供狀態查詢） */
-let subscribedDeviceIds = [];
-/** 訂閱長連線仍在讀取的設備（與 deviceIds 不同：迴圈在跑不代表 socket 還在） */
-const connectedDeviceIds = new Set();
-
-function startLoopForDevice(deviceId) {
-  if (deviceLoopControllers.has(deviceId)) return;
-  const controller = new AbortController();
-  deviceLoopControllers.set(deviceId, {
-    controller,
-    startedAt: Date.now(),
-  });
-  subscribeLoop(deviceId, controller.signal); // 各設備獨立迴圈，不 await
-}
-
-function stopLoopForDevice(deviceId) {
-  const entry = deviceLoopControllers.get(deviceId);
-  if (!entry) return;
-  try {
-    entry.controller.abort();
-  } catch (_e) {}
-  deviceLoopControllers.delete(deviceId);
-}
-
-/**
- * 啟動佈防訂閱服務：對所有需訂閱的門禁設備建立訂閱迴圈
- */
-async function start() {
-  if (started) return;
-  await refresh();
-}
+const manager = createSubscribeManager({
+  logger,
+  keyOf: (deviceId) => deviceId,
+  listTargets: getDeviceIdsToSubscribe,
+  runOnce: runSubscribeForDevice,
+  refreshPolicy: "eager",
+  onStreamEnded: (deviceId) => {
+    logger.warn("[ISAPI] 訂閱串流結束，將重連", { deviceId });
+  },
+  onReconnectError: (deviceId, error) => {
+    logger.warn("[ISAPI] 訂閱連線中斷，將重連", {
+      deviceId,
+      error: error?.message || String(error),
+      statusCode: error?.statusCode ?? null,
+    });
+  },
+  onRefresh: ({ targets, toStart, toStop }) => {
+    if (toStart.length === 0 && toStop.length === 0) return;
+    const refreshMeta = { count: targets.length };
+    if (toStart.length > 0) refreshMeta.start = toStart.join(",");
+    if (toStop.length > 0) refreshMeta.stop = toStop.join(",");
+    logger.info("[ISAPI] 訂閱刷新完成", refreshMeta);
+  },
+  buildStatus: ({ started, targets }) => ({
+    started,
+    deviceIds: [...targets],
+    connectedDeviceIds: [...connectedDeviceIds].sort((a, b) => a - b),
+  }),
+  buildRefreshResult: ({ started, targets }) => ({
+    started,
+    deviceIds: [...targets],
+  }),
+});
 
 function stop() {
-  started = false;
-  subscribedDeviceIds = [];
   connectedDeviceIds.clear();
-  for (const deviceId of [...deviceLoopControllers.keys()]) {
-    stopLoopForDevice(deviceId);
-  }
-}
-
-/**
- * 重新計算需要訂閱的設備，增量啟停訂閱迴圈
- * - 新增的設備：啟動訂閱
- * - 被移除的設備：中止串流並停止重連
- */
-async function refresh() {
-  if (!started) {
-    started = true;
-  }
-  const deviceIds = await getDeviceIdsToSubscribe();
-  const nextSet = new Set(deviceIds);
-  const prevSet = new Set(subscribedDeviceIds);
-
-  const toStart = deviceIds.filter((id) => !prevSet.has(id));
-  const toStop = subscribedDeviceIds.filter((id) => !nextSet.has(id));
-
-  if (toStart.length === 0 && toStop.length === 0) {
-    subscribedDeviceIds = deviceIds;
-    return { started: true, deviceIds: [...subscribedDeviceIds] };
-  }
-
-  for (const id of toStop) stopLoopForDevice(id);
-  for (const id of toStart) startLoopForDevice(id);
-
-  subscribedDeviceIds = deviceIds;
-  const refreshMeta = { count: subscribedDeviceIds.length };
-  if (toStart.length > 0) refreshMeta.start = toStart.join(",");
-  if (toStop.length > 0) refreshMeta.stop = toStop.join(",");
-  logger.info("[ISAPI] 訂閱刷新完成", refreshMeta);
-  return { started: true, deviceIds: [...subscribedDeviceIds] };
-}
-
-/**
- * 取得佈防訂閱狀態（供確認是否已實施佈防）
- * @returns {{ started: boolean, deviceIds: number[], connectedDeviceIds: number[] }}
- */
-function getSubscribeStatus() {
-  return {
-    started,
-    deviceIds: [...subscribedDeviceIds],
-    connectedDeviceIds: [...connectedDeviceIds].sort((a, b) => a - b),
-  };
+  manager.stop();
 }
 
 module.exports = {
-  start,
+  start: manager.start,
   stop,
-  refresh,
-  getSubscribeStatus,
+  refresh: manager.refresh,
+  getSubscribeStatus: manager.getSubscribeStatus,
   getDeviceIdsToSubscribe,
-  persistIsapiEvent,
-  isProcessableEvent,
-  attachPictureToEvent,
-  SUBSCRIBE_XML,
 };

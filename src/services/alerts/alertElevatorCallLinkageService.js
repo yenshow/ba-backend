@@ -3,8 +3,6 @@
  * location_ids 空＝全部電梯地點；有值＝僅指定地點。不復歸。
  */
 const db = require("../../database/db");
-const C = require("../../utils/apiErrorCodes");
-const { throwApiError } = require("../../utils/apiErrors");
 const { createLogger } = require("../../utils/logger");
 const licenseService = require("../license/licenseService");
 const {
@@ -19,91 +17,23 @@ const { formatBusinessSummary } = require("../operationalEvents/operationalEvent
 const {
   formatPlaceLabel,
 } = require("../operationalEvents/operationalEventPlaceContext");
+const {
+  normalizeIdList,
+  createRuleLinkageCrud,
+} = require("./alertLinkageHelpers");
 
 const logger = createLogger("alertElevatorCallLinkage");
 const MAX_LOCATION_IDS = 100;
 const TARGET_FLOOR_LABEL = "1F";
 
-const normalizeId = (v) => {
-  const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : null;
-};
+const crud = createRuleLinkageCrud({
+  tableName: "alert_elevator_call_linkages",
+  idsColumn: "location_ids",
+  payloadIdsKey: "location_ids",
+  maxIds: MAX_LOCATION_IDS,
+});
 
-const normalizeIdList = (v, maxLen = MAX_LOCATION_IDS) => {
-  if (!Array.isArray(v)) return [];
-  const ids = v.map(normalizeId).filter(Boolean);
-  return [...new Set(ids)].slice(0, maxLen);
-};
-
-const parsePgIntArray = (v) => {
-  if (Array.isArray(v)) return normalizeIdList(v);
-  if (typeof v !== "string") return [];
-  const inner = v.trim().replace(/^\s*\{|\}\s*$/g, "");
-  if (!inner) return [];
-  return normalizeIdList(inner.split(","));
-};
-
-const normalizeRow = (row) => {
-  if (!row) return row;
-  return {
-    ...row,
-    location_ids: parsePgIntArray(row.location_ids),
-  };
-};
-
-async function getByRuleId(ruleId) {
-  const rid = normalizeId(ruleId);
-  if (!rid) return null;
-  const rows = await db.query(
-    `SELECT * FROM alert_elevator_call_linkages WHERE rule_id = ? LIMIT 1`,
-    [rid],
-  );
-  return normalizeRow(rows?.[0] || null);
-}
-
-async function getByRuleIds(ruleIds) {
-  const ids = Array.isArray(ruleIds)
-    ? [...new Set(ruleIds.map(normalizeId).filter(Boolean))]
-    : [];
-  if (ids.length === 0) return [];
-  const rows = await db.query(
-    `SELECT * FROM alert_elevator_call_linkages WHERE rule_id = ANY(?)`,
-    [ids],
-  );
-  return (rows || []).map(normalizeRow);
-}
-
-async function upsertForRule(ruleId, payload, userId = null) {
-  const rid = normalizeId(ruleId);
-  if (!rid) throwApiError(C.ALERT_LINKAGE_RULE_ID_INVALID, "rule_id 不合法");
-  const enabled = payload?.enabled !== undefined ? Boolean(payload.enabled) : true;
-  const locationIds = normalizeIdList(payload?.location_ids, MAX_LOCATION_IDS);
-
-  const rows = await db.query(
-    `
-    INSERT INTO alert_elevator_call_linkages (rule_id, enabled, location_ids, created_by)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT (rule_id)
-    DO UPDATE SET
-      enabled = EXCLUDED.enabled,
-      location_ids = EXCLUDED.location_ids,
-      updated_at = CURRENT_TIMESTAMP
-    RETURNING *
-    `,
-    [rid, enabled, locationIds, userId != null ? Number(userId) : null],
-  );
-  return normalizeRow(rows?.[0] || null);
-}
-
-async function deleteForRule(ruleId) {
-  const rid = normalizeId(ruleId);
-  if (!rid) return { deleted: 0 };
-  const rows = await db.query(
-    `DELETE FROM alert_elevator_call_linkages WHERE rule_id = ? RETURNING id`,
-    [rid],
-  );
-  return { deleted: rows?.length || 0 };
-}
+const { getByRuleId, getByRuleIds, upsertForRule, deleteForRule } = crud;
 
 const ELEVATOR_LOCATION_SELECT = `
   SELECT
@@ -119,7 +49,7 @@ const ELEVATOR_LOCATION_SELECT = `
 `;
 
 async function loadElevatorLocations(selectedIds) {
-  const list = normalizeIdList(selectedIds);
+  const list = normalizeIdList(selectedIds, MAX_LOCATION_IDS);
   const rows =
     list.length > 0
       ? await db.query(

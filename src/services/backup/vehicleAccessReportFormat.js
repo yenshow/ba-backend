@@ -13,18 +13,16 @@ const { computeTransitionStats } = require("../entryExit/stats");
 const {
   normalizeVehicleDirection,
 } = require("../vehicleAccess/vehicleAccessHelpers");
+const {
+  DEFAULT_VEHICLE_ACCESS_STAT_LABELS,
+  normalizeVehicleAccessStatLabels,
+  resolveSharedVehicleAccessStatLabels,
+  entryExitReportHeaders,
+  mapEntryExitStatsRow,
+} = require("../entryExit/statLabels");
 
 const sep = "\x00";
 
-const STATS_HEADERS = ["日期", "區域-地點", "進場車輛", "出場車輛", "在場車輛"];
-const GROUP_STATS_HEADERS = [
-  "日期",
-  "區域-地點",
-  "群組",
-  "進場車輛",
-  "出場車輛",
-  "在場車輛",
-];
 /** 與 UI 完整報表匯出一致（固定欄＋預設顯示欄＋圖片路徑） */
 const DETAIL_HEADERS = [
   "區域-地點",
@@ -36,6 +34,18 @@ const DETAIL_HEADERS = [
   "時間",
   "圖片路徑",
 ];
+
+function resolveVehicleLabels(opts = {}) {
+  if (opts.statLabels) {
+    return normalizeVehicleAccessStatLabels(opts.statLabels);
+  }
+  if (Array.isArray(opts.statLabelsList) && opts.statLabelsList.length > 0) {
+    return resolveSharedVehicleAccessStatLabels(
+      opts.statLabelsList.map((x) => normalizeVehicleAccessStatLabels(x)),
+    );
+  }
+  return { ...DEFAULT_VEHICLE_ACCESS_STAT_LABELS };
+}
 
 function groupByDayLocation(rows) {
   const groups = new Map();
@@ -65,7 +75,7 @@ function countEntryExit(recs) {
   return { entry: entryCount, exit: exitCount, current: currentCount };
 }
 
-function buildStatsSection(rows) {
+function buildStatsSection(rows, labels) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
     const [dA, zA] = a.split(sep);
@@ -79,18 +89,23 @@ function buildStatsSection(rows) {
     const zoneLoc = key.slice(idx + sep.length);
     const recs = groups.get(key);
     const { entry, exit, current } = countEntryExit(recs);
-    sectionRows.push({
-      日期: dateStr,
-      "區域-地點": zoneLoc,
-      進場車輛: String(entry),
-      出場車輛: String(exit),
-      在場車輛: String(current),
-    });
+    sectionRows.push(
+      mapEntryExitStatsRow(
+        {
+          date: dateStr,
+          zoneLocation: zoneLoc,
+          entryCount: entry,
+          exitCount: exit,
+          currentCount: current,
+        },
+        labels,
+      ),
+    );
   }
   return sectionRows;
 }
 
-function buildGroupStatsSection(rows) {
+function buildGroupStatsSection(rows, labels) {
   const groups = groupByDayLocation(rows);
   const sortedKeys = [...groups.keys()].sort((a, b) => {
     const [dA, zA] = a.split(sep);
@@ -113,14 +128,19 @@ function buildGroupStatsSection(rows) {
     for (const groupName of [...byGroup.keys()].sort()) {
       const unitRecs = byGroup.get(groupName);
       const { entry, exit, current } = countEntryExit(unitRecs);
-      sectionRows.push({
-        日期: dateStr,
-        "區域-地點": zoneLoc,
-        群組: groupName,
-        進場車輛: String(entry),
-        出場車輛: String(exit),
-        在場車輛: String(current),
-      });
+      sectionRows.push(
+        mapEntryExitStatsRow(
+          {
+            date: dateStr,
+            zoneLocation: zoneLoc,
+            groupName,
+            entryCount: entry,
+            exitCount: exit,
+            currentCount: current,
+          },
+          labels,
+        ),
+      );
     }
   }
   return sectionRows;
@@ -151,8 +171,7 @@ function buildDetailSection(rows) {
           : r.allow_result === 0
             ? "拒絕"
             : "陌生";
-      const pic =
-        r.backup_picture_path ?? r.picture_path ?? "";
+      const pic = r.backup_picture_path ?? r.picture_path ?? "";
       result.push({
         "區域-地點": zoneLoc || "—",
         群組: (r.vehicle_list_name ?? "").trim() || "—",
@@ -168,30 +187,37 @@ function buildDetailSection(rows) {
   return result.sort((a, b) => (b.時間 || "").localeCompare(a.時間 || ""));
 }
 
-function emptySections() {
+function emptySections(labels = DEFAULT_VEHICLE_ACCESS_STAT_LABELS) {
+  const { statsHeaders, groupStatsHeaders } = entryExitReportHeaders(labels);
   return {
     sections: [
-      { title: "進出統計", headers: [...STATS_HEADERS], rows: [] },
-      { title: "群組統計", headers: [...GROUP_STATS_HEADERS], rows: [] },
+      { title: "進出統計", headers: [...statsHeaders], rows: [] },
+      { title: "群組統計", headers: [...groupStatsHeaders], rows: [] },
       { title: "過車紀錄", headers: [...DETAIL_HEADERS], rows: [] },
     ],
   };
 }
 
-function transformVehicleAccessToReportFormat(rows) {
-  if (!rows || rows.length === 0) return emptySections();
+/**
+ * @param {object[]} rows
+ * @param {{ statLabels?: object, statLabelsList?: object[] }} [reportOpts]
+ */
+function transformVehicleAccessToReportFormat(rows, reportOpts = {}) {
+  const labels = resolveVehicleLabels(reportOpts);
+  if (!rows || rows.length === 0) return emptySections(labels);
 
+  const { statsHeaders, groupStatsHeaders } = entryExitReportHeaders(labels);
   return {
     sections: [
       {
         title: "進出統計",
-        headers: [...STATS_HEADERS],
-        rows: buildStatsSection(rows),
+        headers: [...statsHeaders],
+        rows: buildStatsSection(rows, labels),
       },
       {
         title: "群組統計",
-        headers: [...GROUP_STATS_HEADERS],
-        rows: buildGroupStatsSection(rows),
+        headers: [...groupStatsHeaders],
+        rows: buildGroupStatsSection(rows, labels),
       },
       {
         title: "過車紀錄",

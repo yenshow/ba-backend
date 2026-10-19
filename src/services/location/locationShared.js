@@ -355,10 +355,14 @@ function formatSystem(system) {
     }
 
     case "roll_call": {
+      const {
+        normalizeRollCallStatLabels,
+      } = require("../entryExit/statLabels");
       return {
         ...baseSystem,
         config: {
           deviceIds: deviceIdsFromDbSystemConfig(config),
+          statLabels: normalizeRollCallStatLabels(config.stat_labels),
         },
       };
     }
@@ -373,6 +377,9 @@ function formatSystem(system) {
         CAMERA_MODE,
         normalizeDashboardLayout,
       } = require("../peopleCounting/peopleCountingConfig");
+      const {
+        normalizePeopleCountingStatLabels,
+      } = require("../entryExit/statLabels");
       const cameras = parsePeopleCountingConfigFields(config);
       const isFace = cameras.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
       return {
@@ -427,6 +434,7 @@ function formatSystem(system) {
           ...(isFace ? { faceSimilarityThreshold: cameras.faceSimilarityThreshold } : {}),
           eventBackfillEnabled: cameras.eventBackfillEnabled === true,
           eventBackfillWindowSec: cameras.eventBackfillWindowSec,
+          statLabels: normalizePeopleCountingStatLabels(config.stat_labels),
         },
       };
     }
@@ -469,6 +477,9 @@ function formatSystem(system) {
         normalizeOperationMode,
         parseVehicleAccessConfigFields,
       } = require("../vehicleAccess/vehicleAccessConfig");
+      const {
+        normalizeVehicleAccessStatLabels,
+      } = require("../entryExit/statLabels");
       const vaFields = parseVehicleAccessConfigFields(config);
       return {
         ...baseSystem,
@@ -502,6 +513,7 @@ function formatSystem(system) {
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),
+          statLabels: normalizeVehicleAccessStatLabels(config.stat_labels),
         },
       };
     }

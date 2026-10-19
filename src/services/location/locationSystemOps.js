@@ -116,6 +116,20 @@ function shallowMergePeopleCountingConfig(baseline, incoming) {
   return out;
 }
 
+/** @returns {{ stat_labels?: object }} */
+function pickStoredStatLabels(config, systemType) {
+  const { toStoredStatLabelsFromApi } = require("../entryExit/statLabels");
+  try {
+    const statLabels = toStoredStatLabelsFromApi(config, systemType);
+    return statLabels ? { stat_labels: statLabels } : {};
+  } catch (e) {
+    if (e?.code === "STAT_LABELS_TOO_LONG") {
+      throwApiError(C.VALIDATION_REQUIRED, e.message);
+    }
+    throw e;
+  }
+}
+
 function buildSystemConfig(systemType, config) {
   switch (systemType) {
     case "environment": {
@@ -235,7 +249,10 @@ function buildSystemConfig(systemType, config) {
           "時段簽到地點必須綁定至少一台門禁機",
         );
       }
-      return { device_ids: ids };
+      return {
+        device_ids: ids,
+        ...pickStoredStatLabels(config, "roll_call"),
+      };
     }
 
     case "people_counting": {
@@ -306,6 +323,7 @@ function buildSystemConfig(systemType, config) {
           ((config.dataSource || "yscp") === "access_control" || isFace) &&
           resetFields.eventBackfillEnabled === true,
         event_backfill_window_sec: resetFields.eventBackfillWindowSec,
+        ...pickStoredStatLabels(config, "people_counting"),
       };
     }
 
@@ -375,6 +393,7 @@ function buildSystemConfig(systemType, config) {
           );
           return cols.length > 0 ? cols : undefined;
         })(),
+        ...pickStoredStatLabels(config, "vehicle_access"),
       };
     }
 

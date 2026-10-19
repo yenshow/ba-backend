@@ -1,9 +1,12 @@
 /**
  * 車輛 ISAPI ANPR 佈防訂閱（eventMode=all，程式內篩選 ANPR）
+ * 長連線骨架：../isapi/isapiSubscribeLoop
  */
 const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("../accessControl/isapiClient");
-const logger = require("../../utils/logger").createLogger("ISAPI Vehicle Subscribe");
+const logger = require("../../utils/logger").createLogger(
+  "ISAPI Vehicle Subscribe",
+);
 const db = require("../../database/db");
 const { parseAnprEventXml } = require("./isapiVehicleXmlParser");
 const {
@@ -19,6 +22,10 @@ const {
 const {
   parseEventBackfillFields,
 } = require("../isapi/isapiEventBackfillCommon");
+const {
+  createSubscribeManager,
+  consumeMultipartEventStream,
+} = require("../isapi/isapiSubscribeLoop");
 
 const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <SubscribeEvent version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">
@@ -26,10 +33,6 @@ const SUBSCRIBE_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <eventMode>all</eventMode>
 </SubscribeEvent>`;
 
-const RE_CONNECT_DELAY_MS = 10000;
-const deviceLoopControllers = new Map();
-let started = false;
-let subscribedDeviceIds = [];
 let deviceLocationMap = new Map();
 
 async function loadDeviceLocationMap() {
@@ -104,53 +107,31 @@ async function getDeviceClient(deviceId) {
   };
 }
 
-const CRLF = Buffer.from("\r\n");
-const CRLFCRLF = Buffer.from("\r\n\r\n");
-
 async function consumeEventStreamIncremental(
   stream,
   contentType,
   deviceId,
   abortSignal,
 ) {
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i);
-  const rawBoundary = boundaryMatch
-    ? (boundaryMatch[1] || boundaryMatch[2]).trim()
-    : null;
-  if (!rawBoundary) {
-    return new Promise((resolve, reject) => {
-      stream.on("data", () => {});
-      stream.on("error", reject);
-      stream.on("end", () => resolve());
-      stream.on("close", () => resolve());
-    });
-  }
-
-  const boundary = rawBoundary.replace(/^["']|["']$/g, "");
-  const sep = Buffer.from(`--${boundary}`, "utf8");
-  const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
-  let buffer = Buffer.alloc(0);
   let pendingPicture = { logIds: [], attachFirstImage: false };
-  let partChain = Promise.resolve();
 
-  const enqueuePart = (fn) => {
-    partChain = partChain.then(fn).catch((err) => {
-      logger.warn("[ISAPI Vehicle] part 處理失敗", {
-        deviceId,
-        message: err?.message || String(err),
-      });
-    });
-  };
+  await consumeMultipartEventStream({
+    stream,
+    contentType,
+    abortSignal,
+    preferContentLength: false,
+    onPart: async (headerStr, body) => {
+      const ct =
+        (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+      const rawBody = body
+        .toString("utf8")
+        .replace(/^\uFEFF/, "")
+        .trim();
 
-  const processPart = (headerStr, body) => {
-    const ct = (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
-    const rawBody = body
-      .toString("utf8")
-      .replace(/^\uFEFF/, "")
-      .trim();
-
-    if (/xml/i.test(ct) || (rawBody.startsWith("<") && rawBody.includes("eventType"))) {
-      enqueuePart(async () => {
+      if (
+        /xml/i.test(ct) ||
+        (rawBody.startsWith("<") && rawBody.includes("eventType"))
+      ) {
         const parsed = parseAnprEventXml(rawBody);
         if (!parsed) return;
         const targets = deviceLocationMap.get(deviceId) || [];
@@ -172,71 +153,26 @@ async function consumeEventStreamIncremental(
           eventTime: parsed.dateTime,
           locationTargets: targets,
         });
-      });
-      return;
-    }
+        return;
+      }
 
-    if (/image/i.test(ct)) {
-      enqueuePart(async () => {
-        if (!pendingPicture.attachFirstImage || pendingPicture.logIds.length === 0) return;
+      if (/image/i.test(ct)) {
+        if (
+          !pendingPicture.attachFirstImage ||
+          pendingPicture.logIds.length === 0
+        ) {
+          return;
+        }
         pendingPicture.attachFirstImage = false;
         await attachLicensePlatePicture(pendingPicture.logIds, body);
+      }
+    },
+    onPartError: (err) => {
+      logger.warn("[ISAPI Vehicle] part 處理失敗", {
+        deviceId,
+        message: err?.message || String(err),
       });
-    }
-  };
-
-  const tryConsumeOnePart = () => {
-    if (buffer.length === 0) return false;
-    let start = buffer.indexOf(sepWithCRLF);
-    let skip = sepWithCRLF.length;
-    if (start === -1) {
-      if (buffer.length >= sep.length && buffer.slice(0, sep.length).equals(sep)) {
-        start = 0;
-        skip = sep.length;
-      } else return false;
-    } else if (start > 0) {
-      buffer = buffer.slice(start);
-      start = 0;
-      skip = sepWithCRLF.length;
-    }
-    const afterBoundary = buffer.slice(skip);
-    const headEnd = afterBoundary.indexOf(CRLFCRLF);
-    if (headEnd === -1) return false;
-    const headerStr = afterBoundary.slice(0, headEnd).toString("utf8");
-    const bodyStart = skip + headEnd + CRLFCRLF.length;
-    let next = buffer.indexOf(sepWithCRLF, bodyStart);
-    if (next === -1) next = buffer.indexOf(sep, bodyStart);
-    if (next === -1) return false;
-    let bodyEnd = next;
-    if (buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d) bodyEnd -= 2;
-    const body = buffer.slice(bodyStart, bodyEnd);
-    processPart(headerStr, body);
-    buffer = buffer.slice(next);
-    return true;
-  };
-
-  return new Promise((resolve, reject) => {
-    const abortHandler = () => {
-      try {
-        stream.destroy(new Error("ABORTED"));
-      } catch (_e) {}
-    };
-    if (abortSignal) {
-      if (abortSignal.aborted) abortHandler();
-      else abortSignal.addEventListener("abort", abortHandler, { once: true });
-    }
-    stream.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length > 0 && tryConsumeOnePart()) {}
-      if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
-    });
-    stream.on("error", reject);
-    stream.on("end", () => {
-      partChain.finally(() => resolve());
-    });
-    stream.on("close", () => {
-      partChain.finally(() => resolve());
-    });
+    },
   });
 }
 
@@ -254,46 +190,37 @@ async function runSubscribeForDevice(deviceId, abortSignal) {
   );
 }
 
-async function subscribeLoop(deviceId, abortSignal) {
-  for (;;) {
-    if (abortSignal?.aborted) return;
-    try {
-      await runSubscribeForDevice(deviceId, abortSignal);
-      if (abortSignal?.aborted) return;
-      logger.warn("[ISAPI Vehicle] 訂閱串流結束，將重連", { deviceId });
-    } catch (e) {
-      if (abortSignal?.aborted) return;
-      if (e && String(e.message || "").includes("ABORTED")) return;
-      logger.warn("[ISAPI Vehicle] 訂閱連線中斷，將重連", {
-        deviceId,
-        error: e?.message || String(e),
-        statusCode: e?.statusCode ?? null,
-      });
-    }
-    if (abortSignal?.aborted) return;
-    await new Promise((r) => setTimeout(r, RE_CONNECT_DELAY_MS));
-  }
-}
+const manager = createSubscribeManager({
+  logger,
+  keyOf: (deviceId) => deviceId,
+  listTargets: getDeviceIdsToSubscribe,
+  runOnce: runSubscribeForDevice,
+  // Hub reconcile 只呼叫 refresh；首次需與 start 相同（fan-out 後再啟迴圈）
+  refreshPolicy: "strict",
+  onStreamEnded: (deviceId) => {
+    logger.warn("[ISAPI Vehicle] 訂閱串流結束，將重連", { deviceId });
+  },
+  onReconnectError: (deviceId, error) => {
+    logger.warn("[ISAPI Vehicle] 訂閱連線中斷，將重連", {
+      deviceId,
+      error: error?.message || String(error),
+      statusCode: error?.statusCode ?? null,
+    });
+  },
+  onRefresh: ({ targets }) => {
+    logger.info("[ISAPI Vehicle] 訂閱刷新", { count: targets.length });
+  },
+  buildStatus: ({ started, targets }) => ({
+    started,
+    deviceIds: [...targets],
+  }),
+  buildRefreshResult: ({ started, targets }) => ({
+    started,
+    deviceIds: [...targets],
+  }),
+});
 
-function startLoopForDevice(deviceId) {
-  if (deviceLoopControllers.has(deviceId)) return;
-  const controller = new AbortController();
-  deviceLoopControllers.set(deviceId, { controller, startedAt: Date.now() });
-  subscribeLoop(deviceId, controller.signal);
-}
-
-function stopLoopForDevice(deviceId) {
-  const entry = deviceLoopControllers.get(deviceId);
-  if (!entry) return;
-  try {
-    entry.controller.abort();
-  } catch (_e) {}
-  deviceLoopControllers.delete(deviceId);
-}
-
-async function start() {
-  if (started) return;
-  started = true;
+async function runFanOutHook() {
   try {
     const count = await runFanOutPictureBackfillOnce();
     if (count > 0) {
@@ -304,39 +231,26 @@ async function start() {
       message: error?.message || String(error),
     });
   }
-  await refresh();
 }
 
-function stop() {
-  started = false;
-  subscribedDeviceIds = [];
-  for (const deviceId of [...deviceLoopControllers.keys()]) {
-    stopLoopForDevice(deviceId);
-  }
-}
-
+/**
+ * Hub 僅呼叫 refresh：尚未 started 時等同 start（含 fan-out），避免車輛佈防永不啟動。
+ */
 async function refresh() {
-  if (!started) return { started: false, deviceIds: [] };
-  const deviceIds = await getDeviceIdsToSubscribe();
-  const nextSet = new Set(deviceIds);
-  const prevSet = new Set(subscribedDeviceIds);
-  const toStart = deviceIds.filter((id) => !prevSet.has(id));
-  const toStop = subscribedDeviceIds.filter((id) => !nextSet.has(id));
-  for (const id of toStop) stopLoopForDevice(id);
-  for (const id of toStart) startLoopForDevice(id);
-  subscribedDeviceIds = deviceIds;
-  logger.info("[ISAPI Vehicle] 訂閱刷新", { count: deviceIds.length });
-  return { started: true, deviceIds: [...subscribedDeviceIds] };
-}
-
-function getSubscribeStatus() {
-  return { started, deviceIds: [...subscribedDeviceIds] };
+  if (!manager.getStarted()) {
+    await manager.startWithBeforeRefresh(runFanOutHook);
+    return {
+      started: true,
+      deviceIds: [...manager.getRunningTargets()],
+    };
+  }
+  return manager.refresh();
 }
 
 module.exports = {
-  start,
-  stop,
+  start: refresh,
+  stop: manager.stop,
   refresh,
-  getSubscribeStatus,
+  getSubscribeStatus: manager.getSubscribeStatus,
   getDeviceIdsToSubscribe,
 };
