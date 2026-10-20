@@ -11,35 +11,26 @@ const { throwApiError } = require("../../utils/apiErrors");
 const FACE_OUTPUT_SIZE = 320;
 const JPEG_QUALITIES = [0.85, 0.8, 0.74, 0.68, 0.62, 0.56, 0.5, 0.44, 0.38];
 
+/** 接近 1:1（表單裁切／設備臉圖）：置中 cover，勿再預裁 */
+function isNearSquare(width, height) {
+  const aspect = height / width;
+  return aspect >= 0.92 && aspect <= 1.08;
+}
+
 /**
- * 半身／全身照常見構圖：人臉在上方。先取上段再方形裁切，比單靠 attention 更容易放大臉部。
+ * 高直幅半身／全身：先取上段再方形裁切。
  * @param {import("sharp").Sharp} pipeline 已 rotate 的 sharp 實例
  * @param {{ width: number, height: number }} meta
  */
 function applyUpperBodyPreCrop(pipeline, meta) {
-  const width = meta.width;
-  const height = meta.height;
-  const aspect = height / width;
-
-  if (aspect > 1.15) {
-    return pipeline.extract({
-      left: 0,
-      top: 0,
-      width,
-      height: Math.min(height, Math.round(width * 1.05)),
-    });
-  }
-
-  if (aspect >= 0.85) {
-    return pipeline.extract({
-      left: 0,
-      top: 0,
-      width,
-      height: Math.min(height, Math.round(height * 0.72)),
-    });
-  }
-
-  return pipeline;
+  const { width, height } = meta;
+  if (height / width <= 1.15) return pipeline;
+  return pipeline.extract({
+    left: 0,
+    top: 0,
+    width,
+    height: Math.min(height, Math.round(width * 1.05)),
+  });
 }
 
 async function cropToSquareBuffer(inputBuffer, position) {
@@ -49,13 +40,15 @@ async function cropToSquareBuffer(inputBuffer, position) {
     throw new Error("invalid image dimensions");
   }
 
-  const pipeline = applyUpperBodyPreCrop(rotated, meta).resize(
-    FACE_OUTPUT_SIZE,
-    FACE_OUTPUT_SIZE,
-    { fit: "cover", position },
-  );
+  const nearSquare = isNearSquare(meta.width, meta.height);
+  const base = nearSquare ? rotated : applyUpperBodyPreCrop(rotated, meta);
 
-  return pipeline.toBuffer({ resolveWithObject: true });
+  return base
+    .resize(FACE_OUTPUT_SIZE, FACE_OUTPUT_SIZE, {
+      fit: "cover",
+      position: nearSquare ? "centre" : position,
+    })
+    .toBuffer({ resolveWithObject: true });
 }
 
 async function cropToSquareBufferWithFallback(inputBuffer) {
@@ -71,7 +64,8 @@ async function cropToSquareBufferWithFallback(inputBuffer) {
 }
 
 /**
- * 將 JPEG 正規化為設備可接受的大頭照（320×320 方形、≤200KB、attention 居中裁切）。
+ * JPEG → 設備可接受大頭照（320×320、≤200KB）。
+ * 近方形置中；直幅上半身預裁＋attention。
  * @param {Buffer} inputBuffer
  * @returns {Promise<{ buffer: Buffer, width: number, height: number, bytes: number }>}
  */

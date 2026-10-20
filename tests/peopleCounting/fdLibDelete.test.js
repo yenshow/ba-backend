@@ -8,6 +8,7 @@ const {
   buildFdLibPicturePath,
   buildFdDeleteDataXml,
   buildFdSearchXml,
+  collectPidsFromSearchMatches,
 } = require("../../src/services/peopleCounting/isapiCameraFdLibService");
 
 assert.equal(
@@ -22,7 +23,16 @@ const deleteXml = buildFdDeleteDataXml({
   faceLibType: "ordinary",
 });
 assert.match(deleteXml, /<faceLibType>ordinary<\/faceLibType>/);
-assert.match(deleteXml, /<deleteMode>byPID<\/deleteMode>/);
+assert.match(deleteXml, /<deleteFP>[\s\S]*<FPID>12<\/FPID>[\s\S]*<\/deleteFP>/);
+assert.doesNotMatch(deleteXml, /deleteMode|<PID>/);
+
+const deleteNoType = buildFdDeleteDataXml({
+  fdid: "3",
+  pid: "12",
+  includeFaceLibType: false,
+});
+assert.doesNotMatch(deleteNoType, /faceLibType/);
+assert.match(deleteNoType, /<FPID>12<\/FPID>/);
 
 const searchWithType = buildFdSearchXml({
   searchID: "S1",
@@ -42,5 +52,17 @@ const searchNoType = buildFdSearchXml({
   includeFaceLibType: false,
 });
 assert.doesNotMatch(searchNoType, /faceLibType/);
+
+assert.deepEqual(
+  collectPidsFromSearchMatches([
+    { PID: "12", customHumanID: "B0002" },
+    { PID: "12" },
+    { PID: " 13 " },
+    { PID: "" },
+    null,
+  ]),
+  ["12", "13"],
+);
+assert.deepEqual(collectPidsFromSearchMatches([]), []);
 
 console.log("fdLibDelete.test.js: ok");

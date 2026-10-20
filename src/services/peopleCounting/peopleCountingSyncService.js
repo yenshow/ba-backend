@@ -6,6 +6,10 @@
 const externalDb = require("../../database/externalDb");
 const logger = require("../../utils/logger");
 const { peopleCounting: yscpFeature } = require("../../utils/yscpSystemFeature");
+const {
+  getPreviousOperationalDayTimeRange,
+  getOperationalDayRangeDaysAgo,
+} = require("../entryExit/operationalDayRange");
 
 const syncLogger = logger.createLogger("peopleCountingSyncService");
 const db = require("../../database/db");
@@ -110,23 +114,16 @@ async function syncRecords(start, end) {
  * @returns {Promise<{ synced: number }>}
  */
 async function syncYesterday() {
-  const now = new Date();
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0, 0));
-  const end = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 23, 59, 59, 999)
-  );
+  const { start, end } = getPreviousOperationalDayTimeRange();
   return syncRecords(start, end);
 }
 
 /**
- * 同步指定天數前的單日記錄
- * @param {number} daysAgo - 幾天前（1 = 昨天）
+ * 同步指定天數前的單日記錄（營運日；1 = 昨天）
+ * @param {number} daysAgo
  */
 async function syncDayAgo(daysAgo) {
-  const now = new Date();
-  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo, 0, 0, 0, 0));
-  const start = d;
-  const end = new Date(d.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const { start, end } = getOperationalDayRangeDaysAgo(daysAgo);
   return syncRecords(start, end);
 }
 

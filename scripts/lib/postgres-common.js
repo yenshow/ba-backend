@@ -13,8 +13,8 @@ const path = require("path");
 const os = require("os");
 const dotenv = require("dotenv");
 
-// 載入 .env 以讀取 DB_PORT 等配置
-dotenv.config({ path: path.resolve(__dirname, "..", ".env"), quiet: true });
+// 載入 ba-backend/.env（SSOT；勿指向 scripts/.env）
+dotenv.config({ path: path.resolve(__dirname, "..", "..", ".env"), quiet: true });
 
 const {
   getProjectDir,
@@ -39,7 +39,7 @@ function getPostgresqlConfPath() {
 
 /**
  * 讀取 PostgreSQL 配置中的端口
- * @returns {number} 端口號，預設為 5432
+ * @returns {number} 端口號，預設為 5433（與 .env.example／config.js 一致）
  */
 function getPostgresPort() {
 	const postgresqlConf = getPostgresqlConfPath();
@@ -51,7 +51,7 @@ function getPostgresPort() {
 		}
 	}
 	// 如果配置檔案不存在或沒有端口設定，從環境變數讀取
-	return parseInt(process.env.DB_PORT || "5432", 10);
+	return parseInt(process.env.DB_PORT || "5433", 10);
 }
 
 /**

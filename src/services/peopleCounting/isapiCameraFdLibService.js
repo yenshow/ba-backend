@@ -3,8 +3,7 @@
  * 協定：ensureFaceLib → pictureUpload → faceContrast；與門禁 UserInfo 分流。
  *
  * 僅操作本平台庫（name=BA_FaceLib / customFaceLibID=BA_PC_FACELIB）。
- * 刪除：DELETE /FDLib/{FDID}/picture/{customHumanID|PID}；拒收再後備 PUT FDDeleteData。
- * 禁止無參數 DELETE /FDLib。
+ * 刪除：FDSearch(customHumanID)→PID 後 DELETE picture/{PID}；拒收再 PUT FDDeleteData。禁止無參數 DELETE /FDLib。
  */
 const crypto = require("crypto");
 const FormData = require("form-data");
@@ -86,6 +85,10 @@ function errorText(err) {
   if (err == null) return "";
   if (typeof err === "string") return err;
   return String(err?.message || err?.detail || err);
+}
+
+function isBadXmlContentError(errOrText) {
+  return /badXmlContent|Invalid XML Content/i.test(errorText(errOrText));
 }
 
 function isFaceLibraryIdError(errOrText) {
@@ -609,7 +612,7 @@ async function searchByCustomHumanId(deviceId, employeeNo, libMeta = null) {
   try {
     res = await postSearch(true);
   } catch (err) {
-    if (!/badXmlContent|Invalid XML Content/i.test(errorText(err))) throw err;
+    if (!isBadXmlContentError(err)) throw err;
     logger.warn("FDSearch 拒收 faceLibType，改送不含該欄位", {
       deviceId,
       employeeNo,
@@ -620,19 +623,37 @@ async function searchByCustomHumanId(deviceId, employeeNo, libMeta = null) {
   return parseFdSearchMatches(responseToText(res.data));
 }
 
-/** DELETE /FDLib/{FDID}/picture/{PID|customHumanID} */
-function buildFdLibPicturePath(fdid, pidOrHumanId) {
-  return `${PATHS.fdLib}/${encodeURIComponent(String(fdid))}/picture/${encodeURIComponent(String(pidOrHumanId))}`;
+function collectPidsFromSearchMatches(matches) {
+  return [
+    ...new Set(
+      (matches || [])
+        .map((m) => String(m?.PID || "").trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
-/** 後備：PUT FDDeleteData（須含 faceLibType，否則易 badXmlContent） */
-function buildFdDeleteDataXml({ fdid, pid, faceLibType = DEFAULT_FACE_LIB_TYPE }) {
+/** DELETE /FDLib/{FDID}/picture/{PID} */
+function buildFdLibPicturePath(fdid, pid) {
+  return `${PATHS.fdLib}/${encodeURIComponent(String(fdid))}/picture/${encodeURIComponent(String(pid))}`;
+}
+
+/** 後備：PUT FDDeleteData（標準 deleteFP／FPID；faceLibType 拒收則可省略） */
+function buildFdDeleteDataXml({
+  fdid,
+  pid,
+  faceLibType = DEFAULT_FACE_LIB_TYPE,
+  includeFaceLibType = true,
+}) {
+  const typeLine = includeFaceLibType
+    ? `\n  <faceLibType>${escapeXml(String(faceLibType || DEFAULT_FACE_LIB_TYPE))}</faceLibType>`
+    : "";
   return xmlDoc(
     "FDDeleteData",
-    `  <FDID>${escapeXml(String(fdid))}</FDID>
-  <faceLibType>${escapeXml(String(faceLibType || DEFAULT_FACE_LIB_TYPE))}</faceLibType>
-  <deleteMode>byPID</deleteMode>
-  <PID>${escapeXml(String(pid))}</PID>`,
+    `  <FDID>${escapeXml(String(fdid))}</FDID>${typeLine}
+  <deleteFP>
+    <FPID>${escapeXml(String(pid))}</FPID>
+  </deleteFP>`,
   );
 }
 
@@ -655,16 +676,28 @@ async function deleteOneFacePicture(client, { fdid, pid, faceLibType }) {
       path,
       error: err?.message || String(err),
     });
-    await requestXml(client, {
-      method: "PUT",
-      path: PATHS.fdLib,
-      xml: buildFdDeleteDataXml({ fdid, pid, faceLibType }),
-    });
+    const putDelete = (includeFaceLibType) =>
+      requestXml(client, {
+        method: "PUT",
+        path: PATHS.fdLib,
+        xml: buildFdDeleteDataXml({ fdid, pid, faceLibType, includeFaceLibType }),
+      });
+    try {
+      await putDelete(true);
+    } catch (putErr) {
+      if (!isBadXmlContentError(putErr)) throw putErr;
+      logger.warn("FDDeleteData 拒收 faceLibType，改送不含該欄位", {
+        fdid,
+        pid,
+        error: putErr?.message || String(putErr),
+      });
+      await putDelete(false);
+    }
     return { missing: false };
   }
 }
 
-/** 用工號 DELETE picture/{customHumanID}（不依賴 FDSearch） */
+/** 工號只用於 FDSearch；刪除一律用設備 PID */
 async function deleteByCustomHumanId(deviceId, employeeNo, libMeta = null) {
   const lib = libMeta || (await ensureFaceLib(deviceId));
   const fdid = String(lib.FDID || "").trim();
@@ -679,13 +712,24 @@ async function deleteByCustomHumanId(deviceId, employeeNo, libMeta = null) {
     throw createApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, "缺少工號");
   }
 
+  const matches = await searchByCustomHumanId(deviceId, humanId, lib);
+  const pids = collectPidsFromSearchMatches(matches);
+  if (pids.length === 0) {
+    return { success: true, deleted: 0 };
+  }
+
   const { client } = await getCameraDeviceAndClient(deviceId);
-  const result = await deleteOneFacePicture(client, {
-    fdid,
-    pid: humanId,
-    faceLibType: String(lib.faceLibType || DEFAULT_FACE_LIB_TYPE),
-  });
-  return { success: true, deleted: result.missing ? 0 : 1 };
+  const faceLibType = String(lib.faceLibType || DEFAULT_FACE_LIB_TYPE);
+  let deleted = 0;
+  for (const pid of pids) {
+    const result = await deleteOneFacePicture(client, {
+      fdid,
+      pid,
+      faceLibType,
+    });
+    if (!result.missing) deleted += 1;
+  }
+  return { success: true, deleted };
 }
 
 async function ensureFaceContrast(deviceId, options = {}) {
@@ -763,4 +807,5 @@ module.exports = {
   buildFdLibPicturePath,
   buildFdDeleteDataXml,
   buildFdSearchXml,
+  collectPidsFromSearchMatches,
 };

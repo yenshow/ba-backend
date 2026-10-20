@@ -402,17 +402,18 @@ function createIsapiClient(deviceConfig, options = {}) {
       });
     }
 
-    const contentType =
-      headers["Content-Type"] || headers["content-type"] || "application/json";
     const config = {
       method,
       url,
-      headers: { "Content-Type": contentType, ...headers },
+      headers: { ...headers },
       validateStatus: (status) => status < 500,
       maxRedirects: 0,
       timeout: 15000,
     };
     if (data !== undefined) {
+      if (!config.headers["Content-Type"] && !config.headers["content-type"]) {
+        config.headers["Content-Type"] = "application/json";
+      }
       config.data = typeof data === "string" ? data : JSON.stringify(data);
     }
     if (responseType) config.responseType = responseType;

@@ -1724,7 +1724,7 @@ async function syncPersonFaceToCamera(
       })
     : null;
   try {
-    // 曾同步過才先刪再傳，避免全新上傳多打 FDSearch
+    // 曾同步過才先刪再傳（刪除含 FDSearch；全新上傳略過）
     if (stateRow?.face_status || stateRow?.face_hash) {
       try {
         await withTransientRetry(
@@ -1732,6 +1732,7 @@ async function syncPersonFaceToCamera(
             isapiCameraFdLibService.deleteByCustomHumanId(
               deviceId,
               person.employeeNo,
+              libMeta,
             ),
           {
             deviceId,
@@ -1955,10 +1956,8 @@ async function syncCameraDevicesWithPersons(
     }
 
     const synced = platformSyncedByDevice.get(Number(deviceId)) || new Set();
-    const toDelete = personDeviceSyncStateService.filterDeletableEmployeeNos(
-      synced,
-      targetEmployeeNos,
-      synced,
+    const toDelete = [...synced].filter(
+      (no) => !targetEmployeeNos.has(String(no)),
     );
 
     for (const no of toDelete) {
@@ -1972,19 +1971,11 @@ async function syncCameraDevicesWithPersons(
         : null;
       try {
         await deviceOp(
-          () => isapiCameraFdLibService.deleteByCustomHumanId(deviceId, no),
+          () =>
+            isapiCameraFdLibService.deleteByCustomHumanId(deviceId, no, libMeta),
           { deviceId, employeeNo: String(no), stage: "fdLibDelete" },
         );
-        await db.query(
-          `UPDATE person_device_sync_states
-           SET face_status = NULL,
-               face_hash = NULL,
-               face_synced_at = NULL,
-               last_error_message = NULL,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE device_id = ? AND employee_no = ?`,
-          [deviceId, String(no)],
-        );
+        await personDeviceSyncStateService.deleteSyncStates(deviceId, [no]);
         reporter?.finishOp?.({
           employeeNo: String(no),
           deviceId,

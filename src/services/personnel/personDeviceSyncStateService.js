@@ -172,7 +172,7 @@ async function getStatesForDevice(deviceId, employeeNos) {
 }
 
 /**
- * 取得各設備上「平台曾同步過」的工號（person_device_sync_states 有紀錄）
+ * 取得各設備上「平台曾同步過」的工號（至少一個步驟 status 非空；全 NULL 列不算）
  * @returns {Map<number, Set<string>>}
  */
 async function getSyncedEmployeeNosByDeviceIds(deviceIds) {
@@ -189,7 +189,13 @@ async function getSyncedEmployeeNosByDeviceIds(deviceIds) {
   const rows = await db.query(
     `SELECT device_id, employee_no
      FROM person_device_sync_states
-     WHERE device_id IN (${ids.map(() => "?").join(",")})`,
+     WHERE device_id IN (${ids.map(() => "?").join(",")})
+       AND (
+         user_info_status IS NOT NULL
+         OR face_status IS NOT NULL
+         OR card_status IS NOT NULL
+         OR fingerprint_status IS NOT NULL
+       )`,
     ids,
   );
   for (const r of rows || []) {
@@ -198,6 +204,18 @@ async function getSyncedEmployeeNosByDeviceIds(deviceIds) {
     map.get(did).add(String(r.employee_no));
   }
   return map;
+}
+
+async function deleteSyncStates(deviceId, employeeNos) {
+  const nos = [
+    ...new Set((employeeNos || []).map((x) => String(x)).filter(Boolean)),
+  ];
+  if (!nos.length) return;
+  await db.query(
+    `DELETE FROM person_device_sync_states
+     WHERE device_id = ? AND employee_no = ANY(?::text[])`,
+    [Number(deviceId), nos],
+  );
 }
 
 /** 設備上應刪除的工號：不在目標名單，且平台曾推送過 */
@@ -350,6 +368,7 @@ module.exports = {
   hashFingerprintTemplate,
   getStatesForDevice,
   getSyncedEmployeeNosByDeviceIds,
+  deleteSyncStates,
   filterDeletableEmployeeNos,
   getCardNosForEmployeeNos,
   upsertStepState,

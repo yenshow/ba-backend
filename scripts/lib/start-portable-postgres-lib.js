@@ -68,13 +68,28 @@ const verifyPsqlReady = (maxAttempts = 30, delayMs = 500) => {
   }
 };
 
+/** 僅判定 TCP LISTENING；避免 findstr :5433 誤匹配 15433 等。 */
 const checkPortAvailable = (port) => {
   try {
-    const result = execWithUtf8OnWindows(`netstat -ano | findstr :${port}`, {
+    const result = execWithUtf8OnWindows("netstat -ano -p tcp", {
       stdio: "pipe",
       encoding: "utf8",
     });
-    return result.trim().length === 0;
+    const needle = `:${port}`;
+    const occupied = String(result)
+      .split(/\r?\n/)
+      .some((line) => {
+        if (!/LISTENING/i.test(line)) {
+          return false;
+        }
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 2) {
+          return false;
+        }
+        const local = parts[1];
+        return local === needle || local.endsWith(needle);
+      });
+    return !occupied;
   } catch {
     return true;
   }

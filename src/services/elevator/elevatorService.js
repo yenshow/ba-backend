@@ -16,6 +16,9 @@ const {
 } = require("./elevatorFloorModel");
 const elevatorRuntimeService = require("./elevatorRuntimeService");
 const { resolveTimeOptions } = require("../entryExit/resolveTimeOptions");
+const {
+  getOperationalDayTimeRange,
+} = require("../entryExit/operationalDayRange");
 const { formatAcsEventDisplayName } = require("../ladderSdk/acsEventLabels");
 const { aggregateElevatorLogs } = require("./elevatorLogAggregation");
 const db = require("../../database/db");
@@ -95,12 +98,9 @@ function filterLogsBySearch(logs, search) {
   });
 }
 
+/** 今日＝Asia/Taipei 營運日（與人流／車輛 resolveTimeOptions 一致） */
 function getTodayRange() {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(now);
-  end.setHours(23, 59, 59, 999);
+  const { start, end } = getOperationalDayTimeRange();
   return {
     startTime: start.toISOString(),
     endTime: end.toISOString(),

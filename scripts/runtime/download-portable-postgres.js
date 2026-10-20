@@ -195,7 +195,7 @@ function initDatabase() {
   }
 
   const postgresqlConf = getPostgresqlConfPath();
-  const dbPort = process.env.DB_PORT || "5432";
+  const dbPort = process.env.DB_PORT || "5433";
 
   let confContent = "";
   if (fs.existsSync(postgresqlConf)) {
