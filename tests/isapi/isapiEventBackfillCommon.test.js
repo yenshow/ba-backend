@@ -15,6 +15,7 @@ const {
   createDebouncedScheduler,
   mergeEventBackfillPrefs,
   isSearchCompleteStatus,
+  normalizeNvrWallClockDateTime,
 } = require("../../src/services/isapi/isapiEventBackfillCommon");
 const {
   parseFcSearchResult,
@@ -169,6 +170,19 @@ async function main() {
   } finally {
     clear();
   }
+
+  assert.equal(
+    normalizeNvrWallClockDateTime("2026-10-19T09:21:47Z"),
+    "2026-10-19T09:21:47+08:00",
+  );
+  assert.equal(
+    normalizeNvrWallClockDateTime("2026-10-19T09:21:47"),
+    "2026-10-19T09:21:47+08:00",
+  );
+  assert.equal(
+    normalizeNvrWallClockDateTime("2026-10-19T09:21:47+08:00"),
+    "2026-10-19T09:21:47+08:00",
+  );
 
   console.log("isapiEventBackfillCommon.test.js: OK");
 }

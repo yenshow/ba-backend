@@ -270,29 +270,29 @@ function buildDigestResponse({
 }
 
 function throwIfBadStatus(res) {
-  if (res.status >= 400) {
-    const fallbackBody =
-      res.data == null
-        ? ""
-        : typeof res.data === "string"
-          ? res.data.slice(0, 500)
-          : JSON.stringify(res.data).slice(0, 500);
-    const msg =
-      res.data?.message ||
-      res.data?.error ||
-      (fallbackBody
-        ? `${res.statusText || `HTTP ${res.status}`}: ${fallbackBody}`
-        : res.statusText || `HTTP ${res.status}`);
-    const status = res.status;
-    const code =
-      status >= 500
-        ? C.BAD_GATEWAY
-        : C.ACCESS_CONTROL_ISAPI_INVALID_RESPONSE;
-    throwApiError(code, msg, {
-      statusCode: status >= 400 && status <= 599 ? status : 502,
-      details: fallbackBody ? { status, body: fallbackBody } : { status },
-    });
-  }
+  if (res.status < 400) return;
+  const isStream = Boolean(res.data && typeof res.data.pipe === "function");
+  if (isStream && typeof res.data.destroy === "function") res.data.destroy();
+  const fallbackBody = isStream
+    ? ""
+    : res.data == null
+      ? ""
+      : typeof res.data === "string"
+        ? res.data.slice(0, 500)
+        : JSON.stringify(res.data).slice(0, 500);
+  const msg =
+    res.data?.message ||
+    res.data?.error ||
+    (fallbackBody
+      ? `${res.statusText || `HTTP ${res.status}`}: ${fallbackBody}`
+      : res.statusText || `HTTP ${res.status}`);
+  const status = res.status;
+  const code =
+    status >= 500 ? C.BAD_GATEWAY : C.ACCESS_CONTROL_ISAPI_INVALID_RESPONSE;
+  throwApiError(code, msg, {
+    statusCode: status >= 400 && status <= 599 ? status : 502,
+    details: fallbackBody ? { status, body: fallbackBody } : { status },
+  });
 }
 
 function buildAuthHeader(challenge, method, uri, username, password) {
@@ -388,7 +388,14 @@ function createIsapiClient(deviceConfig, options = {}) {
    * 若傳入 data 為字串且 headers 含 Content-Type: application/xml，則以 XML 送出。
    */
   async function request(options) {
-    const { method = "GET", path, data, headers = {}, responseType } = options;
+    const {
+      method = "GET",
+      path,
+      data,
+      headers = {},
+      responseType,
+      timeout,
+    } = options;
     const url = path.startsWith("http") ? path : `${baseURL}${path}`;
     const isFormData = data && typeof data.getHeaders === "function";
 
@@ -408,7 +415,9 @@ function createIsapiClient(deviceConfig, options = {}) {
       headers: { ...headers },
       validateStatus: (status) => status < 500,
       maxRedirects: 0,
-      timeout: 15000,
+      timeout: Number.isFinite(Number(timeout)) ? Number(timeout) : 15000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
     };
     if (data !== undefined) {
       if (!config.headers["Content-Type"] && !config.headers["content-type"]) {
@@ -418,8 +427,15 @@ function createIsapiClient(deviceConfig, options = {}) {
     }
     if (responseType) config.responseType = responseType;
 
+    const destroyIfStream = (payload) => {
+      if (payload && typeof payload.destroy === "function") {
+        payload.destroy();
+      }
+    };
+
     let res = await axios(config);
     if (res.status === 401 && res.headers["www-authenticate"]) {
+      destroyIfStream(res.data);
       const authHeader = res.headers["www-authenticate"];
       if (!authHeader.toLowerCase().startsWith("digest ")) {
         throwApiError(

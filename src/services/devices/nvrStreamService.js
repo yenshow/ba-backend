@@ -136,6 +136,21 @@ async function searchRecordings(nvrId, body) {
   return { nvrId, ...result };
 }
 
+async function listCalendarDays(nvrId, query) {
+  const device = await getNvrDevice(nvrId);
+  const result = await nvrIsapiService.listCalendarDays(device.config, {
+    year: query?.year,
+    month: query?.month,
+    trackIds: [
+      ...(query?.trackId != null ? [query.trackId] : []),
+      ...(query?.track_id != null ? [query.track_id] : []),
+      ...(query?.trackIds != null ? [query.trackIds] : []),
+      ...(query?.track_ids != null ? [query.track_ids] : []),
+    ],
+  });
+  return { nvrId, ...result };
+}
+
 function schedulePlaybackExpiry(sessionId) {
   const session = playbackSessions.get(sessionId);
   if (!session) return;
@@ -152,25 +167,30 @@ function schedulePlaybackExpiry(sessionId) {
   if (typeof session.timer.unref === "function") session.timer.unref();
 }
 
+function sanitizeDownloadFilename(name) {
+  const base = String(name || "nvr-recording")
+    .replace(/[^\w.\-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `${base || "nvr-recording"}.mp4`;
+}
+
+function buildDownloadFilename(nvrId, body) {
+  const trackId = body?.trackId ?? body?.track_id ?? "ch";
+  const start = body?.startTime ?? body?.start_time ?? body?.start;
+  const startStamp = nvrIsapiService.formatHikvisionTaipeiCompact(start) || "clip";
+  return sanitizeDownloadFilename(`nvr-${nvrId}-ch-${trackId}-${startStamp}`);
+}
+
 async function startPlayback(nvrId, body) {
   const device = await getNvrDevice(nvrId);
   const conn = nvrIsapiService.resolveNvrConnection(device.config);
-  let playbackURI = String(body?.playbackURI || body?.playback_uri || "").trim();
-
-  if (!playbackURI) {
-    const searched = await nvrIsapiService.searchRecordings(device.config, {
-      trackId: body?.trackId ?? body?.track_id,
-      start: body?.startTime ?? body?.start_time ?? body?.start,
-      end: body?.endTime ?? body?.end_time ?? body?.end,
-      maxResults: 1,
-    });
-    playbackURI = String(searched.matches?.[0]?.playbackURI || "").trim();
-  }
+  const playbackURI = nvrIsapiService.resolvePlaybackUri(conn, body || {});
 
   if (!playbackURI.toLowerCase().startsWith("rtsp://")) {
     throw createApiError(
       C.DEVICE_NVR_PLAYBACK_URI_MISSING,
-      "缺少有效的 playbackURI",
+      "缺少有效的 playbackURI 或 trackId／時間區間",
     );
   }
 
@@ -230,13 +250,25 @@ async function stopPlayback(nvrId, sessionId) {
   return { message: "回放已停止", sessionId: sid };
 }
 
+async function downloadRecording(nvrId, body) {
+  const device = await getNvrDevice(nvrId);
+  const payload = body && typeof body === "object" ? body : {};
+  const result = await nvrIsapiService.downloadRecording(device.config, payload);
+  return {
+    ...result,
+    filename: buildDownloadFilename(nvrId, payload),
+  };
+}
+
 module.exports = {
   listChannels,
   startChannelStream,
   stopChannelStream,
   searchRecordings,
+  listCalendarDays,
   startPlayback,
   stopPlayback,
+  downloadRecording,
   pathNameLive,
   pathNamePlayback,
   PLAYBACK_TTL_MS,

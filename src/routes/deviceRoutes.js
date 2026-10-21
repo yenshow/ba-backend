@@ -286,6 +286,19 @@ router.post(
   }),
 );
 
+router.get(
+  "/:id/nvr/calendar",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const result = await nvrStreamService.listCalendarDays(id, req.query || {});
+    res.sendSuccess(result);
+  }),
+);
+
 router.post(
   "/:id/nvr/playback/start",
   disableHttpCache,
@@ -310,6 +323,42 @@ router.post(
     const sessionId = req.body?.sessionId || req.body?.session_id;
     const result = await nvrStreamService.stopPlayback(id, sessionId);
     res.sendSuccess(result);
+  }),
+);
+
+router.post(
+  "/:id/nvr/download",
+  disableHttpCache,
+  requireFeature("surveillance"),
+  requirePermission("system.video_surveillance.stream.control"),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const result = await nvrStreamService.downloadRecording(id, req.body || {});
+    res.setHeader("Content-Type", result.contentType || "video/mp4");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.filename}"`,
+    );
+    res.setHeader("Cache-Control", "no-store");
+    if (result.contentLength) {
+      res.setHeader("Content-Length", result.contentLength);
+    }
+    const upstream = result.stream;
+    const abort = () => {
+      if (upstream && typeof upstream.destroy === "function") upstream.destroy();
+    };
+    req.on("close", abort);
+    res.on("close", abort);
+    upstream.on("error", () => {
+      abort();
+      if (!res.headersSent) {
+        res.status(502).end();
+        return;
+      }
+      res.destroy();
+    });
+    upstream.pipe(res);
   }),
 );
 

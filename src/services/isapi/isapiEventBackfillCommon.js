@@ -73,6 +73,17 @@ function formatIsapiLocalDateTime(date) {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}+08:00`;
 }
 
+/** CMSearch 常回無時區或 `Z`（設備當本地牆鐘）→ 台北 +08:00；已有偏移則原樣 */
+function normalizeNvrWallClockDateTime(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return raw;
+  const m = raw.match(
+    /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z)?$/i,
+  );
+  if (!m) return raw;
+  return `${m[1]}T${m[2]}+08:00`;
+}
+
 function pickTag(xml, tag) {
   if (!xml || typeof xml !== "string") return null;
   const re = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "i");
@@ -215,6 +226,7 @@ module.exports = {
   parseEventBackfillFields,
   resolveBackfillTimeRange,
   formatIsapiLocalDateTime,
+  normalizeNvrWallClockDateTime,
   pickTag,
   pickBlocks,
   decodeXmlEntities,
