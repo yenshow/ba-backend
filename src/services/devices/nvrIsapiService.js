@@ -400,13 +400,43 @@ function resolvePlaybackUri(conn, body) {
   return built || "";
 }
 
+function extractTrackIdFromUri(uri) {
+  const m = String(uri || "").match(/\/(?:tracks|Channels)\/(\d+)/i);
+  return m ? Number(m[1]) : NaN;
+}
+
+/** 下載只依指定起迄組 RTSP，不用搜尋檔名以免整段倒出 */
+function resolveDownloadUri(conn, body) {
+  const start = body?.startTime ?? body?.start_time ?? body?.start;
+  const end = body?.endTime ?? body?.end_time ?? body?.end;
+  const fromUri = String(body?.playbackURI || body?.playback_uri || "").trim();
+  const trackId = Number(body?.trackId ?? body?.track_id) || extractTrackIdFromUri(fromUri);
+  return (
+    buildPlaybackRtspUrl({
+      host: conn.host,
+      rtspPort: conn.rtspPort,
+      trackId,
+      start,
+      end,
+    }) || ""
+  );
+}
+
 async function downloadRecording(config, body) {
   const { client, conn } = createNvrClient(config);
-  const playbackURI = resolvePlaybackUri(conn, body);
+  const start = body?.startTime ?? body?.start_time ?? body?.start;
+  const end = body?.endTime ?? body?.end_time ?? body?.end;
+  if (!start || !end) {
+    throw createApiError(
+      C.DEVICE_NVR_PLAYBACK_URI_MISSING,
+      "下載需指定 startTime／endTime 時間範圍",
+    );
+  }
+  const playbackURI = resolveDownloadUri(conn, body);
   if (!playbackURI.toLowerCase().startsWith("rtsp://")) {
     throw createApiError(
       C.DEVICE_NVR_PLAYBACK_URI_MISSING,
-      "缺少有效的 playbackURI 或 trackId／時間區間",
+      "缺少有效的 trackId／時間區間",
     );
   }
   const xmlUri = stripRtspAuth(playbackURI);

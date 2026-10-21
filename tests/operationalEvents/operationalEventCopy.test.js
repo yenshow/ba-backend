@@ -69,6 +69,15 @@ const run = () => {
     }),
     "遠岫 - 宿舍門口：重置統計 → 2 場次",
   );
+  assert.equal(
+    summaryRollCall({
+      action: "排休",
+      placeLabel: "遠岫 - 宿舍門口",
+      detail: "王小明",
+      ruleName: "早班",
+    }),
+    "遠岫 - 宿舍門口：排休（早班） → 王小明",
+  );
 
   // 門禁：有名／僅工號／皆空
   assert.equal(

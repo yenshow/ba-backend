@@ -1626,7 +1626,7 @@ async function initSchema() {
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CHECK (window_end > window_start),
+        CHECK (window_end <> window_start),
         CHECK (cardinality(weekdays) > 0)
       )
     `);
@@ -1652,7 +1652,7 @@ async function initSchema() {
         person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
         employee_no VARCHAR(64) NOT NULL,
         full_name VARCHAR(200),
-        status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'present', 'absent')),
+        status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'present', 'absent', 'leave')),
         source VARCHAR(16) CHECK (source IS NULL OR source IN ('face', 'manual')),
         checked_in_at TIMESTAMPTZ,
         event_id BIGINT,

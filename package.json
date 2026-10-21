@@ -45,6 +45,7 @@
     "test:personnel-groups-members-api": "node tests/personnel/personnelGroupsAndMembersApi.test.js",
     "test:personnel-apply-sync-api": "node tests/personnel/personnelMembersApplyAndSyncApi.test.js",
     "test:operational-event-copy": "node tests/operationalEvents/operationalEventCopy.test.js",
+    "test:roll-call-window": "node tests/rollCall/rollCallWindow.test.js",
     "test:alert-copy": "node tests/alerts/alertCopy.test.js",
     "test:alert-status-correctness": "node tests/alerts/alertStatusCorrectness.verify.js",
     "test:isapi-picture-binding": "node tests/accessControl/isapiPictureBinding.test.js",

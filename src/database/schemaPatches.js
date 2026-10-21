@@ -976,7 +976,7 @@ async function ensureRollCallTables(pool) {
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CHECK (window_end > window_start),
+      CHECK (window_end <> window_start),
       CHECK (cardinality(weekdays) > 0)
     )
   `);
@@ -1067,7 +1067,32 @@ async function ensureRollCallTables(pool) {
   await pool.query(`
     ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids
   `);
+  // 應到一律用地點門禁名單；不再建規則綁群組表
   await pool.query(`DROP TABLE IF EXISTS roll_call_rule_groups`);
+  await pool.query(`
+    DO $$
+    DECLARE
+      r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        WHERE t.relname = 'roll_call_rules'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) ~ 'window_end\\s*>\\s*window_start'
+          AND pg_get_constraintdef(c.oid) !~ '<>'
+      LOOP
+        EXECUTE format('ALTER TABLE roll_call_rules DROP CONSTRAINT IF EXISTS %I', r.conname);
+      END LOOP;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'roll_call_rules_window_neq'
+      ) THEN
+        ALTER TABLE roll_call_rules
+          ADD CONSTRAINT roll_call_rules_window_neq CHECK (window_end <> window_start);
+      END IF;
+    END $$
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS roll_call_sessions (
       id SERIAL PRIMARY KEY,
@@ -1097,7 +1122,7 @@ async function ensureRollCallTables(pool) {
       person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
       employee_no VARCHAR(64) NOT NULL,
       full_name VARCHAR(200),
-      status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'present', 'absent')),
+      status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'present', 'absent', 'leave')),
       source VARCHAR(16) CHECK (source IS NULL OR source IN ('face', 'manual')),
       checked_in_at TIMESTAMPTZ,
       event_id BIGINT,
@@ -1117,6 +1142,32 @@ async function ensureRollCallTables(pool) {
   await pool.query(`
     ALTER TABLE roll_call_sessions
       ADD COLUMN IF NOT EXISTS stats_reset_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    DO $$
+    DECLARE
+      r RECORD;
+    BEGIN
+      FOR r IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        WHERE t.relname = 'roll_call_attendance'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) ILIKE '%pending%'
+          AND pg_get_constraintdef(c.oid) NOT ILIKE '%leave%'
+      LOOP
+        EXECUTE format('ALTER TABLE roll_call_attendance DROP CONSTRAINT IF EXISTS %I', r.conname);
+      END LOOP;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'roll_call_attendance_status_check'
+      ) THEN
+        ALTER TABLE roll_call_attendance
+          ADD CONSTRAINT roll_call_attendance_status_check
+          CHECK (status IN ('pending', 'present', 'absent', 'leave'));
+      END IF;
+    END $$
   `);
 }
 

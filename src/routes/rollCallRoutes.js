@@ -124,4 +124,18 @@ router.get(
   }),
 );
 
+router.post(
+  "/sessions/:id/attendance/:personId/leave",
+  requirePermission("system.roll_call.attendance.leave"),
+  asyncHandler(async (req, res) => {
+    const session = await rollCallService.setAttendanceLeave(
+      Number(req.params.id),
+      Number(req.params.personId),
+      req.body?.onLeave !== false && req.body?.on_leave !== false,
+      { actorUserId: req.user?.id ?? null },
+    );
+    res.sendSuccess({ session });
+  }),
+);
+
 module.exports = router;

@@ -1,6 +1,6 @@
 /**
  * 時段簽到：地點規則、當日場次快照、門禁人臉成功比對、結場。
- * 時區 Asia/Taipei。時段不跨日。通知不在本模組。
+ * 時區 Asia/Taipei。可跨日（結束早於開始）。通知不在本模組。
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
@@ -23,19 +23,19 @@ const {
 const {
   loadPlaceContextByLocationId,
 } = require("../operationalEvents/operationalEventPlaceContext");
+const { normalizeRollCallStatLabels } = require("../entryExit/statLabels");
 const {
-  normalizeRollCallStatLabels,
-} = require("../entryExit/statLabels");
-
-const WEEKDAY_MAP = {
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-  Sun: 7,
-};
+  taipeiParts,
+  timeToMinutes,
+  minutesToTime,
+  formatPgDate,
+  formatTime,
+  addDaysYmd,
+  normalizeWeekdays,
+  windowsOverlapOnWeek,
+  resolveActiveWindow,
+  pickPrimarySession,
+} = require("./rollCallWindow");
 
 let reconcileChain = Promise.resolve();
 
@@ -54,50 +54,6 @@ const normalizeMediaPath = (raw) => {
   return value.startsWith("/") ? value : `/${value}`;
 };
 
-const taipeiParts = (date = new Date()) => {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Taipei",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    weekday: "short",
-  }).formatToParts(date);
-  const get = (type) => parts.find((part) => part.type === type)?.value || "";
-  const hour = Number(get("hour"));
-  const minute = Number(get("minute"));
-  return {
-    date: `${get("year")}-${get("month")}-${get("day")}`,
-    minutes: (Number.isFinite(hour) ? hour : 0) * 60 + (Number.isFinite(minute) ? minute : 0),
-    weekday: WEEKDAY_MAP[get("weekday")] || 1,
-  };
-};
-
-const timeToMinutes = (value) => {
-  const text = String(value ?? "").trim();
-  const match = /^(\d{1,2}):(\d{2})/.exec(text);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return hour * 60 + minute;
-};
-
-const minutesToTime = (minutes) => {
-  const hour = String(Math.floor(minutes / 60)).padStart(2, "0");
-  const minute = String(minutes % 60).padStart(2, "0");
-  return `${hour}:${minute}:00`;
-};
-
-const taipeiInstant = (dateStr, minutes) => {
-  const hour = String(Math.floor(minutes / 60)).padStart(2, "0");
-  const minute = String(minutes % 60).padStart(2, "0");
-  return `${dateStr}T${hour}:${minute}:00+08:00`;
-};
-
 const normalizeIds = (list) => [
   ...new Set(
     (Array.isArray(list) ? list : [])
@@ -106,17 +62,6 @@ const normalizeIds = (list) => [
       .map((n) => Math.trunc(n)),
   ),
 ];
-
-const normalizeWeekdays = (list) => {
-  const days = [
-    ...new Set(
-      (Array.isArray(list) ? list : [])
-        .map((value) => Number(value))
-        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7),
-    ),
-  ].sort((a, b) => a - b);
-  return days;
-};
 
 const parseSystemConfig = (config) => {
   if (typeof config === "string") {
@@ -132,31 +77,6 @@ const parseSystemConfig = (config) => {
 const parseDeviceIds = (config) => {
   const raw = parseSystemConfig(config);
   return normalizeIds(raw.device_ids);
-};
-
-const rangesOverlap = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
-
-const weekdaysOverlap = (left, right) => {
-  const set = new Set(left);
-  return right.some((day) => set.has(day));
-};
-
-const formatPgDate = (value) => {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    const day = String(value.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-  const text = String(value ?? "");
-  const match = /^(\d{4}-\d{2}-\d{2})/.exec(text);
-  return match ? match[1] : text.slice(0, 10);
-};
-
-const formatTime = (value) => {
-  const minutes = timeToMinutes(value);
-  if (minutes == null) return String(value ?? "");
-  return minutesToTime(minutes).slice(0, 5);
 };
 
 const mapRule = (row) => ({
@@ -205,11 +125,19 @@ const assertNoOverlap = async ({
     const otherDays = Array.isArray(row.weekdays)
       ? row.weekdays.map((day) => Number(day))
       : [];
-    if (!weekdaysOverlap(weekdays, otherDays)) continue;
     const otherStart = timeToMinutes(row.window_start);
     const otherEnd = timeToMinutes(row.window_end);
     if (otherStart == null || otherEnd == null) continue;
-    if (rangesOverlap(startMin, endMin, otherStart, otherEnd)) {
+    if (
+      windowsOverlapOnWeek(
+        startMin,
+        endMin,
+        weekdays,
+        otherStart,
+        otherEnd,
+        otherDays,
+      )
+    ) {
       throwApiError(C.CONFLICT, `與啟用中的規則「${row.name}」時段重疊`);
     }
   }
@@ -230,8 +158,8 @@ const parseRuleInput = (body) => {
   if (startMin == null || endMin == null) {
     throwApiError(C.VALIDATION_REQUIRED, "時段格式須為 HH:mm");
   }
-  if (endMin <= startMin) {
-    throwApiError(C.VALIDATION_REQUIRED, "結束時間須晚於開始時間，且不可跨日");
+  if (endMin === startMin) {
+    throwApiError(C.VALIDATION_REQUIRED, "結束時間不可等於開始時間");
   }
   const weekdays = normalizeWeekdays(body?.weekdays);
   if (weekdays.length === 0) {
@@ -240,7 +168,9 @@ const parseRuleInput = (body) => {
   const enabled = body?.enabled !== false;
   const ruleIdRaw = body?.id;
   const ruleId =
-    ruleIdRaw != null && Number.isFinite(Number(ruleIdRaw)) && Number(ruleIdRaw) > 0
+    ruleIdRaw != null &&
+    Number.isFinite(Number(ruleIdRaw)) &&
+    Number(ruleIdRaw) > 0
       ? Math.trunc(Number(ruleIdRaw))
       : null;
   return {
@@ -385,13 +315,14 @@ const replaceLocationRules = async (locationId, rulesInput) => {
     const current = enabledParsed[i];
     for (let j = i + 1; j < enabledParsed.length; j++) {
       const other = enabledParsed[j];
-      if (!weekdaysOverlap(current.weekdays, other.weekdays)) continue;
       if (
-        rangesOverlap(
+        windowsOverlapOnWeek(
           current.startMin,
           current.endMin,
+          current.weekdays,
           other.startMin,
           other.endMin,
+          other.weekdays,
         )
       ) {
         throwApiError(
@@ -415,7 +346,8 @@ const replaceLocationRules = async (locationId, rulesInput) => {
     const keepIds = new Set();
 
     for (const input of parsed) {
-      if (input.id && existingIds.has(input.id)) {
+      let ruleId = input.id && existingIds.has(input.id) ? input.id : null;
+      if (ruleId) {
         await tx(
           `UPDATE roll_call_rules
            SET name = ?, window_start = ?::time, window_end = ?::time,
@@ -431,7 +363,6 @@ const replaceLocationRules = async (locationId, rulesInput) => {
             id,
           ],
         );
-        keepIds.add(input.id);
       } else {
         const rows = await tx(
           `INSERT INTO roll_call_rules
@@ -447,13 +378,16 @@ const replaceLocationRules = async (locationId, rulesInput) => {
             input.enabled,
           ],
         );
-        keepIds.add(Number(rows[0].id));
+        ruleId = Number(rows[0].id);
       }
+      keepIds.add(ruleId);
     }
 
     const toDelete = [...existingIds].filter((ruleId) => !keepIds.has(ruleId));
     if (toDelete.length) {
-      await tx(`DELETE FROM roll_call_rules WHERE id = ANY(?::int[])`, [toDelete]);
+      await tx(`DELETE FROM roll_call_rules WHERE id = ANY(?::int[])`, [
+        toDelete,
+      ]);
     }
   });
 
@@ -534,7 +468,11 @@ const applyFaceMatches = async (
   if (statsResetAt) {
     const resetMs = new Date(statsResetAt).getTime();
     const startMs = Date.parse(startIso);
-    if (Number.isFinite(resetMs) && Number.isFinite(startMs) && resetMs > startMs) {
+    if (
+      Number.isFinite(resetMs) &&
+      Number.isFinite(startMs) &&
+      resetMs > startMs
+    ) {
       effectiveStart = new Date(statsResetAt).toISOString();
     }
   }
@@ -670,7 +608,10 @@ const ensureSession = async (rule, dateStr) => {
     [rule.id, dateStr],
   );
   if (inserted?.length) {
-    await snapshotAttendance(Number(inserted[0].id), Number(rule.location_id));
+    await snapshotAttendance(
+      Number(inserted[0].id),
+      Number(rule.location_id ?? rule.locationId),
+    );
     return Number(inserted[0].id);
   }
   const existing = await db.query(
@@ -681,26 +622,17 @@ const ensureSession = async (rule, dateStr) => {
 };
 
 const reconcileRule = async (rule, deviceIds, now = new Date()) => {
-  const parts = taipeiParts(now);
-  const weekdays = Array.isArray(rule.weekdays)
-    ? rule.weekdays.map((day) => Number(day))
-    : [];
-  if (!rule.enabled || !weekdays.includes(parts.weekday)) return;
-  const startMin = timeToMinutes(rule.window_start ?? rule.windowStart);
-  const endMin = timeToMinutes(rule.window_end ?? rule.windowEnd);
-  if (startMin == null || endMin == null) return;
-  if (parts.minutes < startMin) return;
-  const sessionId = await ensureSession(rule, parts.date);
+  const window = resolveActiveWindow(rule, now);
+  if (!window) return;
+  const sessionId = await ensureSession(rule, window.sessionDate);
   if (!sessionId) return;
-  // 開場後補齊後來才加入地點名單的應到人員
-  await snapshotAttendance(sessionId, Number(rule.location_id));
+  const locationId = Number(rule.location_id ?? rule.locationId);
+  await snapshotAttendance(sessionId, locationId);
   const sessionMeta = await db.query(
     `SELECT stats_reset_at FROM roll_call_sessions WHERE id = ? LIMIT 1`,
     [sessionId],
   );
-  const startIso = taipeiInstant(parts.date, startMin);
-  const endIso = taipeiInstant(parts.date, endMin);
-  const oePlace = await loadRollCallOeContext(Number(rule.location_id));
+  const oePlace = await loadRollCallOeContext(locationId);
   const oeCtx = {
     locationId: oePlace.locationId,
     systemId: oePlace.systemId,
@@ -711,12 +643,12 @@ const reconcileRule = async (rule, deviceIds, now = new Date()) => {
   await applyFaceMatches(
     sessionId,
     deviceIds,
-    startIso,
-    endIso,
+    window.startIso,
+    window.endIso,
     sessionMeta?.[0]?.stats_reset_at || null,
     oeCtx,
   );
-  if (Date.now() >= Date.parse(endIso)) {
+  if (Date.now() >= Date.parse(window.endIso)) {
     await closeSession(sessionId, oeCtx);
   }
 };
@@ -754,7 +686,7 @@ const countBySession = async (sessionIds) => {
   if (!sessionIds.length) return map;
   const rows = await db.query(
     `SELECT session_id,
-            COUNT(*)::int AS expected,
+            COUNT(*) FILTER (WHERE status <> 'leave')::int AS expected,
             COUNT(*) FILTER (WHERE status = 'present')::int AS present
      FROM roll_call_attendance
      WHERE session_id = ANY(?::int[])
@@ -781,7 +713,7 @@ const unitsBySession = async (sessionIds) => {
     `SELECT a.session_id,
             COALESCE(p.person_group_id, 0)::int AS group_id,
             COALESCE(NULLIF(BTRIM(MAX(pg.name)), ''), ?) AS group_name,
-            COUNT(*)::int AS expected,
+            COUNT(*) FILTER (WHERE a.status <> 'leave')::int AS expected,
             COUNT(*) FILTER (WHERE a.status = 'present')::int AS present
      FROM roll_call_attendance a
      INNER JOIN persons p ON p.id = a.person_id
@@ -816,16 +748,6 @@ const unitsBySession = async (sessionIds) => {
     map.set(sid, list);
   }
   return map;
-};
-
-const pickPrimarySession = (sessions) => {
-  if (!Array.isArray(sessions) || sessions.length === 0) return null;
-  return (
-    sessions.find((item) => item.status === "open") ||
-    sessions.find((item) => item.status === "closed") ||
-    sessions[0] ||
-    null
-  );
 };
 
 /** 地點應到名單 → 單位格（時段尚未開始預覽，同人流 groupPersonsByPersonGroup） */
@@ -864,19 +786,23 @@ const getToday = async () => {
     [],
   );
   const rules = await listRules();
+  const yesterday = addDaysYmd(parts.date, -1);
   const sessions = await db.query(
     `SELECT s.*, r.name AS rule_name, r.location_id,
             r.window_start, r.window_end, r.weekdays
      FROM roll_call_sessions s
      INNER JOIN roll_call_rules r ON r.id = s.rule_id
-     WHERE s.session_date = ?::date`,
-    [parts.date],
+     WHERE s.session_date IN (?::date, ?::date)`,
+    [parts.date, yesterday],
   );
   const sessionIds = (sessions || []).map((row) => Number(row.id));
   const counts = await countBySession(sessionIds);
   const unitsMap = await unitsBySession(sessionIds);
-  const sessionByRule = new Map(
-    (sessions || []).map((row) => [Number(row.rule_id), row]),
+  const sessionByKey = new Map(
+    (sessions || []).map((row) => [
+      `${Number(row.rule_id)}:${formatPgDate(row.session_date)}`,
+      row,
+    ]),
   );
 
   const locationPayloads = [];
@@ -888,11 +814,8 @@ const getToday = async () => {
     const locationRules = rules.filter(
       (rule) => rule.locationId === locationId,
     );
-    const todayRules = locationRules.filter(
-      (rule) => rule.enabled && rule.weekdays.includes(parts.weekday),
-    );
-    const sessionSummaries = todayRules.map((rule) => {
-      const session = sessionByRule.get(rule.id);
+    const buildSummary = (rule, sessionDate) => {
+      const session = sessionByKey.get(`${rule.id}:${sessionDate}`);
       const tally = session ? counts.get(Number(session.id)) : null;
       const hasSession = Boolean(session);
       return {
@@ -902,20 +825,32 @@ const getToday = async () => {
         windowStart: rule.windowStart,
         windowEnd: rule.windowEnd,
         status: hasSession ? session.status : "not_started",
-        sessionDate: parts.date,
+        sessionDate,
         expectedCount: hasSession
           ? (tally?.expectedCount ?? 0)
           : rosterExpected,
         presentCount: hasSession ? (tally?.presentCount ?? 0) : 0,
-        absentCount: hasSession
-          ? (tally?.absentCount ?? 0)
-          : rosterExpected,
+        absentCount: hasSession ? (tally?.absentCount ?? 0) : rosterExpected,
       };
-    });
+    };
+    const sessionSummaries = [];
+    const seen = new Set();
+    for (const rule of locationRules) {
+      if (!rule.enabled) continue;
+      if (rule.weekdays.includes(parts.weekday)) {
+        const key = `${rule.id}:${parts.date}`;
+        sessionSummaries.push(buildSummary(rule, parts.date));
+        seen.add(key);
+      }
+      const active = resolveActiveWindow(rule);
+      if (active && !seen.has(`${rule.id}:${active.sessionDate}`)) {
+        sessionSummaries.push(buildSummary(rule, active.sessionDate));
+        seen.add(`${rule.id}:${active.sessionDate}`);
+      }
+    }
     const primary = pickPrimarySession(sessionSummaries);
-    const sessionUnits =
-      primary?.id != null ? unitsMap.get(primary.id) || [] : [];
-    const units = sessionUnits.length > 0 ? sessionUnits : rosterUnits;
+    const units =
+      primary?.id != null ? unitsMap.get(primary.id) || [] : rosterUnits;
     const cfg = parseSystemConfig(location.system_config);
     locationPayloads.push({
       locationId,
@@ -943,20 +878,37 @@ const resetLocationToday = async (locationId, options = {}) => {
   await assertLocationIsRollCall(id);
   await reconcileTodayQueued();
   const parts = taipeiParts();
-  const sessions = await db.query(
-    `SELECT s.id
+  const yesterday = addDaysYmd(parts.date, -1);
+  const sessionRows = await db.query(
+    `SELECT s.id, s.session_date, r.id AS rule_id, r.name,
+            r.window_start, r.window_end, r.weekdays, r.location_id
      FROM roll_call_sessions s
      INNER JOIN roll_call_rules r ON r.id = s.rule_id
-     WHERE r.location_id = ? AND s.session_date = ?::date`,
-    [id, parts.date],
+     WHERE r.location_id = ? AND s.session_date IN (?::date, ?::date)`,
+    [id, parts.date, yesterday],
   );
+  const sessions = [];
+  for (const row of sessionRows || []) {
+    const sessionDate = formatPgDate(row.session_date);
+    if (sessionDate === parts.date) {
+      sessions.push(row);
+      continue;
+    }
+    const active = resolveActiveWindow({
+      enabled: true,
+      weekdays: row.weekdays,
+      window_start: row.window_start,
+      window_end: row.window_end,
+    });
+    if (active && active.sessionDate === sessionDate) sessions.push(row);
+  }
   const resetAt = new Date();
-  for (const row of sessions || []) {
+  for (const row of sessions) {
     const sessionId = Number(row.id);
     await db.query(
       `UPDATE roll_call_attendance
        SET status = 'pending', source = NULL, checked_in_at = NULL, event_id = NULL
-       WHERE session_id = ?`,
+       WHERE session_id = ? AND status <> 'leave'`,
       [sessionId],
     );
     await db.query(
@@ -967,7 +919,7 @@ const resetLocationToday = async (locationId, options = {}) => {
     );
     await snapshotAttendance(sessionId, id);
   }
-  const resetSessionCount = (sessions || []).length;
+  const resetSessionCount = sessions.length;
   const oePlace = await loadRollCallOeContext(id);
   const actorUserId =
     options.actorUserId != null && Number.isFinite(Number(options.actorUserId))
@@ -979,8 +931,7 @@ const resetLocationToday = async (locationId, options = {}) => {
     systemId: oePlace.systemId,
     placeLabel: oePlace.placeLabel,
     action: "重置統計",
-    detail:
-      resetSessionCount > 0 ? `${resetSessionCount} 場次` : "無今日場次",
+    detail: resetSessionCount > 0 ? `${resetSessionCount} 場次` : "無今日場次",
     rollCallAction: "stats_reset",
     actorUserId,
     refTable: "locations",
@@ -1015,8 +966,10 @@ const resetLocationToday = async (locationId, options = {}) => {
   };
 };
 
-const getSession = async (sessionId) => {
-  await reconcileTodayQueued();
+const getSession = async (sessionId, options = {}) => {
+  if (options.reconcile !== false) {
+    await reconcileTodayQueued();
+  }
   const rows = await db.query(
     `SELECT s.*, r.name AS rule_name, r.location_id,
             r.window_start, r.window_end,
@@ -1068,12 +1021,15 @@ const getSession = async (sessionId) => {
     ...tally,
     attendance: (attendance || []).map((row) => {
       const groupId =
-        row.person_group_id != null && Number.isFinite(Number(row.person_group_id))
+        row.person_group_id != null &&
+        Number.isFinite(Number(row.person_group_id))
           ? Number(row.person_group_id)
           : UNGROUPED_GROUP_ID;
       const photoUrl = normalizeMediaPath(row.face_url);
       const eventPayload =
-        row.event_payload && typeof row.event_payload === "object" ? row.event_payload : {};
+        row.event_payload && typeof row.event_payload === "object"
+          ? row.event_payload
+          : {};
       const eventPhotoUrl = shouldDisplayAccessEventPicture(
         eventPayload,
         row.event_picture_path,
@@ -1101,7 +1057,13 @@ const getSession = async (sessionId) => {
   };
 };
 
-const getHistory = async ({ limit = 50, offset = 0, startDate, endDate, locationId } = {}) => {
+const getHistory = async ({
+  limit = 50,
+  offset = 0,
+  startDate,
+  endDate,
+  locationId,
+} = {}) => {
   const safeLimit = Math.min(200, Math.max(1, Number(limit) || 50));
   const safeOffset = Math.max(0, Number(offset) || 0);
   const parts = taipeiParts();
@@ -1114,7 +1076,9 @@ const getHistory = async ({ limit = 50, offset = 0, startDate, endDate, location
       ? formatPgDate(endDate)
       : parts.date;
   const locId =
-    locationId != null && Number.isFinite(Number(locationId)) && Number(locationId) > 0
+    locationId != null &&
+    Number.isFinite(Number(locationId)) &&
+    Number(locationId) > 0
       ? Math.trunc(Number(locationId))
       : null;
 
@@ -1144,7 +1108,9 @@ const getHistory = async ({ limit = 50, offset = 0, startDate, endDate, location
      LIMIT ? OFFSET ?`,
     [...params, safeLimit, safeOffset],
   );
-  const counts = await countBySession((rows || []).map((row) => Number(row.id)));
+  const counts = await countBySession(
+    (rows || []).map((row) => Number(row.id)),
+  );
   return {
     total: Number(countRows?.[0]?.cnt) || 0,
     limit: safeLimit,
@@ -1180,7 +1146,12 @@ const getReport = async ({ startDate, endDate, locationId } = {}) => {
   const sessions = history.sessions || [];
   const sessionIds = sessions.map((s) => s.id);
   if (sessionIds.length === 0) {
-    return { startDate: history.startDate, endDate: history.endDate, sessions: [], attendance: [] };
+    return {
+      startDate: history.startDate,
+      endDate: history.endDate,
+      sessions: [],
+      attendance: [],
+    };
   }
 
   const sessionMeta = new Map(sessions.map((s) => [s.id, s]));
@@ -1202,12 +1173,15 @@ const getReport = async ({ startDate, endDate, locationId } = {}) => {
     const sessionId = Number(row.session_id);
     const meta = sessionMeta.get(sessionId);
     const groupId =
-      row.person_group_id != null && Number.isFinite(Number(row.person_group_id))
+      row.person_group_id != null &&
+      Number.isFinite(Number(row.person_group_id))
         ? Number(row.person_group_id)
         : UNGROUPED_GROUP_ID;
     const photoUrl = normalizeMediaPath(row.face_url);
     const eventPayload =
-      row.event_payload && typeof row.event_payload === "object" ? row.event_payload : {};
+      row.event_payload && typeof row.event_payload === "object"
+        ? row.event_payload
+        : {};
     const eventPhotoUrl = shouldDisplayAccessEventPicture(
       eventPayload,
       row.event_picture_path,
@@ -1245,6 +1219,84 @@ const getReport = async ({ startDate, endDate, locationId } = {}) => {
   };
 };
 
+const setAttendanceLeave = async (
+  sessionId,
+  personId,
+  onLeave,
+  options = {},
+) => {
+  const sid = Number(sessionId);
+  const pid = Number(personId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(pid) || pid <= 0) {
+    throwApiError(C.VALIDATION_REQUIRED, "場次或人員無效");
+  }
+  const sessions = await db.query(
+    `SELECT s.id, s.status, r.location_id, r.name AS rule_name, r.id AS rule_id
+     FROM roll_call_sessions s
+     INNER JOIN roll_call_rules r ON r.id = s.rule_id
+     WHERE s.id = ?
+     LIMIT 1`,
+    [sid],
+  );
+  if (!sessions?.length) throwApiError(C.NOT_FOUND, "找不到場次");
+  const session = sessions[0];
+  const rows = await db.query(
+    `SELECT id, status, full_name, employee_no
+     FROM roll_call_attendance
+     WHERE session_id = ? AND person_id = ?
+     LIMIT 1`,
+    [sid, pid],
+  );
+  if (!rows?.length) throwApiError(C.NOT_FOUND, "找不到簽到人員");
+  const row = rows[0];
+  const wantLeave = onLeave !== false && onLeave !== "false";
+  if (wantLeave) {
+    if (row.status !== "leave") {
+      await db.query(
+        `UPDATE roll_call_attendance
+         SET status = 'leave', source = 'manual', checked_in_at = NULL, event_id = NULL
+         WHERE id = ?`,
+        [row.id],
+      );
+    }
+  } else if (row.status === "leave") {
+    const nextStatus = session.status === "closed" ? "absent" : "pending";
+    await db.query(
+      `UPDATE roll_call_attendance
+       SET status = ?, source = NULL, checked_in_at = NULL, event_id = NULL
+       WHERE id = ?`,
+      [nextStatus, row.id],
+    );
+  }
+  const oePlace = await loadRollCallOeContext(Number(session.location_id));
+  const who =
+    (row.full_name != null && String(row.full_name).trim()) || row.employee_no;
+  const actorUserId =
+    options.actorUserId != null && Number.isFinite(Number(options.actorUserId))
+      ? Number(options.actorUserId)
+      : null;
+  recordRollCallOperationalEvent({
+    locationId: oePlace.locationId,
+    systemId: oePlace.systemId,
+    placeLabel: oePlace.placeLabel,
+    ruleName: session.rule_name,
+    action: wantLeave ? "排休" : "取消休假",
+    detail: who,
+    rollCallAction: wantLeave ? "leave_set" : "leave_clear",
+    actorUserId,
+    refTable: "roll_call_attendance",
+    refId: Number(row.id),
+    payloadExtra: {
+      sessionId: sid,
+      ruleId: Number(session.rule_id),
+      personId: pid,
+      employeeNo: row.employee_no,
+      result: wantLeave ? "leave" : "cleared",
+    },
+  });
+  return getSession(sid, { reconcile: false });
+};
+
 module.exports = {
   listRules,
   createRule,
@@ -1256,5 +1308,6 @@ module.exports = {
   getSession,
   getHistory,
   getReport,
+  setAttendanceLeave,
   reconcileTodayQueued,
 };

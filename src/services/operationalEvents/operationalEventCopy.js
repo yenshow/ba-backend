@@ -75,7 +75,12 @@ const bitLabel = (bitKey, address) => {
  * @param {number|null|undefined} address
  * @param {'coil'|'holding'|string} [registerType]
  */
-const resolvePointLabel = (pointKey, bitKey, address, registerType = "coil") => {
+const resolvePointLabel = (
+  pointKey,
+  bitKey,
+  address,
+  registerType = "coil",
+) => {
   if (pointKey && POINT_KEY_LABELS[pointKey]) return POINT_KEY_LABELS[pointKey];
   if (pointKey) return String(pointKey);
   const bk = bitKey != null ? String(bitKey).toLowerCase() : "";
@@ -97,7 +102,8 @@ const formatBusinessSummary = ({ placeLabel, action, detail = null }) => {
   const place = formatPlacePrefix(placeLabel);
   const act = action != null ? String(action).trim() : "";
   if (!act) return place ? `${place}事件` : "事件";
-  const tail = detail != null && String(detail).trim() !== "" ? ` → ${detail}` : "";
+  const tail =
+    detail != null && String(detail).trim() !== "" ? ` → ${detail}` : "";
   return `${place}${act}${tail}`;
 };
 
@@ -112,8 +118,7 @@ const summaryStateChange = ({
   pointLabel = null,
 }) => {
   const point =
-    pointLabel ||
-    resolvePointLabel(pointKey, bitKey, address, "coil");
+    pointLabel || resolvePointLabel(pointKey, bitKey, address, "coil");
   return `${formatPlacePrefix(placeLabel)}${point} → ${onOff(newValue)}`;
 };
 
@@ -136,8 +141,7 @@ const summaryControlWrite = ({
 }) => {
   const isHolding = registerType === "holding";
   const point =
-    pointLabel ||
-    resolvePointLabel(pointKey, bitKey, address, registerType);
+    pointLabel || resolvePointLabel(pointKey, bitKey, address, registerType);
   const place = formatPlacePrefix(placeLabel);
 
   if (batchCount != null && batchCount > 1) {
@@ -187,9 +191,15 @@ const summaryRemoteControlWrite = ({
   const name = deviceName || defaultDeviceName;
   const semantic = cmdLabels[cmd] || `${unknownCmdLabel} ${cmd}`;
   if (success) {
-    return formatBusinessSummary({ placeLabel, action: semantic, detail: name });
+    return formatBusinessSummary({
+      placeLabel,
+      action: semantic,
+      detail: name,
+    });
   }
-  const reason = errorMessage ? `（${String(errorMessage).slice(0, 120)}）` : "";
+  const reason = errorMessage
+    ? `（${String(errorMessage).slice(0, 120)}）`
+    : "";
   return formatBusinessSummary({
     placeLabel,
     action: `${semantic}失敗`,
@@ -265,7 +275,7 @@ const summaryPeopleCounting = ({
 
 /**
  * 時段簽到（roll_call）
- * action 例：人臉簽到／場次結場／重置統計；有規則名則加括號
+ * action 例：人臉簽到／場次結場／重置統計／排休／取消休假；有規則名則加括號
  */
 const summaryRollCall = ({
   action,
@@ -286,9 +296,13 @@ const summaryRollCall = ({
  * 車輛過車
  * allowResult === 0 → 過車拒絕；1 → 過車；其餘維持過車
  */
-const summaryVehicle = ({ plate, laneType, placeLabel = null, allowResult = null }) => {
-  const dir =
-    laneType === 1 ? "進場" : laneType === 2 ? "出場" : null;
+const summaryVehicle = ({
+  plate,
+  laneType,
+  placeLabel = null,
+  allowResult = null,
+}) => {
+  const dir = laneType === 1 ? "進場" : laneType === 2 ? "出場" : null;
   const plateText = plate != null ? String(plate).trim() : "";
   const detail = plateText
     ? dir
@@ -315,8 +329,7 @@ const summaryElevator = ({
     formatAcsEventDisplayName(eventName, major, minor) ||
     (eventName ? String(eventName) : null) ||
     `${major}/${minor}`;
-  const floorHint =
-    floor != null && floor !== "" ? String(floor).trim() : null;
+  const floorHint = floor != null && floor !== "" ? String(floor).trim() : null;
   return formatBusinessSummary({
     placeLabel,
     action: label,
@@ -329,10 +342,7 @@ const summaryElevator = ({
  * 順序：eventName → summary 的 eventType= → category → type
  */
 const resolveIntercomEventKey = (message = {}) => {
-  const direct =
-    message.eventName ||
-    message.event_name ||
-    null;
+  const direct = message.eventName || message.event_name || null;
   if (direct != null && String(direct).trim() !== "") {
     return String(direct).trim();
   }
