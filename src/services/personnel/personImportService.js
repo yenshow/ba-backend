@@ -3,6 +3,13 @@ const fs = require("fs").promises;
 const ExcelJS = require("exceljs");
 const AdmZip = require("adm-zip");
 const personnelService = require("./personnelService");
+const personLicensePlateService = require("./personLicensePlateService");
+const {
+  getProfileSchema,
+  getImportAliases,
+  normalizeKey,
+  asCustomFieldsObject,
+} = require("./personnelProfileSchema");
 const {
   PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES,
   formatPersonnelFaceImportSourceMaxSizeLabel,
@@ -43,13 +50,6 @@ const IMPORT_TEMPLATE_ROWS = [
     車牌: "",
   },
 ];
-
-function normalizeKey(k) {
-  return String(k || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "");
-}
 
 function pick(obj, keys) {
   for (const k of keys) {
@@ -146,6 +146,16 @@ const getCardNoFromRow = (row) => pick(row, ["卡號", "cardNo", "card_no"]);
 const getLicensePlatesFromRow = (row) =>
   pick(row, ["車牌", "licensePlates", "license_plates", "plateNumber"]);
 
+const pickCustomFieldsFromRow = (row, fields) => {
+  const result = {};
+  for (const field of fields || []) {
+    const raw = pick(row, getImportAliases(field));
+    if (raw === undefined) continue;
+    result[field.key] = String(raw);
+  }
+  return result;
+};
+
 function parseLicensePlatesFromCell(raw) {
   if (raw == null || String(raw).trim() === "") return [];
   return String(raw)
@@ -175,6 +185,8 @@ async function executeBatchImport({
   }
 
   const rows = await rowsFromExcelBuffer(excelBuffer);
+  const profileSchema = await getProfileSchema();
+  const enabledFields = profileSchema.fields || [];
   let zipIndex = new Map();
   if (zipBuffer && Buffer.isBuffer(zipBuffer)) {
     try {
@@ -218,11 +230,20 @@ async function executeBatchImport({
     try {
       const existing = await personnelService.getPersonByEmployeeNo(employeeNo);
       const isUpdate = Boolean(existing && existing.id);
+      const customFields = pickCustomFieldsFromRow(row, enabledFields);
+      const hasCustomFields = Object.keys(customFields).length > 0;
 
       const person = isUpdate
-        ? await personnelService.updatePerson(existing.id, { fullName })
+        ? await personnelService.updatePerson(existing.id, {
+            fullName,
+            ...(hasCustomFields ? { customFields } : {}),
+          })
         : await personnelService.createPerson(
-            { employeeNo, fullName },
+            {
+              employeeNo,
+              fullName,
+              ...(hasCustomFields ? { customFields } : {}),
+            },
             createdBy,
           );
 
@@ -330,12 +351,106 @@ async function executeBatchImport({
   };
 }
 
+function getImportSpreadsheetHeaders(fields) {
+  return [...IMPORT_HEADERS, ...(fields || []).map((field) => field.label)];
+}
+
+function getExportSpreadsheetHeaders(fields) {
+  return [...getImportSpreadsheetHeaders(fields), "群組", "狀態"];
+}
+
+function toExportDateOnly(value) {
+  const s = String(value || "").trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : "";
+}
+
+function readAccessControlExport(person) {
+  const config = asCustomFieldsObject(person?.config);
+  const ac = asCustomFieldsObject(config.access_control);
+  const validity = asCustomFieldsObject(ac.validity);
+  const cards = Array.isArray(ac.cards) ? ac.cards : [];
+  const firstCard = cards.find((card) => String(card?.cardNo || "").trim());
+  const longTerm = validity.longTerm !== false;
+  return {
+    beginDate: longTerm ? "" : toExportDateOnly(validity.beginTime),
+    endDate: longTerm ? "" : toExportDateOnly(validity.endTime),
+    cardNo: String(firstCard?.cardNo || ac.cardNo || "").trim(),
+  };
+}
+
+function buildPersonExportRow(person, fields, plates) {
+  const ac = readAccessControlExport(person);
+  const custom = asCustomFieldsObject(person?.custom_fields);
+  const row = {
+    ID: person?.employee_no ?? "",
+    姓名: person?.full_name ?? "",
+    有效起始日: ac.beginDate,
+    有效結束日: ac.endDate,
+    門禁密碼: "",
+    卡號: ac.cardNo,
+    車牌: (plates || []).join(","),
+    群組: String(person?.group_name || "").trim() || "未分組",
+    狀態: person?.status === "inactive" ? "停用" : "啟用",
+  };
+  for (const field of fields || []) {
+    const value = custom[field.key];
+    row[field.label] = value == null ? "" : String(value);
+  }
+  return row;
+}
+
+async function listAllPersonsForExport(filters, sortOrder) {
+  const items = [];
+  let offset = 0;
+  const limit = 200;
+  while (true) {
+    const page = await personnelService.getPersonsPaged(filters, {
+      limit,
+      offset,
+      sortOrder,
+    });
+    const chunk = Array.isArray(page?.items) ? page.items : [];
+    items.push(...chunk);
+    const total = Number(page?.total);
+    if (chunk.length < limit || (Number.isFinite(total) && items.length >= total)) {
+      break;
+    }
+    offset += chunk.length;
+  }
+  return items;
+}
+
+async function getExportXlsxBuffer(filters = {}, options = {}) {
+  const schema = await getProfileSchema();
+  const fields = schema.fields || [];
+  const headers = getExportSpreadsheetHeaders(fields);
+  const persons = await listAllPersonsForExport(filters, options.sortOrder);
+  const platesByPerson = await personLicensePlateService.listPlateNumbersByPersonIds(
+    persons.map((p) => p.id),
+  );
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("export");
+  sheet.addRow(headers);
+  for (const person of persons) {
+    const row = buildPersonExportRow(
+      person,
+      fields,
+      platesByPerson.get(Number(person.id)) || [],
+    );
+    sheet.addRow(headers.map((header) => row[header] ?? ""));
+  }
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
 async function getImportTemplateXlsxBuffer() {
+  const schema = await getProfileSchema();
+  const headers = getImportSpreadsheetHeaders(schema.fields);
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("template");
-  sheet.addRow(IMPORT_HEADERS);
+  sheet.addRow(headers);
   IMPORT_TEMPLATE_ROWS.forEach((row) => {
-    sheet.addRow(IMPORT_HEADERS.map((header) => row[header] ?? ""));
+    sheet.addRow(headers.map((header) => row[header] ?? ""));
   });
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
@@ -343,4 +458,8 @@ async function getImportTemplateXlsxBuffer() {
 module.exports = {
   executeBatchImport,
   getImportTemplateXlsxBuffer,
+  getExportXlsxBuffer,
+  getImportSpreadsheetHeaders,
+  getExportSpreadsheetHeaders,
+  buildPersonExportRow,
 };

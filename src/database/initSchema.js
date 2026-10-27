@@ -939,6 +939,7 @@ async function initSchema() {
         status VARCHAR(32) NOT NULL DEFAULT 'active',
         face_url TEXT,
         config JSONB,
+        custom_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

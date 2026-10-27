@@ -21,21 +21,16 @@ const {
 
 // ── 現場參數 ─────────────────────────────────────────────────────
 const SCRIPT_CONFIG = {
-  host: "192.168.2.212",
+  host: "192.168.2.210",
   port: 80,
   username: "admin",
   password: "Aa83124007",
   /** "all"（門禁）| "list"（PeopleCounting／人臉攝影機） */
   subscribeMode: "list",
   channelId: 1,
-  eventTypes: [
-    "PeopleCounting",
-    "faceCapture",
-    "alarmResult",
-    "AccessControllerEvent",
-  ],
+  eventTypes: ["faceCapture", "AccessControllerEvent"],
   heartbeat: null,
-  xmlNs: "http://www.hikvision.com/ver20/XMLSchema",
+  xmlNs: "http://www.isapi.org/ver20/XMLSchema",
   maxParts: 20,
   exitAfterMs: 60_000,
   showKeepAlive: false,

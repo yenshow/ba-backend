@@ -112,6 +112,34 @@ async function assertPlateNotOwnedByOther(plateNormalized, personId) {
   }
 }
 
+async function listPlateNumbersByPersonIds(personIds) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(personIds) ? personIds : [])
+        .map((id) => Number.parseInt(String(id), 10))
+        .filter((id) => Number.isFinite(id)),
+    ),
+  ];
+  const map = new Map();
+  if (ids.length === 0) return map;
+  const rows = await db.query(
+    `SELECT person_id, plate_number
+     FROM person_license_plates
+     WHERE person_id IN (${ids.map(() => "?").join(",")})
+     ORDER BY person_id ASC, id ASC`,
+    ids,
+  );
+  for (const row of rows || []) {
+    const personId = Number(row.person_id);
+    const plate = String(row.plate_number || "").trim();
+    if (!Number.isFinite(personId) || !plate) continue;
+    const list = map.get(personId) || [];
+    list.push(plate);
+    map.set(personId, list);
+  }
+  return map;
+}
+
 async function listByPersonId(personId) {
   const rows = await db.query(
     `SELECT id, person_id, plate_number, plate_normalized,
@@ -323,6 +351,7 @@ async function findBindingsByPlates(plateNumbers) {
 }
 
 module.exports = {
+  listPlateNumbersByPersonIds,
   listByPersonId,
   replacePlatesForPerson,
   upsertPlateForPerson,

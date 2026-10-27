@@ -13,6 +13,7 @@ const personLicensePlateService = require("../services/personnel/personLicensePl
 const personSyncJobService = require("../services/personnel/personSyncJobService");
 const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadService");
 const personImportService = require("../services/personnel/personImportService");
+const personnelProfileSchema = require("../services/personnel/personnelProfileSchema");
 const virtualCardService = require("../services/personnel/virtualCardService");
 const {
   PERSONNEL_FACE_IMPORT_SOURCE_MAX_BYTES,
@@ -218,24 +219,45 @@ router.put(
 
 // ========== 人員 ==========
 
+const parsePersonListQuery = (query = {}) => {
+  const filters = {};
+  if (query.personGroupId != null)
+    filters.personGroupId = parseInt(query.personGroupId, 10);
+  if (query.personGroupIds != null)
+    filters.personGroupIds = String(query.personGroupIds);
+  if (query.mainGroupId != null)
+    filters.mainGroupId = parseInt(query.mainGroupId, 10);
+  if (query.ungroupedOnly != null) filters.ungroupedOnly = query.ungroupedOnly;
+  if (query.status) filters.status = query.status;
+  if (query.employeeNo) filters.employeeNo = query.employeeNo;
+  if (query.fullName) filters.fullName = query.fullName;
+  if (query.q) filters.q = String(query.q);
+  const sortOrder =
+    query.sortOrder != null ? String(query.sortOrder) : undefined;
+  return { filters, sortOrder };
+};
+
+router.get(
+  "/profile-schema",
+  asyncHandler(async (_req, res) => {
+    const schema = await personnelProfileSchema.getProfileSchema();
+    res.sendSuccess(schema);
+  }),
+);
+
+router.put(
+  "/profile-schema",
+  requirePermission("system.personnel.person.update"),
+  asyncHandler(async (req, res) => {
+    const schema = await personnelProfileSchema.saveProfileSchema(req.body || {});
+    res.sendSuccess(schema);
+  }),
+);
+
 router.get(
   "/persons",
   asyncHandler(async (req, res) => {
-    const filters = {};
-    if (req.query.personGroupId != null)
-      filters.personGroupId = parseInt(req.query.personGroupId, 10);
-    if (req.query.personGroupIds != null)
-      filters.personGroupIds = String(req.query.personGroupIds);
-    if (req.query.mainGroupId != null)
-      filters.mainGroupId = parseInt(req.query.mainGroupId, 10);
-    if (req.query.ungroupedOnly != null)
-      filters.ungroupedOnly = req.query.ungroupedOnly;
-    if (req.query.status) filters.status = req.query.status;
-    if (req.query.employeeNo) filters.employeeNo = req.query.employeeNo;
-    if (req.query.fullName) filters.fullName = req.query.fullName;
-    if (req.query.q) filters.q = String(req.query.q);
-    const sortOrder =
-      req.query.sortOrder != null ? String(req.query.sortOrder) : undefined;
+    const { filters, sortOrder } = parsePersonListQuery(req.query);
     const limit =
       req.query.limit != null && String(req.query.limit).trim() !== ""
         ? parseInt(String(req.query.limit), 10)
@@ -682,7 +704,26 @@ router.get(
   }),
 );
 
-// ========== 批次匯入（Excel + 圖片 zip；單一路由） ==========
+// ========== 批次匯入／匯出 ==========
+
+router.get(
+  "/export",
+  asyncHandler(async (req, res) => {
+    const { filters, sortOrder } = parsePersonListQuery(req.query);
+    const buffer = await personImportService.getExportXlsxBuffer(filters, {
+      sortOrder,
+    });
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="personnel_export.xlsx"',
+    );
+    res.status(200).send(buffer);
+  }),
+);
 
 // 下載批次匯入範例 Excel（template）
 router.get(

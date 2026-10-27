@@ -1238,6 +1238,14 @@ async function normalizePersonDeviceSyncStatuses(pool) {
   return { updated: result.rowCount || 0 };
 }
 
+/** 既有庫：persons.custom_fields（人員自訂欄位值；平台專用） */
+async function ensurePersonsCustomFieldsColumn(pool) {
+  await pool.query(`
+    ALTER TABLE persons
+      ADD COLUMN IF NOT EXISTS custom_fields JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+}
+
 /** 既有庫：devices.enabled（預設啟用；停用後略過背景訂閱／佈防／探測） */
 async function ensureDevicesEnabledColumn(pool) {
   await pool.query(`
@@ -1257,6 +1265,7 @@ async function applySchemaPatches(pool) {
   await ensureOperationalEventsTable(pool);
   await ensureVideoIntercomTypeCode(pool);
   await ensureDevicesEnabledColumn(pool);
+  await ensurePersonsCustomFieldsColumn(pool);
   await ensureAccessSecurityLocationSystemType(pool);
   await ensureRollCallTables(pool);
   const deviceSyncStatusNorm = await normalizePersonDeviceSyncStatuses(pool);
@@ -1296,6 +1305,7 @@ module.exports = {
   migrateLegacyNvrTypeCodeToCamera,
   ensureVideoIntercomTypeCode,
   ensureDevicesEnabledColumn,
+  ensurePersonsCustomFieldsColumn,
   ensureAccessSecurityLocationSystemType,
   ensureAlertAccessDoorDeviceIds,
   ensureAlertSipRingLinkagesTable,

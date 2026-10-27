@@ -24,6 +24,9 @@ const {
 const { getModuleDisplayNameByCode } = require("../../access/catalog");
 const { assertSafeOutboundUrl, isExternalHttpUrl } = require("../../utils/safeUrl");
 const { resolveUploadFilePath } = require("../../utils/baDataPaths");
+const {
+  resolveCustomFieldsForWrite,
+} = require("./personnelProfileSchema");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -300,7 +303,10 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
   if (q) {
     params.push(`%${q}%`);
     params.push(`%${q}%`);
-    whereParts.push("(p.employee_no ILIKE ? OR p.full_name ILIKE ?)");
+    params.push(`%${q}%`);
+    whereParts.push(
+      "(p.employee_no ILIKE ? OR p.full_name ILIKE ? OR COALESCE(p.custom_fields::text, '') ILIKE ?)",
+    );
   }
 
   const countRows = await db.query(
@@ -634,7 +640,10 @@ async function getPersonsPaged(filters = {}, options = {}) {
     if (q) {
       params.push(`%${q}%`);
       params.push(`%${q}%`);
-      whereParts.push("(p.employee_no ILIKE ? OR p.full_name ILIKE ?)");
+      params.push(`%${q}%`);
+      whereParts.push(
+        "(p.employee_no ILIKE ? OR p.full_name ILIKE ? OR COALESCE(p.custom_fields::text, '') ILIKE ?)",
+      );
     }
   }
 
@@ -763,9 +772,12 @@ async function createPerson(data, createdBy = null) {
     personGroupId = await resolvePersonGroupIdForPerson(data.personGroupId);
   }
 
+  const customFields = await resolveCustomFieldsForWrite(data, {});
+  const customFieldsJson = JSON.stringify(customFields ?? {});
+
   const rows = await db.query(
-    `INSERT INTO persons (employee_no, full_name, person_group_id, status, face_url, config, created_by, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+    `INSERT INTO persons (employee_no, full_name, person_group_id, status, face_url, config, custom_fields, created_by, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
     [
       employeeNo,
       fullNameRaw,
@@ -773,6 +785,7 @@ async function createPerson(data, createdBy = null) {
       status,
       faceUrl || null,
       config ? JSON.stringify(config) : null,
+      customFieldsJson,
       createdBy,
       userId || null,
     ],
@@ -864,6 +877,17 @@ async function updatePerson(id, data) {
   if (data.userId !== undefined) {
     updates.push("user_id = ?");
     params.push(data.userId ?? null);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(data || {}, "customFields") ||
+    Object.prototype.hasOwnProperty.call(data || {}, "custom_fields")
+  ) {
+    const nextCustomFields = await resolveCustomFieldsForWrite(
+      data,
+      existingPerson.custom_fields,
+    );
+    updates.push("custom_fields = ?");
+    params.push(JSON.stringify(nextCustomFields ?? {}));
   }
   if (updates.length > 0) {
     params.push(id);
