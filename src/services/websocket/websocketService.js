@@ -101,6 +101,9 @@ function safeEmit(eventName, data, options = {}) {
  */
 function initializeWebSocket(httpServer) {
   const { Server } = require("socket.io");
+  const {
+    attachTalkHandlers,
+  } = require("../accessSecurity/accessSecurityTalkGateway");
 
   // 解析允許的來源（與 Express CORS 配置一致）
   const allowedOrigins = config.cors.origins.length
@@ -241,6 +244,8 @@ function initializeWebSocket(httpServer) {
         });
       }
     });
+
+    attachTalkHandlers(socket);
 
     socket.on("disconnect", (reason) => {
       if (logConnections) {

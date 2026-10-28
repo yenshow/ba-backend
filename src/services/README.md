@@ -20,7 +20,7 @@
 | `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測、NVR ISAPI／虛擬通道串流（`nvrIsapiService`／`nvrStreamService`） |
 | `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
 | `alerts/` | 警報 CRUD、規則、Email、聯動（DO＝`alertLinkageService`；攝影機／門禁／SIP／電梯 CRUD 樣板＝`alertLinkageHelpers`） |
-| `accessSecurity/` | 門禁保全：戶別、層 1 listen、層 2 SIP 語音廣播（`sipInviteService`／`g711Audio`／`rtpSender`） |
+| `accessSecurity/` | 門禁保全：戶別；對講／廣播 SIP 直打室內（`sipInviteService`／`accessSecurityTalkGateway`）；事件系統自記；主機 listen 可選 |
 | `operationalEvents/` | 查寫／文案／hooks／retention |
 | `backup/` | 備份排程；薄報表 `simpleReportFormats`；厚報表 `peopleCountingReportFormat`／`vehicleAccessReportFormat` |
 | `accessControl/` | 門禁 ISAPI 業務、Digest、佈防訂閱／事件寫入 |

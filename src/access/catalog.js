@@ -370,12 +370,12 @@ const CENTRAL_MODULES = [
     sort_order: 29,
     children: [
       ...LOCATION_MUTATION_CHILDREN,
-      { code: "ring", name: "室內語音廣播", sort_order: 4 },
+      { code: "ring", name: "室內語音廣播／對講", sort_order: 4 },
     ],
     ui: {
       id: 16,
       icon: "security",
-      description: "視訊對講保全（組網對講與室內語音廣播）",
+      description: "室內機對講與緊急廣播（皆須接聽、不經主機）",
       category: "security",
       routePrefix: "/security/access-control",
       featureKey: "access_security",

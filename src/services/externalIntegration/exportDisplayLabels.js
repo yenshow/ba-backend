@@ -48,6 +48,7 @@ const SYSTEM_SOURCE_LABELS = {
   alert_linkage: "警報連動",
   video_intercom: "組網對講",
   access_security_ring: "語音廣播",
+  access_security_talk: "網頁對講",
   system: "系統",
 };
 

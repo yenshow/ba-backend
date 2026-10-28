@@ -416,16 +416,11 @@ function buildSystemConfig(systemType, config) {
       }
       const manageRaw = config.manageDeviceId ?? config.manage_device_id ?? null;
       const manageDeviceId = Number(manageRaw);
-      if (!Number.isFinite(manageDeviceId) || manageDeviceId <= 0) {
-        throwApiError(
-          C.LOCATION_DEVICE_NOT_FOUND,
-          "門禁保全區域必須綁定管理中心主機",
-        );
-      }
+      const hasManage = Number.isFinite(manageDeviceId) && manageDeviceId > 0;
       return {
         indoor_device_id: indoorDeviceId,
         floor,
-        manage_device_id: manageDeviceId,
+        ...(hasManage ? { manage_device_id: manageDeviceId } : {}),
       };
     }
 
@@ -591,10 +586,7 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
 
   const manageDeviceId = Number(systemConfig?.manage_device_id);
   if (!Number.isFinite(manageDeviceId) || manageDeviceId <= 0) {
-    throwApiError(
-      C.LOCATION_DEVICE_NOT_FOUND,
-      "門禁保全區域必須綁定管理中心主機",
-    );
+    return;
   }
 
   const manageRows = await query(

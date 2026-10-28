@@ -2,6 +2,8 @@
  * 層 2：直打室內機 SIP
  * - ring：只振鈴（180 後 CANCEL；200 立刻 BYE，無 RTP）
  * - broadcast：等待接聽（200）→ 單向 RTP 播放 G.711 音檔 → BYE
+ * - talk：探測用 sendrecv + 靜音 RTP（不播警報音檔）
+ * - live：生產對講 sendrecv；200 ACK 後保持 RTP，由呼叫端掛斷
  */
 const dgram = require("dgram");
 const crypto = require("crypto");
@@ -74,10 +76,12 @@ const parseAnswerSdp = (body, fallbackHost) => {
     if (pts.includes(8) && !pts.includes(0)) payloadType = 8;
     else if (!pts.includes(0) && pts[0]) payloadType = pts[0];
   }
+  const dirMatch = text.match(/a=(sendrecv|sendonly|recvonly|inactive)/i);
   return {
     remoteIp: connMatch?.[1] || fallbackHost,
     remotePort: mediaMatch ? Number(mediaMatch[1]) : null,
     payloadType: payloadType === 8 ? 8 : 0,
+    direction: dirMatch ? dirMatch[1].toLowerCase() : "sendrecv",
   };
 };
 
@@ -173,11 +177,20 @@ class SipProbe {
     this.waiters = [];
     this.inbox = [];
     this.silent = Boolean(cfg.silent);
-    this.mode = cfg.mode === "broadcast" ? "broadcast" : "ring";
+    this.mode = ["broadcast", "talk", "early", "live"].includes(cfg.mode)
+      ? cfg.mode
+      : "ring";
     this.rtpLocalPort = 0;
     this.audio = cfg.audio || null;
     this.audioPath = cfg.audioPath || null;
     this.rtp = null;
+    this.extraHeaders = Array.isArray(cfg.extraHeaders) ? cfg.extraHeaders : [];
+    this.onRemoteBye = null;
+    this.hangupRequested = false;
+    this._hangupDone = false;
+    this._dialog = null;
+    this._rtpPlayOpts = null;
+    this._remoteBye = false;
   }
 
   log(...args) {
@@ -195,6 +208,7 @@ class SipProbe {
         this.log(
           `\n<< ${rinfo.address}:${rinfo.port}\n${parsed.raw.slice(0, 1200)}\n`,
         );
+        if (this.handleIncomingRequest(parsed)) return;
         if (this.waiters.length > 0) {
           const pending = [...this.waiters];
           this.waiters = [];
@@ -233,6 +247,79 @@ class SipProbe {
     } catch {
       /* ignore */
     }
+  }
+
+  handleIncomingRequest(parsed) {
+    const start = parsed?.start || "";
+    if (start.startsWith("SIP/2.0")) return false;
+    if (start.startsWith("BYE ")) {
+      this._remoteBye = true;
+      this.send(this.buildSipResponse(parsed, "SIP/2.0 200 OK")).catch(() => {});
+      if (typeof this.onRemoteBye === "function") {
+        try {
+          this.onRemoteBye();
+        } catch {
+          /* ignore */
+        }
+      }
+      return true;
+    }
+    return start.startsWith("ACK ");
+  }
+
+  buildSipResponse(parsed, statusLine) {
+    return [
+      statusLine,
+      `Via: ${parsed.headers?.via || ""}`,
+      `From: ${parsed.headers?.from || ""}`,
+      `To: ${parsed.headers?.to || ""}`,
+      `Call-ID: ${parsed.headers?.["call-id"] || ""}`,
+      `CSeq: ${parsed.headers?.cseq || ""}`,
+      "Content-Length: 0",
+      "",
+      "",
+    ].join("\r\n");
+  }
+
+  interruptWaiters() {
+    const pending = this.waiters;
+    this.waiters = [];
+    for (const w of pending) {
+      w.resolve({
+        start: "",
+        headers: {},
+        statusCode: null,
+        body: "",
+        hangupRequested: true,
+      });
+    }
+  }
+
+  async hangup() {
+    if (this._hangupDone) {
+      this.close();
+      return;
+    }
+    this._hangupDone = true;
+    this.hangupRequested = true;
+    this.interruptWaiters();
+    try {
+      if (this._dialog && !this._remoteBye) {
+        await this.sendByeIfPossible(
+          this._dialog.requestUri,
+          this._dialog.toUser,
+          this._dialog.toTag,
+        );
+      } else if (!this._remoteBye && this.inviteBranch && this.callId) {
+        await this.sendCancel(
+          `sip:${this.config.targetUser}@${this.config.sipHost}:${this.config.sipPort}`,
+          this.config.targetUser,
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+    this.close();
   }
 
   send(raw) {
@@ -290,6 +377,10 @@ class SipProbe {
       "Allow: INVITE, ACK, CANCEL, BYE, OPTIONS",
     ];
     if (authHeader) lines.push(`Authorization: ${authHeader}`);
+    for (const header of this.extraHeaders) {
+      const line = String(header || "").trim();
+      if (line) lines.push(line);
+    }
     const payload = body || "";
     if (payload) lines.push("Content-Type: application/sdp");
     lines.push(`Content-Length: ${Buffer.byteLength(payload, "utf8")}`);
@@ -302,14 +393,16 @@ class SipProbe {
     return [
       "v=0",
       `o=${this.config.sipUser} ${Date.now()} ${Date.now()} IN IP4 ${this.localIp}`,
-      "s=BA Alert Broadcast",
+      this.mode === "talk" || this.mode === "live"
+        ? "s=BA Intercom Talk"
+        : "s=BA Alert Broadcast",
       `c=IN IP4 ${this.localIp}`,
       "t=0 0",
       `m=audio ${this.rtpLocalPort} RTP/AVP 0 8 101`,
       "a=rtpmap:0 PCMU/8000",
       "a=rtpmap:8 PCMA/8000",
       "a=rtpmap:101 telephone-event/8000",
-      "a=sendonly",
+      this.mode === "talk" || this.mode === "live" ? "a=sendrecv" : "a=sendonly",
       "",
     ].join("\r\n");
   }
@@ -344,12 +437,125 @@ class SipProbe {
         ? this.audio
         : loadBroadcastAudio(this.audioPath, pt);
     if (!audio?.frames?.length) throw new Error("未載入廣播音訊");
-    await this.rtp.sendFrames(audio.frames, {
+    const maxFrames = Number(this.config.playMaxFrames);
+    const frames =
+      Number.isFinite(maxFrames) && maxFrames > 0
+        ? audio.frames.slice(0, maxFrames)
+        : audio.frames;
+    await this.rtp.sendFrames(frames, {
       remoteIp,
       remotePort,
       payloadType: pt,
     });
-    return { playDurationMs: audio.durationMs, frameCount: audio.frames.length };
+    return { playDurationMs: frames.length * 20, frameCount: frames.length };
+  }
+
+  async playTalkRtp(remoteIp, remotePort, payloadType) {
+    if (!this.rtp) throw new Error("RTP 未啟動");
+    const pt = payloadType === 8 ? 8 : 0;
+    const playOpts = { remoteIp, remotePort, payloadType: pt };
+    const holdMs = Number(this.config.talkHoldMs) > 0 ? Number(this.config.talkHoldMs) : 20_000;
+    await this.rtp.sendSilence(holdMs, playOpts);
+    const inbound = this.rtp.snapshotInbound();
+    this.log(
+      `入站 RTP packets=${inbound.packets} bytes=${inbound.bytes} pts=${JSON.stringify(inbound.payloadTypes)}`,
+    );
+    return {
+      playDurationMs: holdMs,
+      frameCount: 0,
+      inbound,
+    };
+  }
+
+  async collectUntilSdpOrAnswer(firstResp, collectMs) {
+    let current = firstResp;
+    let sdpResp = parseAnswerSdp(firstResp.body || "", this.config.sipHost)
+      .remotePort
+      ? firstResp
+      : null;
+    const codes = [firstResp.statusCode].filter(Boolean);
+    const deadline = Date.now() + collectMs;
+    while (Date.now() < deadline) {
+      if (current.statusCode === 200) {
+        return { current, sdpResp: current, answered: true, codes };
+      }
+      if (!isProvisional(current.statusCode)) {
+        return { current, sdpResp, answered: false, codes };
+      }
+      const remain = deadline - Date.now();
+      if (remain <= 0) break;
+      try {
+        current = await this.waitOne(Math.min(2000, remain));
+        if (current.statusCode) codes.push(current.statusCode);
+        const sdp = parseAnswerSdp(current.body || "", this.config.sipHost);
+        if (sdp.remotePort) sdpResp = current;
+      } catch {
+        this.log(`early-media 收集中… 剩餘 ${Math.ceil(remain / 1000)}s`);
+      }
+    }
+    return { current, sdpResp, answered: current.statusCode === 200, codes };
+  }
+
+  async runEarlyMedia(firstResp, requestUri) {
+    const collectMs = Math.max(2000, this.config.earlyCollectMs || 8000);
+    const { current, sdpResp, answered, codes } = await this.collectUntilSdpOrAnswer(
+      firstResp,
+      collectMs,
+    );
+    const toUser = this.config.targetUser;
+    const source = sdpResp || current;
+    const toTag = this.extractToTag(source);
+    const sdp = parseAnswerSdp(source.body || "", this.config.sipHost);
+    current._earlyCodes = codes;
+    current._remoteSdp = sdp.remotePort ? sdp : null;
+    current._earlyAnswered = Boolean(answered);
+
+    if (!sdp.remotePort) {
+      this.log("early-media：振鈴回應無 SDP，無法在未接聽時送 RTP");
+      if (isProvisional(current.statusCode)) {
+        try {
+          await this.sendCancel(requestUri, toUser);
+        } catch {
+          /* ignore */
+        }
+      }
+      return current;
+    }
+
+    try {
+      if (answered) {
+        await this.send(
+          this.buildMessage("ACK", { requestUri, toUser, toTag }),
+        );
+      }
+      this.config.playMaxFrames =
+        Number(this.config.playMaxFrames) > 0
+          ? Number(this.config.playMaxFrames)
+          : 400;
+      const played = await this.playRtp(
+        sdp.remoteIp,
+        sdp.remotePort,
+        sdp.payloadType,
+      );
+      current._played = { ...played, early: !answered, autoAnswered: answered };
+      if (answered) {
+        await this.sendByeIfPossible(requestUri, toUser, toTag);
+      } else {
+        await this.sendCancel(requestUri, toUser);
+      }
+    } catch (err) {
+      logger.warn("SIP early-media 播放失敗", {
+        error: err?.message || String(err),
+      });
+      current._playError = err?.message || String(err);
+      try {
+        if (answered) await this.sendByeIfPossible(requestUri, toUser, toTag);
+        else await this.sendCancel(requestUri, toUser);
+      } catch {
+        /* ignore */
+      }
+    }
+    return current;
   }
 
   async sendCancel(requestUri, toUser) {
@@ -364,10 +570,12 @@ class SipProbe {
 
   async waitUntilAnswerOrTimeout(resp, requestUri, toUser, answerMs) {
     let current = resp;
+    if (this.hangupRequested || current?.hangupRequested) return current;
     if (current.statusCode === 200) return current;
 
     const deadline = Date.now() + answerMs;
     while (Date.now() < deadline) {
+      if (this.hangupRequested || current?.hangupRequested) return current;
       if (current.statusCode === 200) return current;
       if (!isProvisional(current.statusCode)) return current;
       const remain = deadline - Date.now();
@@ -380,6 +588,7 @@ class SipProbe {
       }
     }
 
+    if (this.hangupRequested || current?.hangupRequested) return current;
     if (current.statusCode === 200) return current;
     if (isProvisional(current.statusCode)) {
       try {
@@ -405,10 +614,13 @@ class SipProbe {
 
     await this.send(this.buildMessage("INVITE", inviteOpts));
     const firstWaitMs =
-      this.mode === "broadcast"
+      this.mode === "broadcast" || this.mode === "talk" || this.mode === "live"
         ? Math.max(5000, this.config.answerMs || DEFAULT_ANSWER_MS)
-        : Math.max(5000, this.config.holdMs);
+        : this.mode === "early"
+          ? Math.max(3000, this.config.earlyCollectMs || 8000)
+          : Math.max(5000, this.config.holdMs);
     let resp = await this.waitOne(firstWaitMs);
+    if (resp.hangupRequested) return resp;
 
     if (resp.statusCode === 401 || resp.statusCode === 407) {
       const hdr =
@@ -428,9 +640,14 @@ class SipProbe {
         }),
       );
       resp = await this.waitOne(firstWaitMs);
+      if (resp.hangupRequested) return resp;
     }
 
-    if (this.mode === "broadcast") {
+    if (this.mode === "early") {
+      return this.runEarlyMedia(resp, requestUri);
+    }
+
+    if (this.mode === "broadcast" || this.mode === "talk" || this.mode === "live") {
       resp = await this.waitUntilAnswerOrTimeout(
         resp,
         requestUri,
@@ -438,12 +655,25 @@ class SipProbe {
         Math.max(5000, this.config.answerMs || DEFAULT_ANSWER_MS),
       );
 
+      if (resp.hangupRequested) return resp;
+
       if (resp.statusCode === 200) {
         const toTag = this.extractToTag(resp);
         const sdp = parseAnswerSdp(resp.body, this.config.sipHost);
         if (!sdp.remotePort) {
           throw new Error("200 OK SDP 缺少 audio port");
         }
+        resp._remoteSdp = sdp;
+        this._dialog = {
+          requestUri,
+          toUser: this.config.targetUser,
+          toTag,
+        };
+        this._rtpPlayOpts = {
+          remoteIp: sdp.remoteIp,
+          remotePort: sdp.remotePort,
+          payloadType: sdp.payloadType,
+        };
         let played = null;
         try {
           await this.send(
@@ -453,7 +683,22 @@ class SipProbe {
               toTag,
             }),
           );
-          played = await this.playRtp(sdp.remoteIp, sdp.remotePort, sdp.payloadType);
+          if (this.mode === "live") {
+            return resp;
+          }
+          if (this.mode === "talk") {
+            played = await this.playTalkRtp(
+              sdp.remoteIp,
+              sdp.remotePort,
+              sdp.payloadType,
+            );
+          } else {
+            played = await this.playRtp(
+              sdp.remoteIp,
+              sdp.remotePort,
+              sdp.payloadType,
+            );
+          }
           await this.send(
             this.buildMessage("BYE", {
               requestUri,
@@ -462,7 +707,10 @@ class SipProbe {
             }),
           );
         } catch (err) {
-          logger.warn("SIP 廣播播放失敗", { error: err?.message || String(err) });
+          logger.warn(
+            this.mode === "talk" ? "SIP 對講探測失敗" : "SIP 廣播播放失敗",
+            { error: err?.message || String(err) },
+          );
           try {
             await this.sendByeIfPossible(requestUri, this.config.targetUser, toTag);
           } catch {
@@ -470,6 +718,7 @@ class SipProbe {
           }
           resp._playError = err?.message || String(err);
         }
+        this._dialog = null;
         resp._played = played;
         return resp;
       }
@@ -528,9 +777,26 @@ const buildInviteResult = (inv, host, mode) => {
   const played = inv._played || null;
   const playError = inv._playError || null;
   const broadcastOk = mode === "broadcast" && Boolean(played);
+  const talkOk = mode === "talk" && Boolean(played);
+  const liveOk = mode === "live" && result === "ok";
+  const earlyOk = mode === "early" && Boolean(played);
+  const inbound = played?.inbound || null;
+  let resultLabel = result;
+  if (broadcastOk) resultLabel = "broadcast-played";
+  else if (talkOk) resultLabel = "talk-session";
+  else if (liveOk) resultLabel = "talk-answered";
+  else if (earlyOk) {
+    resultLabel = played?.autoAnswered ? "early-auto-answered" : "early-media-played";
+  }
   return {
-    ok: broadcastOk || result === "ringing" || (mode === "ring" && result === "ok"),
-    result: broadcastOk ? "broadcast-played" : result,
+    ok:
+      broadcastOk ||
+      talkOk ||
+      liveOk ||
+      earlyOk ||
+      result === "ringing" ||
+      (mode === "ring" && result === "ok"),
+    result: resultLabel,
     statusCode: inv.statusCode,
     startLine: inv.start,
     contactOk,
@@ -539,6 +805,12 @@ const buildInviteResult = (inv, host, mode) => {
     played: Boolean(played),
     playDurationMs: played?.playDurationMs ?? 0,
     playError,
+    remoteSdp: inv._remoteSdp || null,
+    inboundRtpPackets: inbound?.packets ?? 0,
+    inboundRtpBytes: inbound?.bytes ?? 0,
+    inboundPayloadTypes: inbound?.payloadTypes || null,
+    earlyCodes: inv._earlyCodes || null,
+    earlyAnswered: Boolean(inv._earlyAnswered),
   };
 };
 
@@ -569,8 +841,12 @@ const runSipSession = async (opts, mode) => {
         : config.accessSecurity?.alertAnswerMs || DEFAULT_ANSWER_MS,
     silent: opts?.silent !== false,
     mode,
-    audio: mode === "broadcast" ? opts.audio : null,
+    audio: mode === "broadcast" || mode === "early" ? opts.audio : null,
     audioPath: opts?.audioPath || opts?.audioFilePath || null,
+    talkHoldMs: opts?.talkHoldMs,
+    extraHeaders: opts?.extraHeaders,
+    earlyCollectMs: opts?.earlyCollectMs,
+    playMaxFrames: opts?.playMaxFrames,
   });
 
   try {
@@ -600,6 +876,19 @@ async function inviteIndoorBroadcast(opts) {
   return runSipSession({ ...opts, audio }, "broadcast");
 }
 
+/** 探測用：sendrecv + 靜音 RTP，統計入站 RTP。不播警報音檔、不改生產廣播。 */
+async function inviteIndoorTalk(opts) {
+  return runSipSession(opts, "talk");
+}
+
+/** 探測用：未接聽 early media／自動接聽播音。不改生產廣播。 */
+async function inviteIndoorEarlyBroadcast(opts) {
+  const audio =
+    opts?.audio ||
+    loadBroadcastAudio(opts?.audioPath || opts?.audioFilePath);
+  return runSipSession({ ...opts, audio }, "early");
+}
+
 const parseDeviceConfig = (device) => {
   if (typeof device?.config === "string") {
     try {
@@ -617,7 +906,7 @@ const assertIndoorDevice = (device, cfg) => {
     throw createApiError(C.LOCATION_DEVICE_NOT_FOUND, "室內機設備不存在");
   }
   if (ringingByDeviceId.has(deviceId)) {
-    throw createApiError(C.CONFLICT, "該室內機正在語音廣播中，請稍後再試");
+    throw createApiError(C.CONFLICT, "該室內機通話中，請稍後再試");
   }
   const unitType = String(cfg.unitType || "").trim();
   if (unitType !== "indoor") {
@@ -682,9 +971,122 @@ async function alertIndoorDevice(device, meta = {}) {
   return ringIndoorDevice(device, meta);
 }
 
+/**
+ * 生產對講：先綁 UDP／佔鎖，INVITE sendrecv；接聽後保持 RTP，不播警報音檔。
+ * hangup 可在等待接聽期間呼叫。
+ */
+async function beginIndoorTalk(device, meta = {}) {
+  const cfg = parseDeviceConfig(device);
+  const deviceId = assertIndoorDevice(device, cfg);
+  const opts = {
+    ...indoorInviteOpts(cfg, meta),
+    displayName: meta.displayName || "BA-Talk",
+  };
+  const host = String(opts.host || "").trim();
+  const voipNumber = String(opts.voipNumber || "").trim();
+  const username = String(opts.username || "").trim() || DEFAULT_FROM_USER;
+  const password = String(opts.password || "");
+  const sipPort = Number(opts.sipPort) > 0 ? Number(opts.sipPort) : 5060;
+  if (!host || !voipNumber) {
+    throw createApiError(
+      C.LOCATION_DEVICE_NOT_FOUND,
+      "室內機缺少 host 或 voipNumber",
+    );
+  }
+
+  let releaseLock = () => {};
+  const lockPromise = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+  ringingByDeviceId.set(deviceId, lockPromise);
+  lockPromise.finally(() => {
+    ringingByDeviceId.delete(deviceId);
+  });
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return;
+    released = true;
+    releaseLock();
+  };
+
+  const probe = new SipProbe({
+    sipHost: host,
+    sipPort,
+    sipUser: username,
+    password,
+    targetUser: voipNumber,
+    displayName: opts.displayName,
+    answerMs:
+      Number(opts.answerMs) > 0
+        ? Number(opts.answerMs)
+        : config.accessSecurity?.alertAnswerMs || DEFAULT_ANSWER_MS,
+    silent: opts.silent !== false,
+    mode: "live",
+  });
+
+  const hangup = async () => {
+    try {
+      await probe.hangup();
+    } finally {
+      releaseOnce();
+    }
+  };
+
+  try {
+    await probe.start();
+  } catch (err) {
+    await hangup();
+    throw err;
+  }
+
+  const waitAnswered = async () => {
+    try {
+      const inv = await probe.invite();
+      const result = buildInviteResult(inv, host, "live");
+      const answered = inv.statusCode === 200 && Boolean(probe._rtpPlayOpts);
+      if (!answered) {
+        await hangup();
+        return { result, answered: false, deviceId, hangup };
+      }
+      return {
+        result,
+        answered: true,
+        deviceId,
+        sendPcmuFrame(frame) {
+          if (!probe._rtpPlayOpts || !probe.rtp) return;
+          probe.rtp.sendFrame(frame, probe._rtpPlayOpts);
+        },
+        setOnInbound(handler) {
+          probe.rtp?.setOnInbound(handler);
+        },
+        hangup,
+      };
+    } catch (err) {
+      try {
+        await hangup();
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
+  };
+
+  return {
+    hangup,
+    waitAnswered,
+    deviceId,
+    setOnRemoteBye(handler) {
+      probe.onRemoteBye = typeof handler === "function" ? handler : null;
+    },
+  };
+}
+
 module.exports = {
   inviteIndoorRing,
   inviteIndoorBroadcast,
+  inviteIndoorTalk,
+  inviteIndoorEarlyBroadcast,
+  beginIndoorTalk,
   alertIndoorDevice,
   isAlertBroadcastConfigured,
   resolveBroadcastAudioPath,

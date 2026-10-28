@@ -22,6 +22,8 @@
     "probe:video-intercom-matrix": "node scripts/probe/probeVideoIntercomModelMatrix.js",
     "scan:video-intercom-indoor": "node scripts/probe/scanVideoIntercomIndoor.js",
     "test:video-intercom-sip": "node scripts/probe/testVideoIntercomSipInvite.js",
+    "test:video-intercom-sip-talk": "node scripts/probe/testVideoIntercomSipTalk.js",
+    "test:video-intercom-sip-early": "node scripts/probe/testVideoIntercomSipEarlyMedia.js",
     "test:video-intercom-voip-write": "node scripts/probe/testVideoIntercomVoipWrite.js",
     "db:init": "node src/database/initSchema.js",
     "db:sync-perms": "node src/access/syncDefinitions.js",

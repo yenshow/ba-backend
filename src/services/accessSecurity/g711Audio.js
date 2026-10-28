@@ -38,6 +38,49 @@ const linearToMulaw = (sample) => {
   return ~(sign | (exponent << 4) | mantissa) & 0xff;
 };
 
+const mulawToLinear = (mulawByte) => {
+  const mu = ~mulawByte & 0xff;
+  const exponent = (mu >> 4) & 0x07;
+  const mantissa = mu & 0x0f;
+  let sample = ((mantissa << 3) + BIAS) << exponent;
+  sample -= BIAS;
+  return mu & 0x80 ? -sample : sample;
+};
+
+const alawToLinear = (alawByte) => {
+  const a = alawByte ^ 0x55;
+  const exponent = (a >> 4) & 0x07;
+  const mantissa = a & 0x0f;
+  const sample =
+    exponent === 0 ? (mantissa << 4) + 8 : ((mantissa << 4) + 0x108) << (exponent - 1);
+  return a & 0x80 ? -sample : sample;
+};
+
+const encodePcm16leFrame = (pcmBuffer, payloadType = 0) => {
+  const encodeFn = payloadType === 8 ? linearToAlaw : linearToMulaw;
+  const frame = Buffer.alloc(FRAME_BYTES);
+  const silence = encodeFn(0);
+  for (let i = 0; i < FRAME_SAMPLES; i += 1) {
+    const offset = i * 2;
+    if (!pcmBuffer || offset + 1 >= pcmBuffer.length) {
+      frame[i] = silence;
+      continue;
+    }
+    frame[i] = encodeFn(pcmBuffer.readInt16LE(offset));
+  }
+  return frame;
+};
+
+const decodeG711Frame = (frame, payloadType = 0) => {
+  const decodeFn = payloadType === 8 ? alawToLinear : mulawToLinear;
+  const src = frame && frame.length ? frame : Buffer.alloc(FRAME_BYTES);
+  const pcm = Buffer.alloc(src.length * 2);
+  for (let i = 0; i < src.length; i += 1) {
+    pcm.writeInt16LE(decodeFn(src[i]), i * 2);
+  }
+  return pcm;
+};
+
 const linearToAlaw = (sample) => {
   let sign = 0;
   if (sample < 0) {
@@ -302,4 +345,8 @@ const loadG711FramesFromFile = (filePath, opts = {}) => {
 
 module.exports = {
   loadG711FramesFromFile,
+  encodePcm16leFrame,
+  decodeG711Frame,
+  FRAME_SAMPLES,
+  FRAME_BYTES,
 };

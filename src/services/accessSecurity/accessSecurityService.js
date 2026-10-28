@@ -16,6 +16,7 @@ const logger = createLogger("accessSecurity");
 const INTERCOM_MONITOR_SOURCES = Object.freeze([
   "access_security_ring",
   "alert_linkage",
+  "access_security_talk",
 ]);
 
 const UNCLASSIFIED_FLOOR = "未分類";
@@ -360,7 +361,7 @@ async function getZoneLogsLatest(zoneId, { limit = 5 } = {}) {
     LEFT JOIN locations l ON oe.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     WHERE oe.event_kind = 'intercom'
-      AND oe.source IN (?, ?)
+      AND oe.source IN (?, ?, ?)
       AND (
         oe.location_id IN (
           SELECT l2.id
@@ -385,7 +386,7 @@ async function getZoneLogsLatest(zoneId, { limit = 5 } = {}) {
     ORDER BY oe.created_at DESC, oe.id DESC
     LIMIT ?
     `,
-    [sources[0], sources[1], zid, zid, zid, lim],
+    [sources[0], sources[1], sources[2], zid, zid, zid, lim],
   );
 
   return { logs: logs || [] };
