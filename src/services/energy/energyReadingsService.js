@@ -78,6 +78,35 @@ async function listReadings({ deviceId, startTime, endTime, limit = 500, order =
   return (await db.query(sql, params)) || [];
 }
 
+async function getDeviceAvgPowerFactor(deviceIds, startTime, endTime) {
+  const ids = (deviceIds || [])
+    .map((id) => parseInt(id, 10))
+    .filter((n) => Number.isFinite(n));
+  if (ids.length === 0) return [];
+  const rows = await db.query(
+    `
+    SELECT er.device_id,
+      AVG(
+        CASE
+          WHEN (er.data->>'pf_avg') ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+          THEN (er.data->>'pf_avg')::double precision
+          ELSE NULL
+        END
+      ) AS avg_pf,
+      COUNT(*) FILTER (
+        WHERE (er.data->>'pf_avg') ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+      )::int AS sample_count
+    FROM energy_readings er
+    WHERE er.device_id = ANY($1::int[])
+      AND er.recorded_at >= $2
+      AND er.recorded_at < $3
+    GROUP BY er.device_id
+    `,
+    [ids, new Date(startTime), new Date(endTime)],
+  );
+  return rows || [];
+}
+
 async function getReadingsForBackup(beforeDate) {
   const rows = await db.query(
     `SELECT er.id, er.device_id, er.recorded_at, er.data, d.name AS device_name
@@ -94,5 +123,6 @@ module.exports = {
   saveReading,
   getLatestReadings,
   listReadings,
+  getDeviceAvgPowerFactor,
   getReadingsForBackup,
 };

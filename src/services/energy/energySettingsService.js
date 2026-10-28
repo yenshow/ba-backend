@@ -5,6 +5,10 @@
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
+const { normalizeElectricityTariff } = require("../../constants/taipowerTouDefaults");
+const {
+  normalizePowerFactorAdjustment,
+} = require("./powerFactorBillAdjustment");
 
 const SETTINGS_ID = 1;
 
@@ -27,12 +31,8 @@ const DEFAULT_CONFIG = {
   meter_share_pct: 40,
   water_usage_vs_avg_enabled: true,
   include_device_ids: [],
-  electricity_tariff: {
-    currency: "TWD",
-    peak: { rate: 0, windows: [] },
-    semi_peak: { rate: 0, windows: [] },
-    off_peak: { rate: 0, windows: [] },
-  },
+  electricity_tariff: normalizeElectricityTariff({}),
+  power_factor_adjustment: normalizePowerFactorAdjustment({}),
   water_tariff: { rate: 0 },
   load_shed_stages: [],
 };
@@ -119,13 +119,6 @@ function normalizeConfig(raw) {
     src.electricity_tariff && typeof src.electricity_tariff === "object"
       ? src.electricity_tariff
       : {};
-  const band = (key) => {
-    const b = et[key] && typeof et[key] === "object" ? et[key] : {};
-    return {
-      rate: Number.isFinite(Number(b.rate)) ? Number(b.rate) : 0,
-      windows: Array.isArray(b.windows) ? b.windows : [],
-    };
-  };
   return {
     contract_capacity_kw: Number.isFinite(Number(src.contract_capacity_kw))
       ? Number(src.contract_capacity_kw)
@@ -149,12 +142,10 @@ function normalizeConfig(raw) {
     meter_share_pct: clampPct(src.meter_share_pct, 40),
     water_usage_vs_avg_enabled: boolDefault(src.water_usage_vs_avg_enabled),
     include_device_ids: include,
-    electricity_tariff: {
-      currency: et.currency || "TWD",
-      peak: band("peak"),
-      semi_peak: band("semi_peak"),
-      off_peak: band("off_peak"),
-    },
+    electricity_tariff: normalizeElectricityTariff(et),
+    power_factor_adjustment: normalizePowerFactorAdjustment(
+      src.power_factor_adjustment,
+    ),
     water_tariff: {
       rate: Number.isFinite(Number(src.water_tariff?.rate))
         ? Number(src.water_tariff.rate)

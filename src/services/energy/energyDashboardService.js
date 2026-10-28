@@ -10,6 +10,11 @@ const {
   getEnergyUsageSystemLabel,
   DEFAULT_USAGE_SYSTEM_KEY,
 } = require("../../constants/energyUsageSystemCatalog");
+const {
+  calcReferenceElectricityCost,
+  combineStationPf,
+} = require("./energyReferenceBill");
+const { normalizePfToPercent } = require("./powerFactorBillAdjustment");
 
 function startOfLocalDayUtc() {
   const now = new Date();
@@ -73,22 +78,43 @@ function sumField(rows, field) {
   return rows.reduce((acc, r) => acc + (Number(r[field]) || 0), 0);
 }
 
-function calcElectricityCost(rows, tariff) {
-  const peak = sumField(rows, "tou_peak_kwh");
-  const semi = sumField(rows, "tou_semi_peak_kwh");
-  const off = sumField(rows, "tou_off_peak_kwh");
-  const cost =
-    peak * (Number(tariff?.peak?.rate) || 0) +
-    semi * (Number(tariff?.semi_peak?.rate) || 0) +
-    off * (Number(tariff?.off_peak?.rate) || 0);
-  return {
-    isReference: true,
-    currency: tariff?.currency || "TWD",
-    peak_kwh: peak,
-    semi_peak_kwh: semi,
-    off_peak_kwh: off,
-    amount: Math.round(cost * 100) / 100,
-  };
+async function listElectricityDeviceIds(ids) {
+  if (!ids.length) return [];
+  const devices = await db.query(
+    `SELECT d.id, dm.config AS model_config
+     FROM devices d
+     LEFT JOIN device_models dm ON dm.id = d.model_id
+     WHERE d.id = ANY($1::int[])`,
+    [ids],
+  );
+  return (devices || [])
+    .filter((d) => parseDeviceConfig(d.model_config).meterKind === "electricity")
+    .map((d) => d.id);
+}
+
+async function resolveMonthStationPf(electricityIds, monthEnergyRows, monthStart, now) {
+  if (!electricityIds.length) {
+    return { pfPercent: null, sampleDeviceCount: 0 };
+  }
+  const pfRows = await energyReadingsService.getDeviceAvgPowerFactor(
+    electricityIds,
+    monthStart,
+    now,
+  );
+  const kwhByDevice = new Map();
+  for (const r of monthEnergyRows || []) {
+    const id = Number(r.device_id);
+    if (!Number.isFinite(id)) continue;
+    kwhByDevice.set(
+      id,
+      (kwhByDevice.get(id) || 0) + (Number(r.delta_energy_kwh) || 0),
+    );
+  }
+  const list = (pfRows || []).map((row) => ({
+    deviceId: Number(row.device_id),
+    pfPercent: normalizePfToPercent(row.avg_pf),
+  }));
+  return combineStationPf(list, kwhByDevice);
 }
 
 async function loadAgg(deviceIds, bucketType, start, end) {
@@ -159,9 +185,19 @@ async function getDashboardSummary() {
   const overContract = contract > 0 && demandKw >= (contract * overPct) / 100;
   const demandAlertEnabled = stages.some((s) => s.enabled !== false);
 
-  const elecCost = calcElectricityCost(
+  const electricityIds = await listElectricityDeviceIds(ids);
+  const stationPf = await resolveMonthStationPf(
+    electricityIds,
+    monthEnergyRows,
+    monthStart,
+    now,
+  );
+  const elecCost = calcReferenceElectricityCost(
     monthEnergyRows,
     config.electricity_tariff,
+    config.power_factor_adjustment,
+    stationPf.pfPercent,
+    stationPf.sampleDeviceCount,
   );
   const monthWater = sumField(monthEnergyRows, "delta_water_m3");
   const waterCost = {

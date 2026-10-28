@@ -3,47 +3,10 @@
  */
 const db = require("../../database/db");
 const energySettingsService = require("./energySettingsService");
+const { classifyTouBand } = require("../../constants/taipowerTouDefaults");
 const logger = require("../../utils/logger").createLogger(
   "energyAggregationService",
 );
-
-const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000;
-
-function parseHhMm(s) {
-  const m = String(s || "").match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-function windowMatches(windows, localDate) {
-  if (!Array.isArray(windows) || windows.length === 0) return false;
-  const minutes = localDate.getUTCHours() * 60 + localDate.getUTCMinutes();
-  const dow = localDate.getUTCDay();
-  for (const w of windows) {
-    const start = parseHhMm(w.start);
-    const end = parseHhMm(w.end);
-    if (start == null || end == null) continue;
-    const dowOk =
-      w.dow === "all" ||
-      w.dow == null ||
-      Number(w.dow) === dow ||
-      (Array.isArray(w.dow) && w.dow.map(Number).includes(dow));
-    if (!dowOk) continue;
-    if (start <= end) {
-      if (minutes >= start && minutes < end) return true;
-    } else if (minutes >= start || minutes < end) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function classifyTouBand(utcBucketAt, tariff) {
-  const local = new Date(new Date(utcBucketAt).getTime() + TAIPEI_OFFSET_MS);
-  if (windowMatches(tariff?.peak?.windows, local)) return "peak";
-  if (windowMatches(tariff?.semi_peak?.windows, local)) return "semi_peak";
-  return "off_peak";
-}
 
 async function getIncludeDeviceIds() {
   const { config } = await energySettingsService.getSettings();
