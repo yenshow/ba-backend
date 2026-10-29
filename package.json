@@ -41,6 +41,7 @@
     "dedupe:access-events": "node scripts/ops/dedupeAccessEvents.js",
     "sdk:build-isup": "powershell -ExecutionPolicy Bypass -File sdk/scripts/run-isup-listen.ps1 -BuildOnly",
     "test:security:safe-url": "node tests/security/safeUrl.test.js",
+    "test:security:cors-origin": "node tests/security/corsOrigin.test.js",
     "test:personnel-face-image": "node tests/personnel/personnelFaceImageService.test.js",
     "test:personnel-isapi-error": "node tests/personnel/personnelIsapiErrorUtils.test.js",
     "test:personnel-file-helpers": "node tests/personnel/personnelFileHelpers.test.js",

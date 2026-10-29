@@ -19,16 +19,21 @@ const normalizeOrigin = (origin) => {
   }
 };
 
-/** 埠 80 前端的 Origin 不帶 port：本機與區網 IPv4。 */
-const builtinHttpOrigins = () => {
-  const origins = ["http://127.0.0.1", "http://localhost"];
+const withHttpAndHttps = (host) => [`http://${host}`, `https://${host}`];
+
+/** 埠 80／443 前端的 Origin 不帶 port：本機與區網 IPv4（http 與 https）。 */
+const builtinOrigins = () => {
+  const origins = [
+    ...withHttpAndHttps("127.0.0.1"),
+    ...withHttpAndHttps("localhost"),
+  ];
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name] || []) {
       const family = iface.family;
       const isIpv4 = family === "IPv4" || family === 4;
       if (isIpv4 && !iface.internal && iface.address) {
-        origins.push(`http://${iface.address}`);
+        origins.push(...withHttpAndHttps(iface.address));
       }
     }
   }
@@ -37,9 +42,13 @@ const builtinHttpOrigins = () => {
 
 let cachedBuiltinOrigins = null;
 
+const resetBuiltinOriginCache = () => {
+  cachedBuiltinOrigins = null;
+};
+
 const getEffectiveOrigins = (configured) => {
   if (!cachedBuiltinOrigins) {
-    cachedBuiltinOrigins = builtinHttpOrigins();
+    cachedBuiltinOrigins = builtinOrigins();
   }
   const list = [
     ...(Array.isArray(configured) ? configured : []),
@@ -65,4 +74,5 @@ module.exports = {
   normalizeOrigin,
   getEffectiveOrigins,
   isOriginAllowed,
+  resetBuiltinOriginCache,
 };

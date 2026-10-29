@@ -38,4 +38,4 @@ npm run test:data-export
 npm run test:data-export:sample-all
 ```
 
-改路徑時請同步：`package.json`、`windows/BaSetupWizard`、`scripts/generate-windows-services.cjs`、`scripts/build-and-package.ps1`、相關 docs。
+改路徑時請同步：`package.json`、`windows/BaSetupWizard`、`scripts/generate-windows-services.cjs`、`scripts/start-nuxt-frontend.mjs`、`scripts/build-and-package.ps1`、相關 docs。

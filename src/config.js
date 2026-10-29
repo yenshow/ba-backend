@@ -254,7 +254,7 @@ const mediaMtxPort = (portKey, legacyUrlKey, fallback) => {
 };
 
 /**
- * MediaMTX（後端 Control API 固定本機；瀏覽器 WHEP 埠由前端依目前 hostname 組裝）
+ * MediaMTX（後端 Control API 固定本機；瀏覽器 WHEP 走前端同源 /mediamtx）
  */
 const mediaMTX = {
   apiPort: mediaMtxPort("MEDIAMTX_API_PORT", "MEDIAMTX_API_BASE_URL", 9997),
