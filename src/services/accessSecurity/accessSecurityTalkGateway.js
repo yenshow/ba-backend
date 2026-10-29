@@ -5,7 +5,10 @@
 const { createLogger } = require("../../utils/logger");
 const licenseService = require("../license/licenseService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
-const { summaryIntercom } = require("../operationalEvents/operationalEventCopy");
+const {
+  summaryIntercom,
+  resolveTalkAction,
+} = require("../operationalEvents/operationalEventCopy");
 const accessSecurityService = require("./accessSecurityService");
 const { beginIndoorTalk } = require("./sipInviteService");
 const {
@@ -132,10 +135,10 @@ const endSession = async (socketId, reason) => {
     });
   }
 
-  let action = "網頁對講結束";
-  if (reason === "no-answer") action = "網頁對講未接聽";
-  else if (reason === "error") action = "網頁對講失敗";
-  else if (!entry.answeredAt) action = "網頁對講未接聽";
+  const action = resolveTalkAction({
+    reason,
+    answered: Boolean(entry.answeredAt),
+  });
 
   await recordTalkEvent({
     locationId: entry.locationId,

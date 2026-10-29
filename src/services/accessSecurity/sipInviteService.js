@@ -1,9 +1,10 @@
 /**
  * 層 2：直打室內機 SIP
  * - ring：只振鈴（180 後 CANCEL；200 立刻 BYE，無 RTP）
- * - broadcast：等待接聽（200）→ 單向 RTP 播放 G.711 音檔 → BYE
+ * - broadcast：等待接聽（200）→ 播 G.711 音檔 → BYE（產品單向；SDP 用 Talk session／sendrecv 以相容 9510）
  * - talk：探測用 sendrecv + 靜音 RTP（不播警報音檔）
  * - live：生產對講 sendrecv；200 ACK 後保持 RTP，由呼叫端掛斷
+ * ACK／CANCEL 的 CSeq 必須與 INVITE 相同（9510／YATE 否則不開喇叭）。
  */
 const dgram = require("dgram");
 const crypto = require("crypto");
@@ -68,18 +69,24 @@ const parseSipMessage = (buf) => {
 
 const parseAnswerSdp = (body, fallbackHost) => {
   const text = String(body || "");
-  const connMatch = text.match(/c=IN IP4 ([^\s\r\n]+)/i);
-  const mediaMatch = text.match(/m=audio (\d+) RTP\/AVP(?: (.+))?/i);
+  const audioBlockMatch = text.match(/m=audio[^\r\n]*[\s\S]*?(?=^m=|$)/im);
+  const audioBlock = audioBlockMatch ? audioBlockMatch[0] : text;
+  const sessionConn = text.match(/^c=IN IP4 ([^\s\r\n]+)/im);
+  const mediaConn = audioBlock.match(/^c=IN IP4 ([^\s\r\n]+)/im);
+  let remoteIp = String(mediaConn?.[1] || sessionConn?.[1] || fallbackHost || "").trim();
+  if (!remoteIp || remoteIp === "0.0.0.0") remoteIp = String(fallbackHost || "").trim();
+  const mediaMatch = audioBlock.match(/m=audio (\d+) RTP\/AVP(?: (.+))?/i);
   let payloadType = 0;
   if (mediaMatch?.[2]) {
     const pts = mediaMatch[2].split(/\s+/).map(Number);
     if (pts.includes(8) && !pts.includes(0)) payloadType = 8;
     else if (!pts.includes(0) && pts[0]) payloadType = pts[0];
   }
-  const dirMatch = text.match(/a=(sendrecv|sendonly|recvonly|inactive)/i);
+  const dirMatch = audioBlock.match(/a=(sendrecv|sendonly|recvonly|inactive)/i);
+  const remotePort = mediaMatch ? Number(mediaMatch[1]) : null;
   return {
-    remoteIp: connMatch?.[1] || fallbackHost,
-    remotePort: mediaMatch ? Number(mediaMatch[1]) : null,
+    remoteIp,
+    remotePort: Number.isFinite(remotePort) && remotePort > 0 ? remotePort : null,
     payloadType: payloadType === 8 ? 8 : 0,
     direction: dirMatch ? dirMatch[1].toLowerCase() : "sendrecv",
   };
@@ -121,6 +128,7 @@ const buildDigestAuth = ({ username, password, method, uri, auth }) => {
 };
 
 const isProvisional = (code) => Number.isInteger(code) && code >= 100 && code < 200;
+const isMediaReject = (code) => [415, 488, 606].includes(Number(code));
 
 const classify = (code) => {
   if (code === 200) return "ok";
@@ -191,6 +199,24 @@ class SipProbe {
     this._dialog = null;
     this._rtpPlayOpts = null;
     this._remoteBye = false;
+    this.inviteCseq = 1;
+    this.offerVideo = true;
+    this.videoSocket = null;
+    this.videoLocalPort = 0;
+  }
+
+  fromUser() {
+    return (
+      String(this.config.fromUser || "").trim() ||
+      DEFAULT_FROM_USER
+    );
+  }
+
+  authUser() {
+    return (
+      String(this.config.authUser || this.config.sipUser || "").trim() ||
+      "admin"
+    );
   }
 
   log(...args) {
@@ -226,11 +252,24 @@ class SipProbe {
         this.rtp = createRtpSender({ localIp: this.localIp });
         this.rtp
           .start()
-          .then(() => {
-            this.rtpLocalPort = this.rtp.localPort;
-            this.log(`本機 RTP ${this.localIp}:${this.rtpLocalPort}`);
-            resolve();
-          })
+          .then(
+            () =>
+              new Promise((res, rej) => {
+                this.rtpLocalPort = this.rtp.localPort;
+                this.videoSocket = dgram.createSocket("udp4");
+                this.videoSocket.on("error", () => {});
+                this.videoSocket.on("message", () => {});
+                this.videoSocket.bind(0, this.localIp, () => {
+                  this.videoLocalPort = this.videoSocket.address().port;
+                  this.log(
+                    `本機 RTP ${this.localIp}:${this.rtpLocalPort} video=${this.videoLocalPort}`,
+                  );
+                  res();
+                });
+                this.videoSocket.once("error", rej);
+              }),
+          )
+          .then(resolve)
           .catch(reject);
       });
     });
@@ -243,6 +282,12 @@ class SipProbe {
       /* ignore */
     }
     try {
+      this.videoSocket?.close();
+    } catch {
+      /* ignore */
+    }
+    this.videoSocket = null;
+    try {
       this.socket.close();
     } catch {
       /* ignore */
@@ -252,7 +297,9 @@ class SipProbe {
   handleIncomingRequest(parsed) {
     const start = parsed?.start || "";
     if (start.startsWith("SIP/2.0")) return false;
-    if (start.startsWith("BYE ")) {
+    const method = String(start.split(/\s+/)[0] || "").toUpperCase();
+    if (method === "ACK") return true;
+    if (method === "BYE") {
       this._remoteBye = true;
       this.send(this.buildSipResponse(parsed, "SIP/2.0 200 OK")).catch(() => {});
       if (typeof this.onRemoteBye === "function") {
@@ -264,7 +311,13 @@ class SipProbe {
       }
       return true;
     }
-    return start.startsWith("ACK ");
+    // 9510 振鈴後會送 MESSAGE（locknumXML）；不可當成 INVITE 回應
+    if (["MESSAGE", "INFO", "NOTIFY", "OPTIONS", "UPDATE"].includes(method)) {
+      this.send(this.buildSipResponse(parsed, "SIP/2.0 200 OK")).catch(() => {});
+      this.log(`已回應室內機 ${method}`);
+      return true;
+    }
+    return false;
   }
 
   buildSipResponse(parsed, statusLine) {
@@ -354,13 +407,17 @@ class SipProbe {
     });
   }
 
-  buildMessage(method, { requestUri, toUser, authHeader, body, toTag, branch }) {
+  buildMessage(method, { requestUri, toUser, authHeader, body, toTag, branch, cseq: cseqOverride }) {
     const host = this.config.sipHost;
-    const cseq = this.cseq;
-    this.cseq += 1;
+    const fromUser = this.fromUser();
+    const cseq = Number.isFinite(Number(cseqOverride))
+      ? Number(cseqOverride)
+      : this.cseq;
+    if (!Number.isFinite(Number(cseqOverride))) this.cseq += 1;
+    if (method === "INVITE") this.inviteCseq = cseq;
     if (!this.callId) this.callId = callIdNew(this.localIp);
     const viaBranch = branch || branchId();
-    const contact = `sip:${this.config.sipUser}@${this.localIp}:${this.localPort}`;
+    const contact = `sip:${fromUser}@${this.localIp}:${this.localPort}`;
     const to = toTag
       ? `<sip:${toUser}@${host}>;tag=${toTag}`
       : `<sip:${toUser}@${host}>`;
@@ -368,7 +425,7 @@ class SipProbe {
       `${method} ${requestUri} SIP/2.0`,
       `Via: SIP/2.0/UDP ${this.localIp}:${this.localPort};rport;branch=${viaBranch}`,
       "Max-Forwards: 70",
-      `From: "${this.config.displayName}" <sip:${this.config.sipUser}@${host}>;tag=${this.fromTag}`,
+      `From: "${this.config.displayName}" <sip:${fromUser}@${host}>;tag=${this.fromTag}`,
       `To: ${to}`,
       `Call-ID: ${this.callId}`,
       `CSeq: ${cseq} ${method}`,
@@ -390,21 +447,29 @@ class SipProbe {
   }
 
   buildOfferSdp() {
-    return [
+    const fromUser = this.fromUser();
+    const lines = [
       "v=0",
-      `o=${this.config.sipUser} ${Date.now()} ${Date.now()} IN IP4 ${this.localIp}`,
-      this.mode === "talk" || this.mode === "live"
-        ? "s=BA Intercom Talk"
-        : "s=BA Alert Broadcast",
+      `o=${fromUser} ${Date.now()} ${Date.now()} IN IP4 ${this.localIp}`,
+      "s=Talk session",
       `c=IN IP4 ${this.localIp}`,
       "t=0 0",
-      `m=audio ${this.rtpLocalPort} RTP/AVP 0 8 101`,
+      `m=audio ${this.rtpLocalPort} RTP/AVP 0 8`,
       "a=rtpmap:0 PCMU/8000",
       "a=rtpmap:8 PCMA/8000",
-      "a=rtpmap:101 telephone-event/8000",
-      this.mode === "talk" || this.mode === "live" ? "a=sendrecv" : "a=sendonly",
-      "",
-    ].join("\r\n");
+      "a=ptime:20",
+      "a=sendrecv",
+    ];
+    if (this.offerVideo && this.videoLocalPort) {
+      lines.push(
+        `m=video ${this.videoLocalPort} RTP/AVP 96`,
+        "a=rtpmap:96 H264/90000",
+        "a=fmtp:96 profile-level-id=42801F;packetization-mode=1",
+        "a=recvonly",
+      );
+    }
+    lines.push("");
+    return lines.join("\r\n");
   }
 
   extractToTag(resp) {
@@ -418,6 +483,7 @@ class SipProbe {
         requestUri,
         toUser,
         toTag,
+        cseq: this.inviteCseq,
       }),
     );
     await this.send(
@@ -564,6 +630,7 @@ class SipProbe {
         requestUri,
         toUser,
         branch: this.inviteBranch,
+        cseq: this.inviteCseq,
       }),
     );
   }
@@ -577,6 +644,7 @@ class SipProbe {
     while (Date.now() < deadline) {
       if (this.hangupRequested || current?.hangupRequested) return current;
       if (current.statusCode === 200) return current;
+      if (!current.statusCode) continue;
       if (!isProvisional(current.statusCode)) return current;
       const remain = deadline - Date.now();
       if (remain <= 0) break;
@@ -600,11 +668,24 @@ class SipProbe {
     return current;
   }
 
-  async invite() {
+  firstWaitMs() {
+    if (this.mode === "broadcast" || this.mode === "talk" || this.mode === "live") {
+      return Math.max(5000, this.config.answerMs || DEFAULT_ANSWER_MS);
+    }
+    if (this.mode === "early") {
+      return Math.max(3000, this.config.earlyCollectMs || 8000);
+    }
+    return Math.max(5000, this.config.holdMs);
+  }
+
+  async sendInviteAndWaitFirst() {
     this.callId = callIdNew(this.localIp);
     this.fromTag = tagId();
-    const requestUri = `sip:${this.config.targetUser}@${this.config.sipHost}:${this.config.sipPort}`;
     this.inviteBranch = branchId();
+    this.cseq = 1;
+    this.inbox = [];
+    const requestUri = `sip:${this.config.targetUser}@${this.config.sipHost}:${this.config.sipPort}`;
+    const waitMs = this.firstWaitMs();
     const inviteOpts = {
       requestUri,
       toUser: this.config.targetUser,
@@ -613,25 +694,21 @@ class SipProbe {
     };
 
     await this.send(this.buildMessage("INVITE", inviteOpts));
-    const firstWaitMs =
-      this.mode === "broadcast" || this.mode === "talk" || this.mode === "live"
-        ? Math.max(5000, this.config.answerMs || DEFAULT_ANSWER_MS)
-        : this.mode === "early"
-          ? Math.max(3000, this.config.earlyCollectMs || 8000)
-          : Math.max(5000, this.config.holdMs);
-    let resp = await this.waitOne(firstWaitMs);
-    if (resp.hangupRequested) return resp;
+    let resp = await this.waitOne(waitMs);
+    if (resp.hangupRequested) return { resp, requestUri };
 
     if (resp.statusCode === 401 || resp.statusCode === 407) {
       const hdr =
         resp.headers["www-authenticate"] || resp.headers["proxy-authenticate"];
       const auth = parseWwwAuthenticate(hdr);
       if (!auth) throw new Error("收到 401/407 但無法解析 Digest");
+      this.inviteBranch = branchId();
       await this.send(
         this.buildMessage("INVITE", {
           ...inviteOpts,
+          branch: this.inviteBranch,
           authHeader: buildDigestAuth({
-            username: this.config.sipUser,
+            username: this.authUser(),
             password: this.config.password,
             method: "INVITE",
             uri: requestUri,
@@ -639,23 +716,47 @@ class SipProbe {
           }),
         }),
       );
-      resp = await this.waitOne(firstWaitMs);
-      if (resp.hangupRequested) return resp;
+      resp = await this.waitOne(waitMs);
     }
+    return { resp, requestUri };
+  }
+
+  async invite() {
+    this.offerVideo = true;
+    let { resp, requestUri } = await this.sendInviteAndWaitFirst();
+    if (resp.hangupRequested) return resp;
 
     if (this.mode === "early") {
       return this.runEarlyMedia(resp, requestUri);
     }
 
     if (this.mode === "broadcast" || this.mode === "talk" || this.mode === "live") {
+      const answerMs = Math.max(5000, this.config.answerMs || DEFAULT_ANSWER_MS);
       resp = await this.waitUntilAnswerOrTimeout(
         resp,
         requestUri,
         this.config.targetUser,
-        Math.max(5000, this.config.answerMs || DEFAULT_ANSWER_MS),
+        answerMs,
       );
 
       if (resp.hangupRequested) return resp;
+
+      if (isMediaReject(resp.statusCode) && this.offerVideo) {
+        logger.info("SIP 拒視訊 INVITE，改音訊-only 重撥", {
+          host: this.config.sipHost,
+          statusCode: resp.statusCode,
+        });
+        this.offerVideo = false;
+        ({ resp, requestUri } = await this.sendInviteAndWaitFirst());
+        if (resp.hangupRequested) return resp;
+        resp = await this.waitUntilAnswerOrTimeout(
+          resp,
+          requestUri,
+          this.config.targetUser,
+          answerMs,
+        );
+        if (resp.hangupRequested) return resp;
+      }
 
       if (resp.statusCode === 200) {
         const toTag = this.extractToTag(resp);
@@ -663,6 +764,14 @@ class SipProbe {
         if (!sdp.remotePort) {
           throw new Error("200 OK SDP 缺少 audio port");
         }
+        logger.info("SIP 接聽 SDP", {
+          host: this.config.sipHost,
+          mode: this.mode,
+          remoteIp: sdp.remoteIp,
+          remotePort: sdp.remotePort,
+          payloadType: sdp.payloadType,
+          direction: sdp.direction,
+        });
         resp._remoteSdp = sdp;
         this._dialog = {
           requestUri,
@@ -681,6 +790,7 @@ class SipProbe {
               requestUri,
               toUser: this.config.targetUser,
               toTag,
+              cseq: this.inviteCseq,
             }),
           );
           if (this.mode === "live") {
@@ -831,6 +941,8 @@ const runSipSession = async (opts, mode) => {
     sipHost: host,
     sipPort,
     sipUser: username,
+    authUser: username,
+    fromUser: opts?.fromUser || DEFAULT_FROM_USER,
     password,
     targetUser: voipNumber,
     displayName: opts?.displayName || DEFAULT_DISPLAY_NAME,
@@ -1013,6 +1125,8 @@ async function beginIndoorTalk(device, meta = {}) {
     sipHost: host,
     sipPort,
     sipUser: username,
+    authUser: username,
+    fromUser: opts.fromUser || DEFAULT_FROM_USER,
     password,
     targetUser: voipNumber,
     displayName: opts.displayName,

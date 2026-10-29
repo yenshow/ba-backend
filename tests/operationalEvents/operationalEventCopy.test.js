@@ -10,6 +10,8 @@ const {
   summaryLinkageWrite,
   summaryIntercom,
   resolveIntercomEventLabel,
+  resolveTalkAction,
+  resolveBroadcastAction,
   summaryBarrierControlWrite,
   summaryRollCall,
 } = require("../../src/services/operationalEvents/operationalEventCopy");
@@ -181,10 +183,16 @@ const run = () => {
   assert.equal(
     summaryIntercom({
       placeLabel: "A1-01",
-      action: "手動語音廣播",
+      action: "廣播完成",
     }),
-    "A1-01：手動語音廣播",
+    "A1-01：廣播完成",
   );
+  assert.equal(resolveTalkAction({ answered: true }), "對講結束");
+  assert.equal(resolveTalkAction({ reason: "no-answer" }), "對講未接聽");
+  assert.equal(resolveTalkAction({ reason: "error" }), "對講失敗");
+  assert.equal(resolveBroadcastAction({ played: true }), "廣播完成");
+  assert.equal(resolveBroadcastAction({ ok: true }), "廣播未接聽");
+  assert.equal(resolveBroadcastAction({}), "廣播失敗");
 
   // 柵欄指令
   assert.equal(

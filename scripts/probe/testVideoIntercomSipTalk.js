@@ -1,6 +1,6 @@
 /**
  * 直打室內機 SIP 對講探測：sendrecv，接聽後只送靜音 RTP，統計入站 RTP。
- * 不播 alert-broadcast.pcm；不經管理中心；不改生產廣播 sendonly。
+ * 不播 alert-broadcast.pcm；不經管理中心。
  *
  *   npm run test:video-intercom-sip-talk -- --host 192.168.2.78 --to 1001 --password <pwd>
  */

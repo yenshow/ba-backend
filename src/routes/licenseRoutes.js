@@ -17,7 +17,7 @@ const toLicenseApiPayload = async (license) => ({
   features: license.features || [],
   quotas: license.quotas || {},
   usage: await licenseQuotaService.getUsageMap(
-    Object.keys(license.quotas || {}),
+    licenseService.getActiveFeatureKeys(),
   ),
   expired: license.expired,
   serialNumber: license.serialNumber ?? null,

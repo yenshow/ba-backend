@@ -1,0 +1,35 @@
+/**
+ * 攝影機型號分類白名單（與雙前端 cameraModelCategories.ts 對齊）。
+ */
+
+const CAMERA_CATEGORY_PEOPLE_COUNTING = "people_counting";
+const CAMERA_CATEGORY_LICENSE_PLATE = "license_plate_recognition";
+const CAMERA_CATEGORY_NVR = "nvr";
+
+const CAMERA_SURVEILLANCE_CATEGORY_CODES = [
+  "surveillance_2mp",
+  "surveillance_4mp",
+  "surveillance_5mp",
+  "surveillance_6mp",
+  "surveillance_8mp",
+];
+
+const CAMERA_MODEL_CATEGORY_CODES = [
+  CAMERA_CATEGORY_PEOPLE_COUNTING,
+  CAMERA_CATEGORY_LICENSE_PLATE,
+  CAMERA_CATEGORY_NVR,
+  ...CAMERA_SURVEILLANCE_CATEGORY_CODES,
+];
+
+const CAMERA_MODEL_CATEGORY_SET = new Set(CAMERA_MODEL_CATEGORY_CODES);
+const CAMERA_SURVEILLANCE_CATEGORY_SET = new Set(
+  CAMERA_SURVEILLANCE_CATEGORY_CODES,
+);
+
+module.exports = {
+  CAMERA_CATEGORY_PEOPLE_COUNTING,
+  CAMERA_CATEGORY_LICENSE_PLATE,
+  CAMERA_CATEGORY_NVR,
+  CAMERA_MODEL_CATEGORY_SET,
+  CAMERA_SURVEILLANCE_CATEGORY_SET,
+};

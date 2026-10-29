@@ -191,11 +191,10 @@ router.get(
   }),
 );
 
-// ========== 攝影機串流 API（影像監控系統，需授權 surveillance）==========
+// ========== 攝影機串流 API（監看頁要 surveillance；人流／車牌預覽見 stream 服務 Feature 閘門）==========
 router.post(
   "/:id/stream/start",
   disableHttpCache,
-  requireFeature("surveillance"),
   requirePermission("system.video_surveillance.stream.control"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
@@ -208,7 +207,6 @@ router.post(
 router.post(
   "/:id/stream/stop",
   disableHttpCache,
-  requireFeature("surveillance"),
   requirePermission("system.video_surveillance.stream.control"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {

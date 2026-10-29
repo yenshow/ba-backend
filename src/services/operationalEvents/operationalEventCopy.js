@@ -369,8 +369,22 @@ const resolveIntercomEventLabel = (message = {}) => {
   return "對講事件";
 };
 
+/** 平台對講結束語意（接通掛斷／未接聽／失敗） */
+const resolveTalkAction = ({ reason, answered } = {}) => {
+  if (String(reason || "") === "error") return "對講失敗";
+  if (String(reason || "") === "no-answer" || !answered) return "對講未接聽";
+  return "對講結束";
+};
+
+/** 平台廣播結束語意（播完／未接聽／失敗）。連動與手動同一套用詞。 */
+const resolveBroadcastAction = (invite) => {
+  if (invite?.played) return "廣播完成";
+  if (invite?.ok) return "廣播未接聽";
+  return "廣播失敗";
+};
+
 /**
- * 對講層 1／層 2 摘要
+ * 對講／廣播摘要
  * @param {{ placeLabel?: string|null, action?: string|null, detail?: string|null, message?: object }}
  */
 const summaryIntercom = ({
@@ -396,6 +410,8 @@ module.exports = {
   formatBusinessSummary,
   formatLinkageExecutionLabel,
   resolveIntercomEventLabel,
+  resolveTalkAction,
+  resolveBroadcastAction,
   summaryStateChange,
   summaryControlWrite,
   summaryLinkageWrite,

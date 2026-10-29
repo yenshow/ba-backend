@@ -1,5 +1,6 @@
 const db = require("../../database/db");
 const licenseService = require("../license/licenseService");
+const licenseQuotaService = require("../license/licenseQuotaService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError, throwApiError, rethrowIfApiError } = require("../../utils/apiErrors");
@@ -25,12 +26,13 @@ const {
 const {
   validatePeopleCountingSystemConfig,
 } = require("../peopleCounting/peopleCountingValidation");
+const { assertCamerasHaveCategory } = require("../devices/deviceCategoryGuard");
+const {
+  CAMERA_CATEGORY_PEOPLE_COUNTING,
+} = require("../../constants/cameraModelCategories");
 const {
   parseOptionalEventCameraDeviceId,
 } = require("../peopleCounting/peopleCountingConfig");
-const {
-  getPrimaryControllerDeviceId,
-} = require("./controllerBindingUtils");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const {
   ensureIntArray,
@@ -60,6 +62,26 @@ async function validatePeopleCountingSystemIfNeeded(
     zoneId: ctx.zoneId,
     isUpdate,
   });
+  if (String(systemConfig?.data_source || "").trim() !== "isapi_camera") return;
+  await assertCamerasHaveCategory(
+    query,
+    [
+      ...(Array.isArray(systemConfig.camera_device_ids)
+        ? systemConfig.camera_device_ids
+        : []),
+      ...(Array.isArray(systemConfig.entry_camera_device_ids)
+        ? systemConfig.entry_camera_device_ids
+        : []),
+      ...(Array.isArray(systemConfig.exit_camera_device_ids)
+        ? systemConfig.exit_camera_device_ids
+        : []),
+      systemConfig.entry_event_camera_device_id,
+      systemConfig.exit_event_camera_device_id,
+    ],
+    CAMERA_CATEGORY_PEOPLE_COUNTING,
+    C.PEOPLE_COUNTING_VALIDATION_FAILED,
+    "人流地點僅可綁定型號分類為門禁管理的攝影機",
+  );
 }
 
 function peopleCountingRowConfigToMergeInput(raw) {
@@ -429,17 +451,6 @@ function buildSystemConfig(systemType, config) {
   }
 }
 
-const CONTROLLER_QUOTA_SYSTEM_TYPES = new Set([
-  "elevator",
-  "lighting",
-  "hvac",
-  "air_circulation",
-  "drainage",
-  "power",
-  "fire",
-  "emergency_rescue",
-]);
-
 async function assertSystemLicensed(systemType) {
   const license = await licenseService.getLicenseState();
   const openAll = license?.activationMethod === "open_all";
@@ -455,75 +466,6 @@ async function assertSystemLicensed(systemType) {
   if (!licensed) {
     throw createApiError(C.FEATURE_NOT_LICENSED, `未授權功能：${systemType}`, {
       details: { feature: systemType },
-    });
-  }
-}
-
-async function assertControllerQuotaWithinLimit({
-  query,
-  systemType,
-  nextDeviceId,
-  currentDeviceId = null,
-  excludeSystemId = null,
-} = {}) {
-  if (!CONTROLLER_QUOTA_SYSTEM_TYPES.has(systemType)) return;
-  if (!nextDeviceId) return;
-  if (currentDeviceId && Number(nextDeviceId) === Number(currentDeviceId))
-    return;
-
-  const license = await licenseService.getLicenseState();
-  const openAll = license?.activationMethod === "open_all";
-  if (openAll) return;
-
-  const rawMax = license?.quotas?.[systemType]?.maxDevices;
-  const max = rawMax == null ? null : Math.floor(Number(rawMax));
-  const hasMax = Number.isFinite(max) && max >= 0;
-  if (!hasMax) return;
-
-  // 僅允許綁定 controller 類型設備（避免把用量算錯）
-  const deviceRows = await query(
-    `SELECT d.type_code
-     FROM devices d
-     WHERE d.id = $1`,
-    [Number(nextDeviceId)],
-  );
-  if (deviceRows.length === 0) {
-    throw createApiError(C.LOCATION_DEVICE_NOT_FOUND, "綁定的設備不存在");
-  }
-  if (deviceRows[0].type_code !== "controller") {
-    throw createApiError(C.LOCATION_DEVICE_NOT_CONTROLLER, "此系統僅允許綁定 controller 類型設備");
-  }
-
-  const rows = await query(
-    `SELECT
-       COUNT(*)::int AS used,
-       SUM(CASE WHEN device_id = $2 THEN 1 ELSE 0 END)::int AS has
-     FROM (
-       SELECT DISTINCT device_id
-       FROM (
-         SELECT
-           CASE
-             WHEN ls.system_type = 'elevator' THEN (ls.system_config->'ladder_device'->>'device_id')::int
-             ELSE (ls.system_config->'device_ids'->>0)::int
-           END AS device_id
-         FROM location_systems ls
-         WHERE ls.system_type = $1
-           AND ($3::int IS NULL OR ls.id <> $3::int)
-       ) x
-       WHERE device_id IS NOT NULL
-     ) t`,
-    [
-      systemType,
-      Number(nextDeviceId),
-      excludeSystemId != null ? Number(excludeSystemId) : null,
-    ],
-  );
-
-  const used = Number(rows?.[0]?.used ?? 0);
-  const has = Number(rows?.[0]?.has ?? 0);
-  if (used >= max && has === 0) {
-    throw createApiError(C.LICENSE_QUOTA_EXCEEDED, "已達到授權配額上限", {
-      details: { feature: systemType, used, max },
     });
   }
 }
@@ -688,12 +630,11 @@ async function createSystem(query, locationId, system) {
     false,
   );
 
-  // 授權/Quota（做法 B）：controller 類系統的用量以 location_systems 綁定計數
   await assertSystemLicensed(systemType);
-  await assertControllerQuotaWithinLimit({
+  await licenseQuotaService.assertSystemQuotaWithinLimit({
     query,
     systemType,
-    nextDeviceId: getPrimaryControllerDeviceId(systemType, systemConfig),
+    nextConfig: systemConfig,
   });
 
   const result = await query(
@@ -752,10 +693,6 @@ async function updateSystem(query, systemId, system) {
           }
         })()
       : existing[0].system_config || {};
-  const currentDeviceId = getPrimaryControllerDeviceId(
-    currentSystemType,
-    currentSystemConfig,
-  );
   const targetSystemType = systemType || currentSystemType;
 
   assertValidSystemType(targetSystemType);
@@ -818,12 +755,10 @@ async function updateSystem(query, systemId, system) {
   }
 
   await assertSystemLicensed(targetSystemType);
-  await assertControllerQuotaWithinLimit({
+  await licenseQuotaService.assertSystemQuotaWithinLimit({
     query,
     systemType: targetSystemType,
-    nextDeviceId: getPrimaryControllerDeviceId(targetSystemType, systemConfig),
-    currentDeviceId:
-      targetSystemType === currentSystemType ? currentDeviceId : null,
+    nextConfig: systemConfig,
     excludeSystemId: systemId,
   });
 
@@ -1244,10 +1179,8 @@ module.exports = {
   shallowMergePeopleCountingConfig,
   buildSystemConfig,
   assertSystemLicensed,
-  assertControllerQuotaWithinLimit,
   createSystem,
   updateSystem,
   createLocationWithSystems,
   updateLocationWithSystems,
-  CONTROLLER_QUOTA_SYSTEM_TYPES,
 };

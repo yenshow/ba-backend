@@ -7,6 +7,7 @@ const logger = require("../../utils/logger").createLogger("Device Stream");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const C = require("../../utils/apiErrorCodes");
 const { createApiError } = require("../../utils/apiErrors");
+const licenseQuotaService = require("../license/licenseQuotaService");
 
 // 同一台攝影機同時被多視窗/多分割要求 start 時，合併成單次啟動，避免並發 addPath 造成連續 reload
 const startInFlightByDeviceId = new Map();
@@ -52,6 +53,7 @@ async function startStream(deviceId) {
 
   const task = (async () => {
   const { device, rtspUrl } = await getCameraRtspUrl(deviceId);
+  await licenseQuotaService.assertCameraStreamLicensed(device);
   const pathName = mediaMTXService.pathNameFromDeviceId(deviceId);
   // 若 path 已存在，直接回覆 running，避免重複 addPath 造成 MediaMTX 多次 reload
   const playback = mediaMTXService.buildWebrtcPlayback(pathName);

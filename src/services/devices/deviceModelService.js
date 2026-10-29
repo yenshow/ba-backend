@@ -26,6 +26,8 @@ const {
   METER_KINDS,
   MODBUS_DATA_TYPES,
 } = require("../../constants/energyParameterCatalog");
+const licenseQuotaService = require("../license/licenseQuotaService");
+const { CAMERA_MODEL_CATEGORY_SET } = require("../../constants/cameraModelCategories");
 const {
   invalidateDeviceLoggingConfig,
 } = require("./deviceLoggingConfig");
@@ -36,6 +38,29 @@ function parseOptionalInt(val) {
   if (val === undefined || val === null || val === "") return null;
   const n = Number(val);
   return Number.isInteger(n) ? n : null;
+}
+
+function normalizeCategoryCodeInput(category_code) {
+  if (category_code == null) return null;
+  const cc = String(category_code).trim();
+  return cc ? cc : null;
+}
+
+function assertCategoryCodeLength(categoryCode) {
+  if (categoryCode && categoryCode.length > 50) {
+    throwApiError(C.DEVICE_MODEL_CATEGORY_CODE_INVALID, "category_code 長度過長");
+  }
+}
+
+function assertCameraCategoryCode(typeCode, categoryCode, { required }) {
+  if (typeCode !== "camera") return;
+  if (required && !categoryCode) {
+    throwApiError(C.DEVICE_MODEL_CATEGORY_CODE_INVALID, "攝影機型號必須選擇分類");
+  }
+  if (!categoryCode) return;
+  if (!CAMERA_MODEL_CATEGORY_SET.has(categoryCode)) {
+    throwApiError(C.DEVICE_MODEL_CATEGORY_CODE_INVALID, "攝影機型號分類不正確");
+  }
 }
 
 async function getAllDeviceModels(filters = {}) {
@@ -256,13 +281,11 @@ async function createDeviceModel(data, userId) {
 
     const resolvedTypeCode = inputTypeCode;
 
-    const finalCategoryCode =
-      category_code != null && String(category_code).trim()
-        ? String(category_code).trim()
-        : null;
-    if (finalCategoryCode && finalCategoryCode.length > 50) {
-      throwApiError(C.DEVICE_MODEL_CATEGORY_CODE_INVALID, "category_code 長度過長");
-    }
+    const finalCategoryCode = normalizeCategoryCodeInput(category_code);
+    assertCategoryCodeLength(finalCategoryCode);
+    assertCameraCategoryCode(resolvedTypeCode, finalCategoryCode, {
+      required: true,
+    });
 
     if (config && resolvedTypeCode === "sensor") {
       validateSensorParametersConfig(config);
@@ -374,8 +397,8 @@ async function updateDeviceModel(id, data, userId) {
       }
     }
 
+    const targetTypeCode = inputTypeCode || currentTypeCode;
     if (config !== undefined) {
-      const targetTypeCode = inputTypeCode || currentTypeCode;
       if (targetTypeCode === "sensor") {
         validateSensorParametersConfig(config);
       }
@@ -422,19 +445,25 @@ async function updateDeviceModel(id, data, userId) {
       params.push(description || null);
     }
 
+    let nextCategoryCode = existingModel.category_code;
     if (category_code !== undefined) {
-      const cc =
-        category_code != null && String(category_code).trim()
-          ? String(category_code).trim()
-          : null;
-      if (cc && cc.length > 50) {
-        throwApiError(
-          C.DEVICE_MODEL_CATEGORY_CODE_INVALID,
-          "category_code 長度過長",
-        );
-      }
+      const cc = normalizeCategoryCodeInput(category_code);
+      assertCategoryCodeLength(cc);
+      assertCameraCategoryCode(targetTypeCode, cc, { required: true });
+      nextCategoryCode = cc;
       updates.push("category_code = ?");
       params.push(cc);
+    }
+
+    if (category_code !== undefined || config !== undefined) {
+      await licenseQuotaService.assertModelQuotaReclass({
+        modelId: id,
+        typeCode: targetTypeCode,
+        existingCategoryCode: existingModel.category_code,
+        nextCategoryCode,
+        nextModelConfig:
+          config !== undefined ? config : existingModel.config,
+      });
     }
 
     if (config !== undefined) {

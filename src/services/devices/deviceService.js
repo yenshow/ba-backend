@@ -9,12 +9,11 @@ const {
   resolveHcnetSdkPort,
 } = require("../../utils/deviceHelpers");
 const websocketService = require("../websocket/websocketService");
-const licenseService = require("../license/licenseService");
 const licenseQuotaService = require("../license/licenseQuotaService");
 const mediaMTXConfigSyncService = require("../communication/mediaMTXConfigSyncService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError, throwApiError, causeDetails } = require("../../utils/apiErrors");
+const { throwApiError, causeDetails } = require("../../utils/apiErrors");
 const {
   rethrowIfApiError,
   failDeviceList,
@@ -453,64 +452,6 @@ async function createDevice(deviceData, userId) {
 
     const typeCode = inputTypeCode;
 
-    // Quota/授權：決定此設備歸屬的 feature key（若可判定）
-    const inputSystemType =
-      typeof deviceData?.system_type === "string"
-        ? deviceData.system_type
-        : typeof deviceData?.systemType === "string"
-          ? deviceData.systemType
-          : typeof config?.systemType === "string"
-            ? config.systemType
-            : null;
-
-    // controller 的 Quota/授權改以 location_systems 綁定時檢查（做法 B）。
-    // 因此建立 controller 設備本身不再要求 system_type，也不在此做 quota 檢查。
-    const featureKey =
-      typeCode === "controller"
-        ? null
-        : typeCode === "access_control"
-          ? await licenseQuotaService.resolveAccessControlFeatureKey()
-          : licenseQuotaService.resolveDeviceFeatureKey({
-              typeCode,
-              systemType: inputSystemType,
-            });
-
-    // 若能判定 feature，則做授權與 quota 檢查（openAll 時略過）
-    if (featureKey) {
-      const license = await licenseService.getLicenseState();
-      const activeKeys = licenseService.getActiveFeatureKeys();
-
-      if (!activeKeys.includes(featureKey)) {
-        throw createApiError(
-          C.DEVICE_UNSUPPORTED_FEATURE,
-          `不支援的 system_type：${featureKey}`,
-        );
-      }
-
-      const openAll = license?.activationMethod === "open_all";
-      const licensed =
-        Array.isArray(license?.features) && license.features.includes(featureKey);
-
-      if (!openAll && !licensed) {
-        throw createApiError(C.FEATURE_NOT_LICENSED, `未授權功能：${featureKey}`, {
-          details: { feature: featureKey },
-        });
-      }
-
-      const rawMax = license?.quotas?.[featureKey]?.maxDevices;
-      const max = rawMax == null ? null : Math.floor(Number(rawMax));
-      const hasMax = Number.isFinite(max) && max >= 0;
-
-      if (!openAll && hasMax) {
-        const used = await licenseQuotaService.getUsedDevicesCount(featureKey);
-        if (used >= max) {
-          throw createApiError(C.LICENSE_QUOTA_EXCEEDED, "已達到授權配額上限", {
-            details: { feature: featureKey, used, max },
-          });
-        }
-      }
-    }
-
     // 驗證 model_id 必填
     if (!model_id) {
       throwApiError(C.DEVICE_MODEL_ID_REQUIRED, "設備型號 ID 不能為空");
@@ -545,6 +486,20 @@ async function createDevice(deviceData, userId) {
     }
     if (typeCode === "camera") {
       applyCameraNvrFlagFromModel(config, modelCategoryCode);
+    }
+
+    const { featureKey } = licenseQuotaService.applyQuotaFeatureToConfig({
+      typeCode,
+      categoryCode: modelCategoryCode,
+      modelConfig,
+      deviceConfig: config,
+    });
+    if (featureKey) {
+      await licenseQuotaService.assertDeviceWriteQuota({
+        featureKey,
+        deviceConfig: config,
+        modelConfig,
+      });
     }
 
     // 驗證配置
@@ -832,6 +787,21 @@ async function updateDevice(id, deviceData, userId) {
       }
       if (typeCode === "camera") {
         applyCameraNvrFlagFromModel(config, modelCategoryCode);
+      }
+
+      const { featureKey } = licenseQuotaService.applyQuotaFeatureToConfig({
+        typeCode,
+        categoryCode: modelCategoryCode,
+        modelConfig,
+        deviceConfig: config,
+      });
+      if (featureKey) {
+        await licenseQuotaService.assertDeviceWriteQuota({
+          featureKey,
+          deviceConfig: config,
+          modelConfig,
+          excludeDeviceId: id,
+        });
       }
 
       // 驗證配置

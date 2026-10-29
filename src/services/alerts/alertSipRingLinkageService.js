@@ -6,7 +6,10 @@ const db = require("../../database/db");
 const { createLogger } = require("../../utils/logger");
 const { alertIndoorDevice } = require("../accessSecurity/sipInviteService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
-const { summaryIntercom } = require("../operationalEvents/operationalEventCopy");
+const {
+  summaryIntercom,
+  resolveBroadcastAction,
+} = require("../operationalEvents/operationalEventCopy");
 const licenseService = require("../license/licenseService");
 const {
   normalizeIdList,
@@ -98,7 +101,6 @@ async function processSipRingLinkagesForNewAlert(alert) {
         const invite = await alertIndoorDevice(device, {
           source: "alert_linkage",
         });
-        const actionLabel = invite.played ? "警報語音廣播" : "警報振鈴";
         let indoorPlace = null;
         try {
           indoorPlace = await resolveLocationByIndoorDeviceId(device.id);
@@ -118,7 +120,7 @@ async function processSipRingLinkagesForNewAlert(alert) {
           device_id: Number(device.id),
           message: summaryIntercom({
             placeLabel,
-            action: invite.ok ? actionLabel : `${actionLabel}失敗`,
+            action: resolveBroadcastAction(invite),
           }),
           payload: {
             layer: 2,

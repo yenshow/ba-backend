@@ -8,6 +8,10 @@ const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFea
 const { ensureIntArray } = require("../location/locationShared");
 const { parseStatsResetAtField } = require("../entryExit/locationStatsReset");
 const { parseLaneId } = require("./vehicleAccessHelpers");
+const { assertCamerasHaveCategory } = require("../devices/deviceCategoryGuard");
+const {
+  CAMERA_CATEGORY_LICENSE_PLATE,
+} = require("../../constants/cameraModelCategories");
 const {
   parseEventBackfillFields,
 } = require("../isapi/isapiEventBackfillCommon");
@@ -215,19 +219,13 @@ async function validateVehicleAccessConfig(systemConfig) {
   }
 
   const allDevices = [...entrySet, ...exitSet];
-
-  const typeRows = await db.query(
-    `SELECT id, type_code FROM devices WHERE id = ANY(?::int[])`,
-    [allDevices],
+  await assertCamerasHaveCategory(
+    db.query,
+    allDevices,
+    CAMERA_CATEGORY_LICENSE_PLATE,
+    C.VEHICLE_ACCESS_VALIDATION_FAILED,
+    "車輛地點僅可綁定型號分類為車牌辨識的攝影機",
   );
-  for (const d of typeRows || []) {
-    if (String(d.type_code || "").toLowerCase() !== "camera") {
-      throwApiError(
-        C.VEHICLE_ACCESS_VALIDATION_FAILED,
-        `設備 ${d.id} 必須為攝影機（type_code=camera）`,
-      );
-    }
-  }
 
   return cfg;
 }

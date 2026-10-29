@@ -223,15 +223,34 @@ const normalizeQuotasObject = (quotas) => {
     const q = obj[key];
     if (!q || typeof q !== "object" || Array.isArray(q)) continue;
 
+    const entry = {};
     const max = q.maxDevices;
-    if (max == null) continue; // null/undefined = unlimited → 不落地
-    const n = Number(max);
-    if (!Number.isFinite(n)) continue;
-    const asInt = Math.floor(n);
-    if (asInt < 0) continue;
-    normalized[key] = { maxDevices: asInt };
+    if (max != null) {
+      const n = Number(max);
+      if (Number.isFinite(n)) {
+        const asInt = Math.floor(n);
+        if (asInt >= 0) entry.maxDevices = asInt;
+      }
+    }
+    const maxPoints = q.maxPoints;
+    if (maxPoints != null) {
+      const n = Number(maxPoints);
+      if (Number.isFinite(n)) {
+        const asInt = Math.floor(n);
+        if (asInt >= 0) entry.maxPoints = asInt;
+      }
+    }
+    if (entry.maxDevices == null && entry.maxPoints == null) continue;
+    normalized[key] = entry;
   }
   return normalized;
+};
+
+const mergeQuotaNumber = (a, b) => {
+  const av = Number.isFinite(a) ? a : null;
+  const bv = Number.isFinite(b) ? b : null;
+  if (av == null && bv == null) return null;
+  return (av ?? 0) + (bv ?? 0);
 };
 
 const mergeQuotasAdditive = (existing, incoming) => {
@@ -247,11 +266,14 @@ const mergeQuotasAdditive = (existing, incoming) => {
 
   for (const key of allowed) {
     if (!presentKeys.has(key)) continue;
-    const av = a[key]?.maxDevices;
-    const bv = b[key]?.maxDevices;
-    const sum = (Number.isFinite(av) ? av : 0) + (Number.isFinite(bv) ? bv : 0);
+    const devices = mergeQuotaNumber(a[key]?.maxDevices, b[key]?.maxDevices);
+    const points = mergeQuotaNumber(a[key]?.maxPoints, b[key]?.maxPoints);
+    const entry = {};
     // 注意：0 代表「完全不允許」，不可當成「無配額」刪掉
-    next[key] = { maxDevices: sum };
+    if (devices != null) entry.maxDevices = devices;
+    if (points != null) entry.maxPoints = points;
+    if (entry.maxDevices == null && entry.maxPoints == null) continue;
+    next[key] = entry;
   }
   return next;
 };

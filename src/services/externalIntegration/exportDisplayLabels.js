@@ -47,8 +47,8 @@ const SYSTEM_SOURCE_LABELS = {
   access_security: "門禁保全",
   alert_linkage: "警報連動",
   video_intercom: "組網對講",
-  access_security_ring: "語音廣播",
-  access_security_talk: "網頁對講",
+  access_security_ring: "廣播",
+  access_security_talk: "對講",
   system: "系統",
 };
 
@@ -58,7 +58,7 @@ const OPERATIONAL_KIND_LABELS = {
   access: "門禁／人流",
   vehicle: "車輛進出",
   elevator: "電梯管理",
-  intercom: "對講",
+  intercom: "對講／廣播",
 };
 
 const VEHICLE_DATA_SOURCE_LABELS = {
