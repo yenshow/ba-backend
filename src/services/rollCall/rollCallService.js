@@ -138,7 +138,10 @@ const assertNoOverlap = async ({
         otherDays,
       )
     ) {
-      throwApiError(C.CONFLICT, `與啟用中的規則「${row.name}」時段重疊`);
+      throwApiError(
+        C.ROLL_CALL_RULE_OVERLAP,
+        `與啟用中的規則「${row.name}」時段重疊`,
+      );
     }
   }
 };
@@ -326,7 +329,7 @@ const replaceLocationRules = async (locationId, rulesInput) => {
         )
       ) {
         throwApiError(
-          C.CONFLICT,
+          C.ROLL_CALL_RULE_OVERLAP,
           `啟用中的規則「${current.name}」與「${other.name}」時段重疊`,
         );
       }

@@ -1,3 +1,7 @@
+const {
+  isIsapiValidContentError,
+} = require("../accessControl/accessControlHelpers");
+
 const FACE_MODELING_ERROR_MESSAGE =
   "設備無法從大頭照建立人臉模型，請改用清晰正臉單人照（320×320 方形 ≤200KB），或使用設備擷取人臉後重試";
 
@@ -18,6 +22,9 @@ function normalizeIsapiErrorMessage(raw) {
     /saveFacePic/i.test(msg)
   ) {
     return FACE_MODELING_ERROR_MESSAGE;
+  }
+  if (isIsapiValidContentError(msg)) {
+    return "設備拒絕人員有效期限，已嘗試相容格式仍失敗。請檢查效期或改為長期有效後重試";
   }
   return msg;
 }

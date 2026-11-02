@@ -32,8 +32,10 @@ const SUB_TYPES_PROCESS = new Set([1, 9, 38, 39, 75, 76, 2077, 2078, 2079]);
  * @param {object} ac - AccessControllerEvent 巢狀物件
  */
 function isProcessableEvent(ac) {
-  if (!ac || Number(ac.majorEventType) !== 5) return false;
-  return SUB_TYPES_PROCESS.has(Number(ac.subEventType));
+  if (!ac) return false;
+  const major = Number(ac.majorEventType ?? ac.major);
+  if (major !== 5) return false;
+  return SUB_TYPES_PROCESS.has(Number(ac.subEventType ?? ac.minor));
 }
 
 /**

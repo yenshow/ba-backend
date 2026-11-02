@@ -27,6 +27,11 @@ const { resolveUploadFilePath } = require("../../utils/baDataPaths");
 const {
   resolveCustomFieldsForWrite,
 } = require("./personnelProfileSchema");
+const {
+  normalizeIsapiDateTime,
+  taipeiDateOnly,
+  ISAPI_VALID_MAX_END,
+} = require("../accessControl/accessControlHelpers");
 
 const VALID_STATUSES = ["active", "inactive"];
 const MAX_PERSON_GROUP_MEMBER_IDS = 5000;
@@ -908,28 +913,6 @@ async function updatePerson(id, data) {
 
 // ========== 有效期限（Valid；僅存平台，設備同步統一處理） ==========
 
-function normalizeIsapiTimeString(value) {
-  const s = String(value || "").trim();
-  if (!s) return null;
-  // 支援 yyyy-mm-dd（from <input type="date">／批次匯入範例）→ 補 00:00:00
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00`;
-  // 支援 yyyy-mm-ddThh:mm → 補秒
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return `${s}:00`;
-  // 支援 yyyy-mm-ddThh:mm:ss（不含 Z/millis）
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)) return s;
-  // 支援 ISO，統一轉為不含毫秒與 Z 的格式
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString().replace(/\.\d{3}Z$/, "");
-}
-
-function isBeginBeforeEnd(beginTime, endTime) {
-  const b = new Date(beginTime).getTime();
-  const e = new Date(endTime).getTime();
-  if (!Number.isFinite(b) || !Number.isFinite(e)) return false;
-  return b <= e;
-}
-
 function upsertFingerPrint(list, params = {}) {
   const fingerData = String(params.fingerData || "").trim();
   const fpIdRaw = params.fingerPrintID == null ? 1 : params.fingerPrintID;
@@ -955,20 +938,18 @@ function buildValidityPayload(params = {}) {
     params.longTerm !== undefined ? Boolean(params.longTerm) : true;
   const beginTimeRaw = params.beginTime ?? null;
   const endTimeRaw = params.endTime ?? null;
-  let beginTime = normalizeIsapiTimeString(beginTimeRaw);
-  let endTime = normalizeIsapiTimeString(endTimeRaw);
+  let beginTime = normalizeIsapiDateTime(beginTimeRaw, { asEnd: false }) || null;
+  let endTime = normalizeIsapiDateTime(endTimeRaw, { asEnd: true }) || null;
 
   // 永久授權：允許未提供日期，後端自動補齊避免同步工作失敗（常見於批次匯入/外部資料來源）
   if (longTerm && (!beginTime || !endTime)) {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    beginTime = `${today}T00:00:00`;
-    endTime = "2035-12-31T23:59:59";
+    beginTime = `${taipeiDateOnly()}T00:00:00`;
+    endTime = ISAPI_VALID_MAX_END;
   }
 
   if (!beginTime || !endTime)
     throwApiError(C.PERSONNEL_VALIDATION_FAILED,"請提供有效期限（beginTime / endTime）");
-  if (!isBeginBeforeEnd(beginTime, endTime)) {
+  if (beginTime > endTime) {
     throwApiError(C.PERSONNEL_VALIDATION_FAILED,
       "有效期限起訖不正確（beginTime 必須小於等於 endTime）",
     );

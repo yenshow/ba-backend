@@ -26,7 +26,7 @@ const SUB_TYPES_WITH_SNAPSHOT = new Set([75, 76]);
 
 function extractSubEventType(payload) {
   if (!payload || typeof payload !== "object") return null;
-  const direct = payload.subEventType;
+  const direct = payload.subEventType ?? payload.minor;
   if (direct != null && Number.isFinite(Number(direct))) return Number(direct);
   const list = payload.InfoList ?? payload.infoList;
   if (list == null) return null;

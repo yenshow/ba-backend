@@ -25,15 +25,16 @@ const SCRIPT_CONFIG = {
   port: 80,
   username: "admin",
   password: "Aa83124007",
-  /** "all"（門禁）| "list"（PeopleCounting／人臉攝影機） */
-  subscribeMode: "list",
+  /** "all"（門禁／讀卡機）| "list"（PeopleCounting／人臉攝影機） */
+  subscribeMode: "all",
   channelId: 1,
   eventTypes: ["faceCapture", "AccessControllerEvent"],
   heartbeat: null,
   xmlNs: "http://www.isapi.org/ver20/XMLSchema",
-  maxParts: 20,
-  exitAfterMs: 60_000,
-  showKeepAlive: false,
+  maxParts: 40,
+  exitAfterMs: 120_000,
+  /** 探測預設印 heartbeat，避免誤以為沒收到 */
+  showKeepAlive: true,
   /** 業務事件印完整內容（不截斷）；modelData base64 預設省略以便對欄位 */
   fullDump: true,
   omitModelData: true,
@@ -225,29 +226,103 @@ const parseJsonPart = (buf) => {
   }
 };
 
-const isKeepAliveEvent = (payloadText) => {
-  if (!payloadText) return false;
+const keepAliveLabel = (payloadText) => {
+  if (!payloadText) return null;
 
   if (payloadText[0] === "{") {
     const obj = parseJsonPart(Buffer.from(payloadText, "utf8"));
-    if (!obj) return false;
+    if (!obj) return null;
     const eventType = String(obj.eventType || "").toLowerCase();
-    if (eventType === "heartbeat" || eventType === "heart beat") return true;
-    if (String(obj.eventState || "").toLowerCase() === "inactive") return true;
-    return (
-      !obj.eventType && Boolean(obj.ipAddress || obj.portNo || obj.macAddress)
-    );
+    if (eventType === "heartbeat" || eventType === "heart beat") {
+      return eventType;
+    }
+    if (
+      String(obj.eventState || "").toLowerCase() === "inactive" &&
+      eventType &&
+      eventType !== "accesscontrollerevent"
+    ) {
+      return `${eventType}/inactive`;
+    }
+    return null;
   }
 
   if (payloadText[0] === "<") {
     const t = payloadText.toLowerCase();
-    return (
-      t.includes("<eventtype>heartbeat</eventtype>") ||
-      (t.includes("eventstate") && t.includes("inactive"))
-    );
+    if (t.includes("<eventtype>heartbeat</eventtype>")) return "heartbeat";
+    if (
+      t.includes("eventstate") &&
+      t.includes("inactive") &&
+      !t.includes("accesscontrollerevent")
+    ) {
+      return "xml-inactive";
+    }
   }
 
-  return false;
+  return null;
+};
+
+const previewBody = (data, maxLen = 800) => {
+  if (data == null) return "";
+  if (Buffer.isBuffer(data)) return toPreviewText(data, maxLen);
+  if (typeof data === "string") return toPreviewText(data, maxLen);
+  try {
+    return toPreviewText(JSON.stringify(data, null, 2), maxLen);
+  } catch {
+    return String(data);
+  }
+};
+
+const dumpGet = async (client, path) => {
+  try {
+    const res = await client.request({ method: "GET", path });
+    console.log(
+      `[ISAPI Probe] GET ${path} HTTP ${res.status}\n${previewBody(res.data, 1200)}`,
+    );
+  } catch (error) {
+    console.log(
+      `[ISAPI Probe] GET ${path} failed: ${error?.message || String(error)}`,
+    );
+  }
+};
+
+const dumpRecentAcsEvents = async (client) => {
+  const now = new Date();
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  try {
+    const res = await client.request({
+      method: "POST",
+      path: "/ISAPI/AccessControl/AcsEvent?format=json",
+      data: {
+        AcsEventCond: {
+          searchID: `probe-${Date.now()}`,
+          searchResultPosition: 0,
+          maxResults: 5,
+          major: 5,
+          minor: 0,
+          startTime: `${date}T00:00:00+08:00`,
+          endTime: `${date}T23:59:59+08:00`,
+        },
+      },
+    });
+    const acs = res.data?.AcsEvent || res.data?.acsEvent || res.data || {};
+    const infoList = acs.InfoList || acs.infoList || [];
+    const rows = (Array.isArray(infoList) ? infoList : [infoList])
+      .filter(Boolean)
+      .slice(-5)
+      .map((item) => ({
+        time: item.time || item.dateTime || "",
+        employee: item.employeeNoString || item.employeeNo || "",
+        name: item.name || item.personName || "",
+        major: item.major ?? item.majorEventType,
+        minor: item.minor ?? item.subEventType,
+        cardNo: item.cardNo || "",
+      }));
+    console.log("[ISAPI Probe] AcsEvent 今日最近筆", rows);
+  } catch (error) {
+    console.log(
+      `[ISAPI Probe] AcsEvent 查詢失敗: ${error?.message || String(error)}`,
+    );
+  }
 };
 
 const consumeMultipartStream = async ({
@@ -268,7 +343,7 @@ const consumeMultipartStream = async ({
   let buffer = Buffer.alloc(0);
   let partCount = 0;
 
-  const tryConsumeOnePart = async () => {
+  const tryConsumeOnePart = () => {
     if (buffer.length === 0) return false;
     let start = buffer.indexOf(sepWithCRLF);
     let skip = sepWithCRLF.length;
@@ -308,18 +383,28 @@ const consumeMultipartStream = async ({
     const body = buffer.slice(bodyStart, bodyEnd);
     buffer = buffer.slice(bodyEnd);
     partCount += 1;
-    await onPart({ index: partCount, headerStr, body });
+    Promise.resolve(onPart({ index: partCount, headerStr, body })).catch(
+      (error) => {
+        throw error;
+      },
+    );
     return true;
   };
 
   return new Promise((resolve, reject) => {
-    inputStream.on("data", async (chunk) => {
+    let settled = false;
+    const finish = (ended) => {
+      if (settled) return;
+      settled = true;
+      resolve({ parts: partCount, ended });
+    };
+    inputStream.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       try {
-        while (buffer.length > 0 && (await tryConsumeOnePart())) {
+        while (buffer.length > 0 && tryConsumeOnePart()) {
           if (partCount >= maxParts) {
             inputStream.destroy();
-            resolve({ parts: partCount, ended: "maxParts" });
+            finish("maxParts");
             return;
           }
         }
@@ -329,10 +414,8 @@ const consumeMultipartStream = async ({
       }
     });
     inputStream.on("error", reject);
-    inputStream.on("end", () => resolve({ parts: partCount, ended: "end" }));
-    inputStream.on("close", () =>
-      resolve({ parts: partCount, ended: "close" }),
-    );
+    inputStream.on("end", () => finish("end"));
+    inputStream.on("close", () => finish("close"));
   });
 };
 
@@ -359,6 +442,8 @@ const main = async () => {
     skippedKeepAlive: 0,
     skippedBinary: 0,
     printed: 0,
+    recvBytes: 0,
+    recvChunks: 0,
   };
 
   console.log("[ISAPI Probe] start", {
@@ -368,25 +453,53 @@ const main = async () => {
     filterKeepAlive: !showKeepAlive,
     fullDump: fullDump !== false,
     omitModelData: omitModelData !== false,
+    exitAfterMs: exitAfterMs ?? 120_000,
   });
   console.log("[ISAPI Probe] XML:\n", xmlBody);
 
   const client = createIsapiClient({ host, port, username, password });
+  await dumpGet(client, "/ISAPI/System/deviceInfo");
+  await dumpGet(client, "/ISAPI/Event/notification/httpHosts");
+  await dumpRecentAcsEvents(client);
+
   const res = await client.requestSubscribeStream(xmlBody);
   const ct = res.headers["content-type"] || "";
 
   console.log("[ISAPI Probe] connected", {
     status: res.status,
     contentType: ct,
+    headers: res.headers,
   });
+  console.log(
+    "[ISAPI Probe] 訂閱已建立（僅即時事件）。請保持運行，看到 recv 後再刷卡；heartbeat 會印一行。勿立刻 Ctrl+C。",
+  );
 
-  const timer = setTimeout(() => res.data.destroy(), exitAfterMs ?? 60_000);
+  const waitMs = exitAfterMs ?? 120_000;
+  const timer = setTimeout(() => res.data.destroy(), waitMs);
+  const startedAt = Date.now();
+  const ticker = setInterval(() => {
+    const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+    console.log("[ISAPI Probe] waiting", {
+      elapsedSec,
+      recvBytes: stats.recvBytes,
+      recvChunks: stats.recvChunks,
+      parts: stats.printed + stats.skippedKeepAlive + stats.skippedBinary,
+    });
+  }, 10_000);
+
+  res.data.on("data", (chunk) => {
+    stats.recvBytes += chunk.length;
+    stats.recvChunks += 1;
+    console.log(
+      `[ISAPI Probe] recv ${chunk.length}B total=${stats.recvBytes}`,
+    );
+  });
 
   try {
     const result = await consumeMultipartStream({
       stream: res.data,
       contentType: ct,
-      maxParts: ensureInt(maxParts) ?? 20,
+      maxParts: ensureInt(maxParts) ?? 40,
       onPart: async ({ index, headerStr, body }) => {
         const { partCt, payload, payloadText } = extractPartPayload(
           headerStr,
@@ -395,14 +508,19 @@ const main = async () => {
 
         if (/image\//i.test(partCt) || isBinaryBuffer(payload)) {
           stats.skippedBinary += 1;
-          if (showKeepAlive) {
-            console.log(`[ISAPI Probe] #${index} binary ${payload.length}B`);
-          }
+          console.log(`[ISAPI Probe] #${index} binary ${payload.length}B`);
           return;
         }
 
-        if (!showKeepAlive && isKeepAliveEvent(payloadText)) {
+        const keepAlive = keepAliveLabel(payloadText);
+        if (keepAlive) {
           stats.skippedKeepAlive += 1;
+          console.log(
+            `[ISAPI Probe] #${index} keepalive (${keepAlive}) ${payload.length}B`,
+          );
+          if (showKeepAlive) {
+            console.log(toPreviewText(payloadText, 400));
+          }
           return;
         }
 
@@ -413,6 +531,7 @@ const main = async () => {
 
         if (!looksText && isBinaryBuffer(payload)) {
           stats.skippedBinary += 1;
+          console.log(`[ISAPI Probe] #${index} binary ${payload.length}B`);
           return;
         }
 
@@ -437,6 +556,7 @@ const main = async () => {
     console.log("\n[ISAPI Probe] done", { ...result, ...stats });
   } finally {
     clearTimeout(timer);
+    clearInterval(ticker);
   }
 };
 

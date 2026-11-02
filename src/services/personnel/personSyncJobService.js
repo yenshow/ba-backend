@@ -9,6 +9,8 @@ const db = require("../../database/db");
 const accessControlService = require("../accessControl/accessControlService");
 const {
   buildIsapiValidPayloadFromPlatformValidity,
+  listIsapiValidPayloadFallbacks,
+  isIsapiValidContentError,
 } = require("../accessControl/accessControlHelpers");
 const isapiCameraFdLibService = require("../peopleCounting/isapiCameraFdLibService");
 const personnelService = require("./personnelService");
@@ -448,6 +450,76 @@ async function deviceOp(fn, meta = {}) {
   return result;
 }
 
+/**
+ * UserInfo.Valid 依機種／韌體差異嘗試相容格式。
+ * 同一 job 內記住該設備成功的變體，避免每人重試全部格式。
+ */
+async function updateUserInfoWithValidFallbacks({
+  deviceId,
+  employeeNo,
+  name,
+  password,
+  canonicalValid,
+  variantCache,
+}) {
+  const cache = variantCache instanceof Map ? variantCache : null;
+  const cacheKey = Number(deviceId);
+  const userInfoBase = {
+    employeeNo,
+    name,
+    ...(password ? { password } : {}),
+  };
+  const tryValid = (valid) =>
+    deviceOp(
+      () =>
+        accessControlService.updateUserInfo(deviceId, {
+          ...userInfoBase,
+          Valid: valid,
+        }),
+      { deviceId, employeeNo, stage: "userInfo" },
+    );
+
+  const cached = cache?.get(cacheKey) || null;
+  if (cached) {
+    try {
+      return await tryValid(cached);
+    } catch (err) {
+      if (!isIsapiValidContentError(err)) throw err;
+      cache.delete(cacheKey);
+      logger.warn("門禁 Valid 格式對此設備失效，改試其他變體", {
+        deviceId,
+        employeeNo,
+        error: toMessage(err),
+      });
+    }
+  }
+
+  const variants = listIsapiValidPayloadFallbacks(canonicalValid);
+  let lastErr = null;
+  for (let i = 0; i < variants.length; i++) {
+    const valid = variants[i];
+    try {
+      const result = await tryValid(valid);
+      if (cache) cache.set(cacheKey, valid);
+      if (i > 0) {
+        logger.info("門禁 UserInfo 改用相容 Valid 格式", {
+          deviceId,
+          employeeNo,
+          variant: i,
+          enable: valid.enable,
+          hasTimeType: Boolean(valid.timeType),
+          endTime: valid.endTime || null,
+        });
+      }
+      return result;
+    } catch (err) {
+      lastErr = err;
+      if (!isIsapiValidContentError(err)) throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function maybePauseAfterPersonOps(count) {
   if (
     SYNC_PERSON_BATCH_EVERY <= 0 ||
@@ -615,20 +687,14 @@ async function syncPersonToDevice(
       try {
         const password = passwordForHash;
 
-        await deviceOp(
-          () =>
-            accessControlService.updateUserInfo(deviceId, {
-              employeeNo: person.employeeNo,
-              name: person.name,
-              Valid: validPayload,
-              ...(password ? { password } : {}),
-            }),
-          {
-            deviceId,
-            employeeNo: person.employeeNo,
-            stage: "userInfo",
-          },
-        );
+        await updateUserInfoWithValidFallbacks({
+          deviceId,
+          employeeNo: person.employeeNo,
+          name: person.name,
+          password,
+          canonicalValid: validPayload,
+          variantCache: options?.validVariantByDevice,
+        });
         await personDeviceSyncStateService.upsertStepState({
           deviceId,
           employeeNo: person.employeeNo,
@@ -1291,6 +1357,7 @@ async function syncAccessDevicesWithPersons(
   const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
   const credentialsByDeviceId =
     await getAccessCredentialCapabilitiesByDeviceIds(normalizedDeviceIds);
+  const validVariantByDevice = new Map();
   reporter?.setTotals?.({
     targetPersonsTotal: (targetList || []).length,
     deviceTotal: normalizedDeviceIds.length,
@@ -1404,6 +1471,7 @@ async function syncAccessDevicesWithPersons(
           forceUserInfo: true,
           deviceNameById,
           credentials: credentialsByDeviceId.get(Number(deviceId)),
+          validVariantByDevice,
         });
         reporter?.finishOp?.({
           employeeNo: p.employeeNo,
@@ -1453,6 +1521,7 @@ async function syncAccessDevicesWithPersons(
         await syncPersonToDevice(deviceId, p, warnings, reporter, {
           deviceNameById,
           credentials: credentialsByDeviceId.get(Number(deviceId)),
+          validVariantByDevice,
         });
         reporter?.finishOp?.({
           employeeNo: p.employeeNo,

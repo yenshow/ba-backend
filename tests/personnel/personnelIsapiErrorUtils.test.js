@@ -41,6 +41,11 @@ async function run() {
   assert.equal(isTransientIsapiNetworkError(new Error(deviceBusy)), true);
   assert.match(normalizeIsapiErrorMessage(deviceBusy), /設備忙碌/);
 
+  const endTimeInvalid =
+    'Bad Request: {"statusCode":6,"statusString":"Invalid Content","subStatusCode":"badJsonContent","errorCode":1610612759,"errorMsg":"-endTime"}';
+  assert.match(normalizeIsapiErrorMessage(endTimeInvalid), /有效期限/);
+  assert.equal(isTransientIsapiNetworkError(new Error(endTimeInvalid)), false);
+
   console.log("personnelIsapiErrorUtils tests passed");
 }
 

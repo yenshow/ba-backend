@@ -1,5 +1,5 @@
 /**
- * 門禁事件補齊：訂閱寫入後以 AcsEvent（門禁 JSON API）短查近 N 秒並去重落地
+ * 門禁事件補齊：訂閱寫入後短查 AcsEvent；串流無驗證事件時由 startConnectedAcsEventPoll 週期短查。
  * 注意：與攝影機 FCSearch／車牌 Traffic search 為不同設備 API。
  */
 const logger = require("../../utils/logger").createLogger(
@@ -32,6 +32,8 @@ const {
 const PAGE_SIZE = 30;
 const MAX_PAGES = 10;
 const PREFS_CACHE_MS = 30_000;
+const SILENT_POLL_MS = 5000;
+const SILENT_WINDOW_SEC = 30;
 const scheduler = createDebouncedScheduler();
 
 /** @type {Map<number, { enabled: boolean, windowSec: number, expiresAt: number }>} */
@@ -81,7 +83,25 @@ async function resolveAccessBackfillForDevice(deviceId) {
   return prefs;
 }
 
-async function runBackfill({ deviceId, eventTime, windowSec, deviceIp }) {
+async function maybeAttachPicture(client, eventId, payload) {
+  if (
+    eventId == null ||
+    !shouldQueueAccessEventPicture(payload) ||
+    !payload.pictureURL
+  ) {
+    return;
+  }
+  const pic = await downloadIsapiPicture(client, payload.pictureURL);
+  if (pic) await attachPictureToEvent(eventId, pic);
+}
+
+async function runBackfill({
+  deviceId,
+  eventTime,
+  windowSec,
+  deviceIp,
+  quiet = false,
+}) {
   const { start, end } = resolveBackfillTimeRange(eventTime, windowSec);
   const { client } = await accessControlService.getDeviceAndClient(deviceId);
   const items = await fetchAcsEvents(client, {
@@ -106,13 +126,8 @@ async function runBackfill({ deviceId, eventTime, windowSec, deviceIp }) {
       payload,
     );
     if (existing.id != null) {
-      if (
-        !existing.hasPicture &&
-        shouldQueueAccessEventPicture(payload) &&
-        payload.pictureURL
-      ) {
-        const pic = await downloadIsapiPicture(client, payload.pictureURL);
-        if (pic) await attachPictureToEvent(existing.id, pic);
+      if (!existing.hasPicture) {
+        await maybeAttachPicture(client, existing.id, payload);
       }
       continue;
     }
@@ -125,19 +140,53 @@ async function runBackfill({ deviceId, eventTime, windowSec, deviceIp }) {
     });
     if (result?.inserted && result.id != null) {
       inserted += 1;
-      if (shouldQueueAccessEventPicture(payload) && payload.pictureURL) {
-        const pic = await downloadIsapiPicture(client, payload.pictureURL);
-        if (pic) await attachPictureToEvent(result.id, pic);
-      }
+      await maybeAttachPicture(client, result.id, payload);
     }
   }
-  logger.info("門禁事件補齊完成", {
-    deviceId,
-    windowSec: normalizeEventBackfillWindowSec(windowSec),
-    matched: items.length,
-    inserted,
-  });
+  if (inserted > 0 || !quiet) {
+    logger.info("門禁事件補齊完成", {
+      deviceId,
+      windowSec: normalizeEventBackfillWindowSec(windowSec),
+      matched: items.length,
+      inserted,
+    });
+  }
   return { matched: items.length, inserted };
+}
+
+/** 訂閱長連線在、串流沒推驗證事件時短查 AcsEvent；有串流事件後由呼叫端 stop。 */
+function startConnectedAcsEventPoll({ deviceId, deviceIp = "" } = {}) {
+  const id = Number(deviceId);
+  if (!Number.isFinite(id) || id <= 0) return () => {};
+
+  let stopped = false;
+  let inflight = false;
+  const tick = () => {
+    if (stopped || inflight) return;
+    inflight = true;
+    void runBackfill({
+      deviceId: id,
+      deviceIp,
+      eventTime: new Date().toISOString(),
+      windowSec: SILENT_WINDOW_SEC,
+      quiet: true,
+    })
+      .catch((e) => {
+        logger.warn("門禁事件補齊失敗", {
+          deviceId: id,
+          error: e?.message || String(e),
+        });
+      })
+      .finally(() => {
+        inflight = false;
+      });
+  };
+  tick();
+  const timer = setInterval(tick, SILENT_POLL_MS);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 function scheduleAccessEventBackfill(options) {
@@ -146,13 +195,7 @@ function scheduleAccessEventBackfill(options) {
 
   /** 先確認地點有開補齊再 debounce，避免未開時每筆事件仍排程 */
   void (async () => {
-    const cfg =
-      options.enabled != null
-        ? {
-            enabled: Boolean(options.enabled),
-            windowSec: normalizeEventBackfillWindowSec(options.windowSec),
-          }
-        : await resolveAccessBackfillForDevice(deviceId);
+    const cfg = await resolveAccessBackfillForDevice(deviceId);
     if (!cfg.enabled) return;
     scheduler.schedule(`access:${deviceId}`, () =>
       runBackfill({
@@ -174,4 +217,5 @@ module.exports = {
   scheduleAccessEventBackfill,
   resolveAccessBackfillForDevice,
   runBackfill,
+  startConnectedAcsEventPoll,
 };
