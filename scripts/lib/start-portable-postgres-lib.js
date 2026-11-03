@@ -4,13 +4,13 @@
 
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const {
   DATA_DIR,
   LOG_DIR,
   getBinPath,
   getPostgresPort,
   getPostgresqlConfPath,
+  getPsqlAdminUserCandidates,
 } = require("./postgres-common");
 const { log, execWithUtf8OnWindows } = require("./postgres-exec-windows");
 
@@ -45,26 +45,30 @@ const isPgCtlRunning = () => {
   }
 };
 
+/** @returns {string} 可用的管理帳號（新裝 postgres；舊 cluster 可能是 OS 使用者） */
 const verifyPsqlReady = (maxAttempts = 30, delayMs = 500) => {
   const psqlPath = getBinPath("psql");
   const port = getPostgresPort();
-  const currentUser = os.userInfo().username;
+  const users = getPsqlAdminUserCandidates();
 
   for (let i = 1; i <= maxAttempts; i++) {
-    try {
-      execWithUtf8OnWindows(
-        `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d postgres -c "SELECT 1;"`,
-        { encoding: "utf8", stdio: "pipe" },
-      );
-      return;
-    } catch {
-      if (i === maxAttempts) {
-        throw new Error(
-          `PostgreSQL 已啟動但仍無法連線（${PSQL_HOST}:${port}）。請檢查 ${path.join(LOG_DIR, "postgres.log")}`,
+    for (const user of users) {
+      try {
+        execWithUtf8OnWindows(
+          `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${user}" -d postgres -c "SELECT 1;"`,
+          { encoding: "utf8", stdio: "pipe" },
         );
+        return user;
+      } catch {
+        // 試下一個候選帳號
       }
-      sleepMs(delayMs);
     }
+    if (i === maxAttempts) {
+      throw new Error(
+        `PostgreSQL 已啟動但仍無法連線（${PSQL_HOST}:${port}；已試 ${users.join("、")}）。請檢查 ${path.join(LOG_DIR, "postgres.log")}`,
+      );
+    }
+    sleepMs(delayMs);
   }
 };
 

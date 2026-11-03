@@ -7,7 +7,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const {
   POSTGRES_DIR,
   BIN_DIR,
@@ -15,6 +14,7 @@ const {
   LOG_DIR,
   binExtension,
   PG_OFFLINE_ARCHIVE_NAME,
+  PG_BOOTSTRAP_SUPERUSER,
   getPostgresqlConfPath,
   getPostgresPort,
   getOfflineArchivePath,
@@ -186,8 +186,9 @@ function initDatabase() {
     }
   }
 
+  // --username=postgres：避免 Windows 繁中帳號寫入 UTF8 cluster（0xa3）
   const initdbCmd =
-    `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust --encoding=UTF8 --locale=C`;
+    `"${initdbPath}" -D "${DATA_DIR}" --auth-local=trust --auth-host=trust --encoding=UTF8 --locale=C --lc-messages=C --username=${PG_BOOTSTRAP_SUPERUSER}`;
   try {
     execWithUtf8OnWindows(initdbCmd, { stdio: "inherit", encoding: "utf8" });
   } catch (execError) {
@@ -235,51 +236,50 @@ function setupDatabase() {
 
   const psqlPath = path.join(BIN_DIR, `psql${binExtension}`);
   const port = getPostgresPort();
-  const currentUser = os.userInfo().username;
-
-  verifyPsqlReady();
-
+  const adminUser = verifyPsqlReady();
   const dbName = (process.env.DB_NAME || "ba_system").trim();
   const dbUser = (process.env.DB_USER || "postgres").trim();
+  const psql = (db, sql, { tuplesOnly = false } = {}) => {
+    const flag = tuplesOnly ? "-tc" : "-c";
+    return execWithUtf8OnWindows(
+      `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${adminUser}" -d ${db} ${flag} "${sql}"`,
+      tuplesOnly
+        ? { encoding: "utf8", stdio: "pipe" }
+        : { stdio: "inherit" },
+    );
+  };
 
-  const dbCheckCmd = `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '${dbName}'"`;
-  const dbCheck = execWithUtf8OnWindows(dbCheckCmd, {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
+  const dbExists = String(
+    psql(
+      "postgres",
+      `SELECT 1 FROM pg_database WHERE datname = '${dbName}'`,
+      { tuplesOnly: true },
+    ),
+  ).trim();
+  if (!dbExists) {
+    psql("postgres", `CREATE DATABASE ${dbName};`);
+  }
 
-  if (!dbCheck.trim()) {
-    execWithUtf8OnWindows(
-      `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE DATABASE ${dbName};"`,
-      { stdio: "inherit" },
+  const userExists = String(
+    psql(
+      "postgres",
+      `SELECT 1 FROM pg_user WHERE usename = '${dbUser}'`,
+      { tuplesOnly: true },
+    ),
+  ).trim();
+  if (!userExists) {
+    psql(
+      "postgres",
+      `CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';`,
     );
   }
 
-  const userCheckCmd = `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d postgres -tc "SELECT 1 FROM pg_user WHERE usename = '${dbUser}'"`;
-  const userCheck = execWithUtf8OnWindows(userCheckCmd, {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
-
-  if (!userCheck.trim()) {
-    execWithUtf8OnWindows(
-      `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d postgres -c "CREATE USER ${dbUser} WITH SUPERUSER PASSWORD 'postgres';"`,
-      { stdio: "inherit" },
-    );
-  }
-
-  execWithUtf8OnWindows(
-    `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"`,
-    { stdio: "inherit" },
-  );
-  execWithUtf8OnWindows(
-    `"${psqlPath}" ${PSQL_COMMON_ARGS} -h "${PSQL_HOST}" -p ${port} -U "${currentUser}" -d ${dbName} -c "GRANT ALL ON SCHEMA public TO ${dbUser};"`,
-    { stdio: "inherit" },
-  );
+  psql("postgres", `GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};`);
+  psql(dbName, `GRANT ALL ON SCHEMA public TO ${dbUser};`);
 
   log(`✅ 資料庫和使用者已設定完成`, "green");
   log(
-    `🎉 可攜式 PostgreSQL 設定完成（${PSQL_HOST}:${getPostgresPort()}/${dbName}）`,
+    `🎉 可攜式 PostgreSQL 設定完成（${PSQL_HOST}:${port}/${dbName}）`,
     "green",
   );
 }

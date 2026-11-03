@@ -30,6 +30,23 @@ const LOG_DIR = getPostgresLogDir();
 
 const binExtension = process.platform === "win32" ? ".exe" : "";
 
+/** initdb 固定 ASCII superuser；勿用 Windows 登入名（繁中 CP950 會讓 UTF8 cluster 失敗）。 */
+const PG_BOOTSTRAP_SUPERUSER = "postgres";
+
+/** 新裝：postgres；舊 cluster：可能仍是 OS 帳號。 */
+function getPsqlAdminUserCandidates() {
+  let osUser = "";
+  try {
+    osUser = String(os.userInfo().username || "").trim();
+  } catch {
+    osUser = String(process.env.USERNAME || "").trim();
+  }
+  if (!osUser || osUser === PG_BOOTSTRAP_SUPERUSER) {
+    return [PG_BOOTSTRAP_SUPERUSER];
+  }
+  return [PG_BOOTSTRAP_SUPERUSER, osUser];
+}
+
 /**
  * 獲取 PostgreSQL 配置檔案路徑
  */
@@ -92,6 +109,8 @@ module.exports = {
 	PG_TARGET_TRIPLE,
 	PG_OFFLINE_ARCHIVE_NAME,
 	binExtension,
+	PG_BOOTSTRAP_SUPERUSER,
+	getPsqlAdminUserCandidates,
 	getPostgresqlConfPath,
 	getPostgresPort,
 	isPostgresDownloaded,
