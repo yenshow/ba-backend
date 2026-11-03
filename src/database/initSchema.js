@@ -1661,7 +1661,28 @@ async function initSchema() {
       );
       CREATE INDEX IF NOT EXISTS idx_roll_call_attendance_session
       ON roll_call_attendance(session_id);
+      CREATE TABLE IF NOT EXISTS roll_call_assignments (
+        id SERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        assignment_date DATE NOT NULL,
+        rule_id INTEGER NOT NULL REFERENCES roll_call_rules(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (location_id, person_id, assignment_date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_roll_call_assignments_location_date
+      ON roll_call_assignments(location_id, assignment_date);
+      CREATE INDEX IF NOT EXISTS idx_roll_call_assignments_rule_date
+      ON roll_call_assignments(rule_id, assignment_date);
+      CREATE TABLE IF NOT EXISTS roll_call_roster_dates (
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        roster_date DATE NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (location_id, roster_date)
+      );
     `);
+    await createUpdatedAtTrigger(targetPool, "roll_call_assignments");
     schemaLogger.info("roll_call 表已建立", { module: "initSchema" });
 
     await targetPool.end();

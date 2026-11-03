@@ -397,8 +397,21 @@ const replaceLocationRules = async (locationId, rulesInput) => {
   return listRules(id);
 };
 
-const snapshotAttendance = async (sessionId, locationId) => {
-  const persons = await loadLocationMembers(locationId);
+/**
+ * 開場／補插應到名單。
+ * 該地點 sessionDate 若有排班列：僅門禁名單 ∩ 指派到本場 ruleId；否則全門禁名單。
+ */
+const snapshotAttendance = async (sessionId, locationId, ruleId, sessionDate) => {
+  const members = await loadLocationMembers(locationId);
+  const {
+    resolveExpectedMembers,
+  } = require("./rollCallAssignmentService");
+  const persons = await resolveExpectedMembers(
+    locationId,
+    ruleId,
+    sessionDate,
+    members,
+  );
   for (const person of persons) {
     const employeeNo =
       person.employee_no != null ? String(person.employee_no).trim() : "";
@@ -614,6 +627,8 @@ const ensureSession = async (rule, dateStr) => {
     await snapshotAttendance(
       Number(inserted[0].id),
       Number(rule.location_id ?? rule.locationId),
+      Number(rule.id),
+      dateStr,
     );
     return Number(inserted[0].id);
   }
@@ -630,7 +645,12 @@ const reconcileRule = async (rule, deviceIds, now = new Date()) => {
   const sessionId = await ensureSession(rule, window.sessionDate);
   if (!sessionId) return;
   const locationId = Number(rule.location_id ?? rule.locationId);
-  await snapshotAttendance(sessionId, locationId);
+  await snapshotAttendance(
+    sessionId,
+    locationId,
+    Number(rule.id),
+    window.sessionDate,
+  );
   const sessionMeta = await db.query(
     `SELECT stats_reset_at FROM roll_call_sessions WHERE id = ? LIMIT 1`,
     [sessionId],
@@ -808,19 +828,39 @@ const getToday = async () => {
     ]),
   );
 
+  const {
+    resolveExpectedMembers,
+  } = require("./rollCallAssignmentService");
+
   const locationPayloads = [];
   for (const location of locations || []) {
     const locationId = Number(location.id);
     const members = await loadLocationMembers(locationId);
-    const rosterExpected = countRosterExpected(members);
-    const rosterUnits = buildRosterUnits(members);
     const locationRules = rules.filter(
       (rule) => rule.locationId === locationId,
     );
-    const buildSummary = (rule, sessionDate) => {
+    const expectedCache = new Map();
+    const loadPreviewMembers = async (ruleId, sessionDate) => {
+      const key = `${ruleId}:${sessionDate}`;
+      if (expectedCache.has(key)) return expectedCache.get(key);
+      const previewMembers = await resolveExpectedMembers(
+        locationId,
+        ruleId,
+        sessionDate,
+        members,
+      );
+      expectedCache.set(key, previewMembers);
+      return previewMembers;
+    };
+    const buildSummary = async (rule, sessionDate) => {
       const session = sessionByKey.get(`${rule.id}:${sessionDate}`);
       const tally = session ? counts.get(Number(session.id)) : null;
       const hasSession = Boolean(session);
+      let expectedCount = tally?.expectedCount ?? 0;
+      if (!hasSession) {
+        const previewMembers = await loadPreviewMembers(rule.id, sessionDate);
+        expectedCount = countRosterExpected(previewMembers);
+      }
       return {
         id: hasSession ? Number(session.id) : null,
         ruleId: rule.id,
@@ -829,11 +869,11 @@ const getToday = async () => {
         windowEnd: rule.windowEnd,
         status: hasSession ? session.status : "not_started",
         sessionDate,
-        expectedCount: hasSession
-          ? (tally?.expectedCount ?? 0)
-          : rosterExpected,
+        expectedCount,
         presentCount: hasSession ? (tally?.presentCount ?? 0) : 0,
-        absentCount: hasSession ? (tally?.absentCount ?? 0) : rosterExpected,
+        absentCount: hasSession
+          ? (tally?.absentCount ?? 0)
+          : expectedCount,
       };
     };
     const sessionSummaries = [];
@@ -842,18 +882,30 @@ const getToday = async () => {
       if (!rule.enabled) continue;
       if (rule.weekdays.includes(parts.weekday)) {
         const key = `${rule.id}:${parts.date}`;
-        sessionSummaries.push(buildSummary(rule, parts.date));
+        sessionSummaries.push(await buildSummary(rule, parts.date));
         seen.add(key);
       }
       const active = resolveActiveWindow(rule);
       if (active && !seen.has(`${rule.id}:${active.sessionDate}`)) {
-        sessionSummaries.push(buildSummary(rule, active.sessionDate));
+        sessionSummaries.push(
+          await buildSummary(rule, active.sessionDate),
+        );
         seen.add(`${rule.id}:${active.sessionDate}`);
       }
     }
     const primary = pickPrimarySession(sessionSummaries);
-    const units =
-      primary?.id != null ? unitsMap.get(primary.id) || [] : rosterUnits;
+    let units = [];
+    if (primary?.id != null) {
+      units = unitsMap.get(primary.id) || [];
+    } else if (primary) {
+      const previewMembers = await loadPreviewMembers(
+        primary.ruleId,
+        primary.sessionDate,
+      );
+      units = buildRosterUnits(previewMembers);
+    } else {
+      units = buildRosterUnits(members);
+    }
     const cfg = parseSystemConfig(location.system_config);
     locationPayloads.push({
       locationId,
@@ -920,7 +972,12 @@ const resetLocationToday = async (locationId, options = {}) => {
        WHERE id = ?`,
       [resetAt, sessionId],
     );
-    await snapshotAttendance(sessionId, id);
+    await snapshotAttendance(
+      sessionId,
+      id,
+      Number(row.rule_id),
+      sessionDate,
+    );
   }
   const resetSessionCount = sessions.length;
   const oePlace = await loadRollCallOeContext(id);

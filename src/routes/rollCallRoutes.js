@@ -1,12 +1,19 @@
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const rollCallService = require("../services/rollCall/rollCallService");
+const rollCallAssignmentService = require("../services/rollCall/rollCallAssignmentService");
+const rollCallAssignmentImportService = require("../services/rollCall/rollCallAssignmentImportService");
 const {
   authenticate,
   requirePermission,
 } = require("../middleware/authMiddleware");
 const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
+const C = require("../utils/apiErrorCodes");
+const { throwApiError } = require("../utils/apiErrors");
+
+const assignmentUpload = multer({ storage: multer.memoryStorage() });
 
 router.use(authenticate, requirePermission("system.roll_call"));
 
@@ -135,6 +142,75 @@ router.post(
       { actorUserId: req.user?.id ?? null },
     );
     res.sendSuccess({ session });
+  }),
+);
+
+router.get(
+  "/locations/:locationId/assignments",
+  disableHttpCache,
+  requirePermission("system.roll_call.assignment.edit"),
+  asyncHandler(async (req, res) => {
+    const assignments = await rollCallAssignmentService.listAssignments(
+      Number(req.params.locationId),
+      req.query.startDate,
+      req.query.endDate,
+    );
+    res.sendSuccess({ assignments });
+  }),
+);
+
+router.put(
+  "/locations/:locationId/assignments",
+  requirePermission("system.roll_call.assignment.edit"),
+  asyncHandler(async (req, res) => {
+    const assignments = await rollCallAssignmentService.replaceAssignments(
+      Number(req.params.locationId),
+      req.body || {},
+    );
+    res.sendSuccess({ assignments });
+  }),
+);
+
+router.get(
+  "/locations/:locationId/assignments/import-template",
+  requirePermission("system.roll_call.assignment.edit"),
+  asyncHandler(async (req, res) => {
+    const locationId = Number(req.params.locationId);
+    const buffer =
+      await rollCallAssignmentImportService.buildImportTemplateBuffer(
+        locationId,
+        { weekStart: req.query.weekStart },
+      );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="roll_call_assignments_template.xlsx"',
+    );
+    res.status(200).send(buffer);
+  }),
+);
+
+router.post(
+  "/locations/:locationId/assignments/import",
+  requirePermission("system.roll_call.assignment.edit"),
+  assignmentUpload.fields([{ name: "excel", maxCount: 1 }]),
+  asyncHandler(async (req, res) => {
+    const excelFile = req.files?.excel?.[0];
+    if (!excelFile) {
+      throwApiError(
+        C.VALIDATION_REQUIRED,
+        "請上傳 Excel 檔（欄位名稱：excel）",
+      );
+    }
+    const result =
+      await rollCallAssignmentImportService.importAssignmentsFromExcel(
+        Number(req.params.locationId),
+        excelFile.buffer,
+      );
+    res.sendSuccess(result);
   }),
 );
 
