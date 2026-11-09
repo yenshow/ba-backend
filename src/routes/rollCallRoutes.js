@@ -179,7 +179,6 @@ router.get(
     const buffer =
       await rollCallAssignmentImportService.buildImportTemplateBuffer(
         locationId,
-        { weekStart: req.query.weekStart },
       );
     res.setHeader(
       "Content-Type",

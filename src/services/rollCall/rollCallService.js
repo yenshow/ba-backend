@@ -31,8 +31,6 @@ const {
   formatPgDate,
   formatTime,
   addDaysYmd,
-  normalizeWeekdays,
-  windowsOverlapOnWeek,
   resolveActiveWindow,
   pickPrimarySession,
 } = require("./rollCallWindow");
@@ -85,9 +83,6 @@ const mapRule = (row) => ({
   name: row.name,
   windowStart: formatTime(row.window_start),
   windowEnd: formatTime(row.window_end),
-  weekdays: Array.isArray(row.weekdays)
-    ? row.weekdays.map((day) => Number(day))
-    : [],
   enabled: row.enabled !== false,
 });
 
@@ -103,47 +98,6 @@ const assertLocationIsRollCall = async (locationId) => {
     throwApiError(C.NOT_FOUND, "找不到時段簽到地點");
   }
   return parseDeviceIds(rows[0].system_config);
-};
-
-const assertNoOverlap = async ({
-  locationId,
-  weekdays,
-  startMin,
-  endMin,
-  excludeRuleId,
-}) => {
-  const params = [locationId];
-  let sql = `SELECT id, name, window_start, window_end, weekdays
-     FROM roll_call_rules
-     WHERE location_id = ? AND enabled = TRUE`;
-  if (excludeRuleId) {
-    params.push(excludeRuleId);
-    sql += " AND id <> ?";
-  }
-  const rows = await db.query(sql, params);
-  for (const row of rows || []) {
-    const otherDays = Array.isArray(row.weekdays)
-      ? row.weekdays.map((day) => Number(day))
-      : [];
-    const otherStart = timeToMinutes(row.window_start);
-    const otherEnd = timeToMinutes(row.window_end);
-    if (otherStart == null || otherEnd == null) continue;
-    if (
-      windowsOverlapOnWeek(
-        startMin,
-        endMin,
-        weekdays,
-        otherStart,
-        otherEnd,
-        otherDays,
-      )
-    ) {
-      throwApiError(
-        C.ROLL_CALL_RULE_OVERLAP,
-        `與啟用中的規則「${row.name}」時段重疊`,
-      );
-    }
-  }
 };
 
 const parseRuleInput = (body) => {
@@ -164,10 +118,6 @@ const parseRuleInput = (body) => {
   if (endMin === startMin) {
     throwApiError(C.VALIDATION_REQUIRED, "結束時間不可等於開始時間");
   }
-  const weekdays = normalizeWeekdays(body?.weekdays);
-  if (weekdays.length === 0) {
-    throwApiError(C.VALIDATION_REQUIRED, "請至少選擇一個星期");
-  }
   const enabled = body?.enabled !== false;
   const ruleIdRaw = body?.id;
   const ruleId =
@@ -182,7 +132,6 @@ const parseRuleInput = (body) => {
     locationId: Math.trunc(locationId),
     startMin,
     endMin,
-    weekdays,
     enabled,
   };
 };
@@ -218,15 +167,14 @@ const listRules = async (locationId) => {
 const insertRuleRow = async (locationId, input) => {
   const rows = await db.query(
     `INSERT INTO roll_call_rules
-      (location_id, name, window_start, window_end, weekdays, enabled)
-     VALUES (?, ?, ?::time, ?::time, ?::smallint[], ?)
+      (location_id, name, window_start, window_end, enabled)
+     VALUES (?, ?, ?::time, ?::time, ?)
      RETURNING id`,
     [
       locationId,
       input.name,
       minutesToTime(input.startMin),
       minutesToTime(input.endMin),
-      input.weekdays,
       input.enabled,
     ],
   );
@@ -237,13 +185,12 @@ const updateRuleRow = async (ruleId, input) => {
   await db.query(
     `UPDATE roll_call_rules
      SET name = ?, window_start = ?::time, window_end = ?::time,
-         weekdays = ?::smallint[], enabled = ?, updated_at = CURRENT_TIMESTAMP
+         enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [
       input.name,
       minutesToTime(input.startMin),
       minutesToTime(input.endMin),
-      input.weekdays,
       input.enabled,
       ruleId,
     ],
@@ -253,14 +200,6 @@ const updateRuleRow = async (ruleId, input) => {
 const createRule = async (body) => {
   const input = parseRuleInput(body);
   await assertLocationIsRollCall(input.locationId);
-  if (input.enabled) {
-    await assertNoOverlap({
-      locationId: input.locationId,
-      weekdays: input.weekdays,
-      startMin: input.startMin,
-      endMin: input.endMin,
-    });
-  }
   const ruleId = await insertRuleRow(input.locationId, input);
   return getRuleById(ruleId);
 };
@@ -273,15 +212,6 @@ const updateRule = async (ruleId, body) => {
     ...body,
     locationId: existing.locationId,
   });
-  if (input.enabled) {
-    await assertNoOverlap({
-      locationId: existing.locationId,
-      weekdays: input.weekdays,
-      startMin: input.startMin,
-      endMin: input.endMin,
-      excludeRuleId: ruleId,
-    });
-  }
   await updateRuleRow(ruleId, input);
   return getRuleById(ruleId);
 };
@@ -297,45 +227,27 @@ const deleteRule = async (ruleId) => {
 
 /**
  * 以完整清單取代某地點規則（地點表單草稿一次落庫；同一地點可多筆）。
- * body.rules: Array<{ id?, name, windowStart, windowEnd, weekdays, enabled }>
+ * body.rules: Array<{ id?, name, windowStart, windowEnd, enabled }>
+ * 時段可重疊；人員分班由排班決定。
  */
-const replaceLocationRules = async (locationId, rulesInput) => {
-  const id = Number(locationId);
-  if (!Number.isFinite(id) || id <= 0) {
-    throwApiError(C.VALIDATION_REQUIRED, "地點不能為空");
-  }
-  await assertLocationIsRollCall(id);
-  const list = Array.isArray(rulesInput) ? rulesInput : [];
-  if (list.length === 0) {
-    throwApiError(C.VALIDATION_REQUIRED, "至少需要一筆時段規則");
-  }
-  const parsed = list.map((item) =>
-    parseRuleInput({ ...item, locationId: id }),
+/** 同地點規則整批寫入串行，避免區域 Dialog 並行儲存互相踩踏 */
+const locationRulesWriteChains = new Map();
+
+const enqueueLocationRulesWrite = (locationId, fn) => {
+  const key = Number(locationId);
+  const prev = locationRulesWriteChains.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  locationRulesWriteChains.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
   );
+  return run;
+};
 
-  const enabledParsed = parsed.filter((item) => item.enabled);
-  for (let i = 0; i < enabledParsed.length; i++) {
-    const current = enabledParsed[i];
-    for (let j = i + 1; j < enabledParsed.length; j++) {
-      const other = enabledParsed[j];
-      if (
-        windowsOverlapOnWeek(
-          current.startMin,
-          current.endMin,
-          current.weekdays,
-          other.startMin,
-          other.endMin,
-          other.weekdays,
-        )
-      ) {
-        throwApiError(
-          C.ROLL_CALL_RULE_OVERLAP,
-          `啟用中的規則「${current.name}」與「${other.name}」時段重疊`,
-        );
-      }
-    }
-  }
-
+const replaceLocationRulesOnce = async (id, parsed) => {
   await db.transaction(async (tx) => {
     const existing = await tx(
       `SELECT id FROM roll_call_rules WHERE location_id = ?`,
@@ -354,13 +266,12 @@ const replaceLocationRules = async (locationId, rulesInput) => {
         await tx(
           `UPDATE roll_call_rules
            SET name = ?, window_start = ?::time, window_end = ?::time,
-               weekdays = ?::smallint[], enabled = ?, updated_at = CURRENT_TIMESTAMP
+               enabled = ?, updated_at = CURRENT_TIMESTAMP
            WHERE id = ? AND location_id = ?`,
           [
             input.name,
             minutesToTime(input.startMin),
             minutesToTime(input.endMin),
-            input.weekdays,
             input.enabled,
             input.id,
             id,
@@ -369,15 +280,14 @@ const replaceLocationRules = async (locationId, rulesInput) => {
       } else {
         const rows = await tx(
           `INSERT INTO roll_call_rules
-            (location_id, name, window_start, window_end, weekdays, enabled)
-           VALUES (?, ?, ?::time, ?::time, ?::smallint[], ?)
+            (location_id, name, window_start, window_end, enabled)
+           VALUES (?, ?, ?::time, ?::time, ?)
            RETURNING id`,
           [
             id,
             input.name,
             minutesToTime(input.startMin),
             minutesToTime(input.endMin),
-            input.weekdays,
             input.enabled,
           ],
         );
@@ -393,8 +303,49 @@ const replaceLocationRules = async (locationId, rulesInput) => {
       ]);
     }
   });
+};
 
-  return listRules(id);
+const replaceLocationRules = async (locationId, rulesInput) => {
+  const id = Number(locationId);
+  if (!Number.isFinite(id) || id <= 0) {
+    throwApiError(C.VALIDATION_REQUIRED, "地點不能為空");
+  }
+  await assertLocationIsRollCall(id);
+  const list = Array.isArray(rulesInput) ? rulesInput : [];
+  if (list.length === 0) {
+    throwApiError(C.VALIDATION_REQUIRED, "至少需要一筆時段規則");
+  }
+  const parsed = list.map((item) =>
+    parseRuleInput({ ...item, locationId: id }),
+  );
+
+  return enqueueLocationRulesWrite(id, async () => {
+    try {
+      await replaceLocationRulesOnce(id, parsed);
+    } catch (err) {
+      // 舊庫若仍殘留 location_id unique：清掉後重試一次
+      if (err?.code === "23505") {
+        try {
+          const {
+            dropRollCallRulesLocationUnique,
+          } = require("../../database/schemaPatches");
+          await dropRollCallRulesLocationUnique(db.pool);
+          await replaceLocationRulesOnce(id, parsed);
+        } catch (retryErr) {
+          if (retryErr?.code === "23505") {
+            throwApiError(
+              C.CONFLICT,
+              "此地點時段規則寫入衝突，請稍後再儲存一次",
+            );
+          }
+          throw retryErr;
+        }
+      } else {
+        throw err;
+      }
+    }
+    return listRules(id);
+  });
 };
 
 /**
@@ -812,7 +763,7 @@ const getToday = async () => {
   const yesterday = addDaysYmd(parts.date, -1);
   const sessions = await db.query(
     `SELECT s.*, r.name AS rule_name, r.location_id,
-            r.window_start, r.window_end, r.weekdays
+            r.window_start, r.window_end
      FROM roll_call_sessions s
      INNER JOIN roll_call_rules r ON r.id = s.rule_id
      WHERE s.session_date IN (?::date, ?::date)`,
@@ -880,11 +831,9 @@ const getToday = async () => {
     const seen = new Set();
     for (const rule of locationRules) {
       if (!rule.enabled) continue;
-      if (rule.weekdays.includes(parts.weekday)) {
-        const key = `${rule.id}:${parts.date}`;
-        sessionSummaries.push(await buildSummary(rule, parts.date));
-        seen.add(key);
-      }
+      const key = `${rule.id}:${parts.date}`;
+      sessionSummaries.push(await buildSummary(rule, parts.date));
+      seen.add(key);
       const active = resolveActiveWindow(rule);
       if (active && !seen.has(`${rule.id}:${active.sessionDate}`)) {
         sessionSummaries.push(
@@ -936,7 +885,7 @@ const resetLocationToday = async (locationId, options = {}) => {
   const yesterday = addDaysYmd(parts.date, -1);
   const sessionRows = await db.query(
     `SELECT s.id, s.session_date, r.id AS rule_id, r.name,
-            r.window_start, r.window_end, r.weekdays, r.location_id
+            r.window_start, r.window_end, r.location_id
      FROM roll_call_sessions s
      INNER JOIN roll_call_rules r ON r.id = s.rule_id
      WHERE r.location_id = ? AND s.session_date IN (?::date, ?::date)`,
@@ -951,7 +900,6 @@ const resetLocationToday = async (locationId, options = {}) => {
     }
     const active = resolveActiveWindow({
       enabled: true,
-      weekdays: row.weekdays,
       window_start: row.window_start,
       window_end: row.window_end,
     });

@@ -964,28 +964,8 @@ async function clearResolvedAlertIgnoredFields(pool) {
   return { cleared: result.rowCount || 0 };
 }
 
-async function ensureRollCallTables(pool) {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS roll_call_rules (
-      id SERIAL PRIMARY KEY,
-      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-      name VARCHAR(100) NOT NULL,
-      window_start TIME NOT NULL,
-      window_end TIME NOT NULL,
-      weekdays SMALLINT[] NOT NULL,
-      enabled BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CHECK (window_end <> window_start),
-      CHECK (cardinality(weekdays) > 0)
-    )
-  `);
-  await createUpdatedAtTrigger(pool, "roll_call_rules");
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_roll_call_rules_location
-    ON roll_call_rules(location_id)
-  `);
-  // 產品：單一地點可多條時段規則。清掉任何「僅 location_id」的 unique（含舊名／PG 預設名）
+/** 產品：單一地點可多條時段規則。清掉任何「僅 location_id」的 unique（含舊名／PG 預設名） */
+async function dropRollCallRulesLocationUnique(pool) {
   await pool.query(`
     DO $$
     DECLARE
@@ -1048,51 +1028,44 @@ async function ensureRollCallTables(pool) {
       END LOOP;
     END $$
   `);
+}
+
+async function ensureRollCallTables(pool) {
+  const runPatchStep = async (label, fn) => {
+    try {
+      await fn();
+    } catch (err) {
+      logger.warn(`roll_call schema patch 步驟失敗：${label}`, {
+        error: err?.message || String(err),
+        module: "schemaPatches",
+      });
+    }
+  };
+
+  // 1) 核心表先建齊（含排班）；後續遷移失敗不得擋 roster_dates
   await pool.query(`
-    DELETE FROM roll_call_rules WHERE location_id IS NULL
+    CREATE TABLE IF NOT EXISTS roll_call_rules (
+      id SERIAL PRIMARY KEY,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      name VARCHAR(100) NOT NULL,
+      window_start TIME NOT NULL,
+      window_end TIME NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (window_end <> window_start)
+    )
   `);
   await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'roll_call_rules'
-          AND column_name = 'location_id'
-          AND is_nullable = 'YES'
-      ) THEN
-        ALTER TABLE roll_call_rules ALTER COLUMN location_id SET NOT NULL;
-      END IF;
-    END $$
+    CREATE INDEX IF NOT EXISTS idx_roll_call_rules_location
+    ON roll_call_rules(location_id)
   `);
-  await pool.query(`
-    ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids
-  `);
-  // 應到一律用地點門禁名單；不再建規則綁群組表
-  await pool.query(`DROP TABLE IF EXISTS roll_call_rule_groups`);
-  await pool.query(`
-    DO $$
-    DECLARE
-      r RECORD;
-    BEGIN
-      FOR r IN
-        SELECT c.conname
-        FROM pg_constraint c
-        JOIN pg_class t ON c.conrelid = t.oid
-        WHERE t.relname = 'roll_call_rules'
-          AND c.contype = 'c'
-          AND pg_get_constraintdef(c.oid) ~ 'window_end\\s*>\\s*window_start'
-          AND pg_get_constraintdef(c.oid) !~ '<>'
-      LOOP
-        EXECUTE format('ALTER TABLE roll_call_rules DROP CONSTRAINT IF EXISTS %I', r.conname);
-      END LOOP;
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'roll_call_rules_window_neq'
-      ) THEN
-        ALTER TABLE roll_call_rules
-          ADD CONSTRAINT roll_call_rules_window_neq CHECK (window_end <> window_start);
-      END IF;
-    END $$
-  `);
+  await runPatchStep("roll_call_rules updated_at trigger", () =>
+    createUpdatedAtTrigger(pool, "roll_call_rules"),
+  );
+  // 多規則寫入前必須清掉舊 unique，否則 PUT …/rules 會 23505／衝突
+  await dropRollCallRulesLocationUnique(pool);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS roll_call_sessions (
       id SERIAL PRIMARY KEY,
@@ -1108,12 +1081,6 @@ async function ensureRollCallTables(pool) {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_roll_call_sessions_date
     ON roll_call_sessions(session_date DESC)
-  `);
-  // 舊實驗欄位：時段改由 roll_call_rules.window_*，場次表不再存 window_start/end
-  await pool.query(`
-    ALTER TABLE roll_call_sessions
-      DROP COLUMN IF EXISTS window_start,
-      DROP COLUMN IF EXISTS window_end
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS roll_call_attendance (
@@ -1133,42 +1100,142 @@ async function ensureRollCallTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_roll_call_attendance_session
     ON roll_call_attendance(session_id)
   `);
-  // 群組改即時 JOIN persons（同人流），不再冗餘存 person_group_id／group_name
+
+  // 週曆排班：人員×日期→規則；roster_dates＝已啟用排班之日（全日排休仍標記）
   await pool.query(`
-    ALTER TABLE roll_call_attendance
-      DROP COLUMN IF EXISTS person_group_id,
-      DROP COLUMN IF EXISTS group_name
+    CREATE TABLE IF NOT EXISTS roll_call_assignments (
+      id SERIAL PRIMARY KEY,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+      assignment_date DATE NOT NULL,
+      rule_id INTEGER NOT NULL REFERENCES roll_call_rules(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (location_id, person_id, assignment_date)
+    )
   `);
   await pool.query(`
-    ALTER TABLE roll_call_sessions
-      ADD COLUMN IF NOT EXISTS stats_reset_at TIMESTAMPTZ
+    CREATE INDEX IF NOT EXISTS idx_roll_call_assignments_location_date
+    ON roll_call_assignments(location_id, assignment_date)
   `);
   await pool.query(`
-    DO $$
-    DECLARE
-      r RECORD;
-    BEGIN
-      FOR r IN
-        SELECT c.conname
-        FROM pg_constraint c
-        JOIN pg_class t ON c.conrelid = t.oid
-        WHERE t.relname = 'roll_call_attendance'
-          AND c.contype = 'c'
-          AND pg_get_constraintdef(c.oid) ILIKE '%pending%'
-          AND pg_get_constraintdef(c.oid) NOT ILIKE '%leave%'
-      LOOP
-        EXECUTE format('ALTER TABLE roll_call_attendance DROP CONSTRAINT IF EXISTS %I', r.conname);
-      END LOOP;
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'roll_call_attendance_status_check'
-      ) THEN
-        ALTER TABLE roll_call_attendance
-          ADD CONSTRAINT roll_call_attendance_status_check
-          CHECK (status IN ('pending', 'present', 'absent', 'leave'));
-      END IF;
-    END $$
+    CREATE INDEX IF NOT EXISTS idx_roll_call_assignments_rule_date
+    ON roll_call_assignments(rule_id, assignment_date)
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roll_call_roster_dates (
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      roster_date DATE NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (location_id, roster_date)
+    )
+  `);
+  await runPatchStep("roll_call_assignments updated_at trigger", () =>
+    createUpdatedAtTrigger(pool, "roll_call_assignments"),
+  );
+
+  // 2) 舊欄位／約束遷移（失敗只記 log，不擋開機）
+  await runPatchStep("roll_call_rules null location cleanup", async () => {
+    await pool.query(`DELETE FROM roll_call_rules WHERE location_id IS NULL`);
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'roll_call_rules'
+            AND column_name = 'location_id'
+            AND is_nullable = 'YES'
+        ) THEN
+          ALTER TABLE roll_call_rules ALTER COLUMN location_id SET NOT NULL;
+        END IF;
+      END $$
+    `);
+  });
+  await runPatchStep("drop roll_call_rules.device_ids", () =>
+    pool.query(`ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids`),
+  );
+  await runPatchStep("drop roll_call_rule_groups", () =>
+    pool.query(`DROP TABLE IF EXISTS roll_call_rule_groups`),
+  );
+  await runPatchStep("roll_call_rules window_neq check", () =>
+    pool.query(`
+      DO $$
+      DECLARE
+        r RECORD;
+      BEGIN
+        FOR r IN
+          SELECT c.conname
+          FROM pg_constraint c
+          JOIN pg_class t ON c.conrelid = t.oid
+          WHERE t.relname = 'roll_call_rules'
+            AND c.contype = 'c'
+            AND pg_get_constraintdef(c.oid) ~ 'window_end\\s*>\\s*window_start'
+            AND pg_get_constraintdef(c.oid) !~ '<>'
+        LOOP
+          EXECUTE format('ALTER TABLE roll_call_rules DROP CONSTRAINT IF EXISTS %I', r.conname);
+        END LOOP;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'roll_call_rules_window_neq'
+        ) THEN
+          ALTER TABLE roll_call_rules
+            ADD CONSTRAINT roll_call_rules_window_neq CHECK (window_end <> window_start);
+        END IF;
+      END $$
+    `),
+  );
+  await runPatchStep("drop roll_call_sessions window columns", () =>
+    pool.query(`
+      ALTER TABLE roll_call_sessions
+        DROP COLUMN IF EXISTS window_start,
+        DROP COLUMN IF EXISTS window_end
+    `),
+  );
+  await runPatchStep("drop roll_call_attendance group columns", () =>
+    pool.query(`
+      ALTER TABLE roll_call_attendance
+        DROP COLUMN IF EXISTS person_group_id,
+        DROP COLUMN IF EXISTS group_name
+    `),
+  );
+  await runPatchStep("roll_call_sessions.stats_reset_at", () =>
+    pool.query(`
+      ALTER TABLE roll_call_sessions
+        ADD COLUMN IF NOT EXISTS stats_reset_at TIMESTAMPTZ
+    `),
+  );
+  await runPatchStep("roll_call_attendance status leave check", () =>
+    pool.query(`
+      DO $$
+      DECLARE
+        r RECORD;
+      BEGIN
+        FOR r IN
+          SELECT c.conname
+          FROM pg_constraint c
+          JOIN pg_class t ON c.conrelid = t.oid
+          WHERE t.relname = 'roll_call_attendance'
+            AND c.contype = 'c'
+            AND pg_get_constraintdef(c.oid) ILIKE '%pending%'
+            AND pg_get_constraintdef(c.oid) NOT ILIKE '%leave%'
+        LOOP
+          EXECUTE format('ALTER TABLE roll_call_attendance DROP CONSTRAINT IF EXISTS %I', r.conname);
+        END LOOP;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'roll_call_attendance_status_check'
+        ) THEN
+          ALTER TABLE roll_call_attendance
+            ADD CONSTRAINT roll_call_attendance_status_check
+            CHECK (status IN ('pending', 'present', 'absent', 'leave'));
+        END IF;
+      END $$
+    `),
+  );
+  // 規則不再存適用星期（誰哪天上哪班由排班決定）。
+  // 硬步驟：新程式 INSERT 已不含 weekdays；若欄位殘留會寫入失敗，不可 soft-fail 略過。
+  await pool.query(
+    `ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS weekdays`,
+  );
 }
 
 async function normalizePersonDeviceSyncStatuses(pool) {
@@ -1316,5 +1383,7 @@ module.exports = {
   ensureIsapiAccessEventsDeviceId,
   ensureAlertRulesMessageTemplateColumns,
   migrateLegacySensorModelConfigs,
+  dropRollCallRulesLocationUnique,
+  ensureRollCallTables,
   applySchemaPatches,
 };

@@ -317,6 +317,8 @@ async function startServer() {
       localUrl: `http://localhost:${config.serverPort}`,
       ...(lanUrl ? { lanUrl } : {}),
       websocket: "Socket.IO",
+      rateLimitMax: config.rateLimit?.max,
+      rateLimitWindowMs: config.rateLimit?.windowMs,
     });
 
     global.__backupSchedulerHandle = backupScheduler.startScheduler();

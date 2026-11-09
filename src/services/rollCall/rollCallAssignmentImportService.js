@@ -6,15 +6,36 @@ const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const {
-  parseYmd,
   weekDatesFromMonday,
   replaceAssignments,
   listAssignments,
 } = require("./rollCallAssignmentService");
-const { addDaysYmd, formatTime } = require("./rollCallWindow");
+const {
+  addDaysYmd,
+  addMonthsYmd,
+  mondayOfYmd,
+  taipeiParts,
+  formatTime,
+} = require("./rollCallWindow");
 
 const DAY_HEADERS = ["一", "二", "三", "四", "五", "六", "日"];
 const OFF_TOKENS = new Set(["", "休", "排休", "off", "OFF", "休息", "-"]);
+
+const HEADER_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFE8EEF5" },
+};
+const META_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFF3F4F6" },
+};
+const WEEKEND_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFFF7ED" },
+};
 
 const cellValueToString = (value) => {
   if (value == null || value === "") return "";
@@ -33,6 +54,14 @@ const cellValueToString = (value) => {
 };
 
 const normalizeHeader = (value) => String(value || "").trim();
+
+/** 表頭是否對應某曜日（純「一」或舊檔「一 11-02」） */
+const isDayHeaderMatch = (header, day) => {
+  const h = normalizeHeader(header);
+  if (!h || !day) return false;
+  if (h === day) return true;
+  return h.startsWith(`${day} `) || h.startsWith(`${day}\n`);
+};
 
 const loadLocationRulesByName = async (locationId) => {
   const rows = await db.query(
@@ -74,30 +103,73 @@ const loadMembersByEmployeeNo = async (locationId) => {
   return { members: [...byEmployeeNo.values()], byEmployeeNo };
 };
 
-const resolveTemplateWeekStart = (weekStartRaw) => {
-  const raw = weekStartRaw != null ? String(weekStartRaw).trim() : "";
-  if (!raw) return "";
-  try {
-    return weekDatesFromMonday(raw)[0];
-  } catch {
-    return "";
+/**
+ * 範本週次：本週起往後兩個月（與排班管理週次下拉一致）。
+ * @param {string} [todayYmd]
+ */
+const listTemplateWeekStarts = (todayYmd) => {
+  const today =
+    todayYmd && /^\d{4}-\d{2}-\d{2}$/.test(String(todayYmd).trim())
+      ? String(todayYmd).trim()
+      : taipeiParts().date;
+  const minStart = mondayOfYmd(today);
+  const maxStart = mondayOfYmd(addMonthsYmd(today, 2));
+  if (!minStart || !maxStart) return [];
+  const weeks = [];
+  let cursor = minStart;
+  while (cursor <= maxStart) {
+    weeks.push(cursor);
+    cursor = addDaysYmd(cursor, 7);
   }
+  return weeks;
 };
 
-const buildImportTemplateBuffer = async (locationId, options = {}) => {
+const applyHeaderStyle = (cell, { weekend = false } = {}) => {
+  cell.font = { bold: true };
+  cell.fill = weekend ? WEEKEND_FILL : HEADER_FILL;
+  cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+};
+
+const buildDayCellsForWeek = ({
+  personId,
+  weekStart,
+  defaultRule,
+  assignmentByKey,
+  weekEmpty,
+}) => {
+  const cells = {};
+  DAY_HEADERS.forEach((day, index) => {
+    const date = addDaysYmd(weekStart, index);
+    const existing = assignmentByKey.get(`${personId}|${date}`);
+    if (existing) {
+      cells[day] = existing;
+      return;
+    }
+    cells[day] = weekEmpty ? defaultRule : "休";
+  });
+  return cells;
+};
+
+const buildImportTemplateBuffer = async (locationId) => {
   const id = Number(locationId);
   const { rules } = await loadLocationRulesByName(id);
   const { members } = await loadMembersByEmployeeNo(id);
-  const weekStart =
-    resolveTemplateWeekStart(options.weekStart) ||
-    resolveTemplateWeekStart(options.week_start) ||
-    "";
+  const weekStarts = listTemplateWeekStarts();
+  const rangeStart = weekStarts[0] || "";
+  const rangeEnd = weekStarts.length
+    ? addDaysYmd(weekStarts[weekStarts.length - 1], 6)
+    : "";
+
+  const existingAssignments =
+    rangeStart && rangeEnd
+      ? await listAssignments(id, rangeStart, rangeEnd)
+      : [];
 
   const workbook = new ExcelJS.Workbook();
   const guide = workbook.addWorksheet("說明");
   guide.columns = [
     { header: "項目", key: "item", width: 18 },
-    { header: "內容", key: "content", width: 72 },
+    { header: "內容", key: "content", width: 78 },
   ];
   guide.addRow({
     item: "用途",
@@ -105,19 +177,27 @@ const buildImportTemplateBuffer = async (locationId, options = {}) => {
   });
   guide.addRow({
     item: "週起始",
-    content: "必須為該週週一（yyyy-mm-dd）；同一檔可多週（不同列不同週起始）",
+    content:
+      "必須為該週週一（yyyy-mm-dd）；範本已預填本週起往後兩個月（每人每週一列）",
   });
   guide.addRow({
     item: "一～日",
-    content: "填「班別」工作表的班別名稱；空白／休／排休＝當日不應到",
+    content:
+      "請用下拉選「班別」名稱或「休」；空白／休／排休＝當日不應到。實際日期看「週起始」。勿手打改班別名拼字",
+  });
+  guide.addRow({
+    item: "預填",
+    content:
+      "空週預填第一個班別；已有排班之週帶入既有值，缺日＝休（與畫面相同）",
   });
   guide.addRow({
     item: "人員",
-    content: "工號須已在此地點門禁名單；請先於主畫面「門禁管理」加入",
+    content: "工號須已在此地點門禁名單；請先於主畫面「門禁管理」加入（工號／姓名勿改）",
   });
   guide.addRow({
     item: "班別",
-    content: "班別＝簽到時間窗；請於「地點管理 → 時段規則」新增後再下載範本",
+    content:
+      "班別＝簽到時間窗；請於「地點管理 → 時段規則」新增後再下載範本。哪一天上哪班／休請在「排班」一～日欄選擇",
   });
 
   const shiftSheet = workbook.addWorksheet("班別");
@@ -125,14 +205,14 @@ const buildImportTemplateBuffer = async (locationId, options = {}) => {
     { header: "班別名稱", key: "name", width: 20 },
     { header: "開始", key: "windowStart", width: 12 },
     { header: "結束", key: "windowEnd", width: 12 },
-    { header: "填入提示", key: "hint", width: 40 },
+    { header: "填入提示", key: "hint", width: 44 },
   ];
   for (const rule of rules) {
     shiftSheet.addRow({
       name: String(rule.name || "").trim(),
       windowStart: formatTime(rule.window_start),
       windowEnd: formatTime(rule.window_end),
-      hint: "名稱請完整複製到「排班」一～日欄",
+      hint: "請用「排班」一～日欄下拉選擇",
     });
   }
   if (rules.length === 0) {
@@ -140,7 +220,7 @@ const buildImportTemplateBuffer = async (locationId, options = {}) => {
       name: "早班",
       windowStart: "06:00",
       windowEnd: "08:00",
-      hint: "範例：請先在排班畫面新增真實班別後再下載",
+      hint: "範例：請先在地點管理新增真實班別後再下載",
     });
     shiftSheet.addRow({
       name: "晚班",
@@ -149,24 +229,35 @@ const buildImportTemplateBuffer = async (locationId, options = {}) => {
       hint: "範例",
     });
   }
+  shiftSheet.addRow({
+    name: "休",
+    windowStart: "",
+    windowEnd: "",
+    hint: "當日不應到（空白／排休同義）",
+  });
+  const shiftListEndRow = shiftSheet.rowCount;
+  const shiftListFormula = `班別!$A$2:$A$${shiftListEndRow}`;
 
+  // 多週時表頭用純一…日（日期看「週起始」欄）
   const sheet = workbook.addWorksheet("排班");
   sheet.columns = [
     { header: "工號", key: "employeeNo", width: 14 },
     { header: "姓名", key: "fullName", width: 16 },
     { header: "週起始", key: "weekStart", width: 14 },
-    ...DAY_HEADERS.map((day) => ({ header: day, key: day, width: 14 })),
+    ...DAY_HEADERS.map((day) => ({ header: day, key: day, width: 12 })),
   ];
 
   const sampleRule = rules[0]?.name ? String(rules[0].name).trim() : "早班";
   const sampleRule2 =
     rules[1]?.name != null ? String(rules[1].name).trim() : "晚班";
+  const defaultRule = sampleRule;
+  const firstWeek = weekStarts[0] || "2026-11-02";
 
   if (members.length === 0) {
     sheet.addRow({
       employeeNo: "A0001",
       fullName: "範例（請改為門禁名單人員）",
-      weekStart: weekStart || "2026-11-02",
+      weekStart: firstWeek,
       一: sampleRule,
       二: sampleRule2,
       三: sampleRule,
@@ -176,21 +267,74 @@ const buildImportTemplateBuffer = async (locationId, options = {}) => {
       日: "",
     });
   } else {
-    for (const member of members) {
-      sheet.addRow({
-        employeeNo: member.employeeNo,
-        fullName: member.fullName,
-        weekStart: weekStart || "",
-        一: "",
-        二: "",
-        三: "",
-        四: "",
-        五: "",
-        六: "",
-        日: "",
-      });
+    const assignmentByKey = new Map(
+      existingAssignments.map((row) => [
+        `${row.personId}|${row.assignmentDate}`,
+        row.ruleName || defaultRule,
+      ]),
+    );
+    const weeksWithData = new Set(
+      existingAssignments.map((row) => mondayOfYmd(row.assignmentDate)),
+    );
+    for (const weekStart of weekStarts) {
+      const weekEmpty = !weeksWithData.has(weekStart);
+      for (const member of members) {
+        sheet.addRow({
+          employeeNo: member.employeeNo,
+          fullName: member.fullName,
+          weekStart,
+          ...buildDayCellsForWeek({
+            personId: member.id,
+            weekStart,
+            defaultRule,
+            assignmentByKey,
+            weekEmpty,
+          }),
+        });
+      }
     }
   }
+
+  const headerRow = sheet.getRow(1);
+  headerRow.height = 28;
+  for (let col = 1; col <= 3; col += 1) {
+    applyHeaderStyle(headerRow.getCell(col));
+  }
+  DAY_HEADERS.forEach((day, index) => {
+    const col = 4 + index;
+    const weekend = day === "六" || day === "日";
+    applyHeaderStyle(headerRow.getCell(col), { weekend });
+  });
+
+  const dataStart = 2;
+  const dataEnd = Math.max(sheet.rowCount, 2);
+  const dayValidation = {
+    type: "list",
+    allowBlank: true,
+    formulae: [shiftListFormula],
+    showErrorMessage: true,
+    errorTitle: "無效班別",
+    error: "請從下拉選單選擇班別或休",
+    showInputMessage: true,
+    promptTitle: "班別",
+    prompt: "選班別或休；空白＝不應到",
+  };
+
+  for (let rowNo = dataStart; rowNo <= dataEnd; rowNo += 1) {
+    const row = sheet.getRow(rowNo);
+    row.getCell(1).fill = META_FILL;
+    row.getCell(2).fill = META_FILL;
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const col = 4 + dayIndex;
+      const cell = row.getCell(col);
+      cell.dataValidation = dayValidation;
+      if (dayIndex >= 5) {
+        cell.fill = WEEKEND_FILL;
+      }
+    }
+  }
+
+  sheet.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
 
   return Buffer.from(await workbook.xlsx.writeBuffer());
 };
@@ -249,6 +393,16 @@ const pick = (obj, keys) => {
       ([header]) => normalizeHeader(header) === normalizeHeader(key),
     );
     if (hit && String(hit[1]).trim() !== "") return String(hit[1]).trim();
+  }
+  return "";
+};
+
+/** 依曜日取儲存格（相容「一」與「一 11-02」） */
+const pickDayCell = (obj, day) => {
+  const entries = Object.entries(obj || {});
+  for (const [header, value] of entries) {
+    if (!isDayHeaderMatch(header, day)) continue;
+    return value != null ? String(value).trim() : "";
   }
   return "";
 };
@@ -319,7 +473,7 @@ const importAssignmentsFromExcel = async (locationId, excelBuffer) => {
     const bucket = weeks.get(weekKey);
 
     DAY_HEADERS.forEach((dayHeader, dayIndex) => {
-      const cell = pick(row, [dayHeader]);
+      const cell = pickDayCell(row, dayHeader);
       if (OFF_TOKENS.has(cell)) return;
       const ruleId = byName.get(cell);
       if (!ruleId) {
@@ -374,4 +528,7 @@ module.exports = {
   DAY_HEADERS,
   OFF_TOKENS,
   cellValueToString,
+  isDayHeaderMatch,
+  pickDayCell,
+  listTemplateWeekStarts,
 };

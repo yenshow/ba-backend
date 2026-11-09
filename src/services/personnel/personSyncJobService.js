@@ -34,20 +34,20 @@ const {
   normalizeIsapiErrorMessage,
   isPermanentFaceModelingError,
   isPermanentCardEmployeeNoError,
+  isDeviceBusyError,
   isTransientIsapiNetworkError,
   readStepErrorMessage,
 } = require("./personnelIsapiErrorUtils");
-
-/** 步間延遲：避免嵌入式門禁（含掌紋）被連續寫入壓垮 */
-const SYNC_DELAY_MS = 500;
-/** 每處理 N 人後多歇一段，給設備消化 */
-const SYNC_PERSON_BATCH_EVERY = 20;
-const SYNC_PERSON_BATCH_PAUSE_MS = 2000;
-/** 批次刪除 UserInfo 每批筆數（過大易 Device Busy） */
-const DELETE_USER_INFO_CHUNK_SIZE = 20;
-/** socket hang up／deviceBusy 等暫態錯誤重試次數（含首次） */
-const TRANSIENT_RETRY_ATTEMPTS = 3;
-const TRANSIENT_RETRY_BASE_MS = 800;
+const {
+  STEP_DELAY_MS: SYNC_DELAY_MS,
+  PERSON_BATCH_EVERY: SYNC_PERSON_BATCH_EVERY,
+  PERSON_BATCH_PAUSE_MS: SYNC_PERSON_BATCH_PAUSE_MS,
+  DELETE_USER_INFO_CHUNK_SIZE,
+  DELETE_CHUNK_PAUSE_MS,
+  TRANSIENT_RETRY_ATTEMPTS,
+  TRANSIENT_RETRY_BASE_MS,
+  TRANSIENT_BUSY_BASE_MS,
+} = require("../../config/deviceSyncTiming");
 
 // ========== sync 背景工作（DB 持久化） ==========
 // 需求：避免長時間同步造成 HTTP timeout；前端以 jobId 輪詢進度/結果。
@@ -421,11 +421,14 @@ async function withTransientRetry(fn, meta = {}) {
       ) {
         throw err;
       }
-      const waitMs = TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1);
+      const busy = isDeviceBusyError(err);
+      const baseMs = busy ? TRANSIENT_BUSY_BASE_MS : TRANSIENT_RETRY_BASE_MS;
+      const waitMs = baseMs * 2 ** (attempt - 1);
       logger.warn("ISAPI 暫態錯誤，準備重試", {
         attempt,
         maxAttempts: TRANSIENT_RETRY_ATTEMPTS,
         waitMs,
+        busy,
         deviceId: meta.deviceId ?? null,
         employeeNo: meta.employeeNo ?? null,
         stage: meta.stage ?? null,
@@ -1635,6 +1638,9 @@ async function syncAccessDevicesWithPersons(
               message,
             });
           }
+        }
+        if (ci + 1 < deleteChunks.length && DELETE_CHUNK_PAUSE_MS > 0) {
+          await delay(DELETE_CHUNK_PAUSE_MS);
         }
       }
 

@@ -1,5 +1,6 @@
 /**
- * 時段簽到時間窗：台北曆日、跨日展開、每週重疊、解析目前場次。
+ * 時段簽到時間窗：台北曆日、跨日展開、解析目前場次。
+ * 誰哪天上哪班由排班決定，規則只定時間窗。
  */
 const WEEKDAY_MAP = {
   Mon: 1,
@@ -12,7 +13,6 @@ const WEEKDAY_MAP = {
 };
 
 const MINUTES_PER_DAY = 24 * 60;
-const WEEK_MINUTES = 7 * MINUTES_PER_DAY;
 
 const taipeiParts = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -92,70 +92,39 @@ const addDaysYmd = (dateStr, delta) => {
   return `${year}-${month}-${day}`;
 };
 
-const prevWeekday = (day) => {
-  const n = Number(day);
-  if (n === 1) return 7;
-  return n - 1;
+/** 曆月加減（保留日；溢出則落到該月最後有效日由 Date.UTC 正規化） */
+const addMonthsYmd = (dateStr, deltaMonths) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || "").trim());
+  if (!match) return String(dateStr || "");
+  const utc = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1 + Number(deltaMonths || 0),
+    Number(match[3]),
+  );
+  const date = new Date(utc);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+/** 該日所在週的週一（UTC 曆日） */
+const mondayOfYmd = (dateStr) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || "").trim());
+  if (!match) return "";
+  const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const dow = new Date(utc).getUTCDay(); // 0=Sun … 1=Mon
+  const offset = dow === 0 ? -6 : 1 - dow;
+  return addDaysYmd(String(dateStr).trim(), offset);
 };
 
 const isOvernightWindow = (startMin, endMin) =>
   Number.isFinite(startMin) && Number.isFinite(endMin) && endMin < startMin;
 
-const rangesOverlap = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
-
-const normalizeWeekdays = (list) =>
-  [
-    ...new Set(
-      (Array.isArray(list) ? list : [])
-        .map((value) => Number(value))
-        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7),
-    ),
-  ].sort((a, b) => a - b);
-
-const weekdaysOverlap = (left, right) => {
-  const set = new Set(left);
-  return right.some((day) => set.has(day));
-};
-
-const collectWeekSpans = (startMin, endMin, weekdays) => {
-  const overnight = isOvernightWindow(startMin, endMin);
-  const spans = [];
-  for (const day of normalizeWeekdays(weekdays)) {
-    const dayOffset = (day - 1) * MINUTES_PER_DAY;
-    const start = dayOffset + startMin;
-    const end = overnight
-      ? dayOffset + MINUTES_PER_DAY + endMin
-      : dayOffset + endMin;
-    if (end <= WEEK_MINUTES) {
-      spans.push({ start, end });
-    } else {
-      spans.push({ start, end: WEEK_MINUTES });
-      spans.push({ start: 0, end: end - WEEK_MINUTES });
-    }
-  }
-  return spans;
-};
-
-const windowsOverlapOnWeek = (aStart, aEnd, aDays, bStart, bEnd, bDays) => {
-  const left = collectWeekSpans(aStart, aEnd, aDays);
-  const right = collectWeekSpans(bStart, bEnd, bDays);
-  for (const a of left) {
-    for (const b of right) {
-      if (rangesOverlap(a.start, a.end, b.start, b.end)) return true;
-    }
-  }
-  return false;
-};
-
 const ruleWindowMinutes = (rule) => {
   const startMin = timeToMinutes(rule?.window_start ?? rule?.windowStart);
   const endMin = timeToMinutes(rule?.window_end ?? rule?.windowEnd);
   return { startMin, endMin };
-};
-
-const ruleWeekdays = (rule) => {
-  const raw = rule?.weekdays;
-  return Array.isArray(raw) ? raw.map((day) => Number(day)) : [];
 };
 
 /**
@@ -166,12 +135,11 @@ const resolveActiveWindow = (rule, now = new Date()) => {
   if (!rule || rule.enabled === false) return null;
   const { startMin, endMin } = ruleWindowMinutes(rule);
   if (startMin == null || endMin == null || startMin === endMin) return null;
-  const weekdays = ruleWeekdays(rule);
   const parts = taipeiParts(now);
   const overnight = isOvernightWindow(startMin, endMin);
 
   if (!overnight) {
-    if (!weekdays.includes(parts.weekday) || parts.minutes < startMin) return null;
+    if (parts.minutes < startMin) return null;
     return {
       sessionDate: parts.date,
       startIso: taipeiInstant(parts.date, startMin),
@@ -179,7 +147,7 @@ const resolveActiveWindow = (rule, now = new Date()) => {
     };
   }
 
-  if (weekdays.includes(parts.weekday) && parts.minutes >= startMin) {
+  if (parts.minutes >= startMin) {
     const tomorrow = addDaysYmd(parts.date, 1);
     return {
       sessionDate: parts.date,
@@ -188,9 +156,8 @@ const resolveActiveWindow = (rule, now = new Date()) => {
     };
   }
 
-  const yesterday = addDaysYmd(parts.date, -1);
-  const yesterdayWeekday = prevWeekday(parts.weekday);
-  if (weekdays.includes(yesterdayWeekday) && parts.minutes < endMin) {
+  if (parts.minutes < endMin) {
+    const yesterday = addDaysYmd(parts.date, -1);
     return {
       sessionDate: yesterday,
       startIso: taipeiInstant(yesterday, startMin),
@@ -220,13 +187,9 @@ module.exports = {
   formatPgDate,
   formatTime,
   addDaysYmd,
-  prevWeekday,
+  addMonthsYmd,
+  mondayOfYmd,
   isOvernightWindow,
-  rangesOverlap,
-  normalizeWeekdays,
-  weekdaysOverlap,
-  collectWeekSpans,
-  windowsOverlapOnWeek,
   ruleWindowMinutes,
   resolveActiveWindow,
   pickPrimarySession,

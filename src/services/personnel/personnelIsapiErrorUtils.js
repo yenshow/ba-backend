@@ -56,6 +56,19 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "ESOCKETTIMEDOUT",
 ]);
 
+/** 設備回 Device Busy／deviceBusy（可拉長退避後重試） */
+function isDeviceBusyError(errOrMessage) {
+  const err =
+    errOrMessage && typeof errOrMessage === "object" ? errOrMessage : null;
+  const msg =
+    err?.message != null
+      ? String(err.message)
+      : errOrMessage != null
+        ? String(errOrMessage)
+        : "";
+  return /deviceBusy|Device Busy/i.test(msg);
+}
+
 /**
  * 是否為設備／網路暫態錯誤（可重試）。業務永久錯（建模失敗、工號格式、401）不重試。
  * @param {unknown} errOrMessage
@@ -82,7 +95,7 @@ function isTransientIsapiNetworkError(errOrMessage) {
   const code = err?.code != null ? String(err.code) : "";
   if (code && TRANSIENT_NETWORK_CODES.has(code)) return true;
   if (/socket hang up/i.test(msg)) return true;
-  if (/deviceBusy|Device Busy/i.test(msg)) return true;
+  if (isDeviceBusyError(errOrMessage)) return true;
   if (/timed?\s*out/i.test(msg)) return true;
   if (/network\s*error/i.test(msg)) return true;
   if (
@@ -133,6 +146,7 @@ module.exports = {
   normalizeIsapiErrorMessage,
   isPermanentFaceModelingError,
   isPermanentCardEmployeeNoError,
+  isDeviceBusyError,
   isTransientIsapiNetworkError,
   readStepErrorMessage,
   mergeStepErrorMessage,

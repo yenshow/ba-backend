@@ -131,7 +131,7 @@ const jwt = {
  */
 const rateLimit = {
   windowMs: toNumber(getEnv("RATE_LIMIT_WINDOW_MS"), 15 * 60 * 1000),
-  max: toNumber(getEnv("RATE_LIMIT_MAX"), 1000),
+  max: toNumber(getEnv("RATE_LIMIT_MAX"), 3000),
 };
 
 /**

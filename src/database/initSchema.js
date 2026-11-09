@@ -1616,6 +1616,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // 規則＝名稱＋時間窗；誰哪天上哪班由 roll_call_assignments 決定
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS roll_call_rules (
         id SERIAL PRIMARY KEY,
@@ -1623,12 +1624,10 @@ async function initSchema() {
         name VARCHAR(100) NOT NULL,
         window_start TIME NOT NULL,
         window_end TIME NOT NULL,
-        weekdays SMALLINT[] NOT NULL,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CHECK (window_end <> window_start),
-        CHECK (cardinality(weekdays) > 0)
+        CHECK (window_end <> window_start)
       )
     `);
     await createUpdatedAtTrigger(targetPool, "roll_call_rules");

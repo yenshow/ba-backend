@@ -19,7 +19,7 @@ const personSyncJobStore = require("../personnel/personSyncJobStore");
 const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 
-const SYNC_DELAY_MS = 300;
+const { STEP_DELAY_MS: SYNC_DELAY_MS } = require("../../config/deviceSyncTiming");
 
 const randomJobId = () =>
   `elevator_sync_${Date.now()}_${Math.random().toString(16).slice(2)}`;

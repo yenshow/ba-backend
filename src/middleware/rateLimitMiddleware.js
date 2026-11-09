@@ -10,25 +10,66 @@ const loginFailureBuckets = new Map();
 
 const WINDOW_MS = config.rateLimit?.windowMs ?? 15 * 60 * 1000;
 const LOGIN_MAX_FAILED = 10;
-const API_MAX = config.rateLimit?.max ?? 1000;
+const API_MAX = config.rateLimit?.max ?? 3000;
 const RATE_LIMIT_LOG_COOLDOWN_MS = 30_000;
 
 /** @type {Map<string, number>} */
 const lastRateLimitLogAt = new Map();
 
+const getPathWithoutQuery = (req) =>
+  String(req.originalUrl || req.url || "").split("?")[0];
+
 /** 已登入電梯 live（mount／visibility 偶發 GET）不計入全站限流 */
 const isAuthenticatedElevatorLiveGet = (req) => {
   if (req.method !== "GET" || !req.headers.authorization) return false;
-  const path = String(req.originalUrl || req.url || "").split("?")[0];
+  const path = getPathWithoutQuery(req);
   return /^\/api\/elevator\/sites\/\d+\/live$/.test(path);
+};
+
+/**
+ * 已登入設備同步 job 進度 GET（長跑輪詢）不計入全站限流。
+ * 不含 POST 啟動 job、亦不含 license-plates 列表。
+ */
+const isAuthenticatedDeviceSyncJobGet = (req) => {
+  if (req.method !== "GET" || !req.headers.authorization) return false;
+  const path = getPathWithoutQuery(req);
+  return (
+    /^\/api\/personnel\/sync-location\/jobs\/[^/]+(?:\/items)?$/.test(path) ||
+    /^\/api\/personnel\/sync-all-locations\/jobs\/[^/]+$/.test(path) ||
+    /^\/api\/elevator\/sync-location\/jobs\/[^/]+$/.test(path)
+  );
 };
 
 /** 中控室 token 滑動續期不計入全站限流 */
 const isSessionRefreshPost = (req) =>
   req.method === "POST" &&
-  String(req.originalUrl || req.url || "")
-    .split("?")[0]
-    .endsWith("/users/refresh");
+  getPathWithoutQuery(req).endsWith("/users/refresh");
+
+/**
+ * 已登入殼層 bootstrap GET：限流後守衛會反覆重抓，形成 429 死亡螺旋。
+ * 僅精確路徑；不含 license activate／modules 其他寫入。
+ */
+const isAuthenticatedShellBootstrapGet = (req) => {
+  if (req.method !== "GET" || !req.headers.authorization) return false;
+  const path = getPathWithoutQuery(req);
+  return (
+    path === "/api/users/me" ||
+    path === "/api/license" ||
+    path === "/api/modules/registry"
+  );
+};
+
+/** @param {import('express').Request} req */
+const shouldSkipApiRateLimit = (req) => {
+  if (req.method === "GET" && getPathWithoutQuery(req).startsWith("/api/uploads")) {
+    return true;
+  }
+  if (isSessionRefreshPost(req)) return true;
+  if (isAuthenticatedElevatorLiveGet(req)) return true;
+  if (isAuthenticatedDeviceSyncJobGet(req)) return true;
+  if (isAuthenticatedShellBootstrapGet(req)) return true;
+  return false;
+};
 
 const rateLimitHandler = (req, res) =>
   sendFailure(
@@ -99,6 +140,11 @@ const bumpBucket = (store, key, windowMs) => {
   return bucket;
 };
 
+/** 超限時可放行：已帶 Authorization 的 GET（避免 SPA 讀取整站卡死） */
+const shouldSoftPassOverLimit = (req) =>
+  Boolean(req?.headers?.authorization) &&
+  String(req?.method || "GET").toUpperCase() === "GET";
+
 /**
  * @param {{ windowMs: number, max: number, skip?: (req: import('express').Request) => boolean }} options
  */
@@ -112,6 +158,14 @@ function createRateLimiter(options) {
     const ip = getClientIpKey(req);
     const bucket = bumpBucket(apiBuckets, ip, windowMs);
     if (bucket.count > max) {
+      if (shouldSoftPassOverLimit(req)) {
+        logRateLimitIfAllowed("API 限流中（放行已登入 GET）", {
+          ip,
+          path: getRequestPath(req),
+          count: bucket.count,
+        });
+        return next();
+      }
       return respondRateLimited(req, res, "API 限流觸發", {
         ip,
         path: getRequestPath(req),
@@ -149,16 +203,16 @@ const recordFailedLoginAttempt = (req) => {
 const apiRateLimiter = createRateLimiter({
   windowMs: WINDOW_MS,
   max: API_MAX,
-  skip: (req) => {
-    const url = getRequestPath(req);
-    if (req.method === "GET" && url.startsWith("/api/uploads")) return true;
-    if (isSessionRefreshPost(req)) return true;
-    return isAuthenticatedElevatorLiveGet(req);
-  },
+  skip: shouldSkipApiRateLimit,
 });
 
 module.exports = {
   loginRateLimitPrecheck,
   recordFailedLoginAttempt,
   apiRateLimiter,
+  shouldSkipApiRateLimit,
+  shouldSoftPassOverLimit,
+  createRateLimiter,
+  /** @internal 測試用 */
+  _resetApiBucketsForTests: () => apiBuckets.clear(),
 };
