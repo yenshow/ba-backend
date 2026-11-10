@@ -53,6 +53,9 @@ const TRANSIENT_BUSY_BASE_MS = envNum(
   1500,
 );
 
+/** 單地點 sync job 進度寫回 DB 的最小間隔（ms）；供前端輪詢 overlay */
+const PROGRESS_FLUSH_MS = envNum("DEVICE_SYNC_PROGRESS_FLUSH_MS", 2000);
+
 module.exports = {
   STEP_DELAY_MS,
   PERSON_BATCH_EVERY,
@@ -62,4 +65,5 @@ module.exports = {
   TRANSIENT_RETRY_ATTEMPTS,
   TRANSIENT_RETRY_BASE_MS,
   TRANSIENT_BUSY_BASE_MS,
+  PROGRESS_FLUSH_MS,
 };

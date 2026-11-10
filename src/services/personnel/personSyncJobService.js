@@ -47,6 +47,7 @@ const {
   TRANSIENT_RETRY_ATTEMPTS,
   TRANSIENT_RETRY_BASE_MS,
   TRANSIENT_BUSY_BASE_MS,
+  PROGRESS_FLUSH_MS,
 } = require("../../config/deviceSyncTiming");
 
 // ========== sync 背景工作（DB 持久化） ==========
@@ -101,17 +102,31 @@ function createLocationJobReporter(job, locationId = null) {
     if (!job?.progress) return;
     job.progress[key] = v;
   };
+  const requestProgressFlush = (force = false) => {
+    if (typeof job?._flushProgress === "function") {
+      void job._flushProgress(force);
+    }
+  };
 
   let runningSeq = 0;
   const runningSampleRate = 0;
 
+  /**
+   * progress.total 以「人員層」ops 估算（add/update/delete 各 1）。
+   * 子步驟（userInfo／face／card／fingerprint）仍寫 tail，但不計入 completed，
+   * 避免 UI 出現 896／510 這類分子大於分母。
+   */
+  const countsTowardProgress = (_action, stage) =>
+    String(stage || "").trim() === "person";
+
   const startOp = ({ employeeNo, deviceId, action, stage }) => {
     const startedAt = Date.now();
-    bump("attempted", 1);
+    if (countsTowardProgress(action, stage)) bump("attempted", 1);
     set("currentDeviceId", deviceId ?? null);
     set("currentEmployeeNo", employeeNo ?? null);
     set("currentAction", action ?? null);
     set("currentStage", stage ?? null);
+    requestProgressFlush(false);
     // running 事件：預設不寫入 DB（避免寫入放大）
     if (runningSampleRate > 0) {
       runningSeq += 1;
@@ -147,10 +162,12 @@ function createLocationJobReporter(job, locationId = null) {
     ok,
     message,
   }) => {
-    bump("completed", 1);
-    if (ok === "unchanged") bump("skipped", 1);
-    else if (ok) bump("succeeded", 1);
-    else bump("failed", 1);
+    if (countsTowardProgress(action, stage)) {
+      bump("completed", 1);
+      if (ok === "unchanged") bump("skipped", 1);
+      else if (ok) bump("succeeded", 1);
+      else bump("failed", 1);
+    }
     const completedItem = withLocationId(
       job,
       {
@@ -168,10 +185,11 @@ function createLocationJobReporter(job, locationId = null) {
     // completed 事件一律進 tail；issues 只保留 failed
     pushJobTailItem(job, completedItem);
     pushJobIssueItem(job, completedItem);
+    requestProgressFlush(false);
   };
 
   const skipOp = ({ employeeNo, deviceId, action, stage, message }) => {
-    bump("attempted", 1);
+    if (countsTowardProgress(action, stage)) bump("attempted", 1);
     finishOp({
       employeeNo,
       deviceId,
@@ -187,6 +205,7 @@ function createLocationJobReporter(job, locationId = null) {
     set("currentDeviceId", deviceId ?? null);
     if (deviceIndex != null) set("currentDeviceIndex", deviceIndex);
     if (deviceTotal != null) set("deviceTotal", deviceTotal);
+    requestProgressFlush(false);
   };
 
   const setTotals = ({ totalOps, targetPersonsTotal, deviceTotal }) => {
@@ -194,6 +213,7 @@ function createLocationJobReporter(job, locationId = null) {
     if (targetPersonsTotal != null)
       set("targetPersonsTotal", targetPersonsTotal);
     if (deviceTotal != null) set("deviceTotal", deviceTotal);
+    requestProgressFlush(true);
   };
 
   return { startOp, finishOp, skipOp, markDevice, setTotals };
@@ -2201,6 +2221,20 @@ function startSyncLocationJob(locationId) {
       progress,
       result: null,
       error: null,
+    };
+
+    let lastProgressFlushAt = 0;
+    job._flushProgress = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastProgressFlushAt < PROGRESS_FLUSH_MS) return;
+      lastProgressFlushAt = now;
+      try {
+        await personSyncJobStore.updateJob(jobId, {
+          progress: { ...job.progress },
+        });
+      } catch {
+        // 進度 flush 失敗不中斷同步
+      }
     };
 
     try {
