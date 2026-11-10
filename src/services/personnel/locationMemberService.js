@@ -332,6 +332,28 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
   }
 
   const syncMeta = await triggerDeviceSyncAfterMemberApply(id);
+
+  // 時段簽到：門禁縮減後裁掉場次殘留（與排班儲存同一套 applyRosterPartition）
+  try {
+    const rollCallRows = await db.query(
+      `SELECT 1 FROM location_systems
+       WHERE location_id = ? AND system_type = 'roll_call'
+       LIMIT 1`,
+      [id],
+    );
+    if (rollCallRows?.length) {
+      const {
+        syncOpenSessionsAfterMemberChange,
+      } = require("../rollCall/rollCallAssignmentService");
+      await syncOpenSessionsAfterMemberChange(id);
+    }
+  } catch (err) {
+    logger.warn("門禁名單變更後對齊時段簽到場次失敗", {
+      locationId: id,
+      message: err?.message || String(err),
+    });
+  }
+
   const paged = await getPersonsByLocationIdPaged(id, { limit: 20, offset: 0 });
   return { ...paged, ...syncMeta };
 }

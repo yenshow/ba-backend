@@ -1,5 +1,5 @@
 /**
- * 時段簽到週曆排班：日期／應到篩選／Excel 休班語意／表頭正規化
+ * 時段簽到週曆排班：日期／應到篩選／休＝dayOff／Excel 表頭
  *
  *   node tests/rollCall/rollCallAssignment.test.js
  */
@@ -8,6 +8,8 @@ const {
   parseYmd,
   weekDatesFromMonday,
   filterExpectedMembers,
+  partitionRosterMembers,
+  collectPartitionPersonIds,
   assertDateOrder,
 } = require("../../src/services/rollCall/rollCallAssignmentService");
 const {
@@ -54,6 +56,49 @@ const run = () => {
     [],
   );
 
+  // legacy：全員 working
+  assert.deepEqual(
+    partitionRosterMembers(members, false, new Set(), new Set()),
+    { working: members, dayOff: [] },
+  );
+
+  // 排班日：1→本場早班；2→他場晚班（不在本場、也非休）；3→完全無指派＝休
+  const part = partitionRosterMembers(
+    members,
+    true,
+    new Set([1]),
+    new Set([1, 2]),
+  );
+  assert.deepEqual(
+    part.working.map((p) => p.id),
+    [1],
+  );
+  assert.deepEqual(
+    part.dayOff.map((p) => p.id),
+    [3],
+  );
+
+  // 全日休假
+  assert.deepEqual(
+    partitionRosterMembers(members, true, new Set(), new Set()).dayOff.map(
+      (p) => p.id,
+    ),
+    [1, 2, 3],
+  );
+
+  // 場次裁舊：僅保留 working ∪ dayOff
+  assert.deepEqual(
+    [...collectPartitionPersonIds([{ id: 1 }, { id: 2 }], [{ id: 3 }])].sort(
+      (a, b) => a - b,
+    ),
+    [1, 2, 3],
+  );
+  assert.deepEqual([...collectPartitionPersonIds([], [])], []);
+  assert.deepEqual(
+    [...collectPartitionPersonIds([{ id: "x" }, { id: 0 }], [{ id: 9 }])],
+    [9],
+  );
+
   assert.equal(DAY_HEADERS.length, 7);
   assert.equal(OFF_TOKENS.has(""), true);
   assert.equal(OFF_TOKENS.has("休"), true);
@@ -74,7 +119,10 @@ const run = () => {
   assert.equal(addMonthsYmd("2026-11-03", 2), "2027-01-03");
   const weeks = listTemplateWeekStarts("2026-11-03");
   assert.equal(weeks[0], "2026-11-02");
-  assert.equal(weeks[weeks.length - 1], mondayOfYmd(addMonthsYmd("2026-11-03", 2)));
+  assert.equal(
+    weeks[weeks.length - 1],
+    mondayOfYmd(addMonthsYmd("2026-11-03", 2)),
+  );
   assert.ok(weeks.length >= 8 && weeks.length <= 10);
 
   console.log("rollCallAssignment.test.js OK");

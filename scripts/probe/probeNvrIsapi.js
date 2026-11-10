@@ -194,7 +194,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("\n--- GET /ISAPI/ContentMgmt/InputProxy/channels/status ---");
+  console.log(
+    "\n--- GET InputProxy/channels/status + channels（名稱）via listChannels ---",
+  );
   let channels = [];
   try {
     const listed = await nvrIsapiService.listChannels(nvrConfig);

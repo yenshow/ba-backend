@@ -183,12 +183,12 @@ const buildImportTemplateBuffer = async (locationId) => {
   guide.addRow({
     item: "一～日",
     content:
-      "請用下拉選「班別」名稱或「休」；空白／休／排休＝當日不應到。實際日期看「週起始」。勿手打改班別名拼字",
+      "請用下拉選「班別」名稱或「休」；空白／休／排休＝當日休假（主畫面仍顯示、不計應到）。實際日期看「週起始」。勿手打改班別名拼字",
   });
   guide.addRow({
     item: "預填",
     content:
-      "空週預填第一個班別；已有排班之週帶入既有值，缺日＝休（與畫面相同）",
+      "空週預填第一個班別；已有排班之週帶入既有值，缺日＝休（與畫面相同）。須儲存／匯入後主畫面才生效",
   });
   guide.addRow({
     item: "人員",
@@ -233,7 +233,7 @@ const buildImportTemplateBuffer = async (locationId) => {
     name: "休",
     windowStart: "",
     windowEnd: "",
-    hint: "當日不應到（空白／排休同義）",
+    hint: "當日休假（顯示、不計應到；空白／排休同義）",
   });
   const shiftListEndRow = shiftSheet.rowCount;
   const shiftListFormula = `班別!$A$2:$A$${shiftListEndRow}`;
@@ -317,7 +317,7 @@ const buildImportTemplateBuffer = async (locationId) => {
     error: "請從下拉選單選擇班別或休",
     showInputMessage: true,
     promptTitle: "班別",
-    prompt: "選班別或休；空白＝不應到",
+    prompt: "選班別或休；空白＝休假",
   };
 
   for (let rowNo = dataStart; rowNo <= dataEnd; rowNo += 1) {

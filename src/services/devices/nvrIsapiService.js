@@ -1,5 +1,5 @@
 /**
- * NVR ISAPI：InputProxy 通道狀態、CMSearch／月曆、ContentMgmt/download、即時 RTSP URL 組裝
+ * NVR ISAPI：InputProxy 通道（status＋channels 名稱）、CMSearch／月曆、ContentMgmt/download、即時 RTSP URL 組裝
  */
 const crypto = require("crypto");
 const {
@@ -159,11 +159,12 @@ function parseChannelStatuses(xml) {
         streamingProxyChannelIds.push(singleProxy);
       }
     }
-    const srcName =
+    const srcName = decodeXmlEntities(
       pickTag(block, "name") ||
-      pickTag(block, "srcName") ||
-      pickTag(block, "channelName") ||
-      "";
+        pickTag(block, "srcName") ||
+        pickTag(block, "channelName") ||
+        "",
+    );
     /** 主碼流：優先 x01（海康慣例） */
     const liveTrackId =
       streamingProxyChannelIds.find((n) => n % 100 === 1) ??
@@ -282,6 +283,25 @@ async function listChannels(config) {
     });
     const xml = responseBodyToString(res.data);
     const channels = parseChannelStatuses(xml);
+
+    // status 常缺 name；另抓 channels 清單依 id 覆寫（失敗不阻斷）
+    try {
+      const nameRes = await client.request({
+        method: "GET",
+        path: "/ISAPI/ContentMgmt/InputProxy/channels",
+      });
+      const nameById = new Map();
+      for (const named of parseChannelStatuses(responseBodyToString(nameRes.data))) {
+        if (named.id != null && named.name) nameById.set(named.id, named.name);
+      }
+      for (const ch of channels) {
+        const name = ch.id != null ? nameById.get(ch.id) : undefined;
+        if (name) ch.name = name;
+      }
+    } catch {
+      // 名稱補強失敗仍回傳 status（前端 fallback「通道 N」）
+    }
+
     return {
       host: conn.host,
       rtspPort: conn.rtspPort,

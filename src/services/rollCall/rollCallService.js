@@ -349,32 +349,23 @@ const replaceLocationRules = async (locationId, rulesInput) => {
 };
 
 /**
- * 開場／補插應到名單。
- * 該地點 sessionDate 若有排班列：僅門禁名單 ∩ 指派到本場 ruleId；否則全門禁名單。
+ * 開場／補插名單（與排班儲存後對齊共用 applyRosterPartitionToSession）。
+ * 未啟用排班日：全門禁 → pending。
+ * 已啟用排班日：本場規則 → pending；當日完全無指派 → leave。
  */
 const snapshotAttendance = async (sessionId, locationId, ruleId, sessionDate) => {
   const members = await loadLocationMembers(locationId);
   const {
-    resolveExpectedMembers,
+    resolveRosterPartition,
+    applyRosterPartitionToSession,
   } = require("./rollCallAssignmentService");
-  const persons = await resolveExpectedMembers(
+  const partition = await resolveRosterPartition(
     locationId,
     ruleId,
     sessionDate,
     members,
   );
-  for (const person of persons) {
-    const employeeNo =
-      person.employee_no != null ? String(person.employee_no).trim() : "";
-    if (!employeeNo) continue;
-    await db.query(
-      `INSERT INTO roll_call_attendance
-        (session_id, person_id, employee_no, full_name, status)
-       VALUES (?, ?, ?, ?, 'pending')
-       ON CONFLICT (session_id, person_id) DO NOTHING`,
-      [sessionId, person.id, employeeNo, person.full_name || null],
-    );
-  }
+  await applyRosterPartitionToSession(sessionId, partition);
 };
 
 /** 簽到地點 → 營運事件地點／system_id */
@@ -724,25 +715,26 @@ const unitsBySession = async (sessionIds) => {
   return map;
 };
 
-/** 地點應到名單 → 單位格（時段尚未開始預覽，同人流 groupPersonsByPersonGroup） */
+/** 有工號才計入預覽應到 */
+const personHasEmployeeNo = (person) => {
+  const employeeNo =
+    person?.employee_no != null ? String(person.employee_no).trim() : "";
+  return Boolean(employeeNo);
+};
+
+/** 地點應到名單 → 單位格（時段尚未開始預覽；僅 working，不含休） */
 const buildRosterUnits = (members) =>
   groupPersonsByPersonGroup(members).map((group) => ({
     id: group.id,
     name: group.name,
     currentCount: 0,
-    totalCount: group.list.filter((person) => {
-      const employeeNo =
-        person.employee_no != null ? String(person.employee_no).trim() : "";
-      return Boolean(employeeNo);
-    }).length,
+    totalCount: group.list.filter(personHasEmployeeNo).length,
   }));
 
 const countRosterExpected = (members) => {
   let n = 0;
   for (const person of members || []) {
-    const employeeNo =
-      person.employee_no != null ? String(person.employee_no).trim() : "";
-    if (employeeNo) n += 1;
+    if (personHasEmployeeNo(person)) n += 1;
   }
   return n;
 };
