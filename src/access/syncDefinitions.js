@@ -64,6 +64,58 @@ async function syncDefinitions(pool) {
     "system.people_counting.sync.edit",
   );
 
+  // 時段簽到：規則編輯併入地點編輯；排休改由排班（確認／編輯）
+  await migratePermissionOverrides(
+    pool,
+    "system.roll_call.rule.edit",
+    "system.roll_call.location.update",
+  );
+  await migratePermissionOverrides(
+    pool,
+    "system.roll_call.attendance.leave",
+    "system.roll_call.assignment.view",
+  );
+  await migratePermissionOverrides(
+    pool,
+    "system.roll_call.attendance.leave",
+    "system.roll_call.assignment.edit",
+  );
+  await migratePermissionOverrides(
+    pool,
+    "system.roll_call.assignment.edit",
+    "system.roll_call.assignment.view",
+  );
+
+  // 影像監控：既有串流控制者保留回放／下載能力
+  await migratePermissionOverrides(
+    pool,
+    "system.video_surveillance.stream.control",
+    "system.video_surveillance.playback",
+  );
+  await migratePermissionOverrides(
+    pool,
+    "system.video_surveillance.stream.control",
+    "system.video_surveillance.playback.download",
+  );
+  await migratePermissionOverrides(
+    pool,
+    "system.video_surveillance.stream.control",
+    "system.alert_log.playback",
+  );
+
+  // 警報設定：既有新增／編輯／刪除者補上「查看」
+  for (const oldCode of [
+    "system.alert_log.alert.create",
+    "system.alert_log.alert.update",
+    "system.alert_log.alert.delete",
+  ]) {
+    await migratePermissionOverrides(
+      pool,
+      oldCode,
+      "system.alert_log.alert.view",
+    );
+  }
+
   // 舊版 system.home 為單一寫入碼；拆分後補上子權限
   await pool.query(
     `INSERT INTO user_permission_overrides (user_id, permission_id, granted)

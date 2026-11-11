@@ -115,7 +115,6 @@ function peopleCountingRowConfigToMergeInput(raw) {
     cameraChannelId: c.camera_channel_id,
     preferRegion: c.prefer_region,
     cameraMode: c.camera_mode,
-    accessControlGroups: c.access_control_groups,
     statsResetAt: c.stats_reset_at ?? c.statsResetAt,
     entryEventCameraDeviceId: parseOptionalEventCameraDeviceId(
       c.entry_event_camera_device_id,
@@ -320,7 +319,6 @@ function buildSystemConfig(systemType, config) {
         camera_channel_id: 1,
         prefer_region: config.preferRegion ?? false,
         camera_mode: resetFields.cameraMode,
-        access_control_groups: config.accessControlGroups || [], // 相容保留
         log_display_columns: (() => {
           const cols = toStoredLogDisplayColumns(
             normalizeLogDisplayColumns(config.logDisplayColumns),
@@ -818,7 +816,6 @@ async function createLocationWithSystems(
       dataSource,
       entryDeviceIds,
       exitDeviceIds,
-      accessControlGroups,
       entryLaneId,
       exitLaneId,
       entryCameraDeviceIds,
@@ -879,8 +876,6 @@ async function createLocationWithSystems(
             systemConfig.entryDeviceIds = entryDeviceIds;
           if (exitDeviceIds !== undefined)
             systemConfig.exitDeviceIds = exitDeviceIds;
-          if (accessControlGroups !== undefined)
-            systemConfig.accessControlGroups = accessControlGroups;
           if (cameraDeviceIds !== undefined)
             systemConfig.cameraDeviceIds = cameraDeviceIds;
           if (entryCameraDeviceIds !== undefined)

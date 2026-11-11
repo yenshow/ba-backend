@@ -737,6 +737,8 @@ async function initSchema() {
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
         camera_device_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
+        -- 與 camera_device_ids 同序；0＝一般攝影機；>0＝NVR 主碼流 trackId（liveTrackId）
+        nvr_track_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[],
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -882,35 +884,8 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 建立 lighting_categories 表
-    await targetPool.query(`
-			CREATE TABLE IF NOT EXISTS lighting_categories (
-				id SERIAL PRIMARY KEY,
-				name VARCHAR(100) NOT NULL,
-				zone_id INTEGER REFERENCES zones(id) ON DELETE CASCADE,
-				location_x DECIMAL(5,2) NOT NULL,
-				location_y DECIMAL(5,2) NOT NULL,
-				description TEXT,
-				device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
-				modbus_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-				status VARCHAR(50) DEFAULT 'active',
-				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			)
-		`);
-
-    await createUpdatedAtTrigger(targetPool, "lighting_categories");
-
-    await targetPool.query(`
-			CREATE INDEX IF NOT EXISTS idx_lighting_categories_zone_id ON lighting_categories(zone_id);
-			CREATE INDEX IF NOT EXISTS idx_lighting_categories_device_id ON lighting_categories(device_id);
-			CREATE INDEX IF NOT EXISTS idx_lighting_categories_modbus_config ON lighting_categories USING GIN(modbus_config);
-			CREATE INDEX IF NOT EXISTS idx_lighting_categories_status ON lighting_categories(status);
-			CREATE INDEX IF NOT EXISTS idx_lighting_categories_created_at ON lighting_categories(created_at);
-		`);
-
-    schemaLogger.info("lighting_categories 表已建立", { module: "initSchema" });
+    // 舊版照明分類表已廢除：照明改 zones／locations／location_systems
+    await targetPool.query(`DROP TABLE IF EXISTS lighting_categories`);
 
     // ========== 人員主檔與門禁權限（本系統） ==========
     await targetPool.query(`

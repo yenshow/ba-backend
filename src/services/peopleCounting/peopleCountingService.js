@@ -199,7 +199,6 @@ async function createPeopleCountingLocation(locationData, userId) {
         exitCameraDeviceIds,
         preferRegion,
         cameraMode,
-        accessControlGroups = [], // 相容保留；門禁人員改由人員管理 person_location_access 處理
       } = locationData;
 
       validateLocationData(locationData, false);
@@ -222,7 +221,6 @@ async function createPeopleCountingLocation(locationData, userId) {
             cameraChannelId: 1,
             preferRegion,
             cameraMode,
-            accessControlGroups,
           },
         },
         userId,
@@ -257,7 +255,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         exitCameraDeviceIds,
         preferRegion,
         cameraMode,
-        accessControlGroups,
       } = locationData;
 
       const existing = await getPeopleCountingLocationById(id);
@@ -298,7 +295,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         camera_channel_id: 1,
         prefer_region: existingConfig.preferRegion ?? false,
         camera_mode: resetFields.cameraMode,
-        access_control_groups: existingConfig.accessControlGroups || [],
         stats_reset_at: resetFields.statsResetAt ?? undefined,
       };
 
@@ -343,9 +339,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         ...(cameraMode !== undefined && {
           camera_mode: cameraMode,
         }),
-        ...(accessControlGroups !== undefined && {
-          access_control_groups: accessControlGroups,
-        }),
       };
 
       const systemId = pcSystem?.id ? String(pcSystem.id) : null;
@@ -369,7 +362,6 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               cameraChannelId: 1,
               preferRegion: config.prefer_region,
               cameraMode: config.camera_mode,
-              accessControlGroups: config.access_control_groups,
               statsResetAt: config.stats_reset_at ?? undefined,
             },
           },
@@ -696,8 +688,7 @@ async function getUnitPersonnel(unitId, siteId = null) {
 /**
  * 從地點取得人流統計系統配置
  * @param {Object} location - 地點物件
- * @returns {Object} { peopleCountingSystem, entryDoorIds, exitDoorIds, personGroupIds, dataSource, entryDeviceIds, exitDeviceIds, accessControlGroups }
- * @deprecated accessControlGroups 僅相容保留；門禁流程之可進出人員改由 personnelService.getPersonsWithAccessByLocationId 取得
+ * @returns {Object} 人流地點解析後的設定欄位
  */
 function getPeopleCountingConfig(location) {
   const peopleCountingSystem = ensureArray(location.systems).find(
@@ -720,9 +711,6 @@ function getPeopleCountingConfig(location) {
     cameraChannelId: 1,
     preferRegion: peopleCountingSystem?.config?.preferRegion ?? false,
     cameraMode: resetFields.cameraMode,
-    accessControlGroups: ensureArray(
-      peopleCountingSystem?.config?.accessControlGroups,
-    ),
     logDisplayColumns: normalizeLogDisplayColumns(
       peopleCountingSystem?.config?.logDisplayColumns,
     ),
@@ -734,8 +722,6 @@ function getPeopleCountingConfig(location) {
 /**
  * 取得工地配置（統一處理地點取得和配置解析）
  * @param {number} siteId - 工地 ID
- * @returns {Promise<Object>} { location, personGroupIds, entryDoorIds, exitDoorIds, dataSource, entryDeviceIds, exitDeviceIds, accessControlGroups }
- * @deprecated accessControlGroups 僅相容保留
  */
 async function getSiteConfig(siteId) {
   const locationResult = await getPeopleCountingLocationById(siteId);
@@ -755,7 +741,6 @@ async function getSiteConfig(siteId) {
     cameraChannelId: 1,
     preferRegion: config.preferRegion,
     cameraMode: config.cameraMode,
-    accessControlGroups: config.accessControlGroups,
     statsResetAt: config.statsResetAt,
   };
 }

@@ -419,7 +419,6 @@ function formatSystem(system) {
           cameraChannelId: config.camera_channel_id ?? undefined,
           preferRegion: config.prefer_region ?? undefined,
           cameraMode: cameras.cameraMode,
-          accessControlGroups: config.access_control_groups || [], // 相容保留；門禁人員改由人員管理 API 處理
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),

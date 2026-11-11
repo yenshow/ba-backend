@@ -7,7 +7,13 @@ const rollCallAssignmentImportService = require("../services/rollCall/rollCallAs
 const {
   authenticate,
   requirePermission,
+  requireAnyPermission,
 } = require("../middleware/authMiddleware");
+
+const requireAssignmentRead = requireAnyPermission([
+  "system.roll_call.assignment.view",
+  "system.roll_call.assignment.edit",
+]);
 const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const C = require("../utils/apiErrorCodes");
@@ -33,7 +39,7 @@ router.get(
 
 router.post(
   "/rules",
-  requirePermission("system.roll_call.rule.edit"),
+  requirePermission("system.roll_call.location.update"),
   asyncHandler(async (req, res) => {
     const rule = await rollCallService.createRule(req.body || {});
     res.sendSuccess({ rule });
@@ -42,7 +48,7 @@ router.post(
 
 router.put(
   "/rules/:id",
-  requirePermission("system.roll_call.rule.edit"),
+  requirePermission("system.roll_call.location.update"),
   asyncHandler(async (req, res) => {
     const rule = await rollCallService.updateRule(
       Number(req.params.id),
@@ -54,7 +60,7 @@ router.put(
 
 router.put(
   "/locations/:locationId/rules",
-  requirePermission("system.roll_call.rule.edit"),
+  requirePermission("system.roll_call.location.update"),
   asyncHandler(async (req, res) => {
     const rules = await rollCallService.replaceLocationRules(
       Number(req.params.locationId),
@@ -66,7 +72,7 @@ router.put(
 
 router.delete(
   "/rules/:id",
-  requirePermission("system.roll_call.rule.edit"),
+  requirePermission("system.roll_call.location.update"),
   asyncHandler(async (req, res) => {
     const result = await rollCallService.deleteRule(Number(req.params.id));
     res.sendSuccess(result);
@@ -133,7 +139,7 @@ router.get(
 
 router.post(
   "/sessions/:id/attendance/:personId/leave",
-  requirePermission("system.roll_call.attendance.leave"),
+  requirePermission("system.roll_call.assignment.edit"),
   asyncHandler(async (req, res) => {
     const session = await rollCallService.setAttendanceLeave(
       Number(req.params.id),
@@ -148,7 +154,7 @@ router.post(
 router.get(
   "/locations/:locationId/assignments",
   disableHttpCache,
-  requirePermission("system.roll_call.assignment.edit"),
+  requireAssignmentRead,
   asyncHandler(async (req, res) => {
     const assignments = await rollCallAssignmentService.listAssignments(
       Number(req.params.locationId),

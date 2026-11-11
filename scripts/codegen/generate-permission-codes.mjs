@@ -43,6 +43,7 @@ const MODULE_PERM_KEYS = {
 const CHILD_PROP_OVERRIDES = {
   "alert.ignore": "ignore",
   "report.export": "export",
+  "alert.view": "view",
   "alert.create": "create",
   "alert.update": "update",
   "alert.delete": "delete",
@@ -50,6 +51,7 @@ const CHILD_PROP_OVERRIDES = {
   "statistics.reset": "statisticsReset",
   "barrier.control": "barrierControl",
   "stream.control": "streamControl",
+  "playback.download": "playbackDownload",
   "settings.update": "settingsUpdate",
   "zone.delete": "zoneDelete",
 };

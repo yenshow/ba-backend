@@ -47,6 +47,7 @@ const SHARED_MODULES = [
       { code: "person.create", name: "人員新增", sort_order: 4 },
       { code: "person.update", name: "人員編輯", sort_order: 5 },
       { code: "person.delete", name: "人員刪除", sort_order: 6 },
+      { code: "person.export", name: "人員匯出", sort_order: 7 },
     ],
     ui: {
       id: 2,
@@ -64,9 +65,11 @@ const SHARED_MODULES = [
     children: [
       { code: "alert.ignore", name: "警報忽視", sort_order: 1 },
       { code: "report.export", name: "報表匯出", sort_order: 2 },
-      { code: "alert.create", name: "警報新增", sort_order: 3 },
-      { code: "alert.update", name: "警報編輯", sort_order: 4 },
-      { code: "alert.delete", name: "警報刪除", sort_order: 5 },
+      { code: "alert.view", name: "警報設定查看", sort_order: 3 },
+      { code: "alert.create", name: "警報新增", sort_order: 4 },
+      { code: "alert.update", name: "警報編輯", sort_order: 5 },
+      { code: "alert.delete", name: "警報刪除", sort_order: 6 },
+      { code: "playback", name: "影像回放", sort_order: 7 },
     ],
     ui: {
       id: 3,
@@ -120,12 +123,11 @@ const SHARED_MODULES = [
     sort_order: 13,
     children: [
       ...LOCATION_MUTATION_CHILDREN,
-      { code: "rule.edit", name: "規則編輯", sort_order: 4 },
+      { code: "assignment.view", name: "確認排班", sort_order: 4 },
       { code: "assignment.edit", name: "排班編輯", sort_order: 5 },
       { code: "device_sync", name: "門禁設備同步", sort_order: 6 },
       { code: "sync.edit", name: "門禁名單編輯", sort_order: 7 },
       { code: "statistics.reset", name: "重置統計", sort_order: 8 },
-      { code: "attendance.leave", name: "排休", sort_order: 9 },
     ],
     ui: {
       id: 22,
@@ -180,7 +182,11 @@ const SHARED_MODULES = [
     code: "system.video_surveillance",
     name: "影像監控",
     sort_order: 13,
-    children: [{ code: "stream.control", name: "串流控制", sort_order: 1 }],
+    children: [
+      { code: "stream.control", name: "串流控制", sort_order: 1 },
+      { code: "playback", name: "影像回放", sort_order: 2 },
+      { code: "playback.download", name: "回放下載", sort_order: 3 },
+    ],
     ui: {
       id: 8,
       icon: "surveillance",

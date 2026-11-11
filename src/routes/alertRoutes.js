@@ -23,8 +23,16 @@ const { sendSmtpMailAndClose } = require("../services/notifications/mailer");
 const {
   authenticate,
   requirePermission,
+  requireAnyPermission,
   requireAlertExportIfBulk,
 } = require("../middleware/authMiddleware");
+
+const requireAlertSettingsRead = requireAnyPermission([
+  "system.alert_log.alert.view",
+  "system.alert_log.alert.create",
+  "system.alert_log.alert.update",
+  "system.alert_log.alert.delete",
+]);
 const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
 const { validateIntegers } = require("../middleware/validation");
@@ -161,6 +169,17 @@ function validateRuleIntegrationsPayload(body) {
     }
     if (unique.length > 4) {
       return "cameraLinkage.camera_device_ids 最多 4 台";
+    }
+    if (c.nvr_track_ids !== undefined) {
+      if (!Array.isArray(c.nvr_track_ids)) {
+        return "cameraLinkage.nvr_track_ids 需為陣列";
+      }
+      for (const t of c.nvr_track_ids) {
+        const n = Number(t);
+        if (!Number.isInteger(n) || n < 0) {
+          return "cameraLinkage.nvr_track_ids 需為非負整數（0＝非 NVR）";
+        }
+      }
     }
   }
 
@@ -656,9 +675,10 @@ router.get(
   }),
 );
 
-// 取得警報規則（用於前端顯示狀態）
+// 取得警報規則（警報設定查看；有新增／編輯／刪除者亦可讀）
 router.get(
   "/rules",
+  requireAlertSettingsRead,
   disableHttpCache,
   asyncHandler(async (req, res) => {
     const { source, alert_type, parameter } = req.query;
@@ -694,10 +714,9 @@ router.get(
   }),
 );
 
-// 批次取得多個規則的整合設定（DO／攝影機／門禁全開／Email）
+// 批次取得多個規則的整合設定（讀取；警示列表回放／連動摘要）
 router.post(
   "/rules/integrations/batch",
-  requirePermission("system.alert_log.alert.update"),
   disableHttpCache,
   asyncHandler(async (req, res) => {
     const raw = req.body || {};

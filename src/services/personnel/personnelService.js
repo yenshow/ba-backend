@@ -985,16 +985,6 @@ async function setPersonAccessControlConfig(personId, params = {}) {
       config.access_control,
       validated,
     );
-  } else if (Object.prototype.hasOwnProperty.call(params, "cardNo")) {
-    // deprecated：單卡欄位相容
-    const cardNo = params.cardNo == null ? "" : String(params.cardNo).trim();
-    const validated = cardNo
-      ? normalizeAndValidateCardsInput([{ cardNo, source: "manual" }])
-      : [];
-    config.access_control = applyCardsToAccessControl(
-      config.access_control,
-      validated,
-    );
   }
 
   // password（允許 null 代表清除；僅數字 4~12）
@@ -1016,16 +1006,6 @@ async function setPersonAccessControlConfig(personId, params = {}) {
     const validated = normalizeAndValidateFingerprintsInput(
       Array.isArray(params.fingerprints) ? params.fingerprints : [],
     );
-    config.access_control = applyFingerprintsToAccessControl(
-      config.access_control,
-      validated,
-    );
-  } else if (Object.prototype.hasOwnProperty.call(params, "fingerData")) {
-    // deprecated：單指紋欄位相容
-    const fingerData = String(params.fingerData ?? "").trim();
-    const validated = fingerData
-      ? normalizeAndValidateFingerprintsInput([{ fingerData, source: "manual" }])
-      : [];
     config.access_control = applyFingerprintsToAccessControl(
       config.access_control,
       validated,

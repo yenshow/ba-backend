@@ -798,6 +798,14 @@ async function ensureAlertAccessDoorDeviceIds(pool) {
   `);
 }
 
+/** 既有庫：攝影機連動補 NVR 通道 trackId（與 camera_device_ids 同序；0＝非 NVR） */
+async function ensureAlertCameraLinkageNvrTrackIds(pool) {
+  await pool.query(`
+    ALTER TABLE alert_camera_linkages
+      ADD COLUMN IF NOT EXISTS nvr_track_ids INTEGER[] NOT NULL DEFAULT ARRAY[]::INTEGER[]
+  `);
+}
+
 /**
  * 既有庫：補 alert_rules 訊息模板鍵欄位（initSchema 已有；舊庫靠 patch）。
  * 必須在 syncEnergyAlertRuleCatalog / migrateEnergySettingsToAlertRules 之前執行。
@@ -1314,6 +1322,26 @@ async function ensurePersonsCustomFieldsColumn(pool) {
 }
 
 /** 既有庫：devices.enabled（預設啟用；停用後略過背景訂閱／佈防／探測） */
+/** 既有庫：廢除 lighting_categories（照明已改地點系統） */
+async function dropLightingCategoriesTable(pool) {
+  await pool.query(`DROP TABLE IF EXISTS lighting_categories`);
+}
+
+/** 既有庫：人流 system_config 移除 accessControlGroups（門禁名單改 person_location_access） */
+async function stripPeopleCountingAccessControlGroups(pool) {
+  await pool.query(`
+    UPDATE location_systems
+    SET system_config = (system_config
+      - 'accessControlGroups'
+      - 'access_control_groups')
+    WHERE system_type = 'people_counting'
+      AND (
+        system_config ? 'accessControlGroups'
+        OR system_config ? 'access_control_groups'
+      )
+  `);
+}
+
 async function ensureDevicesEnabledColumn(pool) {
   await pool.query(`
     ALTER TABLE devices
@@ -1331,12 +1359,15 @@ async function applySchemaPatches(pool) {
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
   await ensureVideoIntercomTypeCode(pool);
+  await dropLightingCategoriesTable(pool);
+  await stripPeopleCountingAccessControlGroups(pool);
   await ensureDevicesEnabledColumn(pool);
   await ensurePersonsCustomFieldsColumn(pool);
   await ensureAccessSecurityLocationSystemType(pool);
   await ensureRollCallTables(pool);
   const deviceSyncStatusNorm = await normalizePersonDeviceSyncStatuses(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
+  await ensureAlertCameraLinkageNvrTrackIds(pool);
   await ensureAlertSipRingLinkagesTable(pool);
   await ensureAlertElevatorCallLinkagesTable(pool);
   await ensureIsapiFaceContrastEventsTable(pool);
@@ -1371,10 +1402,13 @@ module.exports = {
   ensureOperationalEventsTable,
   migrateLegacyNvrTypeCodeToCamera,
   ensureVideoIntercomTypeCode,
+  dropLightingCategoriesTable,
+  stripPeopleCountingAccessControlGroups,
   ensureDevicesEnabledColumn,
   ensurePersonsCustomFieldsColumn,
   ensureAccessSecurityLocationSystemType,
   ensureAlertAccessDoorDeviceIds,
+  ensureAlertCameraLinkageNvrTrackIds,
   ensureAlertSipRingLinkagesTable,
   ensureAlertElevatorCallLinkagesTable,
   ensureIsapiFaceContrastEventsTable,

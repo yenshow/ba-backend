@@ -390,8 +390,7 @@ router.put(
  * Body（節錄）:
  * - validity: { longTerm, beginTime, endTime }
  * - cards?: Array<{ cardNo: string, source?: "manual"|"captured"|"virtual" }>
- * - cardNo?: string | null (deprecated)
- * - fingerData?: string | null
+ * - fingerprints?: Array<{ fingerData: string, source?: "manual"|"captured" }>
  * - password?: string | null
  */
 router.put(
@@ -708,6 +707,7 @@ router.get(
 
 router.get(
   "/export",
+  requirePermission("system.personnel.person.export"),
   asyncHandler(async (req, res) => {
     const { filters, sortOrder } = parsePersonListQuery(req.query);
     const buffer = await personImportService.getExportXlsxBuffer(filters, {

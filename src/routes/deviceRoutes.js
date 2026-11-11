@@ -12,8 +12,14 @@ const { throwApiError } = require("../utils/apiErrors");
 const {
   authenticate,
   requirePermission,
+  requireAnyPermission,
   requirePlatformAdmin,
 } = require("../middleware/authMiddleware");
+
+const requireNvrPlayback = requireAnyPermission([
+  "system.video_surveillance.playback",
+  "system.alert_log.playback",
+]);
 const { requireFeature } = require("../middleware/licenseMiddleware");
 const { disableHttpCache } = require("../middleware/common");
 const asyncHandler = require("../utils/asyncHandler");
@@ -301,7 +307,7 @@ router.post(
   "/:id/nvr/playback/start",
   disableHttpCache,
   requireFeature("surveillance"),
-  requirePermission("system.video_surveillance.stream.control"),
+  requireNvrPlayback,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -314,7 +320,7 @@ router.post(
   "/:id/nvr/playback/stop",
   disableHttpCache,
   requireFeature("surveillance"),
-  requirePermission("system.video_surveillance.stream.control"),
+  requireNvrPlayback,
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -328,7 +334,7 @@ router.post(
   "/:id/nvr/download",
   disableHttpCache,
   requireFeature("surveillance"),
-  requirePermission("system.video_surveillance.stream.control"),
+  requirePermission("system.video_surveillance.playback.download"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const id = parseInt(req.params.id, 10);
