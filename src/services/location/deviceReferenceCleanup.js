@@ -14,6 +14,7 @@ const CONTROLLER_SYSTEM_TYPES = new Set([
   "fire",
   "emergency_rescue",
   "smoke_alarm",
+  "security",
 ]);
 
 /** 各 system_type 在 location_systems.system_config 內的設備 ID 欄位 */
@@ -47,10 +48,15 @@ const LOCATION_DEVICE_FIELDS = {
     roles: ["ladder_device", "call_device", "floor_detection"],
     scalars: [],
   },
-  access_security: {
+  intercom: {
     arrays: [],
     roles: [],
     scalars: ["indoor_device_id", "manage_device_id"],
+  },
+  security: {
+    arrays: ["device_ids", "access_device_ids"],
+    roles: [],
+    scalars: [],
   },
 };
 

@@ -12,6 +12,7 @@ const MODBUS_POINT_SYSTEM_TYPES = [
   "fire",
   "emergency_rescue",
   "smoke_alarm",
+  "security",
 ];
 
 const MODBUS_POINT_SYSTEM_TYPE_SET = new Set(MODBUS_POINT_SYSTEM_TYPES);

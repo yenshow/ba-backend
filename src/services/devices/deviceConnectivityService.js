@@ -40,13 +40,29 @@ function normalizeStatus(raw) {
 
 function getSnapshotItem(deviceId) {
   const row = statusByDeviceId.get(deviceId);
+  const bitStore = require("./modbusBitStore");
+  const reach = bitStore.getDeviceReachability(deviceId);
+  const modules =
+    reach?.modules && reach.modules.length > 0 ? reach.modules : undefined;
+
   if (!row) {
+    if (reach) {
+      return {
+        device_id: deviceId,
+        status: reach.online ? "online" : "offline",
+        updated_at: reach.checkedAt
+          ? new Date(reach.checkedAt).toISOString()
+          : null,
+        ...(modules ? { modules } : {}),
+      };
+    }
     return { device_id: deviceId, status: "offline", updated_at: null };
   }
   return {
     device_id: deviceId,
     status: normalizeStatus(row.status),
     updated_at: row.updatedAt || null,
+    ...(modules ? { modules } : {}),
   };
 }
 
@@ -369,6 +385,20 @@ async function checkSingleDeviceConnectivity(deviceRow) {
       await tcpPortHealthCheck(host, resolveHcnetSdkPort(cfg, modelPort));
       return { deviceId, ok: true, nextStatus: "online" };
     }
+    // DI/DO planner 已覆蓋：訂閱 BitStore reachability，不再 holding@0
+    const bitStore = require("./modbusBitStore");
+    if (bitStore.isPlannerCoveredDevice(deviceId)) {
+      const reach = bitStore.getDeviceReachability(deviceId);
+      if (reach) {
+        return {
+          deviceId,
+          ok: true,
+          nextStatus: reach.online ? "online" : "offline",
+          modules: reach.modules,
+          skippedProbe: true,
+        };
+      }
+    }
     await modbusHealthCheck(cfg);
     return { deviceId, ok: true, nextStatus: "online" };
   }
@@ -476,6 +506,21 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
           sourceId: deviceId,
           deviceId,
           status: nextStatus,
+          ...(Array.isArray(r.modules) ? { modules: r.modules } : {}),
+        });
+      }
+      continue;
+    }
+
+    if (r.ok && r.nextStatus === "offline" && r.skippedProbe) {
+      const { nextStatus } = setStatus(deviceId, "offline");
+      if (prevStatus !== nextStatus) {
+        updates.push({
+          system: "device",
+          sourceId: deviceId,
+          deviceId,
+          status: nextStatus,
+          ...(Array.isArray(r.modules) ? { modules: r.modules } : {}),
         });
       }
       continue;
@@ -568,6 +613,21 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
           sourceId: deviceId,
           deviceId,
           status: nextStatus,
+          ...(Array.isArray(r.modules) ? { modules: r.modules } : {}),
+        });
+      }
+      continue;
+    }
+
+    if (r.ok && r.nextStatus === "offline" && r.skippedProbe) {
+      const { nextStatus } = setStatus(deviceId, "offline");
+      if (prevStatus !== nextStatus) {
+        updates.push({
+          system: "device",
+          sourceId: deviceId,
+          deviceId,
+          status: nextStatus,
+          ...(Array.isArray(r.modules) ? { modules: r.modules } : {}),
         });
       }
       continue;

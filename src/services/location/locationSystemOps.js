@@ -36,7 +36,63 @@ const {
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const {
   ensureIntArray,
+  resolveSecurityDataSource,
 } = require("./locationShared");
+const {
+  collectConfiguredBitPointsFromSystemConfig,
+} = require("../devices/modbusDiDoConfig");
+const { assertAddressInIoModules } = require("../devices/modbusIoModules");
+const {
+  parseConfig: parseDeviceConfig,
+} = require("../../utils/deviceHelpers");
+
+const IO_MODULE_ADDRESS_SYSTEM_TYPES = new Set([
+  "lighting",
+  "hvac",
+  "drainage",
+  "power",
+  "fire",
+  "emergency_rescue",
+  "air_circulation",
+  "smoke_alarm",
+  "security",
+]);
+
+/**
+ * 若綁定 controller 有明確 ioModules，校驗 bit address 落在區間內
+ */
+async function assertIoModuleAddresses(query, systemType, systemConfig) {
+  if (!IO_MODULE_ADDRESS_SYSTEM_TYPES.has(systemType)) return;
+  const bits = collectConfiguredBitPointsFromSystemConfig(systemConfig);
+  if (!bits.length) return;
+
+  const deviceIds = [
+    ...new Set(
+      bits
+        .map((b) => Number(b.deviceId))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  if (deviceIds.length === 0) return;
+
+  const rows = await query(
+    `SELECT id, config FROM devices WHERE id = ANY($1::int[])`,
+    [deviceIds],
+  );
+  const byId = new Map();
+  for (const row of rows || []) {
+    byId.set(Number(row.id), parseDeviceConfig(row.config) || {});
+  }
+
+  for (const bit of bits) {
+    const cfg = byId.get(Number(bit.deviceId));
+    if (!cfg) continue;
+    const check = assertAddressInIoModules(cfg, bit.address);
+    if (!check.ok) {
+      throwApiError(C.VALIDATION_REQUIRED, check.message);
+    }
+  }
+}
 
 async function loadLocationContextForValidation(query, locationId) {
   const rows = await query(
@@ -262,6 +318,71 @@ function buildSystemConfig(systemType, config) {
         status_points: config.statusPoints || {},
       };
 
+    case "security": {
+      const rawSource = String(config.dataSource || "").trim();
+      const explicitSource =
+        rawSource === "di" ||
+        rawSource === "access_control" ||
+        rawSource === "both"
+          ? rawSource
+          : null;
+      const usesDi =
+        !explicitSource ||
+        explicitSource === "di" ||
+        explicitSource === "both";
+      const usesAccess =
+        !explicitSource ||
+        explicitSource === "access_control" ||
+        explicitSource === "both";
+      const deviceIds = usesDi ? deviceIdsFromApiSystemConfig(config) : [];
+      const accessDeviceIds = usesAccess
+        ? Array.isArray(config.accessDeviceIds)
+          ? config.accessDeviceIds.map(Number).filter((n) => n > 0)
+          : []
+        : [];
+      const hasDi =
+        usesDi &&
+        (deviceIds.length > 0 ||
+          (config.modbus &&
+            Array.isArray(config.modbus.points) &&
+            config.modbus.points.length > 0) ||
+          (config.statusPoints && Object.keys(config.statusPoints).length > 0));
+      if (usesDi && !hasDi) {
+        throwApiError(C.VALIDATION_REQUIRED, "保全 DI 資料來源須綁定控制器與位址");
+      }
+      if (usesAccess && accessDeviceIds.length === 0) {
+        throwApiError(
+          C.VALIDATION_REQUIRED,
+          "保全門禁／讀卡資料來源須至少選擇一台設備",
+        );
+      }
+      if (!hasDi && accessDeviceIds.length === 0) {
+        throwApiError(
+          C.VALIDATION_REQUIRED,
+          "保全地點須綁定 DI（控制器）或至少一台門禁機／讀卡機",
+        );
+      }
+      return {
+        device_ids: deviceIds,
+        location_x: config.location?.x || 50.0,
+        location_y: config.location?.y || 50.0,
+        modbus_config: usesDi
+          ? stripLegacyModbusDeviceId(config.modbus) || {}
+          : {},
+        equipment_kind: config.equipmentKind || "sensor",
+        view_category:
+          config.viewCategory === undefined || config.viewCategory === null
+            ? "perimeter"
+            : config.viewCategory,
+        status_points: usesDi ? config.statusPoints || {} : {},
+        access_device_ids: accessDeviceIds,
+        data_source: resolveSecurityDataSource(explicitSource, {
+          hasDi,
+          hasAccess: accessDeviceIds.length > 0,
+        }),
+      };
+    }
+
     case "roll_call": {
       const ids = deviceIdsFromApiSystemConfig(config);
       if (ids.length === 0) {
@@ -417,7 +538,7 @@ function buildSystemConfig(systemType, config) {
       };
     }
 
-    case "access_security": {
+    case "intercom": {
       const raw =
         config.indoorDeviceId ??
         config.indoor_device_id ??
@@ -427,12 +548,12 @@ function buildSystemConfig(systemType, config) {
       if (!Number.isFinite(indoorDeviceId) || indoorDeviceId <= 0) {
         throwApiError(
           C.LOCATION_DEVICE_NOT_FOUND,
-          "門禁保全地點必須綁定一台室內機",
+          "對講系統地點必須綁定一台室內機",
         );
       }
       const floor = String(config.floor ?? "").trim();
       if (!floor) {
-        throwApiError(C.LOCATION_NAME_REQUIRED, "門禁保全戶別必須指定樓層");
+        throwApiError(C.LOCATION_NAME_REQUIRED, "對講系統戶別必須指定樓層");
       }
       const manageRaw = config.manageDeviceId ?? config.manage_device_id ?? null;
       const manageDeviceId = Number(manageRaw);
@@ -468,10 +589,10 @@ async function assertSystemLicensed(systemType) {
   }
 }
 
-async function validateAccessSecurityConfig(query, systemConfig, { excludeSystemId = null } = {}) {
+async function validateIntercomConfig(query, systemConfig, { excludeSystemId = null } = {}) {
   const indoorDeviceId = Number(systemConfig?.indoor_device_id);
   if (!Number.isFinite(indoorDeviceId) || indoorDeviceId <= 0) {
-    throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "門禁保全地點必須綁定一台室內機");
+    throwApiError(C.LOCATION_DEVICE_NOT_FOUND, "對講系統地點必須綁定一台室內機");
   }
 
   const deviceRows = await query(
@@ -485,7 +606,7 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
   if (device.type_code !== "video_intercom") {
     throwApiError(
       C.LOCATION_DEVICE_NOT_CONTROLLER,
-      "門禁保全僅可綁定視訊對講室內機（video_intercom）",
+      "對講系統僅可綁定視訊對講室內機（video_intercom）",
     );
   }
   const cfg =
@@ -501,7 +622,7 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
   if (String(cfg.unitType || "").trim() !== "indoor") {
     throwApiError(
       C.LOCATION_DEVICE_NOT_CONTROLLER,
-      "門禁保全地點僅可綁定 unitType=indoor 的室內機",
+      "對講系統地點僅可綁定 unitType=indoor 的室內機",
     );
   }
 
@@ -509,7 +630,7 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
     `
     SELECT ls.id, ls.location_id
     FROM location_systems ls
-    WHERE ls.system_type = 'access_security'
+    WHERE ls.system_type = 'intercom'
       AND (ls.system_config->>'indoor_device_id')::int = $1
       AND ($2::int IS NULL OR ls.id <> $2::int)
     LIMIT 1
@@ -519,7 +640,7 @@ async function validateAccessSecurityConfig(query, systemConfig, { excludeSystem
   if (dup?.length) {
     throwApiError(
       C.LOCATION_DEVICE_NOT_CONTROLLER,
-      "此室內機已綁定其他門禁保全地點",
+      "此室內機已綁定其他對講系統地點",
       { details: { locationId: dup[0].location_id, systemId: dup[0].id } },
     );
   }
@@ -617,8 +738,8 @@ async function createSystem(query, locationId, system) {
     systemConfig = applyVehicleAccessEpochOnSave(systemConfig, null);
     await validateVehicleAccessConfig(systemConfig);
   }
-  if (systemType === "access_security") {
-    await validateAccessSecurityConfig(query, systemConfig);
+  if (systemType === "intercom") {
+    await validateIntercomConfig(query, systemConfig);
   }
   await validatePeopleCountingSystemIfNeeded(
     query,
@@ -627,6 +748,7 @@ async function createSystem(query, locationId, system) {
     locationId,
     false,
   );
+  await assertIoModuleAddresses(query, systemType, systemConfig);
 
   await assertSystemLicensed(systemType);
   await licenseQuotaService.assertSystemQuotaWithinLimit({
@@ -737,8 +859,8 @@ async function updateSystem(query, systemId, system) {
     );
     await validateVehicleAccessConfig(systemConfig);
   }
-  if (targetSystemType === "access_security") {
-    await validateAccessSecurityConfig(query, systemConfig, {
+  if (targetSystemType === "intercom") {
+    await validateIntercomConfig(query, systemConfig, {
       excludeSystemId: systemId,
     });
   }
@@ -751,6 +873,7 @@ async function updateSystem(query, systemId, system) {
       true,
     );
   }
+  await assertIoModuleAddresses(query, targetSystemType, systemConfig);
 
   await assertSystemLicensed(targetSystemType);
   await licenseQuotaService.assertSystemQuotaWithinLimit({
@@ -827,6 +950,7 @@ async function createLocationWithSystems(
       equipmentKind,
       viewCategory,
       statusPoints,
+      accessDeviceIds,
     } = location;
 
     // 如果有現成的 config，直接使用
@@ -852,6 +976,7 @@ async function createLocationWithSystems(
         case "fire":
         case "emergency_rescue":
         case "smoke_alarm":
+        case "security":
           assignFlatControllerFields(systemConfig, {
             deviceId,
             deviceIds,
@@ -861,6 +986,14 @@ async function createLocationWithSystems(
             viewCategory,
             statusPoints,
           });
+          if (locationType === "security") {
+            if (accessDeviceIds !== undefined) {
+              systemConfig.accessDeviceIds = accessDeviceIds;
+            }
+            if (dataSource !== undefined) {
+              systemConfig.dataSource = dataSource;
+            }
+          }
           break;
         case "roll_call":
           assignFlatSystemDeviceFields(systemConfig, deviceId, deviceIds);
@@ -905,7 +1038,7 @@ async function createLocationWithSystems(
           }
           break;
         }
-        case "access_security":
+        case "intercom":
           if (location.indoorDeviceId !== undefined) {
             systemConfig.indoorDeviceId = location.indoorDeviceId;
           } else if (deviceId !== undefined) {

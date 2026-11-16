@@ -145,8 +145,8 @@ const classify = (code) => {
 const resolveBroadcastAudioPath = (overridePath) => {
   const configured =
     overridePath ||
-    config.accessSecurity?.alertAudioPath ||
-    path.resolve(process.cwd(), "assets", "access-security", "alert-broadcast.pcm");
+    config.intercom?.alertAudioPath ||
+    path.resolve(process.cwd(), "assets", "intercom", "alert-broadcast.pcm");
   return path.resolve(String(configured));
 };
 
@@ -167,7 +167,7 @@ const loadBroadcastAudio = (overridePath, payloadType = 0) => {
 };
 
 const isAlertBroadcastConfigured = () => {
-  if (config.accessSecurity?.alertBroadcastEnabled === false) return false;
+  if (config.intercom?.alertBroadcastEnabled === false) return false;
   const abs = resolveBroadcastAudioPath();
   return fs.existsSync(abs);
 };
@@ -950,7 +950,7 @@ const runSipSession = async (opts, mode) => {
     answerMs:
       Number(opts?.answerMs) > 0
         ? Number(opts.answerMs)
-        : config.accessSecurity?.alertAnswerMs || DEFAULT_ANSWER_MS,
+        : config.intercom?.alertAnswerMs || DEFAULT_ANSWER_MS,
     silent: opts?.silent !== false,
     mode,
     audio: mode === "broadcast" || mode === "early" ? opts.audio : null,
@@ -1133,7 +1133,7 @@ async function beginIndoorTalk(device, meta = {}) {
     answerMs:
       Number(opts.answerMs) > 0
         ? Number(opts.answerMs)
-        : config.accessSecurity?.alertAnswerMs || DEFAULT_ANSWER_MS,
+        : config.intercom?.alertAnswerMs || DEFAULT_ANSWER_MS,
     silent: opts.silent !== false,
     mode: "live",
   });

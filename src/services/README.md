@@ -19,8 +19,9 @@
 | `entryExit/` | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測、NVR ISAPI／虛擬通道串流（`nvrIsapiService`／`nvrStreamService`） |
 | `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
+| `devices/`（DI/DO） | `modbusIoModules`（主／副區間）、`modbusBitStore`、`modbusPollPlanner`（1s 區間讀）；`diDoMonitor` 消費 BitStore |
 | `alerts/` | 警報 CRUD、規則、Email、聯動（DO＝`alertLinkageService`；攝影機／門禁／SIP／電梯 CRUD 樣板＝`alertLinkageHelpers`） |
-| `accessSecurity/` | 門禁保全：戶別；對講／廣播 SIP 直打室內（`sipInviteService`／`accessSecurityTalkGateway`）；事件系統自記；主機 listen 可選 |
+| `intercom/` | 對講系統：戶別；對講／廣播 SIP 直打室內（`sipInviteService`／`intercomTalkGateway`）；事件系統自記；主機 listen 可選 |
 | `operationalEvents/` | 查寫／文案／hooks／retention |
 | `backup/` | 備份排程；薄報表 `simpleReportFormats`；厚報表 `peopleCountingReportFormat`／`vehicleAccessReportFormat` |
 | `accessControl/` | 門禁 ISAPI 業務、Digest、佈防訂閱／事件寫入 |
@@ -31,7 +32,10 @@
 | `personnel/` | 人員、匯入、人臉、同步 job |
 | `yscp/` | YSCP Artemis 客戶端、事件訂閱、Runtime |
 | `websocket/` | WebSocket 推播、`wsEventPermissions` |
-| `multimedia/` | 多媒體儀表板 |
+| `multimedia/` | 多媒體儀表板、資訊牆席次（`multimediaWallSeatService`） |
+| `schedule/` | DO 時間排程工廠（`createDoScheduleService`；照明／空調共用） |
+| `lighting/` | 照明時間排程（`lightingScheduleService`／`lightingScheduleScheduler`） |
+| `hvac/` | 空調時間排程（`hvacScheduleService`／`hvacScheduleScheduler`） |
 | `notifications/` | SMTP mailer |
 
 ## 路由 → Service 對照（常用）
@@ -48,7 +52,7 @@
 | `lighting`～`smokeAlarm` Routes（狀態 API） | `snapshotStatus/*StatusService` + `location/locationService` |
 | `deviceRoutes` / `modbusRoutes` | `devices/*` |
 | `alertRoutes` | `alerts/*`（含 `alertSipRingLinkageService`、`alertElevatorCallLinkageService`） |
-| `accessSecurityRoutes` | `accessSecurity/*` |
+| `intercomRoutes` | `intercom/*` |
 | `operationalEventRoutes` | `operationalEvents/*` |
 | `accessControlRoutes` | `accessControl/accessControlService` |
 | `externalDataRoutes` | `externalData/*` |

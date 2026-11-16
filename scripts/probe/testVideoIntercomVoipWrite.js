@@ -16,7 +16,7 @@
 const { invokeBridge } = require("../../src/services/ladderSdk/sdkBridgeClient");
 const {
   inviteIndoorRing,
-} = require("../../src/services/accessSecurity/sipInviteService");
+} = require("../../src/services/intercom/sipInviteService");
 
 const REG_NUMBER_LEN = 11;
 

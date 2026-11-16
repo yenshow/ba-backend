@@ -9,7 +9,7 @@ const {
   summaryIntercom,
   resolveTalkAction,
 } = require("../operationalEvents/operationalEventCopy");
-const accessSecurityService = require("./accessSecurityService");
+const intercomService = require("./intercomService");
 const { beginIndoorTalk } = require("./sipInviteService");
 const {
   encodePcm16leFrame,
@@ -17,18 +17,18 @@ const {
   FRAME_BYTES,
 } = require("./g711Audio");
 
-const logger = createLogger("accessSecurityTalk");
+const logger = createLogger("intercomTalk");
 
-const RING_PERMISSION = "system.access_security.ring";
+const RING_PERMISSION = "system.intercom.ring";
 const TALK_MAX_MS = 5 * 60 * 1000;
 const TALK_ANSWER_MS = 90_000;
 const RTP_INTERVAL_MS = 20;
 const SILENCE_GAP_MS = 40;
 
-const EVENT_START = "access-security:talk:start";
-const EVENT_PCM = "access-security:talk:pcm";
-const EVENT_HANGUP = "access-security:talk:hangup";
-const EVENT_STATUS = "access-security:talk:status";
+const EVENT_START = "intercom:talk:start";
+const EVENT_PCM = "intercom:talk:pcm";
+const EVENT_HANGUP = "intercom:talk:hangup";
+const EVENT_STATUS = "intercom:talk:status";
 
 /** @type {Map<string, object>} */
 const sessionsBySocketId = new Map();
@@ -74,7 +74,7 @@ const recordTalkEvent = async ({
 }) => {
   try {
     await operationalEventService.recordEvent({
-      source: "access_security_talk",
+      source: "intercom_talk",
       event_kind: "intercom",
       location_id: locationId,
       system_id: systemId,
@@ -197,15 +197,15 @@ const handleStart = async (socket, payload) => {
     return;
   }
 
-  const licensed = await licenseService.isRuntimeFeatureLicensed("access_security");
+  const licensed = await licenseService.isRuntimeFeatureLicensed("intercom");
   if (!licensed) {
-    emitStatus(socket, { phase: "error", locationId, message: "未授權門禁保全" });
+    emitStatus(socket, { phase: "error", locationId, message: "未授權對講系統" });
     return;
   }
 
   let resolved;
   try {
-    resolved = await accessSecurityService.resolveIndoorDeviceForLocation(locationId);
+    resolved = await intercomService.resolveIndoorDeviceForLocation(locationId);
   } catch (err) {
     emitStatus(socket, {
       phase: "error",

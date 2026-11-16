@@ -32,7 +32,8 @@ const VALID_LOCATION_SYSTEM_TYPES = [
   "emergency_rescue",
   "smoke_alarm",
   "elevator",
-  "access_security",
+  "intercom",
+  "security",
 ];
 
 function assertValidSystemType(systemType) {
@@ -354,6 +355,40 @@ function formatSystem(system) {
       };
     }
 
+    case "security": {
+      const spSec = config.status_points;
+      const primary = deviceIdsFromDbSystemConfig(config)[0];
+      const accessIds = Array.isArray(config.access_device_ids)
+        ? config.access_device_ids.map(Number).filter((n) => n > 0)
+        : [];
+      const dataSource = resolveSecurityDataSource(config.data_source, {
+        hasDi: Boolean(primary),
+        hasAccess: accessIds.length > 0,
+      });
+      return {
+        ...baseSystem,
+        config: {
+          dataSource,
+          deviceId: primary,
+          location: {
+            x: config.location_x || 50.0,
+            y: config.location_y || 50.0,
+          },
+          modbus: stripLegacyModbusDeviceId(config.modbus_config),
+          equipmentKind: config.equipment_kind || "sensor",
+          viewCategory:
+            config.view_category === null || config.view_category === undefined
+              ? "perimeter"
+              : String(config.view_category),
+          statusPoints:
+            spSec && typeof spSec === "object" && Object.keys(spSec).length > 0
+              ? spSec
+              : undefined,
+          accessDeviceIds: accessIds,
+        },
+      };
+    }
+
     case "roll_call": {
       const {
         normalizeRollCallStatLabels,
@@ -517,7 +552,7 @@ function formatSystem(system) {
       };
     }
 
-    case "access_security": {
+    case "intercom": {
       const indoorId = Number(config.indoor_device_id);
       const floor = String(config.floor || "").trim();
       const manageId = Number(config.manage_device_id);
@@ -796,6 +831,21 @@ function refreshAfterLocationOrZoneDelete(logger) {
   refreshSubscribesForSystemType("elevator", logger);
 }
 
+/**
+ * 保全 data_source：顯式 di／access_control／both，否則依綁定推斷
+ * @param {unknown} rawSource
+ * @param {{ hasDi?: boolean, hasAccess?: boolean }} [hints]
+ */
+function resolveSecurityDataSource(rawSource, hints = {}) {
+  const raw = String(rawSource || "").trim();
+  if (raw === "di" || raw === "access_control" || raw === "both") return raw;
+  const hasDi = Boolean(hints.hasDi);
+  const hasAccess = Boolean(hints.hasAccess);
+  if (hasDi && hasAccess) return "both";
+  if (hasAccess) return "access_control";
+  return "di";
+}
+
 module.exports = {
   handleUniqueConstraintError,
   assertValidSystemType,
@@ -820,4 +870,5 @@ module.exports = {
   deleteEmptyZoneIfNeeded,
   refreshSubscribesForSystemType,
   refreshAfterLocationOrZoneDelete,
+  resolveSecurityDataSource,
 };

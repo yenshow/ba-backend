@@ -115,7 +115,14 @@ async function resolveControlWriteTargets({
     return { device_id: null, location_id: null, system_id: null };
   }
 
-  const type = String(systemType || "").trim();
+  const rawType = String(systemType || "").trim();
+  // *_schedule 落庫 source；解析 location_systems 時對齊模組
+  const type =
+    rawType === "lighting_schedule"
+      ? "lighting"
+      : rawType === "hvac_schedule"
+        ? "hvac"
+        : rawType;
   const params = [resolvedDeviceId];
   let typeClause = "";
   if (type && type !== "modbus" && type !== "alert_linkage") {

@@ -702,8 +702,8 @@ async function ensureVideoIntercomTypeCode(pool) {
   `);
 }
 
-/** 既有庫：location_systems.system_type 加 access_security */
-async function ensureAccessSecurityLocationSystemType(pool) {
+/** 既有庫：access_security → intercom；擴 CHECK；營運事件 source 遷移 */
+async function ensureIntercomLocationSystemType(pool) {
   await pool.query(`
     DO $do$
     DECLARE
@@ -724,16 +724,47 @@ async function ensureAccessSecurityLocationSystemType(pool) {
       LOOP
         EXECUTE format('ALTER TABLE location_systems DROP CONSTRAINT %I', r.conname);
       END LOOP;
+      -- 暫時允許舊＋新鍵以便 UPDATE
       ALTER TABLE location_systems
         ADD CONSTRAINT location_systems_system_type_check
         CHECK (system_type IN (
           'environment', 'lighting', 'hvac', 'air_circulation',
           'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power',
-          'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security'
+          'fire', 'emergency_rescue', 'smoke_alarm', 'elevator',
+          'access_security', 'intercom', 'security'
+        ));
+      UPDATE location_systems
+        SET system_type = 'intercom'
+        WHERE system_type = 'access_security';
+      ALTER TABLE location_systems DROP CONSTRAINT location_systems_system_type_check;
+      ALTER TABLE location_systems
+        ADD CONSTRAINT location_systems_system_type_check
+        CHECK (system_type IN (
+          'environment', 'lighting', 'hvac', 'air_circulation',
+          'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power',
+          'fire', 'emergency_rescue', 'smoke_alarm', 'elevator',
+          'intercom', 'security'
         ));
     END
     $do$;
   `);
+
+  if (
+    (
+      await pool.query(`SELECT to_regclass('public.operational_events') IS NOT NULL AS ok`)
+    ).rows[0]?.ok
+  ) {
+    await pool.query(`
+      UPDATE operational_events
+      SET source = 'intercom_talk'
+      WHERE source = 'access_security_talk'
+    `);
+    await pool.query(`
+      UPDATE operational_events
+      SET source = 'intercom_ring'
+      WHERE source = 'access_security_ring'
+    `);
+  }
 }
 
 /** 既有庫：警報電梯呼梯連動表（location_ids 空＝全部電梯地點） */
@@ -1352,6 +1383,104 @@ async function ensureDevicesEnabledColumn(pool) {
   `);
 }
 
+/** 既有庫：多媒體資訊牆席次（1 指紋＝1 台；seat_token_hash 綁本機憑證） */
+async function ensureMultimediaWallSeatsTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS multimedia_wall_seats (
+      fingerprint VARCHAR(64) PRIMARY KEY,
+      hostname VARCHAR(255),
+      registered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      seat_token_hash VARCHAR(64)
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE multimedia_wall_seats
+      ADD COLUMN IF NOT EXISTS seat_token_hash VARCHAR(64)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_multimedia_wall_seats_last_seen
+    ON multimedia_wall_seats(last_seen_at DESC)
+  `);
+}
+
+async function ensureSecurityScheduleRulesTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS security_schedule_rules (
+      id SERIAL PRIMARY KEY,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      name VARCHAR(80),
+      days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
+      window_start TIME NOT NULL,
+      window_end TIME NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (window_end <> window_start)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_security_schedule_rules_location
+    ON security_schedule_rules(location_id)
+  `);
+}
+
+async function ensureLightingScheduleTables(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lighting_schedule_rules (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(80),
+      days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
+      on_time TIME NOT NULL,
+      off_time TIME NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (on_time <> off_time)
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "lighting_schedule_rules");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lighting_schedule_rule_locations (
+      rule_id INTEGER NOT NULL REFERENCES lighting_schedule_rules(id) ON DELETE CASCADE,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      PRIMARY KEY (rule_id, location_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_lighting_schedule_rule_locations_location
+    ON lighting_schedule_rule_locations(location_id)
+  `);
+}
+
+async function ensureHvacScheduleTables(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hvac_schedule_rules (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(80),
+      days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
+      on_time TIME NOT NULL,
+      off_time TIME NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK (on_time <> off_time)
+    )
+  `);
+  await createUpdatedAtTrigger(pool, "hvac_schedule_rules");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hvac_schedule_rule_locations (
+      rule_id INTEGER NOT NULL REFERENCES hvac_schedule_rules(id) ON DELETE CASCADE,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      PRIMARY KEY (rule_id, location_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hvac_schedule_rule_locations_location
+    ON hvac_schedule_rule_locations(location_id)
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -1363,7 +1492,10 @@ async function applySchemaPatches(pool) {
   await stripPeopleCountingAccessControlGroups(pool);
   await ensureDevicesEnabledColumn(pool);
   await ensurePersonsCustomFieldsColumn(pool);
-  await ensureAccessSecurityLocationSystemType(pool);
+  await ensureIntercomLocationSystemType(pool);
+  await ensureSecurityScheduleRulesTable(pool);
+  await ensureLightingScheduleTables(pool);
+  await ensureHvacScheduleTables(pool);
   await ensureRollCallTables(pool);
   const deviceSyncStatusNorm = await normalizePersonDeviceSyncStatuses(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
@@ -1375,6 +1507,7 @@ async function applySchemaPatches(pool) {
   await ensureGarmentTables(pool);
   await ensureIsapiAccessEventsDeviceId(pool);
   await ensureAlertRulesMessageTemplateColumns(pool);
+  await ensureMultimediaWallSeatsTable(pool);
   const clearedResolvedIgnored = await clearResolvedAlertIgnoredFields(pool);
   const energyRulesMigration = await migrateEnergySettingsToAlertRules(pool);
   const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(pool);
@@ -1406,7 +1539,7 @@ module.exports = {
   stripPeopleCountingAccessControlGroups,
   ensureDevicesEnabledColumn,
   ensurePersonsCustomFieldsColumn,
-  ensureAccessSecurityLocationSystemType,
+  ensureIntercomLocationSystemType,
   ensureAlertAccessDoorDeviceIds,
   ensureAlertCameraLinkageNvrTrackIds,
   ensureAlertSipRingLinkagesTable,
@@ -1416,8 +1549,11 @@ module.exports = {
   ensureGarmentTables,
   ensureIsapiAccessEventsDeviceId,
   ensureAlertRulesMessageTemplateColumns,
+  ensureMultimediaWallSeatsTable,
   migrateLegacySensorModelConfigs,
   dropRollCallRulesLocationUnique,
   ensureRollCallTables,
+  ensureLightingScheduleTables,
+  ensureHvacScheduleTables,
   applySchemaPatches,
 };

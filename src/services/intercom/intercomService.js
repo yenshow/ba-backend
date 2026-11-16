@@ -1,5 +1,5 @@
 /**
- * 門禁保全（access_security）查詢與手動語音廣播
+ * 對講系統（intercom）查詢與手動語音廣播
  */
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
@@ -14,18 +14,18 @@ const {
   resolveBroadcastAction,
 } = require("../operationalEvents/operationalEventCopy");
 
-const logger = createLogger("accessSecurity");
+const logger = createLogger("intercom");
 
 const INTERCOM_MONITOR_SOURCES = Object.freeze([
-  "access_security_ring",
+  "intercom_ring",
   "alert_linkage",
-  "access_security_talk",
+  "intercom_talk",
 ]);
 
 const UNCLASSIFIED_FLOOR = "未分類";
 const FLOOR_NAME_RE = /^(\d+F|B\d+F?|R\d+F?|RF|G)(?:[-_]?(.*))?$/i;
 
-const parseAccessSecurityUnitName = (name) => {
+const parseIntercomUnitName = (name) => {
   const trimmed = String(name || "").trim();
   if (!trimmed) return { floor: UNCLASSIFIED_FLOOR, unitName: "" };
   const match = FLOOR_NAME_RE.exec(trimmed);
@@ -38,10 +38,10 @@ const parseAccessSecurityUnitName = (name) => {
   };
 };
 
-const resolveAccessSecurityFloor = (floorFromConfig, locationName) => {
+const resolveIntercomFloor = (floorFromConfig, locationName) => {
   const fromConfig = String(floorFromConfig || "").trim();
   if (fromConfig && fromConfig !== UNCLASSIFIED_FLOOR) return fromConfig;
-  return parseAccessSecurityUnitName(locationName).floor || UNCLASSIFIED_FLOOR;
+  return parseIntercomUnitName(locationName).floor || UNCLASSIFIED_FLOOR;
 };
 
 const toPositiveInt = (v) => {
@@ -58,7 +58,7 @@ async function resolveLocationByIndoorDeviceId(deviceId) {
     SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
     FROM location_systems ls
     INNER JOIN locations l ON l.id = ls.location_id
-    WHERE ls.system_type = 'access_security'
+    WHERE ls.system_type = 'intercom'
       AND NULLIF(ls.system_config->>'indoor_device_id', '')::int = ?
     LIMIT 1
     `,
@@ -96,7 +96,7 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
       INNER JOIN locations l ON l.id = ls.location_id
       INNER JOIN devices d
         ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
-      WHERE ls.system_type = 'access_security'
+      WHERE ls.system_type = 'intercom'
         AND d.type_code = 'video_intercom'
         AND (d.config->>'voipNumber') = ?
       LIMIT 2
@@ -105,7 +105,7 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
     );
     if ((rows || []).length === 1) return mapRow(rows[0]);
     if ((rows || []).length > 1) {
-      logger.warn("voipNumber 對應多個門禁保全地點，略過", { voipNumber: voip });
+      logger.warn("voipNumber 對應多個對講系統地點，略過", { voipNumber: voip });
       return null;
     }
   }
@@ -119,7 +119,7 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
     INNER JOIN locations l ON l.id = ls.location_id
     INNER JOIN devices d
       ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
-    WHERE ls.system_type = 'access_security'
+    WHERE ls.system_type = 'intercom'
       AND d.type_code = 'video_intercom'
       AND (
         (d.config->>'host') = ?
@@ -135,7 +135,7 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
   }
   if (matched.length === 1) return mapRow(matched[0]);
   if (matched.length > 1) {
-    logger.warn("host 對應多個門禁保全地點（NAT 可能同公網），略過", {
+    logger.warn("host 對應多個對講系統地點（NAT 可能同公網），略過", {
       host: ip,
       matchCount: matched.length,
     });
@@ -170,7 +170,7 @@ async function getSites() {
     INNER JOIN zones z ON z.id = l.zone_id
     LEFT JOIN devices d
       ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
-    WHERE ls.system_type = 'access_security'
+    WHERE ls.system_type = 'intercom'
     ORDER BY z.sort_order NULLS LAST, z.id, l.sort_order NULLS LAST, l.id
     `,
   );
@@ -187,7 +187,7 @@ async function getSites() {
       });
     }
     const systemCfg = parseConfig(row.system_config);
-    const floor = resolveAccessSecurityFloor(systemCfg.floor, row.location_name);
+    const floor = resolveIntercomFloor(systemCfg.floor, row.location_name);
     const manageId = Number(systemCfg.manage_device_id);
     const zone = zoneMap.get(zoneId);
     if (!zone) continue;
@@ -254,7 +254,7 @@ async function resolveIndoorDeviceForLocation(locationId) {
     SELECT ls.id AS system_id, ls.system_config, l.name AS location_name
     FROM location_systems ls
     INNER JOIN locations l ON l.id = ls.location_id
-    WHERE ls.location_id = $1 AND ls.system_type = 'access_security'
+    WHERE ls.location_id = $1 AND ls.system_type = 'intercom'
     LIMIT 1
     `,
     [lid],
@@ -262,7 +262,7 @@ async function resolveIndoorDeviceForLocation(locationId) {
   if (!rows?.length) {
     throw createApiError(
       C.LOCATION_SYSTEM_NOT_FOUND,
-      "此地點尚未綁定門禁保全室內機",
+      "此地點尚未綁定對講系統室內機",
     );
   }
 
@@ -296,7 +296,7 @@ async function ringLocation(locationId, { actorUserId = null } = {}) {
   try {
     inviteResult = await alertIndoorDevice(device, {
       actorUserId,
-      source: "access_security_ring",
+      source: "intercom_ring",
     });
   } catch (error) {
     logger.warn("手動語音廣播失敗", {
@@ -308,7 +308,7 @@ async function ringLocation(locationId, { actorUserId = null } = {}) {
   }
 
   await operationalEventService.recordEvent({
-    source: "access_security_ring",
+    source: "intercom_ring",
     event_kind: "intercom",
     location_id: lid,
     system_id: systemId,
@@ -366,20 +366,20 @@ async function getZoneLogsLatest(zoneId, { limit = 5 } = {}) {
           SELECT l2.id
           FROM locations l2
           INNER JOIN location_systems ls
-            ON ls.location_id = l2.id AND ls.system_type = 'access_security'
+            ON ls.location_id = l2.id AND ls.system_type = 'intercom'
           WHERE l2.zone_id = ?
         )
         OR oe.system_id IN (
           SELECT ls.id
           FROM location_systems ls
           INNER JOIN locations l2 ON l2.id = ls.location_id
-          WHERE l2.zone_id = ? AND ls.system_type = 'access_security'
+          WHERE l2.zone_id = ? AND ls.system_type = 'intercom'
         )
         OR oe.device_id IN (
           SELECT NULLIF(ls.system_config->>'indoor_device_id', '')::int
           FROM location_systems ls
           INNER JOIN locations l2 ON l2.id = ls.location_id
-          WHERE l2.zone_id = ? AND ls.system_type = 'access_security'
+          WHERE l2.zone_id = ? AND ls.system_type = 'intercom'
         )
       )
     ORDER BY oe.created_at DESC, oe.id DESC

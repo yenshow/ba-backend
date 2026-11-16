@@ -307,7 +307,7 @@ async function initSchema() {
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
 				location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
-				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'access_security')),
+				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'intercom', 'security')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -776,7 +776,7 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // ========== 警報 SIP 室內振鈴連動（門禁保全層 2）==========
+    // ========== 警報 SIP 室內振鈴連動（對講系統層 2）==========
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS alert_sip_ring_linkages (
         id SERIAL PRIMARY KEY,
@@ -1591,6 +1591,81 @@ async function initSchema() {
       module: "initSchema",
     });
 
+    // 保全許可時段（多段聯集；無啟用規則＝不依時段告警）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS security_schedule_rules (
+        id SERIAL PRIMARY KEY,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        name VARCHAR(80),
+        days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
+        window_start TIME NOT NULL,
+        window_end TIME NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (window_end <> window_start)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "security_schedule_rules");
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_security_schedule_rules_location
+      ON security_schedule_rules(location_id);
+    `);
+
+    // 照明時間排程（時刻觸發 DO；一規則可綁多地點）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS lighting_schedule_rules (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(80),
+        days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
+        on_time TIME NOT NULL,
+        off_time TIME NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (on_time <> off_time)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "lighting_schedule_rules");
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS lighting_schedule_rule_locations (
+        rule_id INTEGER NOT NULL REFERENCES lighting_schedule_rules(id) ON DELETE CASCADE,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        PRIMARY KEY (rule_id, location_id)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_lighting_schedule_rule_locations_location
+      ON lighting_schedule_rule_locations(location_id);
+    `);
+
+    // 空調時間排程（時刻觸發電源 DO；一規則可綁多地點）
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS hvac_schedule_rules (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(80),
+        days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
+        on_time TIME NOT NULL,
+        off_time TIME NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (on_time <> off_time)
+      )
+    `);
+    await createUpdatedAtTrigger(targetPool, "hvac_schedule_rules");
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS hvac_schedule_rule_locations (
+        rule_id INTEGER NOT NULL REFERENCES hvac_schedule_rules(id) ON DELETE CASCADE,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        PRIMARY KEY (rule_id, location_id)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_hvac_schedule_rule_locations_location
+      ON hvac_schedule_rule_locations(location_id);
+    `);
+
     // 規則＝名稱＋時間窗；誰哪天上哪班由 roll_call_assignments 決定
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS roll_call_rules (
@@ -1658,6 +1733,19 @@ async function initSchema() {
     `);
     await createUpdatedAtTrigger(targetPool, "roll_call_assignments");
     schemaLogger.info("roll_call 表已建立", { module: "initSchema" });
+
+    await targetPool.query(`
+      CREATE TABLE IF NOT EXISTS multimedia_wall_seats (
+        fingerprint VARCHAR(64) PRIMARY KEY,
+        hostname VARCHAR(255),
+        registered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        seat_token_hash VARCHAR(64)
+      );
+      CREATE INDEX IF NOT EXISTS idx_multimedia_wall_seats_last_seen
+      ON multimedia_wall_seats(last_seen_at DESC);
+    `);
+    schemaLogger.info("multimedia_wall_seats 表已建立", { module: "initSchema" });
 
     await targetPool.end();
 

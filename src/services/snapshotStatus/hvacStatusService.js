@@ -33,6 +33,15 @@ async function readPrimaryBitPoint(modbus, cfgDeviceId) {
   const conn = await resolveDeviceConfig(cfgDeviceId, modbus);
   if (!conn) return { ok: false, error: null };
 
+  const bitStore = require("../devices/modbusBitStore");
+  if (!bitStore.isModuleOnlineForAddress(conn, primary.address)) {
+    return { ok: false, error: "IO 模組離線" };
+  }
+  const hit = bitStore.getBit(conn, primary.registerType, primary.address);
+  if (hit?.ok) {
+    return { ok: true, value: Boolean(hit.value) };
+  }
+
   const results = await modbusBatchService.batchRead([
     {
       host: conn.host,
@@ -89,6 +98,22 @@ async function readAllPoints(statusPoints, cfgDeviceId, cfgModbus) {
     if (!pointDeviceConfig) {
       raw[key] = undefined;
       continue;
+    }
+
+    if (
+      (registerType === "coil" || registerType === "discrete") &&
+      length === 1
+    ) {
+      const bitStore = require("../devices/modbusBitStore");
+      if (!bitStore.isModuleOnlineForAddress(pointDeviceConfig, address)) {
+        raw[key] = undefined;
+        continue;
+      }
+      const hit = bitStore.getBit(pointDeviceConfig, registerType, address);
+      if (hit?.ok) {
+        raw[key] = Boolean(hit.value);
+        continue;
+      }
     }
 
     reqs.push({

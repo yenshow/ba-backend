@@ -1,14 +1,13 @@
 /**
- * 泛用 DI/DO 監控（單次 batch 讀）
+ * 泛用 DI/DO 監控
+ * - Fast：modbusPollPlanner 依 ioModules 區間讀 → BitStore
  * - 警報：啟用 di/do 規則 → create/resolve alert
- * - 營運事件：已配置 bit 0↔1（modbus_config DI/DO + status_points discrete／coil；重啟首輪只建 baseline）
+ * - 營運事件：已配置 bit 0↔1（重啟首輪只建 baseline）
  */
 const logger = require("../../utils/logger");
 const db = require("../../database/db");
 const alertService = require("../alerts/alertService");
 const alertRuleService = require("../alerts/alertRuleService");
-const modbusBatchService = require("../devices/modbusBatchService");
-const systemAlertHelper = require("../alerts/systemAlertHelper");
 const { collectConfiguredBitPointsFromSystemConfig } = require("../devices/modbusDiDoConfig");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const {
@@ -20,6 +19,9 @@ const {
   shouldSuppressCoilStateChange,
 } = require("../operationalEvents/operationalEventHooks");
 const { formatPlaceLabel } = require("../operationalEvents/operationalEventPlaceContext");
+const modbusPollPlanner = require("../devices/modbusPollPlanner");
+const bitStore = require("../devices/modbusBitStore");
+const { DEVICE_CFG_TTL_MS } = require("../../config/realtimeTiming");
 
 const getDeviceService = () => require("../devices/deviceService");
 
@@ -33,6 +35,7 @@ const SOURCE_TO_SYSTEM_TYPE = {
   emergency_rescue: "emergency_rescue",
   air_circulation: "air_circulation",
   smoke_alarm: "smoke_alarm",
+  security: "security",
 };
 
 const CONFIGURED_SYSTEM_TYPES = Object.values(SOURCE_TO_SYSTEM_TYPE);
@@ -52,7 +55,6 @@ function parseBitKey(bitKey) {
 }
 
 const deviceCfgCache = new Map();
-const { DEVICE_CFG_TTL_MS } = require("../../config/realtimeTiming");
 
 async function resolveDeviceConfig(deviceId) {
   if (!deviceId) return null;
@@ -176,6 +178,20 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
       });
     }
 
+    if (rule.source === alertService.ALERT_SOURCES.SECURITY) {
+      const {
+        createOutsideScheduleAlert,
+      } = require("../security/securityAlertGate");
+      await createOutsideScheduleAlert({
+        systemId,
+        alertType: rule.alert_type,
+        dimensionKey,
+        message,
+        severity,
+      });
+      return;
+    }
+
     await alertService.createAlert({
       source: rule.source,
       source_id: Number(systemId),
@@ -211,7 +227,6 @@ function recordStateEdge(point, bitValue, deviceConfig = null) {
   if (prev === bitValue) return;
   lastBitState.set(stateKey, bitValue);
 
-  // 控制寫入造成的 coil 變化只留 control_write，不另記 state_change
   if (
     point.registerType === "coil" &&
     deviceConfig &&
@@ -263,15 +278,40 @@ function recordStateEdge(point, bitValue, deviceConfig = null) {
 }
 
 /**
- * 單次 batch：已配置點 edge + 規則警報 + 連線狀態
+ * 單次：PollPlanner → BitStore → edge + 規則警報
  */
 async function checkDiDoAlerts() {
   const monitorLogger = logger.createLogger("diDoMonitor");
   try {
+    const registerTypes = new Set();
     const [configuredPoints, rules] = await Promise.all([
       loadConfiguredDiDoPoints(),
       alertRuleService.getEnabledDiDoRules(),
     ]);
+
+    for (const p of configuredPoints) {
+      if (p.registerType === "coil" || p.registerType === "discrete") {
+        registerTypes.add(p.registerType);
+      }
+    }
+    for (const rule of rules || []) {
+      const parsed = parseBitKey(rule.condition_config?.bit_key);
+      if (parsed?.registerType) registerTypes.add(parsed.registerType);
+    }
+    // 無消費點／規則時仍讀兩者，供模組離線偵測
+    if (registerTypes.size === 0) {
+      registerTypes.add("coil");
+      registerTypes.add("discrete");
+    }
+
+    await modbusPollPlanner.pollControllers({
+      registerTypes,
+      broadcastStatus: true,
+    });
+
+    if (configuredPoints.length === 0 && !(rules || []).length) {
+      return;
+    }
 
     /** @type {Map<string, { deviceId: number, parsed: { registerType: string, address: number }, alertTasks: any[], edgePoints: any[] }>} */
     const readKeyMap = new Map();
@@ -309,52 +349,24 @@ async function checkDiDoAlerts() {
 
     if (readKeyMap.size === 0) return;
 
-    const readEntries = [...readKeyMap.values()];
-    const batchRequests = [];
-    const validEntries = [];
-
-    for (const entry of readEntries) {
+    for (const entry of readKeyMap.values()) {
       const cfg = await resolveDeviceConfig(entry.deviceId);
       if (!cfg) continue;
-      batchRequests.push({
-        host: cfg.host,
-        port: cfg.port,
-        unitId: cfg.unitId,
-        registerType: entry.parsed.registerType,
-        address: entry.parsed.address,
-        length: 1,
-      });
-      validEntries.push(entry);
-    }
 
-    if (batchRequests.length === 0) return;
-
-    const results = await modbusBatchService.batchRead(batchRequests);
-    const deviceOutcome = new Map();
-
-    for (let i = 0; i < validEntries.length; i++) {
-      const entry = validEntries[i];
-      const req = batchRequests[i];
-      const result = results[i];
-      const deviceCfg = { host: req.host, port: req.port, unitId: req.unitId };
-      const deviceKey = `${req.host}:${req.port}:${req.unitId}`;
-      const bucket = deviceOutcome.get(deviceKey) || {
-        config: deviceCfg,
-        anyOk: false,
-        errorMessage: null,
-      };
-      if (result?.ok) {
-        bucket.anyOk = true;
-      } else if (!bucket.errorMessage) {
-        bucket.errorMessage = result?.error || "無法連接 DI/DO 控制器";
+      if (!bitStore.isModuleOnlineForAddress(cfg, entry.parsed.address)) {
+        continue;
       }
-      deviceOutcome.set(deviceKey, bucket);
 
-      if (!result?.ok) continue;
-      const bitValue = Boolean(result.data?.[0]);
+      const hit = bitStore.getBitRaw(
+        cfg,
+        entry.parsed.registerType,
+        entry.parsed.address,
+      );
+      if (!hit || !hit.ok) continue;
+      const bitValue = Boolean(hit.value);
 
       for (const point of entry.edgePoints) {
-        recordStateEdge(point, bitValue, deviceCfg);
+        recordStateEdge(point, bitValue, cfg);
       }
 
       for (const task of entry.alertTasks) {
@@ -368,33 +380,6 @@ async function checkDiDoAlerts() {
         }
       }
     }
-
-    await Promise.allSettled(
-      [...deviceOutcome.values()].map(
-        async ({ config, anyOk, errorMessage }) => {
-          try {
-            if (anyOk) {
-              await systemAlertHelper.notifyModbusHttpDeviceRecovered(config, {
-                skipWebSocket: true,
-              });
-            } else {
-              await systemAlertHelper.notifyModbusHttpDeviceFailed(
-                config,
-                errorMessage || "無法連接 DI/DO 控制器",
-                { skipWebSocket: true },
-              );
-            }
-          } catch (err) {
-            monitorLogger.warn("DI/DO 控制器連線狀態同步失敗", {
-              host: config?.host,
-              port: config?.port,
-              unitId: config?.unitId,
-              error: err?.message || String(err),
-            });
-          }
-        },
-      ),
-    );
   } catch (error) {
     monitorLogger.warn("DI/DO 監控執行失敗（不影響其他任務）", {
       error: error?.message || String(error),

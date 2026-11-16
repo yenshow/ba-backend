@@ -35,7 +35,8 @@ const FEATURE_KEYS_CENTRAL = [
   "surveillance",
   "vehicle_access",
   "multimedia",
-  "access_security",
+  "intercom",
+  "security",
 ];
 
 /**
@@ -136,15 +137,20 @@ const parseQuotasValue = (value) => {
   }
 };
 
+const FEATURE_KEY_ALIASES = {
+  access_security: "intercom",
+};
+
 const normalizeFeatureArray = (arr) => {
   const raw = Array.isArray(arr)
     ? arr
         .filter((x) => typeof x === "string")
         .map((s) => s.trim())
         .filter(Boolean)
+        .map((key) => FEATURE_KEY_ALIASES[key] || key)
     : [];
   const allowed = getActiveFeatureKeys();
-  return raw.filter((key) => allowed.includes(key));
+  return [...new Set(raw.filter((key) => allowed.includes(key)))];
 };
 
 const parseLicenseEntitlementsValue = (value) => {

@@ -123,6 +123,22 @@ async function readDiscreteBitRange(deviceConfig, start, end, options = {}) {
   if (!deviceConfig || start == null || end == null || end < start) {
     return EMPTY_BITS;
   }
+  const bitStore = require("../devices/modbusBitStore");
+  const preferStore = options.preferBitStore !== false && options.noCache !== true;
+  if (preferStore) {
+    const bits = new Map();
+    let allFresh = true;
+    for (let addr = start; addr <= end; addr += 1) {
+      const hit = bitStore.getBit(deviceConfig, "discrete", addr);
+      if (!hit || !hit.ok) {
+        allFresh = false;
+        break;
+      }
+      bits.set(addr, Boolean(hit.value));
+    }
+    if (allFresh) return { bits, readOk: true };
+  }
+
   const modbusBatchService = require("../devices/modbusBatchService");
   const length = end - start + 1;
   const noCache = options.noCache !== false;
@@ -158,6 +174,7 @@ async function readDiscreteBitRange(deviceConfig, start, end, options = {}) {
  */
 async function readAllStatusPoints(statusPoints, cfgDeviceId, cfgModbus) {
   const modbusBatchService = require("../devices/modbusBatchService");
+  const bitStore = require("../devices/modbusBitStore");
   const raw = {};
   if (!statusPoints || typeof statusPoints !== "object") {
     return raw;
@@ -192,6 +209,22 @@ async function readAllStatusPoints(statusPoints, cfgDeviceId, cfgModbus) {
     if (!pointDeviceConfig) {
       raw[key] = undefined;
       continue;
+    }
+
+    // discrete／coil：優先 BitStore（模組 offline 視為未讀）
+    if (
+      (registerType === "coil" || registerType === "discrete") &&
+      length === 1
+    ) {
+      if (!bitStore.isModuleOnlineForAddress(pointDeviceConfig, address)) {
+        raw[key] = undefined;
+        continue;
+      }
+      const hit = bitStore.getBit(pointDeviceConfig, registerType, address);
+      if (hit?.ok) {
+        raw[key] = Boolean(hit.value);
+        continue;
+      }
     }
 
     reqs.push({

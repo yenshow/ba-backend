@@ -6,7 +6,7 @@
  */
 /* eslint-disable no-console */
 
-const { inviteIndoorTalk } = require("../../src/services/accessSecurity/sipInviteService");
+const { inviteIndoorTalk } = require("../../src/services/intercom/sipInviteService");
 
 const SCRIPT_CONFIG = {
   sipHost: "192.168.2.78",

@@ -54,6 +54,7 @@
     "test:roll-call-window": "node tests/rollCall/rollCallWindow.test.js",
     "test:alert-copy": "node tests/alerts/alertCopy.test.js",
     "test:energy-reference-bill": "node tests/energy/energyReferenceBill.test.js",
+    "test:modbus-io-modules": "node tests/unit/modbusIoModules.test.js",
     "test:alert-status-correctness": "node tests/alerts/alertStatusCorrectness.verify.js",
     "test:isapi-valid-payload": "node tests/accessControl/isapiValidPayload.test.js",
     "test:isapi-picture-binding": "node tests/accessControl/isapiPictureBinding.test.js",

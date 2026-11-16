@@ -14,9 +14,9 @@ const {
   loadPlaceContextByLocationId,
 } = require("../operationalEvents/operationalEventPlaceContext");
 
-/** 延遲載入，避免與 accessSecurityService 循環引用 */
+/** 延遲載入，避免與 intercomService 循環引用 */
 const resolveLocationByVoipOrHost = (...args) =>
-  require("./accessSecurityService").resolveLocationByVoipOrHost(...args);
+  require("./intercomService").resolveLocationByVoipOrHost(...args);
 
 const RE_CONNECT_DELAY_MS = 10_000;
 

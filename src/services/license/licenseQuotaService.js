@@ -76,7 +76,7 @@ const resolveQuotaFeature = ({
     return null;
   }
   if (code === "access_control") return "people_counting";
-  if (code === "video_intercom") return "access_security";
+  if (code === "video_intercom") return "intercom";
   if (code === "controller") {
     return isHcnetProtocol(deviceConfig, modelConfig) ? "elevator" : null;
   }
@@ -368,7 +368,11 @@ const sumLocationPoints = async ({
 
 const getUsedDevicesCount = async (featureKey, opts = {}) => {
   const key = normalizeFeatureKey(featureKey);
-  if (!key || key === "multimedia") return 0;
+  if (!key) return 0;
+  if (key === "multimedia") {
+    const multimediaWallSeatService = require("../multimedia/multimediaWallSeatService");
+    return multimediaWallSeatService.countActiveSeats();
+  }
   if (key === "roll_call") return countRollCallBoundDevices(opts);
   if (key === "environment" || key === "energy") {
     return countSensorPointsForFeature(key, opts);
@@ -470,7 +474,9 @@ const getUsageMap = async (featureKeys) => {
       usedDevices = locationUsage.rollCall;
     } else if (MODBUS_POINT_SYSTEM_TYPE_SET.has(key)) {
       usedDevices = locationUsage.points[key] || 0;
-    } else if (key !== "multimedia") {
+    } else if (key === "multimedia") {
+      usedDevices = await getUsedDevicesCount("multimedia");
+    } else {
       usedDevices = deviceCounts[key] || 0;
     }
     const entry = { usedDevices };

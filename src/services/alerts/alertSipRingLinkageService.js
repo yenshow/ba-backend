@@ -1,10 +1,10 @@
 /**
- * 警報 SIP 室內語音廣播連動（門禁保全層 2）
+ * 警報 SIP 室內語音廣播連動（對講系統層 2）
  * device_ids 空＝全部室內機並行；有值＝指定室內機並行
  */
 const db = require("../../database/db");
 const { createLogger } = require("../../utils/logger");
-const { alertIndoorDevice } = require("../accessSecurity/sipInviteService");
+const { alertIndoorDevice } = require("../intercom/sipInviteService");
 const operationalEventService = require("../operationalEvents/operationalEventService");
 const {
   summaryIntercom,
@@ -16,9 +16,9 @@ const {
   createRuleLinkageCrud,
 } = require("./alertLinkageHelpers");
 
-/** 延遲載入，避免與 accessSecurityService 循環引用 */
+/** 延遲載入，避免與 intercomService 循環引用 */
 const resolveLocationByIndoorDeviceId = (...args) =>
-  require("../accessSecurity/accessSecurityService").resolveLocationByIndoorDeviceId(
+  require("../intercom/intercomService").resolveLocationByIndoorDeviceId(
     ...args,
   );
 
@@ -58,7 +58,7 @@ async function loadIndoorRingTargets(selectedIds) {
 }
 
 async function processSipRingLinkagesForNewAlert(alert) {
-  const licensed = await licenseService.isRuntimeFeatureLicensed("access_security");
+  const licensed = await licenseService.isRuntimeFeatureLicensed("intercom");
   if (!licensed) return;
 
   const rid = alert?.rule_id != null ? Number(alert.rule_id) : null;

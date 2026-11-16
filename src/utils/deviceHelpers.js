@@ -2,6 +2,9 @@
 
 const db = require("../database/db");
 const { deviceConfigInvalid } = require("./deviceErrors");
+const {
+  validateAndNormalizeIoModules,
+} = require("../services/devices/modbusIoModules");
 
 /**
  * 解析 JSON 配置（處理字串或物件格式）
@@ -59,6 +62,7 @@ const validateDeviceConfig = (config, typeCode) => {
       if (config.unitId !== undefined && typeof config.unitId !== "number") {
         deviceConfigInvalid("controller 類型的 unitId 必須是數字");
       }
+      validateAndNormalizeIoModules(config, deviceConfigInvalid);
       break;
 
     case "camera": {

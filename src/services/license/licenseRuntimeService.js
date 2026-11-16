@@ -18,12 +18,20 @@ const {
 } = require("../energy/energyAggregationScheduler");
 const isapiSubscribeHub = require("../isapi/isapiSubscribeHub");
 const sdkArmingService = require("../ladderSdk/sdkArmingService");
-const videoIntercomArmingService = require("../accessSecurity/videoIntercomArmingService");
+const videoIntercomArmingService = require("../intercom/videoIntercomArmingService");
 const { setCachedEffectiveFeatures } = require("./effectiveFeaturesCache");
 const {
   startRollCallScheduler,
   stopRollCallScheduler,
 } = require("../rollCall/rollCallScheduler");
+const {
+  startLightingScheduleScheduler,
+  stopLightingScheduleScheduler,
+} = require("../lighting/lightingScheduleScheduler");
+const {
+  startHvacScheduleScheduler,
+  stopHvacScheduleScheduler,
+} = require("../hvac/hvacScheduleScheduler");
 
 let elevatorArmed = false;
 let intercomArmed = false;
@@ -53,7 +61,7 @@ const reconcileElevatorSdk = async (features) => {
 };
 
 const reconcileIntercomSdk = async (features) => {
-  const licensed = licenseService.hasLicensedFeature(features, "access_security");
+  const licensed = licenseService.hasLicensedFeature(features, "intercom");
   if (!licensed) {
     if (intercomArmed) {
       videoIntercomArmingService.stop();
@@ -113,6 +121,14 @@ const reconcileBackgroundServices = async ({
   if (rollCallOn) startRollCallScheduler();
   else stopRollCallScheduler();
 
+  const lightingOn = licenseService.hasLicensedFeature(features, "lighting");
+  if (lightingOn) startLightingScheduleScheduler();
+  else stopLightingScheduleScheduler();
+
+  const hvacOn = licenseService.hasLicensedFeature(features, "hvac");
+  if (hvacOn) startHvacScheduleScheduler();
+  else stopHvacScheduleScheduler();
+
   const isapi = await isapiSubscribeHub.reconcile({ licensedFeatures: features });
   const elevator = await reconcileElevatorSdk(features);
   const intercom = await reconcileIntercomSdk(features);
@@ -123,6 +139,8 @@ const reconcileBackgroundServices = async ({
     environment: environmentOn ? "on" : "off",
     energy: energyOn ? "on" : "off",
     rollCall: rollCallOn ? "on" : "off",
+    lightingSchedule: lightingOn ? "on" : "off",
+    hvacSchedule: hvacOn ? "on" : "off",
     isapi: isapi.profileKeys || [],
     elevator: elevator.armed ? "on" : "off",
     intercom: intercom.armed ? "on" : "off",

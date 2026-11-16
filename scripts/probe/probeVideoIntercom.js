@@ -5,7 +5,7 @@
  *   node scripts/probeVideoIntercom.js --host 192.168.2.27 --indoor 192.168.2.78
  *
  * 層 1 listen／層 2 直打請用另外兩支腳本。
- * 詳見：docs/40-systems/access-security.md（產品）；探測附錄 video-intercom-main-station.md
+ * 詳見：docs/40-systems/intercom.md（產品）；探測附錄 video-intercom-main-station.md
  */
 
 /* eslint-disable no-console */

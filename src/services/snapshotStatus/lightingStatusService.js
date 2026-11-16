@@ -170,16 +170,53 @@ async function buildLightingSnapshotItem(row) {
   let raw = {};
 
   try {
-    const batch = bitSpecs.map((spec) => ({
-      host: deviceConfig.host,
-      port: deviceConfig.port,
-      unitId: deviceConfig.unitId,
-      registerType: spec.registerType,
-      address: spec.address,
-      length: 1,
-      meta: { systemId, pointKey: spec.pointKey },
-    }));
-    const results = await modbusBatchService.batchRead(batch);
+    const bitStore = require("../devices/modbusBitStore");
+    /** @type {Array<{ ok: boolean, data?: any[], error?: string, meta?: object } | null>} */
+    const results = new Array(bitSpecs.length).fill(null);
+    const needRead = [];
+
+    for (let i = 0; i < bitSpecs.length; i += 1) {
+      const spec = bitSpecs[i];
+      if (!bitStore.isModuleOnlineForAddress(deviceConfig, spec.address)) {
+        results[i] = {
+          ok: false,
+          error: "IO 模組離線",
+          meta: { pointKey: spec.pointKey },
+        };
+        continue;
+      }
+      const hit = bitStore.getBit(
+        deviceConfig,
+        spec.registerType,
+        spec.address,
+      );
+      if (hit?.ok) {
+        results[i] = {
+          ok: true,
+          data: [Boolean(hit.value)],
+          meta: { pointKey: spec.pointKey },
+        };
+      } else {
+        needRead.push({ index: i, spec });
+      }
+    }
+
+    if (needRead.length > 0) {
+      const batch = needRead.map(({ spec }) => ({
+        host: deviceConfig.host,
+        port: deviceConfig.port,
+        unitId: deviceConfig.unitId,
+        registerType: spec.registerType,
+        address: spec.address,
+        length: 1,
+        meta: { systemId, pointKey: spec.pointKey },
+      }));
+      const fetched = await modbusBatchService.batchRead(batch);
+      for (let j = 0; j < needRead.length; j += 1) {
+        results[needRead[j].index] = fetched[j];
+      }
+    }
+
     const merged = mergeLightingRawFromBitResults(bitSpecs, results);
     raw = merged.raw;
     readError = merged.readError;

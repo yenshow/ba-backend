@@ -44,11 +44,13 @@ const SYSTEM_SOURCE_LABELS = {
   access_control: "門禁管理",
   vehicle_access: "車輛進出",
   elevator: "電梯管理",
-  access_security: "門禁保全",
+  intercom: "對講系統",
   alert_linkage: "警報連動",
+  lighting_schedule: "照明排程",
+  hvac_schedule: "空調排程",
   video_intercom: "組網對講",
-  access_security_ring: "廣播",
-  access_security_talk: "對講",
+  intercom_ring: "廣播",
+  intercom_talk: "對講",
   system: "系統",
 };
 

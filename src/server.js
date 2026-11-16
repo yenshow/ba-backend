@@ -34,7 +34,7 @@ const locationRoutes = require("./routes/locationRoutes");
 const peopleCountingRoutes = require("./routes/peopleCountingRoutes");
 const rollCallRoutes = require("./routes/rollCallRoutes");
 const elevatorRoutes = require("./routes/elevatorRoutes");
-const accessSecurityRoutes = require("./routes/accessSecurityRoutes");
+const intercomRoutes = require("./routes/intercomRoutes");
 const vehicleAccessRoutes = require("./routes/vehicleAccessRoutes");
 const alertRoutes = require("./routes/alertRoutes");
 const operationalEventRoutes = require("./routes/operationalEventRoutes");
@@ -184,10 +184,15 @@ app.use(
   elevatorRoutes,
 ); // 電梯系統
 app.use(
+  "/api/intercom",
+  requireFeature("intercom"),
+  intercomRoutes,
+); // 對講系統（VIS）
+app.use(
   "/api/access-security",
-  requireFeature("access_security"),
-  accessSecurityRoutes,
-); // 門禁保全（VIS）
+  requireFeature("intercom"),
+  intercomRoutes,
+); // 相容別名（舊路徑）
 app.use(
   "/api/vehicle-access",
   requireFeature("vehicle_access"),

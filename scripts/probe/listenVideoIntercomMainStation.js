@@ -9,7 +9,7 @@
  *
  * 通話事件請聽管理中心主機（勿聽室內機）。一次只開本腳本。
  * 層 2 外撥：testVideoIntercomSipInvite.js
- * 詳見：docs/40-systems/access-security.md；探測附錄 video-intercom-main-station.md
+ * 詳見：docs/40-systems/intercom.md；探測附錄 video-intercom-main-station.md
  */
 
 /* eslint-disable no-console */

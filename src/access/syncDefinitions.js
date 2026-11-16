@@ -47,6 +47,17 @@ async function syncDefinitions(pool) {
     );
   }
 
+  // 對講：access_security → intercom
+  for (const [oldCode, newCode] of [
+    ["system.access_security", "system.intercom"],
+    ["system.access_security.location.create", "system.intercom.location.create"],
+    ["system.access_security.location.update", "system.intercom.location.update"],
+    ["system.access_security.location.delete", "system.intercom.location.delete"],
+    ["system.access_security.ring", "system.intercom.ring"],
+  ]) {
+    await migratePermissionOverrides(pool, oldCode, newCode);
+  }
+
   await migratePermissionOverrides(
     pool,
     "system.elevator.card.manage",

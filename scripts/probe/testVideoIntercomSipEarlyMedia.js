@@ -6,7 +6,7 @@
  */
 /* eslint-disable no-console */
 
-const { inviteIndoorEarlyBroadcast } = require("../../src/services/accessSecurity/sipInviteService");
+const { inviteIndoorEarlyBroadcast } = require("../../src/services/intercom/sipInviteService");
 const { invokeBridge } = require("../../src/services/ladderSdk/sdkBridgeClient");
 
 const PASSWORD = "Aa83124007";

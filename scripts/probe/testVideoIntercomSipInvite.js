@@ -2,9 +2,9 @@
  * 直打室內機 SIP：等待接聽後單向播放 G.711 音檔（不經管理中心主機）
  *
  *   npm run test:video-intercom-sip -- --host 192.168.2.78 --to 1001 --password <密碼>
- *   node scripts/testVideoIntercomSipInvite.js --audio assets/access-security/alert-broadcast.pcm
+ *   node scripts/testVideoIntercomSipInvite.js --audio assets/intercom/alert-broadcast.pcm
  *
- * 詳見：docs/40-systems/access-security.md（層 2）；探測附錄 video-intercom-main-station.md
+ * 詳見：docs/40-systems/intercom.md（層 2）；探測附錄 video-intercom-main-station.md
  */
 
 /* eslint-disable no-console */
@@ -14,7 +14,7 @@ const fs = require("fs");
 const {
   inviteIndoorBroadcast,
   resolveBroadcastAudioPath,
-} = require("../../src/services/accessSecurity/sipInviteService");
+} = require("../../src/services/intercom/sipInviteService");
 
 const SCRIPT_CONFIG = {
   sipHost: "192.168.2.78",
@@ -27,7 +27,7 @@ const SCRIPT_CONFIG = {
   audioPath: path.resolve(
     process.cwd(),
     "assets",
-    "access-security",
+    "intercom",
     "alert-broadcast.pcm",
   ),
 };
@@ -69,7 +69,7 @@ const run = async () => {
   const audioPath = config.audioPath || resolveBroadcastAudioPath();
   if (!fs.existsSync(audioPath)) {
     console.error(`音訊檔不存在：${audioPath}`);
-    console.error("請先放入音檔：assets/access-security/alert-broadcast.pcm");
+    console.error("請先放入音檔：assets/intercom/alert-broadcast.pcm");
     process.exit(1);
   }
   if (!config.password) {

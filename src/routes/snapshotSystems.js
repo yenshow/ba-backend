@@ -10,6 +10,7 @@ const fireStatusService = require("../services/snapshotStatus/fireStatusService"
 const airCirculationStatusService = require("../services/snapshotStatus/airCirculationStatusService");
 const smokeAlarmStatusService = require("../services/snapshotStatus/smokeAlarmStatusService");
 const emergencyRescueStatusService = require("../services/snapshotStatus/emergencyRescueStatusService");
+const securityStatusService = require("../services/snapshotStatus/securityStatusService");
 
 const SNAPSHOT_SYSTEMS = [
   {
@@ -107,11 +108,36 @@ const SNAPSHOT_SYSTEMS = [
       manualErrorRequiresMessage: true,
     },
   },
+  {
+    mountPath: "/api/security",
+    featureKey: "security",
+    config: {
+      permissionCode: "system.security",
+      locationType: "security",
+      alertSource: "security",
+      systemKey: "security",
+      statusService: securityStatusService,
+      createZoneHttpStatus: 201,
+    },
+  },
 ];
 
 const mountSnapshotSystemRoutes = (app, requireFeature) => {
+  const securityScheduleRoutes = require("./securityScheduleRoutes");
+  const lightingScheduleRoutes = require("./lightingScheduleRoutes");
+  const hvacScheduleRoutes = require("./hvacScheduleRoutes");
   for (const entry of SNAPSHOT_SYSTEMS) {
     const router = createSnapshotSystemRouter(entry.config);
+    // 保全／照明／空調排程掛同一 mountPath，避免 server.js 雙重 mount
+    if (entry.featureKey === "security") {
+      router.use(securityScheduleRoutes);
+    }
+    if (entry.featureKey === "lighting") {
+      router.use(lightingScheduleRoutes);
+    }
+    if (entry.featureKey === "hvac") {
+      router.use(hvacScheduleRoutes);
+    }
     app.use(entry.mountPath, requireFeature(entry.featureKey), router);
   }
 };

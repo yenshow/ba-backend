@@ -92,9 +92,31 @@ async function authenticate(req, res, next) {
   }
 }
 
-/** GET /api/uploads/*：允許 query access_token（供 img 標籤） */
+/**
+ * GET /api/uploads/*：允許 query access_token（供 img 標籤）。
+ * 例外：`multimedia/` 路徑在 Feature `multimedia` 已授權時可匿名讀（資訊牆免登入）。
+ */
 async function authenticateUploadRead(req, res, next) {
   try {
+    const rel = String(req.path || "")
+      .replace(/^\/+/, "")
+      .toLowerCase();
+    if (rel.startsWith("multimedia/")) {
+      const licenseService = require("../services/license/licenseService");
+      const license = await licenseService.getLicenseState();
+      const openAll = license?.activationMethod === "open_all";
+      const enabled =
+        openAll ||
+        (Array.isArray(license?.features) &&
+          license.features.includes("multimedia"));
+      if (enabled) return next();
+      return sendAuthFailure(
+        res,
+        403,
+        C.FEATURE_NOT_LICENSED,
+        "未授權功能：multimedia",
+      );
+    }
     if (!(await applyAuthentication(req, res, { allowQuery: true }))) return;
     next();
   } catch (error) {

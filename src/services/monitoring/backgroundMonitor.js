@@ -67,6 +67,8 @@ function registerMonitoringTask(
     60 * 60 * 1000,
   );
 
+  const startOffsetMs = clampInt(opts.startOffsetMs ?? 0, 0, 60_000);
+
   monitoringTasks.push({
     taskId: resolvedTaskId,
     systemName,
@@ -75,7 +77,7 @@ function registerMonitoringTask(
     minIntervalMs,
     maxIntervalMs,
     currentIntervalMs: baseIntervalMs,
-    nextRunAtMs: Date.now(),
+    nextRunAtMs: Date.now() + startOffsetMs,
     lastRun: null,
     lastStartedAtMs: 0,
     isRunning: false,

@@ -114,6 +114,13 @@ async function persistIsapiEvent(options) {
         result: resolveOperationalAccessResult(ac),
       },
     });
+    void require("../security/securityAlertGate")
+      .maybeAlertAccessEvent({
+        deviceId,
+        eventTime: eventTime || new Date().toISOString(),
+        payload: ac,
+      })
+      .catch(() => {});
   }
   return { inserted: true, id };
 }

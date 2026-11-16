@@ -243,6 +243,7 @@ const CENTRAL_MODULES = [
     children: [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "device.control", name: "開關控制", sort_order: 4 },
+      { code: "schedule.edit", name: "時間排程編輯", sort_order: 5 },
     ],
     ui: {
       id: 9,
@@ -260,6 +261,7 @@ const CENTRAL_MODULES = [
     children: [
       ...LOCATION_MUTATION_CHILDREN,
       { code: "device.control", name: "開關控制", sort_order: 4 },
+      { code: "schedule.edit", name: "時間排程編輯", sort_order: 5 },
     ],
     ui: {
       id: 10,
@@ -372,8 +374,8 @@ const CENTRAL_MODULES = [
     },
   },
   {
-    code: "system.access_security",
-    name: "門禁保全系統",
+    code: "system.intercom",
+    name: "對講系統",
     sort_order: 29,
     children: [
       ...LOCATION_MUTATION_CHILDREN,
@@ -381,17 +383,34 @@ const CENTRAL_MODULES = [
     ],
     ui: {
       id: 16,
-      icon: "security",
+      icon: "intercom",
       description: "室內機對講與緊急廣播（皆須接聽、不經主機）",
       category: "security",
-      routePrefix: "/security/access-control",
-      featureKey: "access_security",
+      routePrefix: "/security/intercom",
+      featureKey: "intercom",
+    },
+  },
+  {
+    code: "system.security",
+    name: "保全系統",
+    sort_order: 30,
+    children: [
+      ...LOCATION_MUTATION_CHILDREN,
+      { code: "schedule.edit", name: "時段計畫編輯", sort_order: 4 },
+    ],
+    ui: {
+      id: 22,
+      icon: "security",
+      description: "平面圖監看；許可時段外 DI／門禁／讀卡活動告警",
+      category: "security",
+      routePrefix: "/security/guard",
+      featureKey: "security",
     },
   },
   {
     code: "system.multimedia",
     name: "多媒體資訊",
-    sort_order: 30,
+    sort_order: 31,
     children: [{ code: "settings.update", name: "設定編輯", sort_order: 1 }],
     ui: {
       id: 21,
@@ -425,7 +444,8 @@ const LOCATION_TYPE_MODULE = {
   emergency_rescue: "system.emergency_rescue",
   smoke_alarm: "system.smoke_alarm",
   elevator: "system.elevator",
-  access_security: "system.access_security",
+  intercom: "system.intercom",
+  security: "system.security",
 };
 
 const normalizeProfile = (profile) =>

@@ -12,6 +12,7 @@ const fireStatusService = require("../snapshotStatus/fireStatusService");
 const emergencyRescueStatusService = require("../snapshotStatus/emergencyRescueStatusService");
 const airCirculationStatusService = require("../snapshotStatus/airCirculationStatusService");
 const smokeAlarmStatusService = require("../snapshotStatus/smokeAlarmStatusService");
+const securityStatusService = require("../snapshotStatus/securityStatusService");
 
 const drainageSnapshotMonitor = createSystemSnapshotMonitor({
   systemKey: "drainage",
@@ -62,6 +63,12 @@ const smokeAlarmSnapshotMonitor = createSystemSnapshotMonitor({
   getSnapshot: () => smokeAlarmStatusService.getStatusSnapshot(),
 });
 
+const securitySnapshotMonitor = createSystemSnapshotMonitor({
+  systemKey: "security",
+  loggerName: "securityMonitor",
+  getSnapshot: () => securityStatusService.getStatusSnapshot(),
+});
+
 const SNAPSHOT_TASK_DEFS = [
   { systemKey: "lighting", systemName: "照明系統", monitor: lightingSnapshotMonitor },
   { systemKey: "hvac", systemName: "空調系統", monitor: hvacSnapshotMonitor },
@@ -87,12 +94,24 @@ const SNAPSHOT_TASK_DEFS = [
     systemName: "煙霧警報系統",
     monitor: smokeAlarmSnapshotMonitor,
   },
+  {
+    systemKey: "security",
+    systemName: "保全系統",
+    monitor: securitySnapshotMonitor,
+  },
 ];
 
-module.exports = SNAPSHOT_TASK_DEFS.map(({ systemKey, systemName, monitor }) => ({
-  taskId: systemKey,
-  systemName,
-  featureKey: systemKey,
-  taskFunction: () => monitor.check(),
-  options: fixedIntervalOptions(STANDARD_POLL_MS),
-}));
+const SNAPSHOT_STAGGER_MS = 2000;
+
+module.exports = SNAPSHOT_TASK_DEFS.map(
+  ({ systemKey, systemName, monitor }, index) => ({
+    taskId: systemKey,
+    systemName,
+    featureKey: systemKey,
+    taskFunction: () => monitor.check(),
+    options: {
+      ...fixedIntervalOptions(STANDARD_POLL_MS),
+      startOffsetMs: index * SNAPSHOT_STAGGER_MS,
+    },
+  }),
+);

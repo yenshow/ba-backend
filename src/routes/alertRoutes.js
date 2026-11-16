@@ -95,7 +95,7 @@ async function getFilteredIntegrationsForRule(ruleId) {
     await Promise.all([
       filterLinkageByLicense(cameraRaw, "surveillance"),
       filterLinkageByLicense(accessRaw, "people_counting"),
-      filterLinkageByLicense(sipRaw, "access_security"),
+      filterLinkageByLicense(sipRaw, "intercom"),
       filterLinkageByLicense(elevatorRaw, "elevator"),
     ]);
 
@@ -780,7 +780,7 @@ router.post(
       if (!rid || !result[rid]) continue;
       result[rid].sipRingLinkage = await filterLinkageByLicense(
         s,
-        "access_security",
+        "intercom",
       );
     }
     for (const e of elevatorCallLinkages || []) {
@@ -903,7 +903,7 @@ router.put(
       if (!body.sipRingLinkage) {
         await alertSipRingLinkageService.deleteForRule(ruleId);
       } else {
-        await assertLinkageLicensedForUpsert(body.sipRingLinkage, "access_security");
+        await assertLinkageLicensedForUpsert(body.sipRingLinkage, "intercom");
         await alertSipRingLinkageService.upsertForRule(
           ruleId,
           body.sipRingLinkage,

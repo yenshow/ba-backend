@@ -4,6 +4,7 @@
  *
  * 僅操作本平台庫（name=BA_FaceLib / customFaceLibID=BA_PC_FACELIB）。
  * 刪除：FDSearch(customHumanID)→PID 後 DELETE picture/{PID}；拒收再 PUT FDDeleteData。禁止無參數 DELETE /FDLib。
+ * faceLibType：設備拒收時寫入 config.fdlib.omitFaceLibType（＋記憶體），後續省略該欄、避免每人重試刷 WARN。
  */
 const crypto = require("crypto");
 const FormData = require("form-data");
@@ -19,6 +20,9 @@ const DEFAULT_LIB_NAME = "BA_FaceLib";
 const DEFAULT_FACE_LIB_TYPE = "ordinary";
 const DEFAULT_SIMILARITY = 50;
 const CUSTOM_FACE_LIB_ID = "BA_PC_FACELIB";
+
+/** 程序內快取：設備拒收 FDSearch／FDDeleteData 的 faceLibType 時省略該欄 */
+const omitFaceLibTypeByDeviceId = new Map();
 
 const PATHS = {
   fdLib: "/ISAPI/Intelligent/FDLib",
@@ -234,6 +238,36 @@ async function persistFdLibMeta(deviceId, meta) {
     [JSON.stringify(config), Number(deviceId)],
   );
   return config.fdlib;
+}
+
+function resolveOmitFaceLibType(deviceId, device = null) {
+  const id = Number(deviceId);
+  if (omitFaceLibTypeByDeviceId.get(id) === true) return true;
+  if (!device) return false;
+  const fdlib = parseConfig(device.config).fdlib;
+  if (fdlib && typeof fdlib === "object" && fdlib.omitFaceLibType === true) {
+    omitFaceLibTypeByDeviceId.set(id, true);
+    return true;
+  }
+  return false;
+}
+
+async function rememberOmitFaceLibType(deviceId, context = {}) {
+  const id = Number(deviceId);
+  if (omitFaceLibTypeByDeviceId.get(id) === true) return;
+  omitFaceLibTypeByDeviceId.set(id, true);
+  logger.info("設備拒收 faceLibType，後續 FDSearch／FDDelete 改省略該欄位", {
+    deviceId: id,
+    ...context,
+  });
+  try {
+    await persistFdLibMeta(deviceId, { omitFaceLibType: true });
+  } catch (err) {
+    logger.warn("寫入 omitFaceLibType 快取失敗（記憶體仍生效）", {
+      deviceId: id,
+      error: err?.message || String(err),
+    });
+  }
 }
 
 async function clearFdLibCache(deviceId) {
@@ -589,12 +623,14 @@ function parseFdSearchMatches(text) {
 
 /**
  * 依工號搜尋臉庫紀錄。失敗時拋錯（呼叫端勿把失敗當成「庫中無人」）。
+ * 設備拒收 faceLibType 時只探測一次（omitFaceLibType 快取）。
  */
 async function searchByCustomHumanId(deviceId, employeeNo, libMeta = null) {
-  const { client } = await getCameraDeviceAndClient(deviceId);
+  const { client, device } = await getCameraDeviceAndClient(deviceId);
   const lib = libMeta || (await ensureFaceLib(deviceId));
   const searchID = `S${crypto.randomBytes(6).toString("hex")}`;
   const faceLibType = String(lib.faceLibType || DEFAULT_FACE_LIB_TYPE);
+  const includeType = !resolveOmitFaceLibType(deviceId, device);
   const postSearch = (includeFaceLibType) =>
     requestXml(client, {
       method: "POST",
@@ -610,11 +646,11 @@ async function searchByCustomHumanId(deviceId, employeeNo, libMeta = null) {
 
   let res;
   try {
-    res = await postSearch(true);
+    res = await postSearch(includeType);
   } catch (err) {
-    if (!isBadXmlContentError(err)) throw err;
-    logger.warn("FDSearch 拒收 faceLibType，改送不含該欄位", {
-      deviceId,
+    if (!includeType || !isBadXmlContentError(err)) throw err;
+    await rememberOmitFaceLibType(deviceId, {
+      op: "FDSearch",
       employeeNo,
       error: err?.message || String(err),
     });
@@ -664,7 +700,7 @@ function isFdDeleteNotFoundError(errOrText) {
 }
 
 /** 優先 DELETE picture；非「找不到」則後備 PUT FDDeleteData */
-async function deleteOneFacePicture(client, { fdid, pid, faceLibType }) {
+async function deleteOneFacePicture(client, { deviceId, fdid, pid, faceLibType }) {
   const path = buildFdLibPicturePath(fdid, pid);
   try {
     const res = await client.request({ method: "DELETE", path });
@@ -676,6 +712,7 @@ async function deleteOneFacePicture(client, { fdid, pid, faceLibType }) {
       path,
       error: err?.message || String(err),
     });
+    const includeType = !resolveOmitFaceLibType(deviceId);
     const putDelete = (includeFaceLibType) =>
       requestXml(client, {
         method: "PUT",
@@ -683,10 +720,11 @@ async function deleteOneFacePicture(client, { fdid, pid, faceLibType }) {
         xml: buildFdDeleteDataXml({ fdid, pid, faceLibType, includeFaceLibType }),
       });
     try {
-      await putDelete(true);
+      await putDelete(includeType);
     } catch (putErr) {
-      if (!isBadXmlContentError(putErr)) throw putErr;
-      logger.warn("FDDeleteData 拒收 faceLibType，改送不含該欄位", {
+      if (!includeType || !isBadXmlContentError(putErr)) throw putErr;
+      await rememberOmitFaceLibType(deviceId, {
+        op: "FDDeleteData",
         fdid,
         pid,
         error: putErr?.message || String(putErr),
@@ -723,6 +761,7 @@ async function deleteByCustomHumanId(deviceId, employeeNo, libMeta = null) {
   let deleted = 0;
   for (const pid of pids) {
     const result = await deleteOneFacePicture(client, {
+      deviceId,
       fdid,
       pid,
       faceLibType,

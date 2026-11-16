@@ -302,24 +302,28 @@ const pda = {
 };
 
 /**
- * 門禁保全 SIP（層 2 手動／警報語音廣播）
+ * 對講系統 SIP（層 2 手動／警報語音廣播）
  */
-const accessSecurity = {
+const intercom = {
   /** false 時僅振鈴，不嘗試 RTP 播放 */
   alertBroadcastEnabled: toBoolean(
-    getEnv("ACCESS_SECURITY_ALERT_BROADCAST_ENABLED"),
+    getEnv("INTERCOM_ALERT_BROADCAST_ENABLED") ||
+      getEnv("ACCESS_SECURITY_ALERT_BROADCAST_ENABLED"),
     true,
   ),
-  /** 預設 raw PCM（官方火場逃生 soConvert） */
+  /** 預設 raw PCM；相容舊 ACCESS_SECURITY_*／assets/access-security */
   alertAudioPath: path.resolve(
     process.cwd(),
-    getEnv(
-      "ACCESS_SECURITY_ALERT_AUDIO_PATH",
-      path.join("assets", "access-security", "alert-broadcast.pcm"),
-    ),
+    getEnv("INTERCOM_ALERT_AUDIO_PATH") ||
+      getEnv("ACCESS_SECURITY_ALERT_AUDIO_PATH") ||
+      path.join("assets", "intercom", "alert-broadcast.pcm"),
   ),
   /** 廣播模式：等待室內機接聽的最長毫秒 */
-  alertAnswerMs: toNumber(getEnv("ACCESS_SECURITY_ALERT_ANSWER_MS"), 45000),
+  alertAnswerMs: toNumber(
+    getEnv("INTERCOM_ALERT_ANSWER_MS") ||
+      getEnv("ACCESS_SECURITY_ALERT_ANSWER_MS"),
+    45000,
+  ),
 };
 
 module.exports = {
@@ -340,7 +344,7 @@ module.exports = {
   operationalEvents,
   isup,
   pda,
-  accessSecurity,
+  intercom,
   cors,
   serverHost: server.host,
   serverPort: server.port,

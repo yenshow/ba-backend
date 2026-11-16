@@ -103,7 +103,7 @@ function initializeWebSocket(httpServer) {
   const { Server } = require("socket.io");
   const {
     attachTalkHandlers,
-  } = require("../accessSecurity/accessSecurityTalkGateway");
+  } = require("../intercom/intercomTalkGateway");
 
   // 解析允許的來源（與 Express CORS 配置一致）
   const allowedOrigins = config.cors.origins.length
@@ -416,10 +416,14 @@ function emitBatchDeviceStatus(updates) {
         updates: [],
       };
     }
-    acc[key].updates.push({
+    const entry = {
       sourceId: update.sourceId,
       deviceId: update.deviceId || update.sourceId, // 如果是 device 系統，deviceId = sourceId；否則使用提供的 deviceId
-    });
+    };
+    if (Array.isArray(update.modules) && update.modules.length > 0) {
+      entry.modules = update.modules;
+    }
+    acc[key].updates.push(entry);
     return acc;
   }, {});
 
