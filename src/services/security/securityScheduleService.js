@@ -1,5 +1,5 @@
 /**
- * 保全許可時段：CRUD 與 isPermittedNow
+ * 保全時間排程：CRUD 與 isPermittedNow（排程內活動不升級為警報）
  * 無啟用規則＝不依時段告警（視為許可）
  */
 const db = require("../../database/db");
@@ -132,7 +132,7 @@ async function replaceForLocation(locationId, rules) {
 }
 
 /**
- * 許可時段內＝true（不告警）；無啟用規則＝true（不依時段告警）
+ * 時間排程內＝true（不告警，UI 活動態）；無啟用規則＝true（不依時段告警）
  */
 async function isPermittedNow(locationId, at = new Date()) {
   const lid = Number(locationId);

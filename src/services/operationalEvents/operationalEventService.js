@@ -37,19 +37,36 @@ function parseMultiFilter(value) {
     .filter(Boolean);
 }
 
+/**
+ * UI 粗分類 → 完整落庫 source 清單（取代篩選鍵；寫入 source 不變）
+ * intercom 僅篩選鍵，無落庫 `source=intercom`
+ */
+const SOURCE_FILTER_ALIASES = Object.freeze({
+  people_counting: ["people_counting", "access_control"],
+  lighting: ["lighting", "lighting_schedule"],
+  hvac: ["hvac", "hvac_schedule"],
+  intercom: ["intercom_talk", "intercom_ring", "video_intercom"],
+});
+
+function expandSourceFilters(sources) {
+  const out = new Set();
+  for (const key of sources) {
+    const expanded = SOURCE_FILTER_ALIASES[key];
+    if (expanded) {
+      for (const s of expanded) out.add(s);
+    } else {
+      out.add(key);
+    }
+  }
+  return [...out];
+}
+
 function buildListWhere(filters = {}) {
   const { source, event_kind, start_date, end_date, location_id } = filters;
   let where = "WHERE 1=1";
   const params = [];
 
-  // 篩選 people_counting 時一併含歷史 access_control
-  const sources = parseMultiFilter(source);
-  if (
-    sources.includes("people_counting") &&
-    !sources.includes("access_control")
-  ) {
-    sources.push("access_control");
-  }
+  const sources = expandSourceFilters(parseMultiFilter(source));
   if (sources.length === 1) {
     where += " AND oe.source = ?";
     params.push(sources[0]);

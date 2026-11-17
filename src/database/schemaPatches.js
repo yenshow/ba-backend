@@ -10,6 +10,9 @@ const {
   syncEnergyAlertRuleCatalog,
   migrateEnergySettingsToAlertRules,
 } = require("./syncEnergyAlertRuleCatalog");
+const {
+  syncSecurityAlertRuleCatalog,
+} = require("./syncSecurityAlertRuleCatalog");
 
 /** 與 initSchema `alert_source`、alertService.ALERT_SOURCES 對齊 */
 const ALERT_SOURCE_ENUM_VALUES = [
@@ -1511,6 +1514,7 @@ async function applySchemaPatches(pool) {
   const clearedResolvedIgnored = await clearResolvedAlertIgnoredFields(pool);
   const energyRulesMigration = await migrateEnergySettingsToAlertRules(pool);
   const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(pool);
+  const securityAlertRuleSync = await syncSecurityAlertRuleCatalog(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
   const deviceModelSync = await syncDeviceModelCatalog(pool);
   const deviceModelRepair = await repairDeviceModelCatalogConfig(pool);
@@ -1520,6 +1524,7 @@ async function applySchemaPatches(pool) {
     deviceSyncStatusNorm,
     energyRulesMigration,
     energyAlertRuleSync,
+    securityAlertRuleSync,
     migratedSensorModels,
     ...deviceModelSync,
     ...deviceModelRepair,

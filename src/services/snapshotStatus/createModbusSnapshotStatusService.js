@@ -36,6 +36,7 @@ const logger = require("../../utils/logger");
  * @param {boolean} [config.useAllSettled=false] 單系統失敗時以 fallback item 取代
  * @param {string} [config.fallbackEquipmentKind]
  * @param {string} [config.fallbackViewCategory]
+ * @param {(items: object[]) => Promise<object[]>} [config.afterBuildItems] 讀點後、合併 active alerts 前
  */
 function createModbusSnapshotStatusService(config) {
   const {
@@ -53,6 +54,7 @@ function createModbusSnapshotStatusService(config) {
     useAllSettled = false,
     fallbackEquipmentKind = "pump",
     fallbackViewCategory = systemType,
+    afterBuildItems = null,
   } = config;
 
   const statusLogger = logger.createLogger(loggerName);
@@ -182,10 +184,6 @@ function createModbusSnapshotStatusService(config) {
     const systemIds = triples
       .map((t) => Number(t.system?.id))
       .filter((n) => Number.isFinite(n));
-    const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
-      alertSource,
-      systemIds,
-    );
 
     let ruleSemanticsBySystemId = null;
     if (useRuleSemantics && typeof mergeRuleSemantics === "function") {
@@ -221,6 +219,16 @@ function createModbusSnapshotStatusService(config) {
         ),
       );
     }
+
+    if (typeof afterBuildItems === "function") {
+      items = await afterBuildItems(items);
+    }
+
+    // 讀點／afterBuildItems 後再載入，才能反映本輪新建或已 resolve 的警報
+    const activeAlertSystemIds = await loadActiveAlertSystemIdSet(
+      alertSource,
+      systemIds,
+    );
 
     const mergedAlerts = mergeActiveAlertsIntoSnapshotItems(
       items,

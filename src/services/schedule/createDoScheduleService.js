@@ -47,9 +47,15 @@ function toTaipeiParts(at = new Date()) {
   };
 }
 
+/** TIME／字串／Date（pg 偶發）→ 當日秒數 */
 function timeToSeconds(t) {
+  if (t instanceof Date && !Number.isNaN(t.getTime())) {
+    return (
+      t.getUTCHours() * 3600 + t.getUTCMinutes() * 60 + t.getUTCSeconds()
+    );
+  }
   const s = String(t || "").trim();
-  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  const m = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
   if (!m) return null;
   return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] || 0);
 }
@@ -73,7 +79,12 @@ function normalizeLocationIds(ids) {
 }
 
 function timeSlice(t) {
-  return String(t || "").slice(0, 8);
+  const sec = timeToSeconds(t);
+  if (sec == null) return String(t || "").slice(0, 8);
+  const hh = Math.floor(sec / 3600);
+  const mm = Math.floor((sec % 3600) / 60);
+  const ss = sec % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
 function timeMatchesHm(timeStr, hm) {
@@ -409,9 +420,8 @@ function createDoScheduleService(opts) {
       for (const edge of item.edges) {
         const fireKey = `${item.id}:${edge}:${dateKey}:${hm}`;
         if (firedEdges.has(fireKey)) continue;
-        firedEdges.set(fireKey, Date.now());
 
-        await Promise.all(
+        const results = await Promise.all(
           locationIds.map((locationId) =>
             writeScheduleDo({
               locationId,
@@ -421,12 +431,25 @@ function createDoScheduleService(opts) {
             }),
           ),
         );
+        // 全部失敗不標記：同分鐘內可重試（避免 60s tick 錯過或短暫離線）
+        const anyOk = results.some((r) => r?.success);
+        if (!anyOk) {
+          logger.warn(`${label}排程邊緣寫入皆失敗（將重試）`, {
+            ruleId: item.id,
+            edge,
+            hm,
+            locationCount: locationIds.length,
+          });
+          continue;
+        }
+        firedEdges.set(fireKey, Date.now());
         fired += 1;
         logger.info(`${label}排程邊緣已觸發`, {
           ruleId: item.id,
           edge,
           hm,
           locationCount: locationIds.length,
+          successCount: results.filter((r) => r?.success).length,
         });
       }
     }

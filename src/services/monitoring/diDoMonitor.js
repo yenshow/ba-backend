@@ -188,6 +188,7 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
         dimensionKey,
         message,
         severity,
+        ruleId: rule.id,
       });
       return;
     }

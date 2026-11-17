@@ -779,6 +779,18 @@ async function createSystem(query, locationId, system) {
     systemType === "elevator"
   ) {
     shared.refreshSubscribesForSystemType(systemType, locationLogger);
+  } else if (systemType === "security") {
+    const {
+      ensureSecurityDiAlertRule,
+    } = require("../../database/syncSecurityAlertRuleCatalog");
+    try {
+      await ensureSecurityDiAlertRule(query, locationId);
+    } catch (err) {
+      locationLogger.warn("security DI alert rule seed after createSystem failed", {
+        locationId,
+        error: err?.message || String(err),
+      });
+    }
   }
 
   return result[0].id;
@@ -907,6 +919,18 @@ async function updateSystem(query, systemId, system) {
     targetSystemType === "elevator"
   ) {
     shared.refreshSubscribesForSystemType(targetSystemType, locationLogger);
+  } else if (targetSystemType === "security" && vaLocationId != null) {
+    const {
+      ensureSecurityDiAlertRule,
+    } = require("../../database/syncSecurityAlertRuleCatalog");
+    try {
+      await ensureSecurityDiAlertRule(query, vaLocationId);
+    } catch (err) {
+      locationLogger.warn("security DI alert rule seed after updateSystem failed", {
+        locationId: vaLocationId,
+        error: err?.message || String(err),
+      });
+    }
   }
 }
 

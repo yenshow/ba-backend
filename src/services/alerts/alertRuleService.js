@@ -34,6 +34,7 @@ const LOCATION_SYSTEM_SOURCES = new Set([
   "fire",
   "emergency_rescue",
   "smoke_alarm",
+  "security",
 ]);
 
 const {

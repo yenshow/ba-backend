@@ -6,6 +6,9 @@ const schemaLogger = logger.createLogger("initSchema");
 const syncDefinitions = require("../access/syncDefinitions");
 const { syncDeviceModelCatalog } = require("./syncDeviceModelCatalog");
 const { syncEnergyAlertRuleCatalog } = require("./syncEnergyAlertRuleCatalog");
+const {
+  syncSecurityAlertRuleCatalog,
+} = require("./syncSecurityAlertRuleCatalog");
 
 async function createUpdatedAtTrigger(pool, tableName) {
   await pool.query(`
@@ -619,6 +622,13 @@ async function initSchema() {
     schemaLogger.info("energy alert_rules catalog 已同步", {
       module: "initSchema",
       ...energyAlertRuleSync,
+    });
+
+    const securityAlertRuleSync =
+      await syncSecurityAlertRuleCatalog(targetPool);
+    schemaLogger.info("security alert_rules catalog 已同步", {
+      module: "initSchema",
+      ...securityAlertRuleSync,
     });
 
     // 建立警報事件表（事件流）

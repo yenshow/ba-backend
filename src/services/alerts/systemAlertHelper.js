@@ -420,6 +420,8 @@ const getEmergencyRescueInfo = (systemId) =>
   getSourceInfoByType(systemId, "emergency_rescue");
 const getSmokeAlarmInfo = (systemId) =>
   getSourceInfoByType(systemId, "smoke_alarm");
+const getSecurityInfo = (systemId) =>
+  getSourceInfoByType(systemId, "security");
 
 /**
  * 獲取設備資訊
@@ -586,6 +588,8 @@ const getDeviceIdFromEmergencyRescue = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "emergency_rescue");
 const getDeviceIdFromSmokeAlarm = (systemId) =>
   getDeviceIdFromLocationSystem(systemId, "smoke_alarm");
+const getDeviceIdFromSecurity = (systemId) =>
+  getDeviceIdFromLocationSystem(systemId, "security");
 
 /**
  * 依設備 ID 與系統類型取得所有對應的 location_systems.id
@@ -662,6 +666,11 @@ const SYSTEM_CONFIGS = {
     source: alertService.ALERT_SOURCES.SMOKE_ALARM,
     getSourceInfo: getSmokeAlarmInfo,
     getDeviceId: getDeviceIdFromSmokeAlarm,
+  },
+  security: {
+    source: alertService.ALERT_SOURCES.SECURITY,
+    getSourceInfo: getSecurityInfo,
+    getDeviceId: getDeviceIdFromSecurity,
   },
   device: {
     source: alertService.ALERT_SOURCES.DEVICE,
@@ -827,7 +836,7 @@ const SNAPSHOT_CONNECTIVITY_SYSTEM_KEYS = new Set(
 /**
  * 背景監控或快照讀取後：統一寫入連線成功（clear）或失敗（record）
  * 預設 `skipWebSocket: true`，由監控輪次結尾批次推送。
- * @param {string} systemKey - environment | lighting | drainage | power | fire | emergency_rescue
+ * @param {string} systemKey - environment | lighting | drainage | power | fire | emergency_rescue | smoke_alarm | security | …
  * @param {number} sourceId - location_systems.id（與既有 recordError/clearError 一致）
  * @param {boolean} readOk - Modbus／讀點是否成功
  * @param {string} [errorMessageWhenFail] - 失敗時訊息

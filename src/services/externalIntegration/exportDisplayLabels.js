@@ -27,6 +27,16 @@ const ALERT_TYPE_LABELS = {
   do: "DO",
 };
 
+/** 落庫細 source → 粗分類鍵（對齊營運事件 UI） */
+const SYSTEM_SOURCE_ALIASES = {
+  access_control: "people_counting",
+  lighting_schedule: "lighting",
+  hvac_schedule: "hvac",
+  video_intercom: "intercom",
+  intercom_ring: "intercom",
+  intercom_talk: "intercom",
+};
+
 /** 警報／營運共用：系統來源 */
 const SYSTEM_SOURCE_LABELS = {
   device: "設備",
@@ -41,16 +51,10 @@ const SYSTEM_SOURCE_LABELS = {
   smoke_alarm: "煙霧警報",
   emergency_rescue: "緊急求救",
   people_counting: "門禁管理",
-  access_control: "門禁管理",
   vehicle_access: "車輛進出",
   elevator: "電梯管理",
   intercom: "對講系統",
   alert_linkage: "警報連動",
-  lighting_schedule: "照明排程",
-  hvac_schedule: "空調排程",
-  video_intercom: "組網對講",
-  intercom_ring: "廣播",
-  intercom_talk: "對講",
   system: "系統",
 };
 
@@ -95,7 +99,10 @@ function labelAlertType(raw) {
 }
 
 function labelSystemSource(raw) {
-  return mapLabel(SYSTEM_SOURCE_LABELS, raw);
+  const key = String(raw ?? "").trim();
+  if (!key) return "";
+  const resolved = SYSTEM_SOURCE_ALIASES[key] || key;
+  return SYSTEM_SOURCE_LABELS[resolved] ?? key;
 }
 
 function labelOperationalKind(raw) {
