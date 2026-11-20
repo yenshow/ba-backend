@@ -1407,11 +1407,14 @@ async function ensureMultimediaWallSeatsTable(pool) {
   `);
 }
 
+/**
+ * 保全排程：舊「列綁 location_id」→「規則表＋_locations」；新裝若已是新形狀則只確保表存在。
+ * 遷移：每舊列保留同一 rule id，寫入綁定後再 DROP location_id。
+ */
 async function ensureSecurityScheduleRulesTable(pool) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS security_schedule_rules (
       id SERIAL PRIMARY KEY,
-      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
       name VARCHAR(80),
       days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
       window_start TIME NOT NULL,
@@ -1422,9 +1425,39 @@ async function ensureSecurityScheduleRulesTable(pool) {
       CHECK (window_end <> window_start)
     )
   `);
+  await createUpdatedAtTrigger(pool, "security_schedule_rules");
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_security_schedule_rules_location
-    ON security_schedule_rules(location_id)
+    CREATE TABLE IF NOT EXISTS security_schedule_rule_locations (
+      rule_id INTEGER NOT NULL REFERENCES security_schedule_rules(id) ON DELETE CASCADE,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      PRIMARY KEY (rule_id, location_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_security_schedule_rule_locations_location
+    ON security_schedule_rule_locations(location_id)
+  `);
+
+  const legacyCols = await pool.query(`
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'security_schedule_rules'
+      AND column_name = 'location_id'
+    LIMIT 1
+  `);
+  if (!legacyCols.rows?.length) return;
+
+  await pool.query(`
+    INSERT INTO security_schedule_rule_locations (rule_id, location_id)
+    SELECT id, location_id
+    FROM security_schedule_rules
+    WHERE location_id IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `);
+  await pool.query(`DROP INDEX IF EXISTS idx_security_schedule_rules_location`);
+  await pool.query(`
+    ALTER TABLE security_schedule_rules DROP COLUMN IF EXISTS location_id
   `);
 }
 
@@ -1560,5 +1593,6 @@ module.exports = {
   ensureRollCallTables,
   ensureLightingScheduleTables,
   ensureHvacScheduleTables,
+  ensureSecurityScheduleRulesTable,
   applySchemaPatches,
 };

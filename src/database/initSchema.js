@@ -1601,11 +1601,10 @@ async function initSchema() {
       module: "initSchema",
     });
 
-    // 保全許可時段（多段聯集；無啟用規則＝不依時段告警）
+    // 保全許可時段（規則→綁多地點；無綁定啟用規則＝不依時段告警）
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS security_schedule_rules (
         id SERIAL PRIMARY KEY,
-        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
         name VARCHAR(80),
         days_of_week INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6]::INTEGER[],
         window_start TIME NOT NULL,
@@ -1618,8 +1617,15 @@ async function initSchema() {
     `);
     await createUpdatedAtTrigger(targetPool, "security_schedule_rules");
     await targetPool.query(`
-      CREATE INDEX IF NOT EXISTS idx_security_schedule_rules_location
-      ON security_schedule_rules(location_id);
+      CREATE TABLE IF NOT EXISTS security_schedule_rule_locations (
+        rule_id INTEGER NOT NULL REFERENCES security_schedule_rules(id) ON DELETE CASCADE,
+        location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+        PRIMARY KEY (rule_id, location_id)
+      )
+    `);
+    await targetPool.query(`
+      CREATE INDEX IF NOT EXISTS idx_security_schedule_rule_locations_location
+      ON security_schedule_rule_locations(location_id);
     `);
 
     // 照明時間排程（時刻觸發 DO；一規則可綁多地點）

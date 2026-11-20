@@ -13,27 +13,24 @@ const securityScheduleService = require("../services/security/securityScheduleSe
 const router = express.Router();
 
 router.get(
-  "/locations/:locationId/schedules",
+  "/schedules",
   authenticate,
   requirePermission("system.security"),
-  asyncHandler(async (req, res) => {
-    const rules = await securityScheduleService.listByLocationId(
-      req.params.locationId,
-    );
+  asyncHandler(async (_req, res) => {
+    const rules = await securityScheduleService.listAll();
     return res.sendSuccess({ rules });
   }),
 );
 
 router.put(
-  "/locations/:locationId/schedules",
+  "/schedules",
   authenticate,
   requireAnyPermission([
     "system.security.schedule.edit",
     "system.security.location.update",
   ]),
   asyncHandler(async (req, res) => {
-    const rules = await securityScheduleService.replaceForLocation(
-      req.params.locationId,
+    const rules = await securityScheduleService.replaceAll(
       req.body?.rules ?? req.body,
     );
     return res.sendSuccess({ rules });

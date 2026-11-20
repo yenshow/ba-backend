@@ -365,6 +365,10 @@ function formatSystem(system) {
         hasDi: Boolean(primary),
         hasAccess: accessIds.length > 0,
       });
+      const {
+        normalizeArmingConfig,
+      } = require("../security/securityScheduleService");
+      const arming = normalizeArmingConfig(config);
       return {
         ...baseSystem,
         config: {
@@ -385,6 +389,9 @@ function formatSystem(system) {
               ? spSec
               : undefined,
           accessDeviceIds: accessIds,
+          armingMode: arming.armingMode,
+          entryDelaySec: arming.entryDelaySec,
+          exitDelaySec: arming.exitDelaySec,
         },
       };
     }

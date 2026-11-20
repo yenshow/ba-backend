@@ -205,6 +205,18 @@ async function syncDiDoAlert(rule, systemId, bitValue) {
     return;
   }
 
+  if (rule.source === alertService.ALERT_SOURCES.SECURITY) {
+    const {
+      cancelPendingSecurityAlert,
+    } = require("../security/securityAlertGate");
+    await cancelPendingSecurityAlert({
+      systemId,
+      alertType: rule.alert_type,
+      dimensionKey,
+    });
+    return;
+  }
+
   try {
     await alertService.resolveAlert(
       Number(systemId),

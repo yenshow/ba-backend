@@ -1,12 +1,13 @@
 /**
  * 保全：Modbus DI 快照（門禁設備狀態不進本快照，僅平面圖 DI）
- * - 排程內 running → uiStatus=activity（顯示用；alerts 仍靠警報設定 bit_state＋閘門）
- * - 排程外 running → uiStatus=alarm
+ * - 撤防／許可／離開寬限中 running → uiStatus=activity
+ * - 佈防中 running → uiStatus=alarm
+ * - 24 小時防區永遠視為佈防（schedulePermitted=false）
  */
 const alertService = require("../alerts/alertService");
-const securityScheduleService = require("../security/securityScheduleService");
 const {
   resolveActivityAlertsIfPermitted,
+  evaluateDisarmedState,
 } = require("../security/securityAlertGate");
 const {
   normalizeSmokeEmergencySnapshotRaw,
@@ -40,10 +41,10 @@ async function afterBuildSecurityItems(items) {
     let schedulePermitted = true;
     if (Number.isFinite(sid) && sid > 0) {
       try {
-        schedulePermitted =
-          await securityScheduleService.isPermittedNowBySystemId(sid);
-        // 進入排程：結案規則／門禁留下的活動類 alert（不新建；新建靠警報設定）
-        await resolveActivityAlertsIfPermitted(sid, schedulePermitted);
+        const state = await evaluateDisarmedState(sid);
+        // disarmed 含許可窗＋離開寬限；對外仍用 schedulePermitted 語意（可活動）
+        schedulePermitted = state.disarmed;
+        await resolveActivityAlertsIfPermitted(sid, state.disarmed);
       } catch (err) {
         statusLogger.warn("保全排程語意套用失敗（略過）", {
           systemId: sid,

@@ -362,6 +362,10 @@ function buildSystemConfig(systemType, config) {
           "保全地點須綁定 DI（控制器）或至少一台門禁機／讀卡機",
         );
       }
+      const {
+        normalizeArmingConfig,
+      } = require("../security/securityScheduleService");
+      const arming = normalizeArmingConfig(config);
       return {
         device_ids: deviceIds,
         location_x: config.location?.x || 50.0,
@@ -380,6 +384,9 @@ function buildSystemConfig(systemType, config) {
           hasDi,
           hasAccess: accessDeviceIds.length > 0,
         }),
+        arming_mode: arming.armingMode,
+        entry_delay_sec: arming.entryDelaySec,
+        exit_delay_sec: arming.exitDelaySec,
       };
     }
 
