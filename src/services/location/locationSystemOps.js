@@ -32,6 +32,7 @@ const {
 } = require("../../constants/cameraModelCategories");
 const {
   parseOptionalEventCameraDeviceId,
+  parseOptionalEventCameraNvrTrackId,
 } = require("../peopleCounting/peopleCountingConfig");
 const { vehicleAccess: yscpVehicleFeature } = require("../../utils/yscpSystemFeature");
 const {
@@ -118,6 +119,42 @@ async function validatePeopleCountingSystemIfNeeded(
     zoneId: ctx.zoneId,
     isUpdate,
   });
+  if (systemConfig.data_source === "access_control") {
+    const bindings = [
+      {
+        label: "入口",
+        deviceId: systemConfig.entry_event_camera_device_id,
+        trackId: systemConfig.entry_event_camera_nvr_track_id,
+      },
+      {
+        label: "出口",
+        deviceId: systemConfig.exit_event_camera_device_id,
+        trackId: systemConfig.exit_event_camera_nvr_track_id,
+      },
+    ];
+    const deviceIds = [...new Set(bindings.map(({ deviceId }) => deviceId)
+      .filter((deviceId) => deviceId != null))];
+    const rows = deviceIds.length
+      ? await query("SELECT id, config FROM active_devices WHERE id = ANY($1::int[])", [deviceIds])
+      : [];
+    const nvrIds = new Set(rows
+      .filter(({ config }) => parseDeviceConfig(config)?.is_nvr === true)
+      .map(({ id }) => Number(id)));
+    for (const { label, deviceId, trackId } of bindings) {
+      if (nvrIds.has(deviceId) && trackId == null) {
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          `請選擇${label}調閱的 NVR 通道`,
+        );
+      }
+      if (!nvrIds.has(deviceId) && trackId != null) {
+        throwApiError(
+          C.PEOPLE_COUNTING_VALIDATION_FAILED,
+          `${label}調閱的 NVR 通道須搭配 NVR 設備`,
+        );
+      }
+    }
+  }
   if (String(systemConfig?.data_source || "").trim() !== "isapi_camera") return;
   await assertCamerasHaveCategory(
     query,
@@ -175,8 +212,14 @@ function peopleCountingRowConfigToMergeInput(raw) {
     entryEventCameraDeviceId: parseOptionalEventCameraDeviceId(
       c.entry_event_camera_device_id,
     ),
+    entryEventCameraNvrTrackId: parseOptionalEventCameraNvrTrackId(
+      c.entry_event_camera_nvr_track_id,
+    ),
     exitEventCameraDeviceId: parseOptionalEventCameraDeviceId(
       c.exit_event_camera_device_id,
+    ),
+    exitEventCameraNvrTrackId: parseOptionalEventCameraNvrTrackId(
+      c.exit_event_camera_nvr_track_id,
     ),
   };
 }
@@ -189,6 +232,17 @@ function shallowMergePeopleCountingConfig(baseline, incoming) {
   if (!incoming || typeof incoming !== "object") return out;
   for (const k of Object.keys(incoming)) {
     if (incoming[k] !== undefined) out[k] = incoming[k];
+  }
+  for (const role of ["entry", "exit"]) {
+    const deviceKey = `${role}EventCameraDeviceId`;
+    const trackKey = `${role}EventCameraNvrTrackId`;
+    if (
+      incoming[deviceKey] !== undefined &&
+      parseOptionalEventCameraDeviceId(incoming[deviceKey]) !== baseline[deviceKey] &&
+      incoming[trackKey] === undefined
+    ) {
+      out[trackKey] = null;
+    }
   }
   return out;
 }
@@ -416,6 +470,7 @@ function buildSystemConfig(systemType, config) {
       } = require("../peopleCounting/peopleCountingConfig");
       const resetFields = parsePeopleCountingConfigFields(config);
       const isFace = resetFields.cameraMode === CAMERA_MODE.FACE_RECOGNITION;
+      const isAccessControl = config.dataSource === "access_control";
       const entryEventCam = parseOptionalEventCameraDeviceId(
         config.entryEventCameraDeviceId,
       );
@@ -460,12 +515,16 @@ function buildSystemConfig(systemType, config) {
         ...(isFace
           ? { face_similarity_threshold: resetFields.faceSimilarityThreshold }
           : {}),
-        ...(entryEventCam !== undefined
-          ? { entry_event_camera_device_id: entryEventCam }
-          : {}),
-        ...(exitEventCam !== undefined
-          ? { exit_event_camera_device_id: exitEventCam }
-          : {}),
+        ...(isAccessControl && {
+          entry_event_camera_device_id: entryEventCam,
+          exit_event_camera_device_id: exitEventCam,
+          entry_event_camera_nvr_track_id: parseOptionalEventCameraNvrTrackId(
+            config.entryEventCameraNvrTrackId,
+          ),
+          exit_event_camera_nvr_track_id: parseOptionalEventCameraNvrTrackId(
+            config.exitEventCameraNvrTrackId,
+          ),
+        }),
         // 僅門禁／人臉適用；其餘資料源寫 false，避免切換模式後殘留開啟
         event_backfill_enabled:
           ((config.dataSource || "yscp") === "access_control" || isFace) &&

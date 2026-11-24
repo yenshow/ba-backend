@@ -529,7 +529,7 @@ async function deleteDeviceModel(id) {
     }
 
     const devices = await db.query(
-      "SELECT id FROM devices WHERE model_id = ? LIMIT 1",
+      "SELECT id FROM active_devices WHERE model_id = ? LIMIT 1",
       [id],
     );
     if (devices.length > 0) {

@@ -5,6 +5,9 @@ const websocketService = require("../websocket/websocketService");
 const {
   resolveAccessEventPopupLabel,
 } = require("./accessControlLogLabels");
+const {
+  parseOptionalEventCameraNvrTrackId,
+} = require("./peopleCountingConfig");
 
 const toPositiveInt = (v) => {
   const n = Number(v);
@@ -62,12 +65,24 @@ function emitAccessControlEventFromPlaceContext(placeCtx, options = {}) {
     }
   }
 
+  const cfg = placeCtx?.systemConfig;
+  const role = placeCtx?.deviceRole;
+  const eventCameraDeviceId = resolveEventCameraFromPlaceContext(placeCtx);
+  const trackId = eventCameraDeviceId == null
+    ? undefined
+    : parseOptionalEventCameraNvrTrackId(
+      role === "entry"
+        ? cfg?.entry_event_camera_nvr_track_id ?? cfg?.entryEventCameraNvrTrackId
+        : cfg?.exit_event_camera_nvr_track_id ?? cfg?.exitEventCameraNvrTrackId,
+    );
+
   websocketService.emitIsapiAccessEvent({
     source,
     locationId: placeCtx?.locationId ?? null,
     deviceId: options.deviceId ?? null,
     deviceRole: placeCtx?.deviceRole ?? null,
-    eventCameraDeviceId: resolveEventCameraFromPlaceContext(placeCtx),
+    eventCameraDeviceId,
+    eventCameraNvrTrackId: trackId ?? undefined,
     zoneName: placeCtx?.zoneName,
     locationName: placeCtx?.locationName,
     eventLabel,

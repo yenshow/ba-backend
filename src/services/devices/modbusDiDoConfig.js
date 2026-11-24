@@ -56,12 +56,19 @@ function pointKind(point) {
   return null;
 }
 
-/** @param {unknown[]} list */
-function minFiniteNumber(list) {
-  const nums = (Array.isArray(list) ? list : [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n));
-  return nums.length > 0 ? Math.min(...nums) : null;
+function parseBitAddress(value) {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) {
+    return null;
+  }
+  const address = Number(value);
+  return Number.isInteger(address) && address >= 0 ? address : null;
+}
+
+function minBitAddress(list) {
+  const addresses = (Array.isArray(list) ? list : [])
+    .map(parseBitAddress)
+    .filter((address) => address !== null);
+  return addresses.length > 0 ? Math.min(...addresses) : null;
 }
 
 /**
@@ -73,30 +80,18 @@ function resolveDiDoParts(modbus) {
   const points = Array.isArray(cfg.points) ? cfg.points : [];
 
   const findAddr = (want) => {
-    const p = points.find(
-      (x) => pointKind(x) === want && Number.isFinite(Number(x?.address)),
-    );
-    return p != null ? Number(p.address) : null;
+    for (const point of points) {
+      if (pointKind(point) !== want) continue;
+      const address = parseBitAddress(point.address);
+      if (address !== null) return address;
+    }
+    return null;
   };
 
-  let doAddr = findAddr("do");
-  let diAddr = findAddr("di");
-
-  if (doAddr == null && Number.isFinite(Number(cfg.doAddress))) {
-    doAddr = Number(cfg.doAddress);
-  }
-  if (diAddr == null && Number.isFinite(Number(cfg.diAddress))) {
-    diAddr = Number(cfg.diAddress);
-  }
-  if (doAddr == null) doAddr = minFiniteNumber(cfg.doAddresses);
-  if (diAddr == null) diAddr = minFiniteNumber(cfg.diAddresses);
-
-  if (
-    doAddr == null &&
-    diAddr == null &&
-    Number.isFinite(Number(cfg.address))
-  ) {
-    doAddr = Number(cfg.address);
+  let doAddr = findAddr("do") ?? parseBitAddress(cfg.doAddress) ?? minBitAddress(cfg.doAddresses);
+  const diAddr = findAddr("di") ?? parseBitAddress(cfg.diAddress) ?? minBitAddress(cfg.diAddresses);
+  if (doAddr === null && diAddr === null) {
+    doAddr = parseBitAddress(cfg.address);
   }
 
   return {
@@ -135,8 +130,8 @@ function collectBitPointsFromStatusPoints(statusPoints, defaultDeviceId) {
     );
     if (!registerType) continue;
 
-    const address = Number(def.address);
-    if (!Number.isFinite(address) || address < 0) continue;
+    const address = parseBitAddress(def.address);
+    if (address === null) continue;
 
     let deviceId = defaultDeviceId;
     if (def.deviceId != null && def.deviceId !== "") {
@@ -210,6 +205,7 @@ function collectConfiguredBitPointsFromSystemConfig(systemConfig) {
 }
 
 module.exports = {
+  parseBitAddress,
   resolveDiDoParts,
   collectLightingDiDoReadSpecs,
   pickPrimaryDiDoBitRead,

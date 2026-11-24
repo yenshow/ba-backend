@@ -192,13 +192,12 @@ router.put(
 
     // 單個寫入
     if (typeof value === "boolean") {
-      const success = await modbusClient.writeCoil(
+      const success = await modbusBatchService.writeCoilValues(
         address,
         value,
         deviceConfig,
       );
       if (success) {
-        modbusBatchService.invalidateDeviceCache(deviceConfig, "coil");
         const controlScope = String(req.query.controlScope || "").trim() || "modbus";
         void recordControlWriteEvent({
           deviceConfig,
@@ -223,13 +222,12 @@ router.put(
       if (!values.every((v) => typeof v === "boolean")) {
         return res.sendError(C.MODBUS_INVALID_VALUES, "all values must be boolean", 400);
       }
-      const success = await modbusClient.writeCoils(
+      const success = await modbusBatchService.writeCoilValues(
         address,
         values,
         deviceConfig,
       );
       if (success) {
-        modbusBatchService.invalidateDeviceCache(deviceConfig, "coil");
         const controlScope = String(req.query.controlScope || "").trim() || "modbus";
         void recordControlWriteEvent({
           deviceConfig,

@@ -613,7 +613,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const locationId = parseInt(req.params.locationId, 10);
     await assertLocationAccessByKind(req, locationId, "device_sync");
-    const { jobId } = personSyncJobService.startSyncLocationJob(locationId);
+    const { jobId } = await personSyncJobService.startSyncLocationJob(locationId);
     res.sendSuccess({ jobId }, 202);
   }),
 );
@@ -685,8 +685,8 @@ router.post(
   "/sync-all-locations",
   requirePermission("system.people_counting.device_sync"),
   asyncHandler(async (req, res) => {
-    const job = personSyncJobService.startSyncAllLocationsJob();
-    res.sendSuccess({ jobId: job.jobId }, 202);
+    const { jobId } = await personSyncJobService.startSyncAllLocationsJob();
+    res.sendSuccess({ jobId }, 202);
   }),
 );
 

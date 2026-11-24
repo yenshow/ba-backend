@@ -601,7 +601,12 @@ function emitIsapiAccessEvent(context) {
   if (locationId != null) payload.locationId = locationId;
   if (deviceId != null) payload.deviceId = deviceId;
   if (deviceRole) payload.deviceRole = deviceRole;
-  if (eventCameraDeviceId != null) payload.eventCameraDeviceId = eventCameraDeviceId;
+  if (eventCameraDeviceId != null) {
+    payload.eventCameraDeviceId = eventCameraDeviceId;
+    if (Number.isSafeInteger(ctx.eventCameraNvrTrackId) && ctx.eventCameraNvrTrackId > 0) {
+      payload.eventCameraNvrTrackId = ctx.eventCameraNvrTrackId;
+    }
+  }
   if (ctx.zoneName) payload.zoneName = String(ctx.zoneName).trim();
   if (ctx.locationName) payload.locationName = String(ctx.locationName).trim();
   if (ctx.eventLabel) payload.eventLabel = String(ctx.eventLabel).trim();

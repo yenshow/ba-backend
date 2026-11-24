@@ -349,7 +349,7 @@ async function updateZone(id, zoneData, userId, options = {}) {
           throwApiError(C.LOCATION_ZONE_NAME_REQUIRED, "區域名稱不能為空");
         }
         const nameCheck = await db.query(
-          "SELECT id FROM zones WHERE name = $1 AND id != $2",
+          "SELECT id FROM active_zones WHERE name = $1 AND id != $2",
           [trimmedName, id],
         );
         if (nameCheck.length > 0) {

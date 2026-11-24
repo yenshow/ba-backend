@@ -21,8 +21,11 @@ async function syncDeviceModelCatalog(pool) {
           description,
           config
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-        ON CONFLICT (type_code, name) DO NOTHING
+        SELECT $1::varchar, $2::varchar, $3::varchar, $4::integer, $5::integer, $6::text, $7::jsonb
+        WHERE NOT EXISTS (
+          SELECT 1 FROM device_models
+          WHERE type_code = $2::varchar AND name = $1::varchar AND archived_at IS NULL
+        )
       `,
       [
         model.name,
@@ -57,7 +60,7 @@ async function repairDeviceModelCatalogConfig(pool) {
       `
         SELECT id, port, config
         FROM device_models
-        WHERE type_code = $1 AND name = $2
+        WHERE type_code = $1 AND name = $2 AND archived_at IS NULL
         LIMIT 1
       `,
       [catalog.typeCode, catalog.name],

@@ -11,16 +11,17 @@
 | `location/` | 區域／地點／`location_systems`（多系統共用）、controller 綁定提取 |
 | `elevator/` | 電梯地點、運行態、樓層授權、梯控同步 job |
 | `ladderSdk/` | HCNetSDK 梯控／呼梯、卡號、佈防事件 |
-| `snapshotStatus/` | Modbus 快照型子系統：`createModbusSnapshotStatusService`（排水／消防／電力／煙霧／求救／空氣循環）+ `modbusSnapshotHelpers`；`lighting`／`hvac` 仍獨立；背景見 `monitoring/snapshotTaskRegistry` |
+| `snapshotStatus/` | `createModbusSnapshotStatusService` 供排水、消防、電力、煙霧、求救、空氣循環與保全使用。照明與空調各有狀態服務，共用 `modbusSnapshotHelpers` |
 | `environment/` | 環境讀數、衍生指標、彙總排程 |
 | `energy/` | 能源讀數、設定、差分彙總／TOU、Dashboard、契約／Insight 評估 |
 | `peopleCounting/` | 人流 API、sync、providers；ISAPI 攝影機訂閱、臉庫、人臉比對落地 |
+| `rollCall/` | 時段簽到、排班指派與匯入、時段判定及背景排程 |
 | `vehicleAccess/` | 車輛進出 API、ISAPI 訂閱／持久化／設備代理、車牌同步 |
 | `entryExit/` | 人流／車輛共用：transition／cumulative 統計、營運日、`resolveTimeOptions` |
 | `devices/` | 設備 CRUD、Modbus、`modbusDiDoConfig`、連線探測、NVR ISAPI／虛擬通道串流（`nvrIsapiService`／`nvrStreamService`） |
 | `monitoring/` | `backgroundMonitor`、`monitoringTaskRegistry`、`snapshotTaskRegistry`、環境／能源／電梯／快照／DI-DO；Timing → `config/realtimeTiming.js` |
 | `devices/`（DI/DO） | `modbusIoModules`（主／副區間）、`modbusBitStore`、`modbusPollPlanner`（1s 區間讀）；`diDoMonitor` 消費 BitStore |
-| `alerts/` | 警報 CRUD、規則、Email、聯動（DO＝`alertLinkageService`；攝影機／門禁／SIP／電梯 CRUD 樣板＝`alertLinkageHelpers`） |
+| `alerts/` | 警報 CRUD、規則、Email、聯動。列表／單筆／備份查詢共用 `alertQueryFragments`，狀態寫入及日界線結案由 `alertStatusStore` 處理 |
 | `intercom/` | 對講系統：戶別；對講／廣播 SIP 直打室內（`sipInviteService`／`intercomTalkGateway`）；事件系統自記；主機 listen 可選 |
 | `operationalEvents/` | 查寫／文案／hooks／retention |
 | `backup/` | 備份排程；薄報表 `simpleReportFormats`；厚報表 `peopleCountingReportFormat`／`vehicleAccessReportFormat` |
@@ -29,13 +30,15 @@
 | `externalData/` | YSCP／外部 DB handler 與車輛群組彙總 |
 | `externalIntegration/` | 資料庫對接／記錄轉存（`externalSync`、`recordExport`） |
 | `communication/` | MediaMTX 串流（license `surveillance`） |
-| `personnel/` | 人員、匯入、人臉、同步 job |
+| `personnel/` | 人員、匯入、人臉；同步 Job 編排＝`personSyncJobService`；門禁／攝影機設備寫入＝`personSyncDeviceOps`；Job 持久化＝`personSyncJobStore` |
 | `yscp/` | YSCP Artemis 客戶端、事件訂閱、Runtime |
+| `pda/` | PDA 掃碼、工服檢查、ISUP 監聽、Agent 連線與警報控制 |
 | `websocket/` | WebSocket 推播、`wsEventPermissions` |
 | `multimedia/` | 多媒體儀表板、資訊牆席次（`multimediaWallSeatService`） |
-| `schedule/` | DO 時間排程工廠（`createDoScheduleService`；照明／空調共用） |
-| `lighting/` | 照明時間排程（`lightingScheduleService`／`lightingScheduleScheduler`） |
-| `hvac/` | 空調時間排程（`hvacScheduleService`／`hvacScheduleScheduler`） |
+| `schedule/` | DO 時間排程工廠 `createDoScheduleService`，共用規則、到點執行與啟停 |
+| `lighting/` | 照明時間排程（`lightingScheduleService`） |
+| `hvac/` | 空調時間排程（`hvacScheduleService`） |
+| `security/` | 保全時間排程、離開寬限及活動警報閘門 |
 | `notifications/` | SMTP mailer |
 
 ## 路由 → Service 對照（常用）
@@ -49,7 +52,9 @@
 | `environmentRoutes` | `environment/environmentService` |
 | `energyRoutes` | `energy/*` |
 | `peopleCountingRoutes` | `peopleCounting/peopleCountingService`、`entryExit/resolveTimeOptions` |
-| `lighting`～`smokeAlarm` Routes（狀態 API） | `snapshotStatus/*StatusService` + `location/locationService` |
+| [rollCallRoutes](../routes/rollCallRoutes.js) | `rollCall/rollCallService`、`rollCallAssignmentService`、`rollCallAssignmentImportService` |
+| [snapshotSystems](../routes/snapshotSystems.js) → [snapshotSystemRoutesFactory](../routes/snapshotSystemRoutesFactory.js) | 九個快照模組共用 `snapshotStatus/*StatusService`、`location/locationService` |
+| `lightingScheduleRoutes` / `hvacScheduleRoutes` / `securityScheduleRoutes` | 各自掛於對應快照前綴，服務位於 `lighting/`、`hvac/`、`security/` |
 | `deviceRoutes` / `modbusRoutes` | `devices/*` |
 | `alertRoutes` | `alerts/*`（含 `alertSipRingLinkageService`、`alertElevatorCallLinkageService`） |
 | `intercomRoutes` | `intercom/*` |
@@ -58,6 +63,7 @@
 | `externalDataRoutes` | `externalData/*` |
 | `externalSyncRoutes` / `recordExportRoutes` | `externalIntegration/*` |
 | `personnelRoutes` | `personnel/*` |
+| [pdaScanRoutes](../routes/pdaScanRoutes.js) | `pda/pdaScanService`、`garmentCheckService`、`isupListenService`、`pdaAgentService` |
 | `elevatorRoutes` | `elevator/*`、`elevatorFloorSyncJobService` |
 | `ladderSdkRoutes` | `ladderSdk/*` |
 | `multimediaDashboardRoutes` | `multimedia/multimediaDashboardService` |
@@ -70,13 +76,13 @@
 - **跨域**：優先 `require("../<domain>/...")`，避免在 `routes` 外再包一層 `systems`。
 - **快照監控**：`monitoring/snapshotTaskRegistry` 註冊各 `snapshotStatus/*`；共用欄位語意見 `monitoring/systemSnapshotStatusFields.js`。
 - **人流統計**：**不**註冊於 `monitoringTaskRegistry`／`backgroundMonitor`；即時刷新依 YSCP 事件（`yscpEventRoutes`）、門禁／攝影機 ISAPI 訂閱與 WS 提示 → REST 校準（見 `docs/40-systems/people-counting.md`）。舊版定時輪詢 `peopleCountingMonitor.js` 已移除，勿恢復。
-- **Modbus DI/DO**：照明／空調與 `devices/modbusDiDoConfig.js` 共用，勿在單一 `*StatusService` 內複製位址解析。
+- **Modbus DI/DO**：位址解析位於 `devices/modbusDiDoConfig.js`，設備連線設定位於 `devices/modbusDeviceConfig.js`。快照單點由 `snapshotStatus/modbusSnapshotHelpers.js` 統一檢查模組健康、讀 BitStore 與批次補讀。DI/DO 監控直接使用本輪 PollPlanner 的設備端點。手動控制、照明／空調排程及警報聯動共用 `modbusBatchService.writeCoilValues`，設備確認成功後先在 BitStore 標記狀態異動抑制，再清除 coil 讀取快取。
 
 ## 新增子系統時放哪裡？
 
 | 類型 | 建議路徑 |
 |------|----------|
-| 有 `getStatusSnapshot` 的 Modbus 基礎設施 | `snapshotStatus/<name>StatusService.js` + 在 `monitoring/snapshotTaskRegistry.js` 註冊 |
+| 有 `getStatusSnapshot` 的 Modbus 基礎設施 | `snapshotStatus/<name>StatusService.js`，HTTP 在 `routes/snapshotSystems.js` 掛載，背景在 `monitoring/snapshotTaskRegistry.js` 註冊 |
 | 區域／地點設定延伸 | 改 `location/locationService.js` 的 `formatSystem` |
 | 獨立 feature（環境、人流、車輛、能源） | `environment/`、`peopleCounting/`、`vehicleAccess/`、`energy/` 或新開同層資料夾 |
 | 跨 feature 共用（進出統計、營運日） | `entryExit/`（路由：`routes/entryExitRoutes.js`） |

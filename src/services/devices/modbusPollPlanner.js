@@ -12,6 +12,7 @@ const bitStore = require("./modbusBitStore");
 const { resolveIoModules } = require("./modbusIoModules");
 const { parseConfig, isHcnetSdkController } = require("../../utils/deviceHelpers");
 const { sqlAndEnabled } = require("./deviceEnabledFilter");
+const { normalizeModbusEndpoint } = require("./modbusDeviceConfig");
 const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
 const websocketService = require("../websocket/websocketService");
 const systemAlertHelper = require("../alerts/systemAlertHelper");
@@ -65,13 +66,11 @@ async function loadModbusControllers() {
     const cfg = parseConfig(row.config) || {};
     const modelCfg = parseConfig(row.model_config) || {};
     if (isHcnetSdkController(cfg, modelCfg)) continue;
-    const host = String(cfg.host || "").trim();
-    const port = Number(cfg.port ?? 502);
-    const unitId = Number(cfg.unitId ?? 1);
-    if (!host || !Number.isFinite(port) || !Number.isFinite(unitId)) continue;
+    const deviceConfig = normalizeModbusEndpoint(cfg, { defaultPort: 502 });
+    if (!deviceConfig) continue;
     out.push({
       deviceId: Number(row.id),
-      deviceConfig: { host, port, unitId },
+      deviceConfig,
       modules: resolveIoModules(cfg),
     });
   }
@@ -94,8 +93,6 @@ async function pollControllers({
 
   const controllers = await loadModbusControllers();
   bitStore.markPlannerCovered(controllers.map((c) => c.deviceId));
-
-  if (controllers.length === 0) return { controllerCount: 0 };
 
   const statusUpdates = [];
 
@@ -252,7 +249,10 @@ async function pollControllers({
     }
   }
 
-  return { controllerCount: controllers.length };
+  return {
+    controllerCount: controllers.length,
+    deviceConfigs: new Map(controllers.map(({ deviceId, deviceConfig }) => [deviceId, deviceConfig])),
+  };
 }
 
 module.exports = {

@@ -41,12 +41,14 @@ router.get("/audit", asyncHandler(async (req, res) => {
 router.get("/:type", asyncHandler(async (req, res) => {
   const table = getTable(req);
   const before = getBeforeCursor(req);
-  const deviceSyncPending = table === "persons"
-    ? "EXISTS (SELECT 1 FROM archived_person_revocations j WHERE j.person_id = t.id AND j.completed_at IS NULL)"
-    : "FALSE";
+  const extra = table === "persons"
+    ? `, EXISTS (
+         SELECT 1 FROM archived_person_revocations j
+         WHERE j.person_id = t.id AND j.completed_at IS NULL
+       ) AS device_sync_pending`
+    : "";
   const rows = await db.query(
-    `SELECT id, archived_at, coalesce(t.${archiveLabels.get(table)}::text, id::text) AS label,
-            ${deviceSyncPending} AS device_sync_pending
+    `SELECT id, archived_at, coalesce(t.${archiveLabels.get(table)}::text, id::text) AS label${extra}
      FROM ${table} t
      WHERE archived_at IS NOT NULL AND (?::bigint IS NULL OR id < ?::bigint)
      ORDER BY id DESC LIMIT 101`,

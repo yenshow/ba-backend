@@ -119,7 +119,9 @@ function convertQueryParams(sql, params) {
 async function query(sql, params = []) {
   try {
     const audit = getAuditContext();
-    if (audit && /^\s*(INSERT|UPDATE|DELETE|WITH)\b/i.test(sql)) {
+    const isMutation = /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql)
+      || (/^\s*WITH\b/i.test(sql) && /\b(INSERT|UPDATE|DELETE)\b/i.test(sql));
+    if (audit && isMutation) {
       return await transaction((queryInTransaction) => queryInTransaction(sql, params), audit);
     }
     const { sql: convertedSql, params: convertedParams } = convertQueryParams(

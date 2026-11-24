@@ -43,7 +43,9 @@ function validateLocationData(locationData, isUpdate = false) {
     exitCameraDeviceIds,
     cameraMode,
     entryEventCameraDeviceId,
+    entryEventCameraNvrTrackId,
     exitEventCameraDeviceId,
+    exitEventCameraNvrTrackId,
   } = locationData;
 
   if (!name?.trim()) {
@@ -198,6 +200,19 @@ function validateLocationData(locationData, isUpdate = false) {
         exitEventCameraDeviceId,
         "出口事件調閱攝影機",
       );
+      for (const [label, deviceId, trackId] of [
+        ["入口", entryEventCameraDeviceId, entryEventCameraNvrTrackId],
+        ["出口", exitEventCameraDeviceId, exitEventCameraNvrTrackId],
+      ]) {
+        if (trackId == null) continue;
+        if (!Number.isSafeInteger(trackId) || trackId <= 0) {
+          throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, `${label}調閱的 NVR 通道 ID 須為正整數`);
+        }
+        // 部分更新在地點服務合併既有設備後再驗證配對。
+        if (deviceId === null || (!isUpdate && deviceId === undefined)) {
+          throwApiError(C.PEOPLE_COUNTING_VALIDATION_FAILED, `${label}調閱的 NVR 通道須搭配 NVR 設備`);
+        }
+      }
     }
     if (effectiveDataSource === "isapi_camera") {
       const mode = normalizeCameraMode(cameraMode);
@@ -292,7 +307,9 @@ function validatePeopleCountingSystemConfig(systemConfig, context) {
       preferRegion: cfg.prefer_region,
       cameraMode: normalizeCameraMode(cfg.camera_mode),
       entryEventCameraDeviceId: cfg.entry_event_camera_device_id,
+      entryEventCameraNvrTrackId: cfg.entry_event_camera_nvr_track_id,
       exitEventCameraDeviceId: cfg.exit_event_camera_device_id,
+      exitEventCameraNvrTrackId: cfg.exit_event_camera_nvr_track_id,
     },
     context.isUpdate === true,
   );

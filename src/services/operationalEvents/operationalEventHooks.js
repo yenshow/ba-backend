@@ -1,6 +1,5 @@
 /**
  * 營運事件寫入輔助：
- * - coil 控制寫入後短窗抑制 state_change
  * - Modbus／設備反查 location／system
  * - recordControlWriteEvent
  * - 電梯雙寫略過／邏輯樓層
@@ -30,49 +29,6 @@ const {
   resolveFormulaFromDef,
   applyDefTransform,
 } = require("../../utils/modbusTransform");
-
-// ─── coil suppress ───────────────────────────────────────────
-
-const COIL_SUPPRESS_MS = 20_000;
-/** @type {Map<string, number>} */
-const suppressUntilByCoil = new Map();
-
-const coilEndpointKey = (deviceConfig, address) => {
-  const host = String(deviceConfig?.host || "").trim();
-  if (!host || address == null) return null;
-  const port = Number(deviceConfig.port);
-  const unitId = Number(deviceConfig.unitId ?? 1);
-  const addr = Number(address);
-  if (
-    !Number.isFinite(port) ||
-    !Number.isFinite(unitId) ||
-    !Number.isFinite(addr)
-  ) {
-    return null;
-  }
-  return `${host}:${port}:${unitId}:${addr}`;
-};
-
-/** 成功寫入 coil 後呼叫；須在 await 其他 I/O 之前 */
-const markCoilControlWrite = (deviceConfig, address, ttlMs = COIL_SUPPRESS_MS) => {
-  const key = coilEndpointKey(deviceConfig, address);
-  if (!key) return;
-  const ttl = Math.max(Number(ttlMs) || COIL_SUPPRESS_MS, 1_000);
-  suppressUntilByCoil.set(key, Date.now() + ttl);
-};
-
-/** diDoMonitor：若近期有控制寫入則略過 state_change */
-const shouldSuppressCoilStateChange = (deviceConfig, address) => {
-  const key = coilEndpointKey(deviceConfig, address);
-  if (!key) return false;
-  const until = suppressUntilByCoil.get(key);
-  if (until == null) return false;
-  if (until <= Date.now()) {
-    suppressUntilByCoil.delete(key);
-    return false;
-  }
-  return true;
-};
 
 // ─── Modbus／設備反查 ────────────────────────────────────────
 
@@ -223,9 +179,6 @@ function applyHoldingDisplayTransform(rawValue, pointDef) {
 // ─── control_write ───────────────────────────────────────────
 
 /**
- * mark suppress（僅 coil）+ 反查設備／地點 + recordEvent
- * 呼叫端若需先 await 其他 I/O，請先自行 markCoilControlWrite
- *
  * @param {object} args
  * @param {'coil'|'holding'} [args.registerType='coil'] holding＝AO 數值寫入，不抑制 DI/DO state_change
  */
@@ -246,15 +199,6 @@ async function recordControlWriteEvent({
   if (!deviceConfig || address == null) return null;
 
   const isHolding = registerType === "holding";
-
-  if (!isHolding) {
-    markCoilControlWrite(deviceConfig, address);
-    if (Array.isArray(values)) {
-      for (let i = 1; i < values.length; i++) {
-        markCoilControlWrite(deviceConfig, address + i);
-      }
-    }
-  }
 
   const controlScope = String(source || "modbus").trim() || "modbus";
   const targets = await resolveControlWriteTargets({
@@ -458,8 +402,6 @@ const formatOperationalElevatorFloor = (rawFloor, floors) => {
 };
 
 module.exports = {
-  markCoilControlWrite,
-  shouldSuppressCoilStateChange,
   recordControlWriteEvent,
   loadSystemPlaceContext,
   resolveControlPointMeta,

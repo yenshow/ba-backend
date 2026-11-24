@@ -169,7 +169,7 @@ async function applyControllerConnectionConfig({
 
     const params = [typeCode, host, config.port];
     let sql = `SELECT id FROM devices 
-      WHERE type_code = ? 
+      WHERE archived_at IS NULL AND type_code = ? 
       AND config->>'host' = ? 
       AND (config->>'port')::integer = ?`;
     if (excludeDeviceId != null) {
@@ -206,7 +206,7 @@ async function applyControllerConnectionConfig({
     } else if (host && finalPort) {
       const params = [typeCode, host, finalPort];
       let sql = `SELECT config FROM devices 
-        WHERE type_code = ? 
+        WHERE archived_at IS NULL AND type_code = ? 
         AND config->>'host' = ? 
         AND (config->>'port')::integer = ?`;
       if (excludeDeviceId != null) {
@@ -249,7 +249,7 @@ async function applyControllerConnectionConfig({
   ) {
     const params = [typeCode, config.host, config.port, config.unitId];
     let sql = `SELECT id FROM devices 
-      WHERE type_code = ? 
+      WHERE archived_at IS NULL AND type_code = ? 
       AND config->>'host' = ? 
       AND (config->>'port')::integer = ? 
       AND (config->>'unitId')::integer = ?`;
@@ -550,7 +550,7 @@ async function createDevice(deviceData, userId) {
           // 查詢相同 host + port 的設備，找出已使用的 unitId
           const existingDevices = await db.query(
             `SELECT config FROM devices 
-					WHERE type_code = ? 
+					WHERE archived_at IS NULL AND type_code = ? 
 					AND config->>'protocol' = 'modbus'
 					AND config->>'host' = ? 
 					AND (config->>'port')::integer = ?`,
@@ -590,7 +590,7 @@ async function createDevice(deviceData, userId) {
       // 檢查是否已有相同連接配置的設備（host + port + unitId）
       const existing = await db.query(
         `SELECT id FROM devices 
-				WHERE type_code = ? 
+				WHERE archived_at IS NULL AND type_code = ? 
 				AND config->>'protocol' = 'modbus'
 				AND config->>'host' = ? 
 				AND (config->>'port')::integer = ? 
@@ -847,7 +847,7 @@ async function updateDevice(id, deviceData, userId) {
               // 查詢相同 host + port 的設備，找出已使用的 unitId（排除當前設備）
               const existingDevices = await db.query(
                 `SELECT config FROM devices 
-							WHERE type_code = ? 
+							WHERE archived_at IS NULL AND type_code = ? 
 							AND id != ?
 							AND config->>'protocol' = 'modbus'
 							AND config->>'host' = ? 
@@ -916,7 +916,7 @@ async function updateDevice(id, deviceData, userId) {
         ) {
           const existing = await db.query(
             `SELECT id FROM devices 
-						WHERE type_code = ? 
+						WHERE archived_at IS NULL AND type_code = ? 
 						AND id != ?
 						AND config->>'host' = ? 
 						AND (config->>'port')::integer = ? 

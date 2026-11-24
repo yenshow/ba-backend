@@ -7,6 +7,8 @@ const { BIT_STORE_FRESHNESS_MS } = require("../../config/realtimeTiming");
 
 /** @type {Map<string, { value: boolean, readAt: number, ok: boolean }>} */
 const bitMap = new Map();
+const coilWriteSuppressUntil = new Map();
+const COIL_SUPPRESS_MS = 20_000;
 
 /**
  * deviceKey -> Map<moduleId, health>
@@ -26,6 +28,23 @@ const buildDeviceKey = (d) =>
 
 const buildBitKey = (deviceKey, registerType, address) =>
   `${deviceKey}|${registerType}|${Number(address)}`;
+
+function markCoilControlWrite(deviceConfig, address, count) {
+  const deviceKey = buildDeviceKey(deviceConfig);
+  const until = Date.now() + COIL_SUPPRESS_MS;
+  for (let i = 0; i < count; i += 1) {
+    coilWriteSuppressUntil.set(buildBitKey(deviceKey, "coil", address + i), until);
+  }
+}
+
+function shouldSuppressCoilStateChange(deviceConfig, address) {
+  const key = buildBitKey(buildDeviceKey(deviceConfig), "coil", address);
+  const until = coilWriteSuppressUntil.get(key);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  coilWriteSuppressUntil.delete(key);
+  return false;
+}
 
 function setBit(deviceConfig, registerType, address, value, { ok = true, readAt = Date.now() } = {}) {
   const deviceKey = buildDeviceKey(deviceConfig);
@@ -129,12 +148,15 @@ function toPublicModules(modules) {
 /** @internal */
 function _resetForTests() {
   bitMap.clear();
+  coilWriteSuppressUntil.clear();
   moduleHealthByDevice.clear();
   deviceReachability.clear();
   plannerCoveredDeviceIds.clear();
 }
 
 module.exports = {
+  markCoilControlWrite,
+  shouldSuppressCoilStateChange,
   setBit,
   getBit,
   getBitRaw,

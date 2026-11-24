@@ -14,104 +14,72 @@ const airCirculationStatusService = require("../snapshotStatus/airCirculationSta
 const smokeAlarmStatusService = require("../snapshotStatus/smokeAlarmStatusService");
 const securityStatusService = require("../snapshotStatus/securityStatusService");
 
-const drainageSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "drainage",
-  loggerName: "drainageMonitor",
-  getSnapshot: () => drainageStatusService.getStatusSnapshot(),
-});
-
-const powerSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "power",
-  loggerName: "powerMonitor",
-  getSnapshot: () => powerStatusService.getStatusSnapshot(),
-});
-
-const fireSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "fire",
-  loggerName: "fireMonitor",
-  getSnapshot: () => fireStatusService.getStatusSnapshot(),
-});
-
-const emergencyRescueSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "emergency_rescue",
-  loggerName: "emergencyRescueMonitor",
-  getSnapshot: () => emergencyRescueStatusService.getStatusSnapshot(),
-});
-
-const airCirculationSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "air_circulation",
-  loggerName: "airCirculationMonitor",
-  getSnapshot: () => airCirculationStatusService.getStatusSnapshot(),
-});
-
-const lightingSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "lighting",
-  loggerName: "lightingMonitor",
-  getSnapshot: () => lightingStatusService.getStatusSnapshot(),
-  getDeviceId: (item) => item?.deviceId ?? null,
-});
-
-const hvacSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "hvac",
-  loggerName: "hvacMonitor",
-  getSnapshot: () => hvacStatusService.getStatusSnapshot(),
-});
-
-const smokeAlarmSnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "smoke_alarm",
-  loggerName: "smokeAlarmMonitor",
-  getSnapshot: () => smokeAlarmStatusService.getStatusSnapshot(),
-});
-
-const securitySnapshotMonitor = createSystemSnapshotMonitor({
-  systemKey: "security",
-  loggerName: "securityMonitor",
-  getSnapshot: () => securityStatusService.getStatusSnapshot(),
-});
-
 const SNAPSHOT_TASK_DEFS = [
-  { systemKey: "lighting", systemName: "照明系統", monitor: lightingSnapshotMonitor },
-  { systemKey: "hvac", systemName: "空調系統", monitor: hvacSnapshotMonitor },
+  {
+    systemKey: "lighting",
+    systemName: "照明系統",
+    statusService: lightingStatusService,
+    getDeviceId: (item) => item?.deviceId ?? null,
+  },
+  { systemKey: "hvac", systemName: "空調系統", statusService: hvacStatusService },
   {
     systemKey: "drainage",
     systemName: getModuleDisplayNameByCode("system.drainage") ?? "排水系統",
-    monitor: drainageSnapshotMonitor,
+    statusService: drainageStatusService,
   },
-  { systemKey: "power", systemName: "電力系統", monitor: powerSnapshotMonitor },
+  { systemKey: "power", systemName: "電力系統", statusService: powerStatusService },
   {
     systemKey: "air_circulation",
     systemName: "空氣循環系統",
-    monitor: airCirculationSnapshotMonitor,
+    statusService: airCirculationStatusService,
+    loggerName: "airCirculationMonitor",
   },
-  { systemKey: "fire", systemName: "消防系統", monitor: fireSnapshotMonitor },
+  { systemKey: "fire", systemName: "消防系統", statusService: fireStatusService },
   {
     systemKey: "emergency_rescue",
     systemName: "緊急求救系統",
-    monitor: emergencyRescueSnapshotMonitor,
+    statusService: emergencyRescueStatusService,
+    loggerName: "emergencyRescueMonitor",
   },
   {
     systemKey: "smoke_alarm",
     systemName: "煙霧警報系統",
-    monitor: smokeAlarmSnapshotMonitor,
+    statusService: smokeAlarmStatusService,
+    loggerName: "smokeAlarmMonitor",
   },
   {
     systemKey: "security",
     systemName: "保全系統",
-    monitor: securitySnapshotMonitor,
+    statusService: securityStatusService,
   },
 ];
 
 const SNAPSHOT_STAGGER_MS = 2000;
 
 module.exports = SNAPSHOT_TASK_DEFS.map(
-  ({ systemKey, systemName, monitor }, index) => ({
-    taskId: systemKey,
-    systemName,
-    featureKey: systemKey,
-    taskFunction: () => monitor.check(),
-    options: {
-      ...fixedIntervalOptions(STANDARD_POLL_MS),
-      startOffsetMs: index * SNAPSHOT_STAGGER_MS,
-    },
-  }),
+  (definition, index) => {
+    const {
+      systemKey,
+      systemName,
+      statusService,
+      loggerName = `${systemKey}Monitor`,
+      getDeviceId,
+    } = definition;
+    const monitor = createSystemSnapshotMonitor({
+      systemKey,
+      loggerName,
+      getSnapshot: () => statusService.getStatusSnapshot(),
+      getDeviceId,
+    });
+    return {
+      taskId: systemKey,
+      systemName,
+      featureKey: systemKey,
+      taskFunction: monitor.check,
+      options: {
+        ...fixedIntervalOptions(STANDARD_POLL_MS),
+        startOffsetMs: index * SNAPSHOT_STAGGER_MS,
+      },
+    };
+  },
 );

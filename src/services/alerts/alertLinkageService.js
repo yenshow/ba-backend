@@ -1,44 +1,20 @@
 const db = require("../../database/db");
-const modbusClient = require("../devices/modbusClient");
 const modbusBatchService = require("../devices/modbusBatchService");
+const { resolveModbusDeviceConfig } = require("../devices/modbusDeviceConfig");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const {
   recordControlWriteEvent,
-  markCoilControlWrite,
 } = require("../operationalEvents/operationalEventHooks");
 
 const linkageLogger = logger.createLogger("alertLinkageService");
-
-const getDeviceService = () => require("../devices/deviceService");
 
 const nowIso = () => new Date().toISOString();
 
 const autoOffTimers = new Map(); // key -> Timeout
 const buildDoKey = (doDeviceId, doAddress) =>
   `${Number(doDeviceId)}:${Number(doAddress)}`;
-
-const deviceCfgCache = new Map(); // deviceId -> { ts, cfg }
-const DEVICE_CFG_TTL_MS = 60_000;
-
-async function resolveDeviceConfig(deviceId) {
-  if (!deviceId) return null;
-  const id = Number(deviceId);
-  const cached = deviceCfgCache.get(id);
-  if (cached && Date.now() - cached.ts < DEVICE_CFG_TTL_MS) return cached.cfg;
-
-  const { device } = await getDeviceService().getDeviceById(id);
-  const c = device?.config || {};
-  if (!c.host || c.port == null) return null;
-  const cfg = {
-    host: String(c.host).trim(),
-    port: Number(c.port),
-    unitId: Number(c.unitId ?? 1),
-  };
-  deviceCfgCache.set(id, { ts: Date.now(), cfg });
-  return cfg;
-}
 
 async function insertExecution({
   linkageId,
@@ -103,33 +79,30 @@ async function writeDo({
   doValue,
   createdBy = null,
 }) {
-  const cfg = await resolveDeviceConfig(doDeviceId);
-  if (!cfg) {
-    const msg = `DO 設備連線設定不足 (device_id=${doDeviceId})`;
-    await insertExecution({
-      linkageId,
-      alertId,
-      executionType,
-      doDeviceId,
-      doAddress,
-      doValue,
-      success: false,
-      errorMessage: msg,
-      createdBy,
-    });
-    return { success: false, error: msg };
-  }
-
   try {
-    const ok = await modbusClient.writeCoil(
+    const cfg = await resolveModbusDeviceConfig(doDeviceId);
+    if (!cfg) {
+      const msg = `DO 設備連線設定不足 (device_id=${doDeviceId})`;
+      await insertExecution({
+        linkageId,
+        alertId,
+        executionType,
+        doDeviceId,
+        doAddress,
+        doValue,
+        success: false,
+        errorMessage: msg,
+        createdBy,
+      });
+      return { success: false, error: msg };
+    }
+
+    const ok = await modbusBatchService.writeCoilValues(
       Number(doAddress),
       Boolean(doValue),
       cfg,
     );
     if (ok) {
-      modbusBatchService.invalidateDeviceCache(cfg, "coil");
-      // mark 須在任何 await 之前，避免 diDoMonitor 搶先寫 state_change
-      markCoilControlWrite(cfg, doAddress);
       const execId = await insertExecution({
         linkageId,
         alertId,

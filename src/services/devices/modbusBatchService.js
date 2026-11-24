@@ -1,4 +1,5 @@
 const modbusClient = require("./modbusClient");
+const { markCoilControlWrite } = require("./modbusBitStore");
 const { STANDARD_CONCURRENCY } = require("./modbusGlobalLimiter");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
@@ -40,6 +41,19 @@ const invalidateDeviceCache = (deviceConfig, registerType = null) => {
   }
   modbusClient.invalidateReads(deviceConfig, registerType);
 };
+
+// 確認成功後立即標記所有線圈，再清除快取。呼叫端接回控制權後才寫營運事件。
+async function writeCoilValues(address, value, deviceConfig) {
+  const multiple = Array.isArray(value);
+  const success = await (multiple
+    ? modbusClient.writeCoils(address, value, deviceConfig)
+    : modbusClient.writeCoil(address, value, deviceConfig));
+  if (success) {
+    markCoilControlWrite(deviceConfig, address, multiple ? value.length : 1);
+    invalidateDeviceCache(deviceConfig, "coil");
+  }
+  return success;
+}
 
 const readByType = async (registerType, address, length, deviceConfig) => {
   if (registerType === "coil") return modbusClient.readCoils(address, length, deviceConfig);
@@ -231,6 +245,7 @@ async function batchRead(requests) {
 
 module.exports = {
   batchRead,
+  writeCoilValues,
   invalidateDeviceCache,
   _internal: {
     normalizeRegisterType,

@@ -94,10 +94,10 @@ async function ensureExternalIntegrationTables(pool) {
       cursor_ts TIMESTAMPTZ,
       cursor_event_id BIGINT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(event_type)
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // 作用中唯一性 (event_type) 由 archiveSchema partial index 建立
   await pool.query(`
     ALTER TABLE external_sync_configs
       ADD COLUMN IF NOT EXISTS cursor_event_id BIGINT

@@ -109,7 +109,7 @@ async function initSchema() {
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS users (
 				id SERIAL PRIMARY KEY,
-				username VARCHAR(50) NOT NULL UNIQUE,
+				username VARCHAR(50) NOT NULL,
 				password_hash VARCHAR(255) NOT NULL,
 				role user_role NOT NULL DEFAULT 'user',
 				status user_status NOT NULL DEFAULT 'active',
@@ -208,11 +208,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_device_models_port ON device_models(port);
 		`);
 
-    // 這裡採用 (type_code, name) 唯一即可（型號字串本身為 SSOT，大小寫固定）
-    await targetPool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_device_models_type_name
-      ON device_models (type_code, name);
-    `);
+    // 作用中唯一性（type_code, name）由 archiveSchema partial index 建立
 
     schemaLogger.info("device_models 表已建立", { module: "initSchema" });
 
@@ -260,7 +256,7 @@ async function initSchema() {
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS zones (
 				id SERIAL PRIMARY KEY,
-				name VARCHAR(100) NOT NULL UNIQUE,
+				name VARCHAR(100) NOT NULL,
 				building_id INTEGER,
 				image_url TEXT,
 				description TEXT,
@@ -291,8 +287,7 @@ async function initSchema() {
 				sort_order INTEGER NOT NULL DEFAULT 0,
 				created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(zone_id, name)
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 			)
 		`);
 
@@ -307,6 +302,7 @@ async function initSchema() {
     });
 
     // 建立 location_systems 表（地點系統關聯表）
+    // people_counting 事件調閱通道存於 system_config 的 entry/exit_event_camera_nvr_track_id。
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS location_systems (
 				id SERIAL PRIMARY KEY,
@@ -314,8 +310,7 @@ async function initSchema() {
 				system_type VARCHAR(50) NOT NULL CHECK (system_type IN ('environment', 'lighting', 'hvac', 'air_circulation', 'people_counting', 'roll_call', 'vehicle_access', 'drainage', 'power', 'fire', 'emergency_rescue', 'smoke_alarm', 'elevator', 'intercom', 'security')),
 				system_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				UNIQUE(location_id, system_type)
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 			)
 		`);
 
@@ -326,6 +321,7 @@ async function initSchema() {
 			CREATE INDEX IF NOT EXISTS idx_location_systems_system_type ON location_systems(system_type);
 			CREATE INDEX IF NOT EXISTS idx_location_systems_config ON location_systems USING GIN(system_config);
 		`);
+    // 作用中唯一性 (location_id, system_type) 由 archiveSchema partial index 建立
 
     schemaLogger.info("location_systems 表已建立（地點系統關聯表）", {
       module: "initSchema",
@@ -917,7 +913,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS persons (
         id SERIAL PRIMARY KEY,
-        employee_no VARCHAR(64) NOT NULL UNIQUE,
+        employee_no VARCHAR(64) NOT NULL,
         full_name VARCHAR(255),
         person_group_id INTEGER REFERENCES person_groups(id) ON DELETE SET NULL,
         status VARCHAR(32) NOT NULL DEFAULT 'active',
@@ -1335,7 +1331,7 @@ async function initSchema() {
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS system_settings (
 				id SERIAL PRIMARY KEY,
-				key VARCHAR(100) NOT NULL UNIQUE,
+				key VARCHAR(100) NOT NULL,
 				value TEXT,
 				description TEXT,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1348,6 +1344,7 @@ async function initSchema() {
     await targetPool.query(`
 			CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings(key);
 		`);
+    // 作用中唯一性 (key) 由 archiveSchema partial index 建立
 
     schemaLogger.info("system_settings 表已建立", { module: "initSchema" });
 
@@ -1374,7 +1371,6 @@ async function initSchema() {
         options_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(event_type),
         CONSTRAINT external_sync_configs_push_schedule_check CHECK (
           (push_mode = 'fixed' AND push_time IS NOT NULL)
           OR (
@@ -1391,6 +1387,7 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_external_sync_configs_push_time
       ON external_sync_configs(push_time);
     `);
+    // 作用中唯一性 (event_type) 由 archiveSchema partial index 建立
     schemaLogger.info("external_sync_configs 表已建立", {
       module: "initSchema",
     });

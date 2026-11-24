@@ -15,15 +15,9 @@ const {
   resolvePointLabel,
 } = require("../operationalEvents/operationalEventCopy");
 const { summaryBitTriggerFallback } = require("../alerts/alertCopy");
-const {
-  shouldSuppressCoilStateChange,
-} = require("../operationalEvents/operationalEventHooks");
 const { formatPlaceLabel } = require("../operationalEvents/operationalEventPlaceContext");
 const modbusPollPlanner = require("../devices/modbusPollPlanner");
 const bitStore = require("../devices/modbusBitStore");
-const { DEVICE_CFG_TTL_MS } = require("../../config/realtimeTiming");
-
-const getDeviceService = () => require("../devices/deviceService");
 
 const SOURCE_TO_SYSTEM_TYPE = {
   environment: "environment",
@@ -52,28 +46,6 @@ function parseBitKey(bitKey) {
   const registerType =
     kind === "di" || kind === "discrete" ? "discrete" : "coil";
   return { registerType, address: Number(m[2]) };
-}
-
-const deviceCfgCache = new Map();
-
-async function resolveDeviceConfig(deviceId) {
-  if (!deviceId) return null;
-  const cached = deviceCfgCache.get(deviceId);
-  if (cached && Date.now() - cached.ts < DEVICE_CFG_TTL_MS) return cached.cfg;
-  try {
-    const { device } = await getDeviceService().getDeviceById(Number(deviceId));
-    const c = device?.config || {};
-    if (!c.host || c.port == null) return null;
-    const cfg = {
-      host: String(c.host).trim(),
-      port: Number(c.port),
-      unitId: Number(c.unitId ?? 1),
-    };
-    deviceCfgCache.set(deviceId, { cfg, ts: Date.now() });
-    return cfg;
-  } catch {
-    return null;
-  }
 }
 
 async function resolveTargetSystems(rule) {
@@ -243,7 +215,7 @@ function recordStateEdge(point, bitValue, deviceConfig = null) {
   if (
     point.registerType === "coil" &&
     deviceConfig &&
-    shouldSuppressCoilStateChange(deviceConfig, point.address)
+    bitStore.shouldSuppressCoilStateChange(deviceConfig, point.address)
   ) {
     return;
   }
@@ -317,7 +289,7 @@ async function checkDiDoAlerts() {
       registerTypes.add("discrete");
     }
 
-    await modbusPollPlanner.pollControllers({
+    const { deviceConfigs } = await modbusPollPlanner.pollControllers({
       registerTypes,
       broadcastStatus: true,
     });
@@ -363,7 +335,7 @@ async function checkDiDoAlerts() {
     if (readKeyMap.size === 0) return;
 
     for (const entry of readKeyMap.values()) {
-      const cfg = await resolveDeviceConfig(entry.deviceId);
+      const cfg = deviceConfigs.get(Number(entry.deviceId));
       if (!cfg) continue;
 
       if (!bitStore.isModuleOnlineForAddress(cfg, entry.parsed.address)) {

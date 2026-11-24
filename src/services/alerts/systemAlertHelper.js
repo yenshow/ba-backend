@@ -1,7 +1,8 @@
 /**
  * 統一系統警報輔助函數
- * 為所有系統提供統一的警報創建和管理接口
- * 取代多個系統專用的 helper 文件
+ * 為所有系統提供統一的警報創建和管理接口（建警／結案一律走 alertService）
+ *
+ * 區塊：快照合併 → 設備／地點解析 → recordError／連線告警 → 規則 bit → 手動告警
  */
 
 const alertService = require("./alertService");
@@ -19,6 +20,8 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 
 const getErrorTracker = () => require("./errorTracker");
+
+// ========== 快照合併（active alerts／規則語意 → status items） ==========
 
 /**
  * 取得指定 source 在一批 source_id 中「仍為 active」的集合
@@ -339,6 +342,8 @@ function mergeActiveAlertsIntoSnapshotItems(items, activeAlertSystemIds) {
   });
 }
 
+// ========== 設備／地點解析 ==========
+
 /**
  * 從設備配置中提取設備 ID
  * @param {Object} deviceConfig - 設備配置 { host, port, unitId }
@@ -491,16 +496,6 @@ function parseSystemConfigObject(systemConfigRaw) {
     : systemConfigRaw || {};
 }
 
-/** 主設備：`device_ids[0]`（供單一 device 來源對應） */
-function parseSingularDeviceIdFromSystemConfig(systemConfigRaw) {
-  const c = parseSystemConfigObject(systemConfigRaw);
-  const raw =
-    Array.isArray(c.device_ids) && c.device_ids.length > 0 ? c.device_ids[0] : null;
-  if (raw == null || raw === "") return null;
-  const n = parseInt(String(raw), 10);
-  return Number.isNaN(n) ? null : n;
-}
-
 /** `device_ids` 去重；供 clearError 清除所有綁定設備之離線 */
 function parseDeviceIdsFromSystemConfig(systemConfigRaw) {
   const config = parseSystemConfigObject(systemConfigRaw);
@@ -516,6 +511,12 @@ function parseDeviceIdsFromSystemConfig(systemConfigRaw) {
     }
   }
   return [...out];
+}
+
+/** 主設備：`device_ids[0]`（供單一 device 來源對應） */
+function parseSingularDeviceIdFromSystemConfig(systemConfigRaw) {
+  const ids = parseDeviceIdsFromSystemConfig(systemConfigRaw);
+  return ids.length > 0 ? ids[0] : null;
 }
 
 async function fetchLocationSystemConfig(systemId, systemType) {
@@ -678,6 +679,8 @@ const SYSTEM_CONFIGS = {
     getDeviceId: async (id) => id, // 設備 ID 就是自己
   },
 };
+
+// ========== recordError／連線告警（經 alertService.createAlert／resolve） ==========
 
 /**
  * 記錄系統錯誤
@@ -1020,6 +1023,8 @@ function severityRank(sev) {
   return 0;
 }
 
+// ========== 規則 bit 告警 ==========
+
 async function recordRuleBitStateAlarm(
   systemKey,
   sourceId,
@@ -1207,6 +1212,8 @@ async function clearRuleBitStateAlarm(
     throw err;
   }
 }
+
+// ========== 手動告警 ==========
 
 /**
  * 手動建立「警報」（直接建立 Incident，跳過 error_count 閾值）

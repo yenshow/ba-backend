@@ -199,6 +199,10 @@ async function createPeopleCountingLocation(locationData, userId) {
         exitCameraDeviceIds,
         preferRegion,
         cameraMode,
+        entryEventCameraDeviceId,
+        entryEventCameraNvrTrackId,
+        exitEventCameraDeviceId,
+        exitEventCameraNvrTrackId,
       } = locationData;
 
       validateLocationData(locationData, false);
@@ -221,6 +225,10 @@ async function createPeopleCountingLocation(locationData, userId) {
             cameraChannelId: 1,
             preferRegion,
             cameraMode,
+            entryEventCameraDeviceId,
+            entryEventCameraNvrTrackId,
+            exitEventCameraDeviceId,
+            exitEventCameraNvrTrackId,
           },
         },
         userId,
@@ -255,6 +263,10 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
         exitCameraDeviceIds,
         preferRegion,
         cameraMode,
+        entryEventCameraDeviceId,
+        entryEventCameraNvrTrackId,
+        exitEventCameraDeviceId,
+        exitEventCameraNvrTrackId,
       } = locationData;
 
       const existing = await getPeopleCountingLocationById(id);
@@ -362,6 +374,10 @@ async function updatePeopleCountingLocation(id, locationData, userId) {
               cameraChannelId: 1,
               preferRegion: config.prefer_region,
               cameraMode: config.camera_mode,
+              entryEventCameraDeviceId,
+              entryEventCameraNvrTrackId,
+              exitEventCameraDeviceId,
+              exitEventCameraNvrTrackId,
               statsResetAt: config.stats_reset_at ?? undefined,
             },
           },

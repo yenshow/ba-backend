@@ -3,8 +3,8 @@
  * 時刻觸發 on／off；一規則可綁多地點
  */
 const db = require("../../database/db");
-const modbusClient = require("../devices/modbusClient");
 const modbusBatchService = require("../devices/modbusBatchService");
+const { resolveModbusDeviceConfig } = require("../devices/modbusDeviceConfig");
 const { resolveDiDoParts } = require("../devices/modbusDiDoConfig");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
@@ -12,12 +12,10 @@ const loggerFactory = require("../../utils/logger");
 const scheduleRulesUnchanged = require("./scheduleRulesUnchanged");
 const {
   recordControlWriteEvent,
-  markCoilControlWrite,
 } = require("../operationalEvents/operationalEventHooks");
 
 const FIRED_TTL_MS = 48 * 60 * 60 * 1000;
-
-const getDeviceService = () => require("../devices/deviceService");
+const DO_SCHEDULE_INTERVAL_MS = 15_000;
 
 /** @param {Date|string|number} [at] */
 function toTaipeiParts(at = new Date()) {
@@ -128,8 +126,6 @@ function createDoScheduleService(opts) {
   const logger = loggerFactory.createLogger(loggerName);
   /** @type {Map<string, number>} */
   const firedEdges = new Map();
-  const deviceCfgCache = new Map();
-  const DEVICE_CFG_TTL_MS = 60_000;
 
   function mapRuleRow(row, locationIds = []) {
     return {
@@ -250,24 +246,6 @@ function createDoScheduleService(opts) {
     return listAll();
   }
 
-  async function resolveDeviceEndpoint(deviceId) {
-    if (!deviceId) return null;
-    const id = Number(deviceId);
-    const cached = deviceCfgCache.get(id);
-    if (cached && Date.now() - cached.ts < DEVICE_CFG_TTL_MS) return cached.cfg;
-
-    const { device } = await getDeviceService().getDeviceById(id);
-    const c = device?.config || {};
-    if (!c.host || c.port == null) return null;
-    const cfg = {
-      host: String(c.host).trim(),
-      port: Number(c.port),
-      unitId: Number(c.unitId ?? 1),
-    };
-    deviceCfgCache.set(id, { ts: Date.now(), cfg });
-    return cfg;
-  }
-
   async function resolveDoTarget(locationId) {
     const lid = Number(locationId);
     const rows = await db.query(
@@ -293,40 +271,40 @@ function createDoScheduleService(opts) {
         ? JSON.parse(row.modbus_config)
         : row.modbus_config;
     const { do: doPart } = resolveDiDoParts(modbusConfigRaw);
-    if (!doPart || !Number.isFinite(Number(doPart.address))) return null;
+    if (!doPart) return null;
 
     const deviceId = Number(row.device_id);
     if (!Number.isFinite(deviceId) || deviceId <= 0) return null;
 
-    return { deviceId, doAddress: Number(doPart.address) };
+    return { deviceId, doAddress: doPart.address };
   }
 
   async function writeScheduleDo({ locationId, value, ruleId, edge }) {
-    const target = await resolveDoTarget(locationId);
-    if (!target) {
-      logger.warn(`${label}排程略過：地點無 DO 或未綁定`, {
-        locationId,
-        ruleId,
-        edge,
-      });
-      return { success: false, skipped: true, reason: "no_do" };
-    }
-
-    const cfg = await resolveDeviceEndpoint(target.deviceId);
-    if (!cfg) {
-      logger.warn(`${label}排程略過：設備連線設定不足`, {
-        locationId,
-        deviceId: target.deviceId,
-        ruleId,
-        edge,
-      });
-      return { success: false, skipped: true, reason: "no_device_cfg" };
-    }
-
     try {
-      const ok = await modbusClient.writeCoil(
-        Number(target.doAddress),
-        Boolean(value),
+      const target = await resolveDoTarget(locationId);
+      if (!target) {
+        logger.warn(`${label}排程略過：地點無 DO 或未綁定`, {
+          locationId,
+          ruleId,
+          edge,
+        });
+        return { success: false, skipped: true, reason: "no_do" };
+      }
+
+      const cfg = await resolveModbusDeviceConfig(target.deviceId);
+      if (!cfg) {
+        logger.warn(`${label}排程略過：設備連線設定不足`, {
+          locationId,
+          deviceId: target.deviceId,
+          ruleId,
+          edge,
+        });
+        return { success: false, skipped: true, reason: "no_device_cfg" };
+      }
+
+      const ok = await modbusBatchService.writeCoilValues(
+        target.doAddress,
+        value,
         cfg,
       );
       if (!ok) {
@@ -340,14 +318,12 @@ function createDoScheduleService(opts) {
         return { success: false };
       }
 
-      modbusBatchService.invalidateDeviceCache(cfg, "coil");
-      markCoilControlWrite(cfg, target.doAddress);
       void recordControlWriteEvent({
         deviceConfig: cfg,
         source: eventSource,
         deviceId: target.deviceId,
         address: target.doAddress,
-        value: Boolean(value),
+        value,
         payloadExtra: {
           fromDoSchedule: true,
           systemType,
@@ -374,7 +350,7 @@ function createDoScheduleService(opts) {
     }
   }
 
-  async function reconcileDueEdges(at = new Date()) {
+  async function reconcileDueEdges(at) {
     pruneFiredEdges();
     const { dow, hm, dateKey } = toTaipeiParts(at);
 
@@ -463,7 +439,40 @@ function createDoScheduleService(opts) {
     return { fired };
   }
 
-  return { listAll, replaceAll, reconcileDueEdges };
+  const runningTicks = new Map();
+  let timer = null;
+
+  function tick() {
+    const at = new Date();
+    const minute = Math.floor(at.getTime() / 60_000);
+    if (runningTicks.has(minute)) return;
+
+    const work = reconcileDueEdges(at)
+      .catch((error) => {
+        logger.warn(`${label}排程 tick 失敗`, {
+          error: error?.message || String(error),
+        });
+      })
+      .finally(() => runningTicks.delete(minute));
+    runningTicks.set(minute, work);
+  }
+
+  function start() {
+    if (timer !== null) return;
+    timer = setInterval(tick, DO_SCHEDULE_INTERVAL_MS);
+    timer.unref?.();
+    tick();
+  }
+
+  function stop() {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+    return Promise.all(runningTicks.values());
+  }
+
+  return { listAll, replaceAll, start, stop };
 }
 
 module.exports = { createDoScheduleService };

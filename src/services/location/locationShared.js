@@ -416,6 +416,7 @@ function formatSystem(system) {
       const {
         parsePeopleCountingConfigFields,
         parseOptionalEventCameraDeviceId,
+        parseOptionalEventCameraNvrTrackId,
         CAMERA_MODE,
         normalizeDashboardLayout,
       } = require("../peopleCounting/peopleCountingConfig");
@@ -469,8 +470,14 @@ function formatSystem(system) {
           entryEventCameraDeviceId: parseOptionalEventCameraDeviceId(
             config.entry_event_camera_device_id,
           ),
+          entryEventCameraNvrTrackId: parseOptionalEventCameraNvrTrackId(
+            config.entry_event_camera_nvr_track_id,
+          ),
           exitEventCameraDeviceId: parseOptionalEventCameraDeviceId(
             config.exit_event_camera_device_id,
+          ),
+          exitEventCameraNvrTrackId: parseOptionalEventCameraNvrTrackId(
+            config.exit_event_camera_nvr_track_id,
           ),
           ...(isFace ? { faceSimilarityThreshold: cameras.faceSimilarityThreshold } : {}),
           eventBackfillEnabled: cameras.eventBackfillEnabled === true,

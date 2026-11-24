@@ -1,3 +1,8 @@
+/**
+ * 統一警報服務
+ * 區塊：查詢 → 建立／去重 → 狀態轉移 → 日界線
+ * enrichment SELECT 見 alertQueryFragments.js
+ */
 const db = require("../../database/db");
 const runtimeConfigService = require("../platform/runtimeConfigService");
 const { getCalendarDateKeyInTimeZone } = require("../../utils/alertRolloverTz");
@@ -7,6 +12,8 @@ const alertAccessDoorLinkageService = require("./alertAccessDoorLinkageService")
 const alertSipRingLinkageService = require("./alertSipRingLinkageService");
 const alertElevatorCallLinkageService = require("./alertElevatorCallLinkageService");
 const { notifyNewAlertByEmail } = require("./alertEmailNotifier");
+const { buildAlertSelectQuery } = require("./alertQueryFragments");
+const { transitionAlerts, reopenAlert, closeAlertsForDailyRollover } = require("./alertStatusStore");
 const logger = require("../../utils/logger");
 const { getDeviceTypeName } = require("../../constants/deviceTypes");
 const C = require("../../utils/apiErrorCodes");
@@ -21,10 +28,7 @@ function ignoreEffectiveTodayKey() {
   return { tz, todayKey: getCalendarDateKeyInTimeZone(new Date(), tz) };
 }
 
-/**
- * 統一警報服務
- * 支持多系統來源：device, environment, lighting 等
- */
+// ========== 查詢／維度 ==========
 
 /**
  * 參數匹配正則表達式（用於舊資料訊息推導維度）
@@ -368,35 +372,6 @@ const ALERT_SOURCES = {
   SECURITY: "security",
 };
 
-/** 站級能源契約告警：source=energy 且 source_id=1（energy_settings.id） */
-const ENERGY_STATION_ALERT_SQL =
-  "(a.source = 'energy' AND a.source_id = 1)";
-
-/** 設備中心 source（source_id = devices.id；不含 LOCATION_ALERT_SOURCES） */
-const DEVICE_SCOPED_ALERT_SOURCES = [ALERT_SOURCES.DEVICE, ALERT_SOURCES.ENERGY];
-const DEVICE_SCOPED_ALERT_SOURCES_SQL = DEVICE_SCOPED_ALERT_SOURCES.map(
-  (source) => `'${source}'`,
-).join(", ");
-
-/** 關聯 location_systems 的 alert source（供列表 JOIN 用） */
-const LOCATION_ALERT_SOURCES = [
-  ALERT_SOURCES.ENVIRONMENT,
-  ALERT_SOURCES.LIGHTING,
-  ALERT_SOURCES.PEOPLE_COUNTING,
-  ALERT_SOURCES.DRAINAGE,
-  ALERT_SOURCES.POWER,
-  ALERT_SOURCES.HVAC,
-  ALERT_SOURCES.AIR_CIRCULATION,
-  ALERT_SOURCES.FIRE,
-  ALERT_SOURCES.EMERGENCY_RESCUE,
-  ALERT_SOURCES.SMOKE_ALARM,
-  ALERT_SOURCES.SECURITY,
-];
-
-const LOCATION_ALERT_SOURCES_SQL = LOCATION_ALERT_SOURCES.map(
-  (source) => `'${source}'`,
-).join(", ");
-
 // 警報狀態（移除 pending，只保留 active, resolved, ignored
 const ALERT_STATUS = {
   ACTIVE: "active",
@@ -486,69 +461,6 @@ function enrichAlert(alert) {
 }
 
 /**
- * 警報列表查詢（一列一筆，不 GROUP BY）
- * @returns {string} SELECT 語句
- */
-function buildAlertSelectQuery() {
-  return `
-    SELECT 
-      a.id,
-      a.source,
-      a.source_id,
-      a.alert_type,
-      a.dimension_key,
-      a.rule_id,
-      a.severity,
-      a.message,
-      a.status,
-      a.ignored_at,
-      a.ignored_by,
-      a.created_at,
-      a.updated_at,
-      iu.username as ignored_by_username,
-      CASE 
-        WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.type_code
-        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
-        ELSE NULL
-      END as device_type_code,
-      CASE 
-        WHEN ${ENERGY_STATION_ALERT_SQL} THEN '能源管理（契約容量）'
-        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
-        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
-        ELSE NULL
-      END as source_name,
-      CASE
-        WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
-        ELSE NULL
-      END as device_name,
-      CASE 
-        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
-        ELSE NULL 
-      END as zone_name,
-      CASE 
-        WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-        WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.config
-        WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
-        ELSE NULL
-      END as device_config
-    FROM alerts a
-    LEFT JOIN users iu ON a.ignored_by = iu.id
-    LEFT JOIN devices d
-      ON a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL})
-     AND a.source_id = d.id
-     AND NOT ${ENERGY_STATION_ALERT_SQL}
-    LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
-    LEFT JOIN locations l ON ls.location_id = l.id
-    LEFT JOIN zones z ON l.zone_id = z.id
-    LEFT JOIN devices d_system
-      ON (ls.system_config->'device_ids'->>0) IS NOT NULL
-     AND (ls.system_config->'device_ids'->>0)::integer = d_system.id
-    `;
-}
-
-/**
  * 取得警報列表
  * @param {Object} filters - 篩選條件
  * @returns {Promise<Object>} 警報列表和總數
@@ -578,7 +490,7 @@ async function getAlerts(filters = {}) {
     const timeFieldCol =
       time_field === "updated_at" ? "updated_at" : "created_at";
 
-    let query = buildAlertSelectQuery() + ` WHERE 1=1`;
+    let query = buildAlertSelectQuery("list") + ` WHERE 1=1`;
     const params = [];
 
     const excludeSourcesList = Array.isArray(exclude_sources)
@@ -704,6 +616,8 @@ async function getAlerts(filters = {}) {
     throw error;
   }
 }
+
+// ========== 建立／去重 ==========
 
 /**
  * 創建警報
@@ -961,6 +875,8 @@ async function createAlert(alertData) {
   }
 }
 
+// ========== 狀態轉移 ==========
+
 /**
  * 標記警報為未解決（管理員功能）
  * @param {number} id - 警報 ID
@@ -969,47 +885,16 @@ async function createAlert(alertData) {
  */
 async function unresolveAlert(id, userId = null) {
   try {
-    // 先查詢當前狀態
-    const currentAlert = await db.query(
-      `SELECT id, status FROM alerts WHERE id = ?`,
-      [id],
-    );
-
-    if (!currentAlert || currentAlert.length === 0) {
+    const result = await reopenAlert(id, userId);
+    if (!result) {
       throwApiError(C.ALERT_NOT_FOUND, `警報 ID ${id} 不存在`);
     }
 
-    const oldStatus = currentAlert[0].status;
-
-    // 更新警報狀態
-    const query = `
-			UPDATE alerts
-			SET status = ?,
-					ignored_at = NULL,
-					ignored_by = NULL
-			WHERE id = ?
-			RETURNING *
-		`;
-    const result = await db.query(query, [ALERT_STATUS.ACTIVE, id]);
-
-    if (!result || result.length === 0) {
-      throwApiError(C.ALERT_NOT_FOUND, `警報 ID ${id} 不存在`);
-    }
-
-    const alert = result[0];
-
+    const { alert, previousStatus: oldStatus } = result;
     const enrichedAlert = enrichAlert(alert);
 
     // 推送 WebSocket 事件：警報狀態更新（unresolve）
     if (oldStatus !== ALERT_STATUS.ACTIVE) {
-      await createAlertEvent(
-        alert.id,
-        "unresolved",
-        oldStatus,
-        ALERT_STATUS.ACTIVE,
-        { reason: "manual_unresolve" },
-        userId,
-      );
       websocketService.emitAlertUpdated(
         enrichedAlert,
         oldStatus,
@@ -1031,66 +916,10 @@ async function unresolveAlert(id, userId = null) {
   }
 }
 
-function buildStatusScope(newStatus) {
-  if (newStatus === ALERT_STATUS.RESOLVED) {
-    return [ALERT_STATUS.ACTIVE];
+function publishAlertStatusChanges(alerts, oldStatus, newStatus) {
+  for (const alert of alerts) {
+    websocketService.emitAlertUpdated(enrichAlert(alert), oldStatus, newStatus);
   }
-  if (newStatus === ALERT_STATUS.IGNORED) {
-    return [ALERT_STATUS.ACTIVE];
-  }
-  if (newStatus === ALERT_STATUS.ACTIVE) {
-    return [ALERT_STATUS.IGNORED];
-  }
-  return [ALERT_STATUS.ACTIVE, ALERT_STATUS.IGNORED, ALERT_STATUS.RESOLVED];
-}
-
-const JOINED_ALERTS_BY_IDS_SQL = `
-        SELECT 
-          a.*,
-          iu.username as ignored_by_username
-        FROM alerts a
-        LEFT JOIN users iu ON a.ignored_by = iu.id
-        WHERE a.id = ANY(?::integer[])
-      `;
-
-async function loadAlertsWithIgnoredByUser(alertIds) {
-  if (!alertIds?.length) return [];
-  const rows = await db.query(JOINED_ALERTS_BY_IDS_SQL, [alertIds]);
-  return rows || [];
-}
-
-/** 將多筆 ignored 先 batch 結為 resolved 時的事件／WS（與 updateAlertStatus 共用） */
-async function emitAlertBatchResolvedFromIgnored(
-  resolvedBatch,
-  oldStatusMap,
-  { source, sourceId, alertType, reason },
-  userId,
-) {
-  if (!resolvedBatch?.length) return;
-  for (const alert of resolvedBatch) {
-    const oldStatus = oldStatusMap.get(alert.id) || ALERT_STATUS.IGNORED;
-    const enrichedAlert = enrichAlert(alert);
-    await createAlertEvent(
-      alert.id,
-      "resolved",
-      oldStatus,
-      ALERT_STATUS.RESOLVED,
-      {
-        source,
-        source_id: sourceId,
-        alert_type: alertType,
-        dimension_key: alert.dimension_key,
-        reason,
-      },
-      userId || null,
-    );
-    websocketService.emitAlertUpdated(
-      enrichedAlert,
-      oldStatus,
-      ALERT_STATUS.RESOLVED,
-    );
-  }
-  void emitUnresolvedAlertCount();
 }
 
 /**
@@ -1103,7 +932,6 @@ async function planUnignoreToActiveSafely({
   alertType,
   normalizedDimensionKey,
   currentAlerts,
-  oldStatusMap,
   userId,
 }) {
   let effectiveStatus = ALERT_STATUS.ACTIVE;
@@ -1139,27 +967,12 @@ async function planUnignoreToActiveSafely({
 
   const sorted = [...currentAlerts].sort((a, b) => b.id - a.id);
   const resolveIds = sorted.slice(1).map((r) => r.id);
-  await db.query(
-    `UPDATE alerts
-     SET status = ?,
-         ignored_at = NULL,
-         ignored_by = NULL,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ANY(?::integer[])`,
-    [ALERT_STATUS.RESOLVED, resolveIds],
+  const resolvedBatch = await transitionAlerts(
+    resolveIds, ALERT_STATUS.IGNORED, ALERT_STATUS.RESOLVED,
+    { reason: "dedupe_same_dimension", userId },
   );
-  const resolvedBatch = await loadAlertsWithIgnoredByUser(resolveIds);
-  await emitAlertBatchResolvedFromIgnored(
-    resolvedBatch,
-    oldStatusMap,
-    {
-      source,
-      sourceId,
-      alertType,
-      reason: "dedupe_same_dimension",
-    },
-    userId,
-  );
+  publishAlertStatusChanges(resolvedBatch, ALERT_STATUS.IGNORED, ALERT_STATUS.RESOLVED);
+  if (resolvedBatch.length > 0) void emitUnresolvedAlertCount();
   return {
     effectiveStatus: ALERT_STATUS.ACTIVE,
     finalAlertIds: [sorted[0].id],
@@ -1193,19 +1006,21 @@ async function updateAlertStatus(
     const normalizedDimensionKey = options.dimensionKey
       ? normalizeDimensionValue(options.dimensionKey)
       : null;
-    const statusScope = buildStatusScope(newStatus);
+    const expectedStatus = newStatus === ALERT_STATUS.ACTIVE
+      ? ALERT_STATUS.IGNORED
+      : ALERT_STATUS.ACTIVE;
     const currentAlerts = await db.query(
       `SELECT id, status FROM alerts
        WHERE source_id = ?
          AND source = ?
          AND alert_type = ?
-         AND status = ANY(?::alert_status[])
+         AND status = ?::alert_status
          AND (?::varchar IS NULL OR dimension_key = ?::varchar)`,
       [
         sourceId,
         source,
         alertType,
-        statusScope,
+        expectedStatus,
         normalizedDimensionKey,
         normalizedDimensionKey,
       ],
@@ -1219,7 +1034,6 @@ async function updateAlertStatus(
     }
 
     const alertIds = currentAlerts.map((a) => a.id);
-    const oldStatusMap = new Map(currentAlerts.map((a) => [a.id, a.status]));
 
     let effectiveStatus = newStatus;
     let finalAlertIds = alertIds;
@@ -1231,94 +1045,36 @@ async function updateAlertStatus(
         alertType,
         normalizedDimensionKey,
         currentAlerts,
-        oldStatusMap,
         userId,
       });
       effectiveStatus = planned.effectiveStatus;
       finalAlertIds = planned.finalAlertIds;
     }
 
-    const updateFields = [];
-    const params = [];
+    const reason = newStatus === ALERT_STATUS.ACTIVE && effectiveStatus === ALERT_STATUS.RESOLVED
+      ? "already_has_active_incident"
+      : options.reason;
+    const alertResults = await transitionAlerts(
+      finalAlertIds,
+      expectedStatus,
+      effectiveStatus,
+      { reason, userId },
+    );
 
-    if (effectiveStatus === ALERT_STATUS.IGNORED) {
-      updateFields.push("ignored_at = CURRENT_TIMESTAMP", "ignored_by = ?");
-      params.push(userId);
-    } else if (
-      effectiveStatus === ALERT_STATUS.ACTIVE ||
-      effectiveStatus === ALERT_STATUS.RESOLVED
-    ) {
-      updateFields.push("ignored_at = NULL", "ignored_by = NULL");
-    }
-
-    updateFields.push("status = ?", "updated_at = CURRENT_TIMESTAMP");
-    params.push(effectiveStatus);
-    // CAS：僅當列仍為預期舊狀態時才翻轉，避免並行 clearError 重複寫 event
-    params.push(finalAlertIds);
-    params.push(statusScope);
-
-    const query = `
-			UPDATE alerts
-			SET ${updateFields.join(", ")}
-			WHERE id = ANY(?::integer[])
-			  AND status = ANY(?::alert_status[])
-			RETURNING id
-		`;
-
-    const result = await db.query(query, params);
-
-    if (!result || result.length === 0) {
+    if (alertResults.length === 0) {
       throwApiError(
         C.ALERT_NOT_FOUND,
         `未找到可更新的警報（來源: ${source}, ID: ${sourceId}, 類型: ${alertType}）`,
       );
     }
 
-    const flippedIds = result.map((row) => row.id);
-    const alertResults = await loadAlertsWithIgnoredByUser(flippedIds);
-
-    for (const alert of alertResults) {
-      const oldStatus = oldStatusMap.get(alert.id);
-      if (!oldStatus || oldStatus === effectiveStatus) {
-        continue;
-      }
-      const enrichedAlert = enrichAlert(alert);
-      const eventReason =
-        newStatus === ALERT_STATUS.ACTIVE &&
-        effectiveStatus === ALERT_STATUS.RESOLVED
-          ? "already_has_active_incident"
-          : options.reason || null;
-      await createAlertEvent(
-        alert.id,
-        effectiveStatus === ALERT_STATUS.RESOLVED
-          ? "resolved"
-          : effectiveStatus === ALERT_STATUS.IGNORED
-            ? "ignored"
-            : "unignored",
-        oldStatus,
-        effectiveStatus,
-        {
-          source,
-          source_id: sourceId,
-          alert_type: alertType,
-          dimension_key: alert.dimension_key,
-          ...(eventReason ? { reason: eventReason } : {}),
-        },
-        userId || null,
-      );
-      websocketService.emitAlertUpdated(
-        enrichedAlert,
-        oldStatus,
-        effectiveStatus,
-      );
-    }
+    publishAlertStatusChanges(alertResults, expectedStatus, effectiveStatus);
 
     void emitUnresolvedAlertCount();
 
     if (
       effectiveStatus === ALERT_STATUS.RESOLVED &&
-      runtimeConfigService.getAlerts()?.linkageRevertOnResolve !== false &&
-      alertResults.length > 0
+      runtimeConfigService.getAlerts()?.linkageRevertOnResolve !== false
     ) {
       try {
         await alertLinkageService.revertLinkagesForResolvedAlerts(alertResults);
@@ -1330,7 +1086,7 @@ async function updateAlertStatus(
       }
     }
 
-    return flippedIds.length;
+    return alertResults.length;
   } catch (error) {
     // 如果錯誤是"未找到可更新的警報"，這是正常情況（警報可能不存在或已經被解決）
     // 不記錄為錯誤，直接拋出讓調用者處理
@@ -1566,6 +1322,8 @@ function emitUnresolvedAlertCount() {
   }, EVENT_COALESCE_MS);
 }
 
+// ========== 日界線 ==========
+
 /**
  * 日界線：將所有 active 批次結案為 resolved，寫入 alert_events、連動 DO 復歸、廣播 alert:daily_rollover 與 alert:count
  * @returns {Promise<{ resolvedCount: number }>}
@@ -1589,53 +1347,10 @@ async function resolveAllActiveForDailyRollover() {
     }
   }
 
-  const activePayloadJson = JSON.stringify({ reason: "daily_rollover" });
-  const ignoredPayloadJson = JSON.stringify({ reason: "daily_rollover_ignored" });
   try {
-    const counts = await db.transaction(async (tq) => {
-      const rows = await tq(
-        `
-        WITH targets AS (
-          SELECT id, status::text AS old_status
-          FROM alerts
-          WHERE status IN ('active'::alert_status, 'ignored'::alert_status)
-        ),
-        closing AS (
-          UPDATE alerts a
-          SET status = 'resolved'::alert_status,
-              ignored_at = NULL,
-              ignored_by = NULL,
-              updated_at = CURRENT_TIMESTAMP
-          FROM targets t
-          WHERE a.id = t.id
-          RETURNING a.id, t.old_status
-        ),
-        ins AS (
-          INSERT INTO alert_events (alert_id, event_type, old_status, new_status, payload, actor_user_id)
-          SELECT
-            id,
-            'resolved',
-            old_status::alert_status,
-            'resolved'::alert_status,
-            CASE
-              WHEN old_status = 'active' THEN ?::jsonb
-              ELSE ?::jsonb
-            END,
-            NULL
-          FROM closing
-          RETURNING alert_id, old_status
-        )
-        SELECT
-          count(*) FILTER (WHERE old_status = 'active')::int AS active_count,
-          count(*) FILTER (WHERE old_status = 'ignored')::int AS ignored_count
-        FROM ins
-        `,
-        [activePayloadJson, ignoredPayloadJson],
-      );
-      return rows[0] || { active_count: 0, ignored_count: 0 };
-    });
-    resolvedCount = counts.active_count ?? 0;
-    ignoredResolvedCount = counts.ignored_count ?? 0;
+    const counts = await closeAlertsForDailyRollover();
+    resolvedCount = counts.activeCount;
+    ignoredResolvedCount = counts.ignoredCount;
   } catch (err) {
     alertLogger.error("日界線批次結案失敗", {
       error: err?.message || String(err),
@@ -1670,52 +1385,8 @@ async function resolveAllActiveForDailyRollover() {
  */
 async function getAlertById(id) {
   try {
-    // 單一警報查詢不需要 GROUP BY，直接查詢並關聯相關資訊
-    const query = `
-      SELECT 
-        a.*,
-        iu.username as ignored_by_username,
-        CASE 
-          WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.type_code
-          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
-          ELSE NULL
-        END as device_type_code,
-        CASE 
-          WHEN ${ENERGY_STATION_ALERT_SQL} THEN '能源管理（契約容量）'
-          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
-          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
-          ELSE NULL
-        END as source_name,
-        CASE
-          WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
-          ELSE NULL
-        END as device_name,
-        CASE 
-          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
-          ELSE NULL 
-        END as zone_name,
-        CASE 
-          WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-          WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.config
-          WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
-          ELSE NULL
-        END as device_config
-      FROM alerts a
-      LEFT JOIN users iu ON a.ignored_by = iu.id
-      LEFT JOIN devices d
-        ON a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL})
-       AND a.source_id = d.id
-       AND NOT ${ENERGY_STATION_ALERT_SQL}
-      LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
-      LEFT JOIN locations l ON ls.location_id = l.id
-      LEFT JOIN zones z ON l.zone_id = z.id
-      LEFT JOIN devices d_system
-        ON (ls.system_config->'device_ids'->>0) IS NOT NULL
-       AND (ls.system_config->'device_ids'->>0)::integer = d_system.id
-      WHERE a.id = ?
-    `;
+    const query = `${buildAlertSelectQuery("byId")}
+      WHERE a.id = ?`;
     const result = await db.query(query, [id]);
 
     if (!result || result.length === 0) {
@@ -1733,60 +1404,12 @@ async function getAlertById(id) {
   }
 }
 
-const ALERT_BACKUP_SELECT = `
-  SELECT 
-    a.id,
-    a.source,
-    a.source_id,
-    a.alert_type,
-    a.severity,
-    a.message,
-    a.status,
-    a.ignored_at,
-    a.created_at,
-    a.updated_at,
-    iu.username as ignored_by_username,
-    CASE 
-      WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-      WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.type_code
-      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.type_code
-      ELSE NULL
-    END as device_type_code,
-    CASE 
-      WHEN ${ENERGY_STATION_ALERT_SQL} THEN '能源管理（契約容量）'
-      WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.name
-      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN l.name
-      ELSE NULL
-    END as source_name,
-    CASE 
-      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN z.name 
-      ELSE NULL 
-    END as zone_name,
-    CASE 
-      WHEN ${ENERGY_STATION_ALERT_SQL} THEN NULL
-      WHEN a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL}) THEN d.config
-      WHEN a.source IN (${LOCATION_ALERT_SOURCES_SQL}) THEN d_system.config
-      ELSE NULL
-    END as device_config
-  FROM alerts a
-  LEFT JOIN users iu ON a.ignored_by = iu.id
-  LEFT JOIN devices d
-    ON a.source IN (${DEVICE_SCOPED_ALERT_SOURCES_SQL})
-   AND a.source_id = d.id
-   AND NOT ${ENERGY_STATION_ALERT_SQL}
-  LEFT JOIN location_systems ls ON a.source IN (${LOCATION_ALERT_SOURCES_SQL}) AND a.source_id = ls.id
-  LEFT JOIN locations l ON ls.location_id = l.id
-  LEFT JOIN zones z ON l.zone_id = z.id
-  LEFT JOIN devices d_system
-    ON (ls.system_config->'device_ids'->>0) IS NOT NULL
-   AND (ls.system_config->'device_ids'->>0)::integer = d_system.id`;
-
 /**
  * 取得已解決的過期警報（含關聯資訊）供備份使用
  * @param {Date} beforeDate - 備份此日期之前的已解決警報
  */
 async function getResolvedAlertsForBackup(beforeDate, startDate = "-infinity") {
-  const query = `${ALERT_BACKUP_SELECT}
+  const query = `${buildAlertSelectQuery("backup")}
     WHERE a.status = 'resolved' AND a.updated_at < ? AND a.updated_at >= ?
     ORDER BY a.updated_at ASC`;
   const result = await db.query(query, [beforeDate, startDate]);

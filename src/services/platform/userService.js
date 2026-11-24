@@ -138,7 +138,7 @@ async function createBootstrapAdminUser({ username, password }) {
   }
 
   const existingUser = await db.query(
-    "SELECT id FROM users WHERE username = ?",
+    "SELECT id FROM active_users WHERE username = ?",
     [username],
   );
   if (existingUser.length > 0) {
@@ -306,7 +306,7 @@ async function createManagedUser(creator, body) {
   }
 
   const existingUser = await db.query(
-    "SELECT id FROM users WHERE username = ?",
+    "SELECT id FROM active_users WHERE username = ?",
     [username],
   );
   if (existingUser.length > 0) {
@@ -364,7 +364,7 @@ async function updateUser(userId, updateData, currentUser) {
 
   if (username !== undefined) {
     const existing = await db.query(
-      "SELECT id FROM users WHERE username = ? AND id != ?",
+      "SELECT id FROM active_users WHERE username = ? AND id != ?",
       [username, userId],
     );
     if (existing.length > 0) {

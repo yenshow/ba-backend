@@ -190,10 +190,10 @@ function triggerVehiclePlateSyncForLocation(locationId) {
   });
 }
 
-function triggerPeopleCountingSyncForLocation(locationId) {
+async function triggerPeopleCountingSyncForLocation(locationId) {
   try {
     const personSyncJobService = require("./personSyncJobService");
-    return personSyncJobService.startSyncLocationJob(locationId);
+    return await personSyncJobService.startSyncLocationJob(locationId);
   } catch (err) {
     logger.error("人流門禁背景同步啟動失敗", {
       locationId,
@@ -208,7 +208,7 @@ async function triggerDeviceSyncAfterMemberApply(locationId) {
   const meta = {};
 
   if (flags.peopleCounting || flags.rollCall) {
-    const started = triggerPeopleCountingSyncForLocation(locationId);
+    const started = await triggerPeopleCountingSyncForLocation(locationId);
     if (started?.jobId) {
       meta.deviceSync = { triggered: true, jobId: started.jobId };
     }

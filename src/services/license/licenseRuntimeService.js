@@ -24,14 +24,8 @@ const {
   startRollCallScheduler,
   stopRollCallScheduler,
 } = require("../rollCall/rollCallScheduler");
-const {
-  startLightingScheduleScheduler,
-  stopLightingScheduleScheduler,
-} = require("../lighting/lightingScheduleScheduler");
-const {
-  startHvacScheduleScheduler,
-  stopHvacScheduleScheduler,
-} = require("../hvac/hvacScheduleScheduler");
+const lightingSchedule = require("../lighting/lightingScheduleService");
+const hvacSchedule = require("../hvac/hvacScheduleService");
 
 let elevatorArmed = false;
 let intercomArmed = false;
@@ -122,12 +116,12 @@ const reconcileBackgroundServices = async ({
   else stopRollCallScheduler();
 
   const lightingOn = licenseService.hasLicensedFeature(features, "lighting");
-  if (lightingOn) startLightingScheduleScheduler();
-  else stopLightingScheduleScheduler();
+  if (lightingOn) lightingSchedule.start();
+  else void lightingSchedule.stop();
 
   const hvacOn = licenseService.hasLicensedFeature(features, "hvac");
-  if (hvacOn) startHvacScheduleScheduler();
-  else stopHvacScheduleScheduler();
+  if (hvacOn) hvacSchedule.start();
+  else void hvacSchedule.stop();
 
   const isapi = await isapiSubscribeHub.reconcile({ licensedFeatures: features });
   const elevator = await reconcileElevatorSdk(features);
@@ -169,7 +163,11 @@ const reconcileBackgroundServices = async ({
 };
 
 const stopLicensedBackgroundServices = async () => {
-  await backgroundMonitor.stopMonitoring();
+  await Promise.all([
+    lightingSchedule.stop(),
+    hvacSchedule.stop(),
+    backgroundMonitor.stopMonitoring(),
+  ]);
   stopEnvironmentAggregationScheduler();
   stopEnergyAggregationScheduler();
   stopRollCallScheduler();

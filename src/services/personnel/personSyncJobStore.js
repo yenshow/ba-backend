@@ -51,17 +51,18 @@ async function createJob(params) {
   const progress = params?.progress && typeof params.progress === "object" ? params.progress : {};
   const itemsMeta = params?.itemsMeta && typeof params.itemsMeta === "object" ? params.itemsMeta : {};
 
-  await db.query(
+  const [created] = await db.query(
     `INSERT INTO person_sync_jobs (
        job_id, job_type, location_id, status,
        progress, items_meta,
        created_at
      ) VALUES (?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::timestamptz)
-     ON CONFLICT (job_id) DO NOTHING`,
+     ON CONFLICT (job_id) DO NOTHING
+     RETURNING *`,
     [jobId, jobType, locationId, status, JSON.stringify(progress), JSON.stringify(itemsMeta), nowIso()],
   );
 
-  return await getJob(jobId);
+  return created ? toJobRow(created) : getJob(jobId);
 }
 
 async function updateJob(jobId, patch) {
@@ -103,8 +104,11 @@ async function updateJob(jobId, patch) {
   if (sets.length === 0) return await getJob(id);
 
   args.push(id);
-  await db.query(`UPDATE person_sync_jobs SET ${sets.join(", ")} WHERE job_id = ?`, args);
-  return await getJob(id);
+  const [updated] = await db.query(
+    `UPDATE person_sync_jobs SET ${sets.join(", ")} WHERE job_id = ? RETURNING *`,
+    args,
+  );
+  return toJobRow(updated);
 }
 
 async function getJob(jobId) {
@@ -133,7 +137,7 @@ async function bumpItemsMetaCounter(jobId, key, n = 1) {
   );
 }
 
-async function appendItem(jobId, itemType, payload, options = {}) {
+async function appendItem(jobId, itemType, payload) {
   const id = String(jobId || "").trim();
   if (!id) throwApiError(C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,"jobId 必填");
   const type = assertIn(ITEM_TYPES, itemType, "itemType");
@@ -146,15 +150,10 @@ async function appendItem(jobId, itemType, payload, options = {}) {
   );
 
   // counters：tailTotal / issuesTotal（累積總發生筆數）
-  if (type === "tail") await bumpItemsMetaCounter(id, "tailTotal", 1);
-  if (type === "issues") await bumpItemsMetaCounter(id, "issuesTotal", 1);
+  await bumpItemsMetaCounter(id, type === "tail" ? "tailTotal" : "issuesTotal");
 
   // ring buffer：只保留最後 N 筆
-  const maxKeep =
-    type === "tail"
-      ? Number(options.maxTail ?? MAX_JOB_TAIL_ITEMS)
-      : Number(options.maxIssues ?? MAX_JOB_ISSUES_ITEMS);
-  const keep = Number.isFinite(maxKeep) && maxKeep > 0 ? Math.trunc(maxKeep) : 200;
+  const keep = type === "tail" ? MAX_JOB_TAIL_ITEMS : MAX_JOB_ISSUES_ITEMS;
 
   await db.query(
     `DELETE FROM person_sync_job_items
@@ -203,16 +202,20 @@ async function replaceWarnings(jobId, warnings, locationId = null) {
   const loc =
     locationId != null && Number.isFinite(Number(locationId)) ? Math.trunc(Number(locationId)) : null;
 
-  await db.query(`DELETE FROM person_sync_job_warnings WHERE job_id = ?`, [id]);
-  const list = Array.isArray(warnings) ? warnings : [];
-  for (const w of list) {
-    if (!w || typeof w !== "object") continue;
-    await db.query(
+  const list = Array.isArray(warnings)
+    ? warnings.filter((warning) => warning && typeof warning === "object")
+    : [];
+  await db.transaction(async (query) => {
+    await query(`DELETE FROM person_sync_job_warnings WHERE job_id = ?`, [id]);
+    if (list.length === 0) return;
+    await query(
       `INSERT INTO person_sync_job_warnings (job_id, location_id, payload)
-       VALUES (?, ?, ?::jsonb)`,
-      [id, loc, JSON.stringify(w)],
+       SELECT ?, ?, warning.payload
+       FROM jsonb_array_elements(?::jsonb) WITH ORDINALITY AS warning(payload, position)
+       ORDER BY warning.position`,
+      [id, loc, JSON.stringify(list)],
     );
-  }
+  });
 }
 
 async function listWarnings(jobId) {
@@ -229,9 +232,6 @@ async function listWarnings(jobId) {
 }
 
 module.exports = {
-  MAX_JOB_ISSUES_ITEMS,
-  MAX_JOB_TAIL_ITEMS,
-
   createJob,
   updateJob,
   getJob,

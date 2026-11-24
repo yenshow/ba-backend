@@ -194,6 +194,14 @@ function parseOptionalEventCameraDeviceId(value) {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : undefined;
 }
 
+/** 讀寫 access_control 事件調閱 NVR 通道 liveTrackId（undefined＝未傳、null＝清除） */
+function parseOptionalEventCameraNvrTrackId(value) {
+  if (value === null) return null;
+  if (value == null || value === "") return undefined;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 /**
  * 主畫面 logs（未傳時間區間）時帶入 reset 起算點
  * @param {{ statsResetAt?: string|null }} cfg
@@ -231,4 +239,5 @@ module.exports = {
   enrichOptionsWithStatsReset,
   isStatsResetActive,
   parseOptionalEventCameraDeviceId,
+  parseOptionalEventCameraNvrTrackId,
 };
