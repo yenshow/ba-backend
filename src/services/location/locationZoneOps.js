@@ -25,7 +25,6 @@ const {
   deleteEmptyZoneIfNeeded,
 } = shared;
 
-const { createLocationWithSystems, updateLocationWithSystems } = systemOps;
 const {
   syncElevatorFloorsFromLocations,
 } = require("../ladderSdk/sdkDoorService");
@@ -43,6 +42,28 @@ const syncElevatorFloorsIfPresent = async (locations) => {
 };
 
 const locationLogger = logger.createLogger("locationZoneOps");
+
+/**
+ * 決定 zone update 對單一地點的動作。
+ * - 既有數字 id 且在 zone 內 → update
+ * - 既有數字 id 但不在 zone 內 → reject（禁止同名靜默接走）
+ * - 無 id／temp-／非數字 → create（可同名合併）
+ */
+function resolveZoneLocationMutation(location, existingLocationIds) {
+  const raw =
+    location?.id != null && String(location.id).trim() !== ""
+      ? String(location.id).trim()
+      : "";
+  const isPersistedNumericId =
+    Boolean(raw) && !raw.startsWith("temp-") && /^\d+$/.test(raw);
+  if (!isPersistedNumericId) {
+    return { action: "create" };
+  }
+  if (existingLocationIds.has(raw)) {
+    return { action: "update", locationId: parseInt(raw, 10), locationIdStr: raw };
+  }
+  return { action: "reject", locationIdStr: raw };
+}
 
 async function getZones(filters = {}) {
   try {
@@ -276,7 +297,7 @@ async function createZone(zoneData, userId, options = {}) {
       await db.transaction(async (query) => {
         const orderedLocationIds = [];
         for (const location of validLocations) {
-          const nid = await createLocationWithSystems(
+          const nid = await systemOps.createLocationWithSystems(
             query,
             zoneId,
             location,
@@ -367,7 +388,7 @@ async function updateZone(id, zoneData, userId, options = {}) {
 
           for (const location of validLocations) {
             // 使用 createLocationWithSystems 自動處理合併（如果地點已存在則使用現有地點）
-            await createLocationWithSystems(
+            await systemOps.createLocationWithSystems(
               query,
               targetZoneId,
               location,
@@ -459,21 +480,29 @@ async function updateZone(id, zoneData, userId, options = {}) {
         const updatedLocationIds = new Set();
         const orderedLocationIds = [];
         for (const location of validLocations) {
-          const locationIdStr = location.id ? String(location.id) : null;
-
+          const decision = resolveZoneLocationMutation(
+            location,
+            existingLocationIds,
+          );
           let resolvedId;
-          if (locationIdStr && existingLocationIds.has(locationIdStr)) {
-            await updateLocationWithSystems(
+          if (decision.action === "update") {
+            await systemOps.updateLocationWithSystems(
               query,
-              parseInt(locationIdStr, 10),
+              decision.locationId,
               location,
               userId,
               locationMutationOptions,
             );
-            resolvedId = parseInt(locationIdStr, 10);
-            updatedLocationIds.add(locationIdStr);
+            resolvedId = decision.locationId;
+            updatedLocationIds.add(String(decision.locationId));
+          } else if (decision.action === "reject") {
+            throwApiError(
+              C.LOCATION_NOT_FOUND,
+              `地點不存在：${decision.locationIdStr}`,
+            );
           } else {
-            resolvedId = await createLocationWithSystems(
+            // 無 persisted id：走 create（含同名合併）
+            resolvedId = await systemOps.createLocationWithSystems(
               query,
               id,
               location,
@@ -572,6 +601,7 @@ module.exports = {
   createZone,
   updateZone,
   deleteZone,
+  resolveZoneLocationMutation,
   loadZoneLocations: shared.loadZoneLocations,
   formatZone: shared.formatZone,
   formatLocation: shared.formatLocation,
