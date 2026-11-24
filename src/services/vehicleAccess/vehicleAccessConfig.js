@@ -12,10 +12,6 @@ const { assertCamerasHaveCategory } = require("../devices/deviceCategoryGuard");
 const {
   CAMERA_CATEGORY_LICENSE_PLATE,
 } = require("../../constants/cameraModelCategories");
-const {
-  parseEventBackfillFields,
-} = require("../isapi/isapiEventBackfillCommon");
-
 const OPERATION_MODES = ["construction_flow", "parking"];
 
 function normalizeOperationMode(value) {
@@ -49,7 +45,6 @@ function parseVehicleAccessConfigFields(raw) {
       statsEpochStartedAt != null ? String(statsEpochStartedAt) : null,
     statsResetAt: statsResetAt != null ? String(statsResetAt) : null,
     parkingCapacity,
-    ...parseEventBackfillFields(c),
   };
 }
 

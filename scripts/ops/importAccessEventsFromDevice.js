@@ -3,7 +3,7 @@
  * 不建立 subscribeEvent，不會佔用佈防長連線。
  *
  * 只列出與即時訂閱相同的驗證事件（major=5：人臉／卡片／指紋／酒精）。
- * 相同設備、同一秒、同一人、同一種子類型已在庫則略過（含訂閱寫入但沒有 serialNo 的列）。
+ * 相同設備、相同 serialNo 已在庫則略過；無 serialNo 的列無法去重比對。
  * 人臉事件（sub 75／76）若設備有 pictureURL，會一併下載寫入；已入庫但沒有圖的列也會補圖。
  *
  *   cd ba-backend
@@ -18,10 +18,12 @@ const readline = require("readline");
 const db = require("../../src/database/db");
 const accessControlService = require("../../src/services/accessControl/accessControlService");
 const {
-  persistIsapiEvent,
   isProcessableEvent,
-  attachPictureToEvent,
 } = require("../../src/services/accessControl/isapiSubscribeService");
+const {
+  persistIsapiEvent,
+  attachPictureToEvent,
+} = require("../../src/services/accessControl/isapiAccessEventPersistence");
 const {
   shouldQueueAccessEventPicture,
 } = require("../../src/services/peopleCounting/accessControlLogLabels");
@@ -194,11 +196,7 @@ const main = async () => {
       if (!isProcessableEvent(payload)) continue;
       const eventTime = String(item.time || item.dateTime || "").trim();
       if (!eventTime) continue;
-      const existing = await findExistingAccessEvent(
-        deviceId,
-        eventTime,
-        payload,
-      );
+      const existing = await findExistingAccessEvent(deviceId, payload);
       const pictureUrl = extractPictureUrl(item);
       candidates.push({
         index: candidates.length + 1,

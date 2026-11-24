@@ -79,28 +79,80 @@ function invalidateLocationIngestCache(locationId) {
 }
 
 /**
+ * @param {number} deviceId
+ * @param {number} locationId
+ * @param {string|null|undefined} deviceEventId
+ * @returns {Promise<{ id: number|null, hasPicture: boolean }>}
+ */
+async function findExistingVehicleLogByDeviceEventId(
+  deviceId,
+  locationId,
+  deviceEventId,
+) {
+  const did = Number(deviceId);
+  const lid = Number(locationId);
+  const key = deviceEventId != null ? String(deviceEventId).trim() : "";
+  if (
+    !Number.isFinite(did) ||
+    did <= 0 ||
+    !Number.isFinite(lid) ||
+    lid <= 0 ||
+    !key
+  ) {
+    return { id: null, hasPicture: false };
+  }
+  const rows = await db.query(
+    `SELECT id, picture_path
+     FROM vehicle_passageway_logs
+     WHERE device_id = ?
+       AND location_id = ?
+       AND data_source = 'isapi_camera'
+       AND COALESCE(payload->>'deviceEventId', '') = ?
+     ORDER BY id
+     LIMIT 1`,
+    [did, lid, key],
+  );
+  const row = rows?.[0];
+  if (!row) return { id: null, hasPicture: false };
+  return {
+    id: row.id != null ? Number(row.id) : null,
+    hasPicture: Boolean(String(row.picture_path || "").trim()),
+  };
+}
+
+/**
  * @param {object} options
- * @returns {Promise<{ inserted: boolean, ids: number[] }>}
+ * @param {'subscribe'|'catchup'|'backfill'} [options.source]
+ * @returns {Promise<{ inserted: boolean, ids: number[], existingIds: number[] }>}
  */
 async function persistAnprEvent(options) {
   const { parsed, deviceId, locationTargets = [] } = options || {};
 
   if (!parsed?.dateTime || !Array.isArray(locationTargets) || locationTargets.length === 0) {
-    return { inserted: false, ids: [] };
+    return { inserted: false, ids: [], existingIds: [] };
   }
 
   const plate = normalizePlate(parsed.licensePlate);
   const personInfo = plate ? await lookupPersonByPlate(plate) : null;
   const laneName = await resolveDeviceDisplayName(deviceId);
   const allowResult = listTypeToAllowResult(parsed.listType);
+  const deviceEventId =
+    parsed.deviceEventId != null ? String(parsed.deviceEventId).trim() : "";
+  const source =
+    options.source === "catchup" || options.source === "backfill"
+      ? "catchup"
+      : "subscribe";
   const payload = JSON.stringify({
     dateTime: parsed.dateTime,
     eventType: parsed.eventType,
     licensePlate: parsed.licensePlate,
     listType: parsed.listType,
+    source,
+    ...(deviceEventId ? { deviceEventId } : {}),
   });
 
   const ids = [];
+  const existingIds = [];
   /** @type {typeof locationTargets[number]|null} */
   let primaryInserted = null;
   /** @type {number[]} */
@@ -112,6 +164,18 @@ async function persistAnprEvent(options) {
       !isEventAfterEffectiveSince(parsed.dateTime, policy.effectiveSince)
     ) {
       continue;
+    }
+
+    if (deviceEventId) {
+      const existing = await findExistingVehicleLogByDeviceEventId(
+        deviceId,
+        target.locationId,
+        deviceEventId,
+      );
+      if (existing.id != null) {
+        existingIds.push(existing.id);
+        continue;
+      }
     }
 
     const rows = await db.query(
@@ -193,7 +257,7 @@ async function persistAnprEvent(options) {
     );
   }
 
-  return { inserted: ids.length > 0, ids };
+  return { inserted: ids.length > 0, ids, existingIds };
 }
 
 function normalizeLogIds(logIds) {
@@ -277,4 +341,5 @@ module.exports = {
   runFanOutPictureBackfillOnce,
   invalidateLocationIngestCache,
   listTypeToAllowResult,
+  findExistingVehicleLogByDeviceEventId,
 };

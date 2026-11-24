@@ -49,6 +49,8 @@ assert.equal(card.AccessControllerEvent.majorEventType, 5);
 assert.equal(card.AccessControllerEvent.subEventType, 1);
 assert.equal(card.AccessControllerEvent.cardNo, "0521778153");
 assert.equal(card.AccessControllerEvent.doorNo, 1);
+assert.equal(card.AccessControllerEvent.serialNo, 521);
+assert.equal(card.serialNo, 521);
 assert.equal(isProcessableEvent(card.AccessControllerEvent), true);
 assert.equal(resolveVerifyMethodKey(card.AccessControllerEvent), "card");
 

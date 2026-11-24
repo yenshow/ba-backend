@@ -46,6 +46,32 @@ async function resolveEmployeeNoByPersonName(personName) {
 }
 
 /**
+ * @param {number} deviceId
+ * @param {string|null|undefined} deviceEventId
+ * @returns {Promise<{ id: number|null, hasPicture: boolean }>}
+ */
+async function findExistingFaceEventByDeviceEventId(deviceId, deviceEventId) {
+  const id = safeInt(deviceId);
+  const key = deviceEventId != null ? String(deviceEventId).trim() : "";
+  if (!id || !key) return { id: null, hasPicture: false };
+  const rows = await db.query(
+    `SELECT id, picture_path
+     FROM isapi_face_contrast_events
+     WHERE device_id = ?
+       AND COALESCE(payload->>'deviceEventId', '') = ?
+     ORDER BY id
+     LIMIT 1`,
+    [id, key],
+  );
+  const row = rows?.[0];
+  if (!row) return { id: null, hasPicture: false };
+  return {
+    id: row.id != null ? Number(row.id) : null,
+    hasPicture: Boolean(String(row.picture_path || "").trim()),
+  };
+}
+
+/**
  * @param {object} options
  * @param {'entry'|'exit'|null|undefined} options.direction - 由訂閱端依設備歸屬傳入
  */
@@ -82,6 +108,8 @@ async function persistFaceContrastEvent(options) {
     options.deviceIp != null ? String(options.deviceIp).trim() : null;
   const faceLibName =
     options.faceLibName != null ? String(options.faceLibName).trim() : null;
+  const deviceEventId =
+    options.deviceEventId != null ? String(options.deviceEventId).trim() : "";
 
   const direction =
     options.direction === "entry" || options.direction === "exit"
@@ -89,13 +117,43 @@ async function persistFaceContrastEvent(options) {
       : null;
 
   const source =
-    options.source === "backfill" ? "backfill" : "subscribe";
+    options.source === "catchup" || options.source === "backfill"
+      ? "catchup"
+      : "subscribe";
+
+  if (deviceEventId) {
+    const existing = await findExistingFaceEventByDeviceEventId(
+      deviceId,
+      deviceEventId,
+    );
+    if (existing.id != null) {
+      return {
+        locationId,
+        deviceId,
+        channelId,
+        eventTime: eventTime.toISOString(),
+        eventType,
+        similarity,
+        employeeNo,
+        personName,
+        pid,
+        matched,
+        direction,
+        faceLibName,
+        id: existing.id,
+        inserted: false,
+        hasPicture: existing.hasPicture,
+        deviceEventId,
+      };
+    }
+  }
 
   const payload = {
     source,
     ...(direction ? { direction } : {}),
     ...(faceLibName ? { faceLibName } : {}),
     ...(pid ? { pid } : {}),
+    ...(deviceEventId ? { deviceEventId } : {}),
   };
 
   const rows = await db.query(
@@ -186,7 +244,7 @@ async function persistFaceContrastEvent(options) {
     });
   }
 
-  return wsPayload;
+  return { ...wsPayload, inserted: true, hasPicture: false, deviceEventId: deviceEventId || null };
 }
 
 /**
@@ -237,4 +295,5 @@ async function attachPictureToFaceContrastEvent(eventId, pictureBuffer) {
 module.exports = {
   persistFaceContrastEvent,
   attachPictureToFaceContrastEvent,
+  findExistingFaceEventByDeviceEventId,
 };

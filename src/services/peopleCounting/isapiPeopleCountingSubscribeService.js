@@ -35,8 +35,8 @@ const {
   attachPictureToFaceContrastEvent,
 } = require("./isapiFaceContrastPersistence");
 const {
-  scheduleFaceContrastBackfill,
-} = require("./isapiFaceContrastBackfillService");
+  scheduleFaceContrastCatchup,
+} = require("./isapiFaceContrastCatchupService");
 const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
 
 function ensureInt(v) {
@@ -89,9 +89,6 @@ async function getCameraSubscriptions() {
     resolveFaceCameraDirection,
     CAMERA_MODE,
   } = require("./peopleCountingConfig");
-  const {
-    parseEventBackfillFields,
-  } = require("../isapi/isapiEventBackfillCommon");
 
   const rows = await db.query(
     `SELECT
@@ -122,7 +119,6 @@ async function getCameraSubscriptions() {
     const includeFaceContrast = isFace;
     const includePeopleCounting = !isFace;
     const deviceIds = cameras.cameraDeviceIds;
-    const backfill = parseEventBackfillFields(cfg);
 
     for (const deviceId of deviceIds) {
       if (!deviceId) continue;
@@ -136,8 +132,6 @@ async function getCameraSubscriptions() {
         includePeopleCounting,
         includeFaceContrast,
         direction,
-        eventBackfillEnabled: backfill.eventBackfillEnabled,
-        eventBackfillWindowSec: backfill.eventBackfillWindowSec,
       });
     }
   }
@@ -156,12 +150,6 @@ async function getCameraSubscriptions() {
         prev.includePeopleCounting || s.includePeopleCounting,
       includeFaceContrast: prev.includeFaceContrast || s.includeFaceContrast,
       direction: prev.direction || s.direction,
-      eventBackfillEnabled:
-        prev.eventBackfillEnabled || s.eventBackfillEnabled,
-      eventBackfillWindowSec: Math.max(
-        Number(prev.eventBackfillWindowSec) || 0,
-        Number(s.eventBackfillWindowSec) || 0,
-      ),
     });
   }
   return [...uniq.values()].filter(
@@ -245,19 +233,28 @@ async function consumeEventStreamIncremental(
       .trim();
     if (!/xml|json/i.test(ct) && raw.length === 0) return;
 
-    // 略過保活（無業務 eventType 或 heartbeat）
+    // 保活：人臉模式仍觸發 catch-up
     const quickType =
       (raw.match(/"eventType"\s*:\s*"([^"]+)"/i) || [])[1] ||
       (raw.match(/<eventType>([^<]+)<\/eventType>/i) || [])[1] ||
       "";
     const quickTypeLower = String(quickType).toLowerCase();
     if (
-      !quickTypeLower ||
       quickTypeLower === "heartbeat" ||
       quickTypeLower === "heart beat"
     ) {
+      if (context.includeFaceContrast) {
+        scheduleFaceContrastCatchup({
+          locationId: context.locationId,
+          deviceId: context.deviceId,
+          channelId: context.channelId ?? 1,
+          direction: context.direction || null,
+          deviceIp: context.deviceIp || "",
+        });
+      }
       return;
     }
+    if (!quickTypeLower) return;
 
     // 人臉比對：face_recognition 落地 alarmResult（含陌生人）
     if (context.includeFaceContrast) {
@@ -279,26 +276,29 @@ async function consumeEventStreamIncremental(
             matched: faceParsed.matched,
             faceLibName: faceParsed.faceLibName,
             direction: context.direction || null,
+            deviceEventId: faceParsed.deviceEventId,
           });
-          if (saved?.id != null) {
+          if (saved?.inserted && saved?.id != null) {
             lastWrittenFaceEventId = Number(saved.id);
+          } else {
+            lastWrittenFaceEventId = null;
           }
-          logger.info("[ISAPI FaceContrast] 已寫入比對事件", {
-            locationId: context.locationId,
-            deviceId: context.deviceId,
-            id: saved?.id ?? null,
-            personName: saved?.personName ?? faceParsed.personName,
-            employeeNo: saved?.employeeNo ?? faceParsed.employeeNo,
-            similarity: faceParsed.similarity,
-          });
-          scheduleFaceContrastBackfill({
+          if (saved?.inserted) {
+            logger.info("[ISAPI FaceContrast] 已寫入比對事件", {
+              locationId: context.locationId,
+              deviceId: context.deviceId,
+              id: saved?.id ?? null,
+              personName: saved?.personName ?? faceParsed.personName,
+              employeeNo: saved?.employeeNo ?? faceParsed.employeeNo,
+              similarity: faceParsed.similarity,
+            });
+          }
+          scheduleFaceContrastCatchup({
             locationId: context.locationId,
             deviceId: context.deviceId,
             channelId: faceParsed.channelId ?? context.channelId ?? 1,
             direction: context.direction || null,
             eventTime: faceParsed.eventTime,
-            enabled: Boolean(context.eventBackfillEnabled),
-            windowSec: context.eventBackfillWindowSec,
             deviceIp: faceParsed.deviceIp || context.deviceIp || "",
           });
         } catch (err) {
@@ -430,8 +430,6 @@ async function runSubscribeForCamera(sub, abortSignal) {
       includePeopleCounting,
       includeFaceContrast,
       direction,
-      eventBackfillEnabled: Boolean(sub.eventBackfillEnabled),
-      eventBackfillWindowSec: sub.eventBackfillWindowSec,
     },
     abortSignal,
   );

@@ -1,61 +1,9 @@
 /**
- * ISAPI 事件補齊共用：視窗秒數、時間區間、debounce、輕量 XML／圖檔工具
- * 人臉（FCSearch）／門禁（AcsEvent JSON）／車牌（Traffic search）各自呼叫不同設備 API；
- * 此檔只放真正共用的排程與字串工具，不混用查詢路徑。
+ * ISAPI 共用工具：時間格式、輕量 XML／圖檔、debounce（NVR／門禁圖檔／catch-up 共用）。
  */
-const DEFAULT_WINDOW_SEC = 5;
-const MIN_WINDOW_SEC = 1;
-const MAX_WINDOW_SEC = 30;
 const DEFAULT_DEBOUNCE_MS = 1500;
 
-function normalizeEventBackfillEnabled(raw) {
-  if (raw === true || raw === 1 || raw === "1" || raw === "true") return true;
-  if (raw === false || raw === 0 || raw === "0" || raw === "false") return false;
-  return false;
-}
-
-function normalizeEventBackfillWindowSec(raw) {
-  if (raw == null || raw === "") return DEFAULT_WINDOW_SEC;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_WINDOW_SEC;
-  return Math.min(MAX_WINDOW_SEC, Math.max(MIN_WINDOW_SEC, Math.trunc(n)));
-}
-
-/**
- * @param {object} raw - snake 或 camel
- * @returns {{ eventBackfillEnabled: boolean, eventBackfillWindowSec: number }}
- */
-function parseEventBackfillFields(raw) {
-  const cfg = raw && typeof raw === "object" ? raw : {};
-  return {
-    eventBackfillEnabled: normalizeEventBackfillEnabled(
-      cfg.event_backfill_enabled ?? cfg.eventBackfillEnabled,
-    ),
-    eventBackfillWindowSec: normalizeEventBackfillWindowSec(
-      cfg.event_backfill_window_sec ?? cfg.eventBackfillWindowSec,
-    ),
-  };
-}
-
-/**
- * @param {Date|string|number} eventTime
- * @param {number} windowSec
- * @returns {{ start: Date, end: Date }}
- */
-function resolveBackfillTimeRange(eventTime, windowSec) {
-  const center = new Date(eventTime);
-  const baseMs = Number.isFinite(center.getTime())
-    ? center.getTime()
-    : Date.now();
-  const win = normalizeEventBackfillWindowSec(windowSec);
-  const start = new Date(baseMs - win * 1000);
-  const endRaw = new Date(baseMs + win * 1000);
-  const now = Date.now();
-  const end = endRaw.getTime() > now ? new Date(now) : endRaw;
-  return { start, end };
-}
-
-/** Asia/Taipei 偏移字串（AcsEvent／FCSearch／Traffic search 常用） */
+/** Asia/Taipei 偏移字串（AcsEvent／FCSearch／Traffic／NVR CMSearch 常用） */
 function formatIsapiLocalDateTime(date) {
   const d = date instanceof Date ? date : new Date(date);
   if (!Number.isFinite(d.getTime())) return "";
@@ -125,11 +73,6 @@ function responseBodyToString(data) {
   return String(data || "");
 }
 
-function isSearchCompleteStatus(status) {
-  const s = String(status || "").toUpperCase();
-  return s === "OK" || s === "NO MATCH" || s === "NO MATCHES";
-}
-
 function isImageBuffer(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 8) return false;
   if (buf[0] === 0xff && buf[1] === 0xd8) return true;
@@ -158,22 +101,6 @@ async function downloadIsapiPicture(client, urlOrPath) {
   } catch {
     return null;
   }
-}
-
-/**
- * 多地點綁定同一設備時：任一開啟即啟用，秒數取最大
- * @param {Array<{ eventBackfillEnabled?: boolean, eventBackfillWindowSec?: number }|object>} configs
- */
-function mergeEventBackfillPrefs(configs) {
-  let enabled = false;
-  let windowSec = DEFAULT_WINDOW_SEC;
-  for (const raw of configs || []) {
-    const fields = parseEventBackfillFields(raw || {});
-    if (!fields.eventBackfillEnabled) continue;
-    enabled = true;
-    windowSec = Math.max(windowSec, fields.eventBackfillWindowSec);
-  }
-  return { enabled, windowSec };
 }
 
 /**
@@ -216,15 +143,12 @@ function createDebouncedScheduler(debounceMs = DEFAULT_DEBOUNCE_MS) {
   return { schedule, clear };
 }
 
+/** 人臉／車牌歷史查詢協議時間窗（秒）；非表單設定、不用作事件身分 */
+const PROTOCOL_LOOKBACK_SEC = 120;
+
 module.exports = {
-  DEFAULT_WINDOW_SEC,
-  MIN_WINDOW_SEC,
-  MAX_WINDOW_SEC,
   DEFAULT_DEBOUNCE_MS,
-  normalizeEventBackfillEnabled,
-  normalizeEventBackfillWindowSec,
-  parseEventBackfillFields,
-  resolveBackfillTimeRange,
+  PROTOCOL_LOOKBACK_SEC,
   formatIsapiLocalDateTime,
   normalizeNvrWallClockDateTime,
   pickTag,
@@ -232,9 +156,7 @@ module.exports = {
   decodeXmlEntities,
   toIsapiUrlPath,
   responseBodyToString,
-  isSearchCompleteStatus,
   isImageBuffer,
   downloadIsapiPicture,
-  mergeEventBackfillPrefs,
   createDebouncedScheduler,
 };

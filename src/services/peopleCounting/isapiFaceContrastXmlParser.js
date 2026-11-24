@@ -2,7 +2,9 @@
  * ISAPI 人臉比對解析（現場 DeepinView：eventType=alarmResult）
  * - 有 candidate：落地比對結果（matched=true，後續再依地點準確度門檻標失敗）
  * - 無 candidate：落地為陌生人（matched=false），與設備本機「臉部比對結果」對齊
+ * - deviceEventId：facePicID／snapFacePicID／UUID（對齊 SDK）；皆無則 snapPicURL path；勿用人臉庫 pid／畫面內 faceId
  */
+const { toIsapiUrlPath } = require("../isapi/isapiEventBackfillCommon");
 
 function firstOf(...vals) {
   for (const v of vals) {
@@ -30,6 +32,69 @@ function normalizeSimilarityPercent(v) {
   if (n >= 0 && n <= 1) return Math.round(n * 1000) / 10;
   if (n > 1 && n <= 100) return Math.round(n * 10) / 10;
   return n;
+}
+
+/**
+ * 事件級唯一鍵（對齊 SDK dwFacePicID／dwSnapFacePicID；可選 UUID；後備圖 path）
+ * 不用畫面內 faceId、也不用臉庫 PID。
+ */
+function extractFaceDeviceEventIdFromObject(root, obj) {
+  const sources = [root, obj].filter(Boolean);
+  for (const src of sources) {
+    const id = firstOf(
+      src.facePicID,
+      src.facePicId,
+      src.snapFacePicID,
+      src.snapFacePicId,
+      src.UUID,
+      src.uuid,
+      src.targetID,
+      src.targetId,
+    );
+    if (id) return id;
+  }
+  for (const src of sources) {
+    for (const block of asArray(src?.alarmResult)) {
+      for (const face of asArray(block?.faces)) {
+        const id = firstOf(
+          face.facePicID,
+          face.facePicId,
+          face.snapFacePicID,
+          face.snapFacePicId,
+          face.UUID,
+          face.uuid,
+        );
+        if (id) return id;
+      }
+    }
+  }
+  for (const src of sources) {
+    const path = toIsapiUrlPath(
+      firstOf(
+        src.snapPicURL,
+        src.snapPicUrl,
+        src.facePicURL,
+        src.facePicUrl,
+        src.pictureURL,
+        src.pictureUrl,
+      ),
+    );
+    if (path) return path;
+    for (const block of asArray(src?.alarmResult)) {
+      for (const face of asArray(block?.faces)) {
+        const facePath = toIsapiUrlPath(
+          firstOf(
+            face.snapPicURL,
+            face.facePicURL,
+            face.pictureURL,
+            face.pImage,
+          ),
+        );
+        if (facePath) return facePath;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -118,11 +183,14 @@ function parseFaceContrastEventPayload(raw) {
   );
   if (!eventTime) return null;
 
+  const deviceEventId = extractFaceDeviceEventIdFromObject(root, obj);
+
   const base = {
     eventType: "alarmResult",
     eventTime,
     channelId: root.channelID ?? root.channelId ?? obj.channelID ?? null,
     deviceIp: firstOf(root.ipAddress, obj.ipAddress),
+    deviceEventId,
   };
 
   const best = extractBestCandidate(root) || extractBestCandidate(obj);
@@ -157,4 +225,5 @@ module.exports = {
   parseFaceContrastEventPayload,
   normalizeSimilarityPercent,
   extractBestCandidate,
+  extractFaceDeviceEventIdFromObject,
 };

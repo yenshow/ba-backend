@@ -14,14 +14,11 @@ const {
   attachLicensePlatePicture,
   runFanOutPictureBackfillOnce,
 } = require("./isapiVehiclePersistence");
+const {
+  scheduleVehicleEventCatchup,
+} = require("./isapiVehicleEventCatchupService");
 const { ensureIntArray } = require("../location/locationShared");
 const isapiTimeSyncService = require("../isapi/isapiTimeSyncService");
-const {
-  scheduleVehicleEventBackfill,
-} = require("./isapiVehicleEventBackfillService");
-const {
-  parseEventBackfillFields,
-} = require("../isapi/isapiEventBackfillCommon");
 const {
   createSubscribeManager,
   consumeMultipartEventStream,
@@ -56,13 +53,10 @@ async function loadDeviceLocationMap() {
     const cfg = r.system_config || {};
     const entryIds = ensureIntArray(cfg.entry_camera_device_ids);
     const exitIds = ensureIntArray(cfg.exit_camera_device_ids);
-    const backfill = parseEventBackfillFields(cfg);
     const target = {
       locationId: Number(r.location_id),
       locationName: r.location_name || "",
       zoneName: r.zone_name || "",
-      eventBackfillEnabled: backfill.eventBackfillEnabled,
-      eventBackfillWindowSec: backfill.eventBackfillWindowSec,
     };
     for (const deviceId of entryIds) {
       if (!map.has(deviceId)) map.set(deviceId, []);
@@ -132,14 +126,35 @@ async function consumeEventStreamIncremental(
         /xml/i.test(ct) ||
         (rawBody.startsWith("<") && rawBody.includes("eventType"))
       ) {
+        const targets = deviceLocationMap.get(deviceId) || [];
+        const quickType =
+          (rawBody.match(/<eventType>([^<]+)<\/eventType>/i) || [])[1] || "";
+        const quickTypeLower = String(quickType).toLowerCase();
+        if (
+          quickTypeLower === "heartbeat" ||
+          quickTypeLower === "heart beat"
+        ) {
+          if (targets.length > 0) {
+            scheduleVehicleEventCatchup({
+              deviceId,
+              locationTargets: targets,
+            });
+          }
+          return;
+        }
+
         const parsed = parseAnprEventXml(rawBody);
         if (!parsed) return;
-        const targets = deviceLocationMap.get(deviceId) || [];
         if (targets.length === 0) return;
         const res = await persistAnprEvent({
           parsed,
           deviceId,
           locationTargets: targets,
+        });
+        scheduleVehicleEventCatchup({
+          deviceId,
+          locationTargets: targets,
+          eventTime: parsed.dateTime,
         });
         if (!res.inserted) return;
         logger.info("[ISAPI Vehicle] 已寫入 ANPR", {
@@ -148,11 +163,6 @@ async function consumeEventStreamIncremental(
           count: res.ids.length,
         });
         pendingPicture = { logIds: res.ids, attachFirstImage: true };
-        scheduleVehicleEventBackfill({
-          deviceId,
-          eventTime: parsed.dateTime,
-          locationTargets: targets,
-        });
         return;
       }
 

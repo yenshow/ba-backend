@@ -17,9 +17,10 @@ const {
   shouldQueueAccessEventPicture,
 } = require("../peopleCounting/accessControlLogLabels");
 const {
-  scheduleAccessEventBackfill,
-  startConnectedAcsEventPoll,
-} = require("./isapiAccessEventBackfillService");
+  scheduleAccessEventCatchup,
+  noteSerialSeen,
+} = require("./isapiAccessEventCatchupService");
+const { parseSerialNo } = require("./isapiAcsEventQuery");
 const {
   isProcessableEvent,
   persistIsapiEvent,
@@ -126,6 +127,12 @@ function parseEventJson(jsonStr) {
     obj.name ??
     "";
   result.cardNo = String(alert.cardNo ?? ac.cardNo ?? obj.cardNo ?? "");
+  const serialRaw = ac.serialNo ?? alert.serialNo ?? obj.serialNo;
+  const serialNo = parseSerialNo(serialRaw);
+  if (serialNo != null) {
+    result.AccessControllerEvent.serialNo = serialNo;
+    result.serialNo = serialNo;
+  }
   if (!result.eventType && (obj.ipAddress || obj.portNo || obj.macAddress))
     result.eventType = "heartBeat";
   return result;
@@ -137,6 +144,8 @@ function parseEventJson(jsonStr) {
  */
 async function handleEvent(parsed, deviceIp, deviceId = null) {
   const ac = parsed.AccessControllerEvent || {};
+  const serialNo =
+    parseSerialNo(parsed.serialNo) ?? parseSerialNo(ac.serialNo);
   const payload = {
     ...ac,
     employeeNoString: parsed.employeeNoString ?? ac.employeeNoString ?? "",
@@ -144,6 +153,7 @@ async function handleEvent(parsed, deviceIp, deviceId = null) {
     personName: parsed.personName ?? ac.personName ?? ac.name ?? "",
     cardNo: parsed.cardNo ?? ac.cardNo ?? "",
   };
+  if (serialNo != null) payload.serialNo = serialNo;
   const { id } = await persistIsapiEvent({
     deviceId,
     deviceIp: parsed.ipAddress || deviceIp || "",
@@ -151,6 +161,9 @@ async function handleEvent(parsed, deviceIp, deviceId = null) {
     eventType: parsed.eventType || "AccessControllerEvent",
     payload,
   });
+  if (id != null && deviceId != null && serialNo != null) {
+    noteSerialSeen(deviceId, serialNo);
+  }
   return id ?? null;
 }
 
@@ -166,14 +179,20 @@ async function consumeEventStreamIncremental(
 ) {
   /** 僅人臉事件佔槽；指紋等 JSON 不清除。新人臉覆蓋並 warn。 */
   let lastPendingFaceEventId = null;
-  const stopSilentPoll = startConnectedAcsEventPoll({ deviceId, deviceIp });
 
   const processParsedEvent = async (parsed) => {
     if (!parsed) return;
     const ac = parsed.AccessControllerEvent || {};
-    if (String(parsed.eventType).toLowerCase() === "heartbeat") return;
+    const isHeartbeat =
+      String(parsed.eventType || "").toLowerCase() === "heartbeat";
+    if (isHeartbeat) {
+      scheduleAccessEventCatchup({
+        deviceId,
+        deviceIp: parsed.ipAddress || deviceIp || "",
+      });
+      return;
+    }
     if (!isProcessableEvent(ac)) return;
-    stopSilentPoll();
     const id = await handleEvent(parsed, deviceIp, deviceId);
     if (id && shouldQueueAccessEventPicture(ac)) {
       if (lastPendingFaceEventId != null) {
@@ -185,74 +204,68 @@ async function consumeEventStreamIncremental(
       }
       lastPendingFaceEventId = id;
     }
-    if (id != null) {
-      scheduleAccessEventBackfill({
-        deviceId,
-        deviceIp: parsed.ipAddress || deviceIp || "",
-        eventTime: parsed.dateTime || new Date().toISOString(),
-      });
-    }
+    scheduleAccessEventCatchup({
+      deviceId,
+      deviceIp: parsed.ipAddress || deviceIp || "",
+      hintSerialNo: parseSerialNo(parsed.serialNo ?? ac.serialNo),
+    });
     logger.debug("[ISAPI] 已寫入門禁事件", { deviceId, deviceIp });
   };
 
-  try {
-    await consumeMultipartEventStream({
-      stream,
-      contentType,
-      abortSignal,
-      preferContentLength: true,
-      onPart: async (headerStr, body) => {
-        const ct =
-          (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
-        const name =
-          (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) ||
-            [])[1] || "";
-        const rawBody = body
-          .toString("utf8")
-          .replace(/^\uFEFF/, "")
-          .trim();
-        if (
-          /application\/json/i.test(ct) ||
-          (rawBody.length > 0 && rawBody[0] === "{")
-        ) {
-          const parsed = parseEventJson(rawBody);
-          if (parsed) await processParsedEvent(parsed);
-          return;
-        }
-        if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
-          const eventId = lastPendingFaceEventId;
-          if (eventId == null) {
-            logger.warn("[ISAPI] 收到附圖但無待綁定事件", {
-              deviceId,
-              deviceIp,
-            });
-            return;
-          }
-          lastPendingFaceEventId = null;
-          await attachPictureToEvent(eventId, body);
-        }
-      },
-      onPartError: (err) => {
-        logger.warn("[ISAPI] 處理事件片段失敗", {
-          deviceId,
-          deviceIp,
-          error: err?.message || String(err),
-        });
-      },
-      onBeforeResolve: () => {
-        if (lastPendingFaceEventId != null) {
-          logger.warn("[ISAPI] 串流結束仍有未配對附圖的事件", {
+  await consumeMultipartEventStream({
+    stream,
+    contentType,
+    abortSignal,
+    preferContentLength: true,
+    onPart: async (headerStr, body) => {
+      const ct =
+        (headerStr.match(/Content-Type:\s*([^\r\n]+)/i) || [])[1] || "";
+      const name =
+        (headerStr.match(/Content-Disposition[^;]*name="([^"]+)"/i) ||
+          [])[1] || "";
+      const rawBody = body
+        .toString("utf8")
+        .replace(/^\uFEFF/, "")
+        .trim();
+      if (
+        /application\/json/i.test(ct) ||
+        (rawBody.length > 0 && rawBody[0] === "{")
+      ) {
+        const parsed = parseEventJson(rawBody);
+        if (parsed) await processParsedEvent(parsed);
+        return;
+      }
+      if (/image/i.test(ct) || /\.(jpg|jpeg|png)$/i.test(name)) {
+        const eventId = lastPendingFaceEventId;
+        if (eventId == null) {
+          logger.warn("[ISAPI] 收到附圖但無待綁定事件", {
             deviceId,
             deviceIp,
-            eventId: lastPendingFaceEventId,
           });
-          lastPendingFaceEventId = null;
+          return;
         }
-      },
-    });
-  } finally {
-    stopSilentPoll();
-  }
+        lastPendingFaceEventId = null;
+        await attachPictureToEvent(eventId, body);
+      }
+    },
+    onPartError: (err) => {
+      logger.warn("[ISAPI] 處理事件片段失敗", {
+        deviceId,
+        deviceIp,
+        error: err?.message || String(err),
+      });
+    },
+    onBeforeResolve: () => {
+      if (lastPendingFaceEventId != null) {
+        logger.warn("[ISAPI] 串流結束仍有未配對附圖的事件", {
+          deviceId,
+          deviceIp,
+          eventId: lastPendingFaceEventId,
+        });
+        lastPendingFaceEventId = null;
+      }
+    },
+  });
 }
 
 /**

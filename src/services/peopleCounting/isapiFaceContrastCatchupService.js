@@ -1,36 +1,67 @@
 /**
- * 人臉比對事件補齊：訂閱 alarmResult 後，以攝影機 FCSearch（Intelligent）短查近 N 秒
- * 注意：門禁機請走 AcsEvent，勿對 access_control 呼叫本服務。
+ * 人臉比對事件補齊：訂閱／heartbeat 後以協議時間窗短查 FCSearch；
+ * 去重鍵＝device_id + deviceEventId（facePicID／snapFacePicID／UUID／snapPicURL path）。
  */
 const logger = require("../../utils/logger").createLogger(
-  "ISAPI FaceContrast Backfill",
+  "ISAPI FaceContrast Catchup",
 );
-const db = require("../../database/db");
 const deviceService = require("../devices/deviceService");
 const { createIsapiClient } = require("../accessControl/isapiClient");
 const {
   persistFaceContrastEvent,
   attachPictureToFaceContrastEvent,
+  findExistingFaceEventByDeviceEventId,
 } = require("./isapiFaceContrastPersistence");
 const {
-  resolveBackfillTimeRange,
-  formatIsapiLocalDateTime,
   createDebouncedScheduler,
-  normalizeEventBackfillWindowSec,
+  downloadIsapiPicture,
+  formatIsapiLocalDateTime,
   pickTag,
   pickBlocks,
   toIsapiUrlPath,
   responseBodyToString,
-  isSearchCompleteStatus,
-  downloadIsapiPicture,
+  DEFAULT_DEBOUNCE_MS,
+  PROTOCOL_LOOKBACK_SEC,
 } = require("../isapi/isapiEventBackfillCommon");
 const { escapeXml } = require("../isapi/isapiXmlUtils");
 
 const FC_SEARCH_PATH = "/ISAPI/Intelligent/FDLib/FCSearch";
 const PAGE_SIZE = 50;
 const MAX_PAGES = 5;
-const scheduler = createDebouncedScheduler();
+const scheduler = createDebouncedScheduler(DEFAULT_DEBOUNCE_MS);
 
+/** @type {Map<string, number>} key=location:device → lastCatchupAt ms */
+const lastCatchupAt = new Map();
+
+function firstOf(...vals) {
+  for (const v of vals) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function cacheKey(locationId, deviceId) {
+  return `${Number(locationId)}:${Number(deviceId)}`;
+}
+
+function resolveProtocolTimeRange(eventTime) {
+  const endMs = Date.now();
+  const end = new Date(endMs);
+  let startMs = endMs - PROTOCOL_LOOKBACK_SEC * 1000;
+  if (eventTime != null) {
+    const center = new Date(eventTime).getTime();
+    if (Number.isFinite(center)) {
+      startMs = Math.min(startMs, center - PROTOCOL_LOOKBACK_SEC * 1000);
+    }
+  }
+  return { start: new Date(startMs), end };
+}
+
+/**
+ * FCSearch MatchElement → 列；deviceEventId 優先 picID／UUID，否則 snapPicURL path
+ */
 function parseFcSearchResult(xml) {
   const text = String(xml || "");
   const elements = pickBlocks(text, "MatchElement");
@@ -60,8 +91,18 @@ function parseFcSearchResult(xml) {
       pickTag(el, "snapPicURL") ||
       pickTag(el, "facePicURL") ||
       (matchInfo ? pickTag(matchInfo, "picURL") : null);
+    const deviceEventId = firstOf(
+      pickTag(el, "facePicID"),
+      pickTag(el, "facePicId"),
+      pickTag(el, "snapFacePicID"),
+      pickTag(el, "snapFacePicId"),
+      pickTag(el, "UUID"),
+      pickTag(el, "uuid"),
+      matchInfo ? pickTag(matchInfo, "facePicID") : null,
+      matchInfo ? pickTag(matchInfo, "UUID") : null,
+      toIsapiUrlPath(snapPicURL),
+    );
     const hasIdentity = Boolean(name || pid || customHumanID);
-    // 有 FaceMatchInfo 卻無身分 → 略過；無 MatchInfo → 陌生人抓拍
     if (matchInfo && !hasIdentity) continue;
     out.push({
       eventTime:
@@ -75,6 +116,7 @@ function parseFcSearchResult(xml) {
       faceLibName: faceLibName || null,
       picturePath: toIsapiUrlPath(snapPicURL),
       matched: hasIdentity,
+      deviceEventId,
     });
   }
   return {
@@ -108,74 +150,70 @@ async function fetchFcSearchMatches(client, start, end) {
     });
     const parsed = parseFcSearchResult(responseBodyToString(res.data));
     all.push(...parsed.rows);
-    if (parsed.rows.length === 0 || isSearchCompleteStatus(parsed.status)) {
+    const status = parsed.status;
+    if (
+      parsed.rows.length === 0 ||
+      status === "OK" ||
+      status === "NO MATCH" ||
+      status === "NO MATCHES"
+    ) {
       break;
     }
-    position += parsed.rows.length > 0 ? parsed.rows.length : PAGE_SIZE;
+    position += parsed.rows.length;
   }
   return all;
 }
 
-async function findExistingFaceEvent(deviceId, eventTime, row) {
-  const who = String(row.employeeNo || row.personName || "").trim();
-  const pid = row.pid != null ? String(row.pid).trim() : "";
-  const isStranger = !who && !pid;
-  const rows = await db.query(
-    `SELECT id, picture_path
-     FROM isapi_face_contrast_events
-     WHERE device_id = ?
-       AND date_trunc('second', event_time) = date_trunc('second', ?::timestamptz)
-       AND (
-         (? <> '' AND COALESCE(pid, '') = ?)
-         OR (
-           ? <> ''
-           AND (
-             COALESCE(NULLIF(employee_no, ''), '') = ?
-             OR COALESCE(NULLIF(person_name, ''), '') = ?
-           )
-         )
-         OR (
-           ?::boolean
-           AND matched = false
-           AND COALESCE(NULLIF(employee_no, ''), '') = ''
-           AND COALESCE(NULLIF(person_name, ''), '') = ''
-           AND COALESCE(NULLIF(pid, ''), '') = ''
-         )
-       )
-     ORDER BY id ASC
-     LIMIT 1`,
-    [deviceId, eventTime, pid, pid, who, who, who, isStranger],
-  );
-  const r = rows?.[0];
-  if (!r) return { id: null, hasPicture: false };
-  return {
-    id: Number(r.id),
-    hasPicture: Boolean(String(r.picture_path || "").trim()),
-  };
-}
+/**
+ * @param {{
+ *   locationId: number,
+ *   deviceId: number,
+ *   channelId?: number,
+ *   direction?: 'entry'|'exit'|null,
+ *   eventTime?: string|Date|null,
+ *   deviceIp?: string,
+ * }} options
+ */
+async function runCatchup(options) {
+  const locationId = Number(options?.locationId);
+  const deviceId = Number(options?.deviceId);
+  if (
+    !Number.isFinite(locationId) ||
+    locationId <= 0 ||
+    !Number.isFinite(deviceId) ||
+    deviceId <= 0
+  ) {
+    return { matched: 0, inserted: 0 };
+  }
 
-async function runBackfill(job) {
-  const {
-    locationId,
-    deviceId,
-    channelId,
-    direction,
-    eventTime,
-    windowSec,
-    deviceIp,
-  } = job;
-  const { start, end } = resolveBackfillTimeRange(eventTime, windowSec);
+  const key = cacheKey(locationId, deviceId);
+  const prevAt = lastCatchupAt.get(key);
+  let { start, end } = resolveProtocolTimeRange(options?.eventTime);
+  if (prevAt != null && Number.isFinite(prevAt)) {
+    const floor = Math.max(start.getTime(), prevAt);
+    if (floor < end.getTime()) start = new Date(floor);
+  }
+
   const { device } = await deviceService.getDeviceById(deviceId);
   if (!device?.config?.host) {
     throw new Error("攝影機連線設定不完整");
   }
   const client = createIsapiClient(device.config, {
-    typeCode: device.type_code || "camera",
+    typeCode: device.type_code,
   });
-  const matches = await fetchFcSearchMatches(client, start, end);
+  const rows = await fetchFcSearchMatches(client, start, end);
   let inserted = 0;
-  for (const row of matches) {
-    const existing = await findExistingFaceEvent(deviceId, row.eventTime, row);
+  let skippedNoId = 0;
+
+  for (const row of rows) {
+    if (!row.deviceEventId) {
+      skippedNoId += 1;
+      continue;
+    }
+    const existing = await findExistingFaceEventByDeviceEventId(
+      deviceId,
+      row.deviceEventId,
+    );
     if (existing.id != null) {
       if (!existing.hasPicture && row.picturePath) {
         const pic = await downloadIsapiPicture(client, row.picturePath);
@@ -186,20 +224,21 @@ async function runBackfill(job) {
     const saved = await persistFaceContrastEvent({
       locationId,
       deviceId,
-      deviceIp: deviceIp || device.config?.host || "",
-      channelId: channelId || 1,
+      deviceIp: options.deviceIp || device.config?.host || "",
+      channelId: options.channelId ?? 1,
       eventTime: row.eventTime,
       eventType: "alarmResult",
       similarity: row.similarity,
       employeeNo: row.employeeNo,
       personName: row.personName,
       pid: row.pid,
-      matched: row.matched !== false,
+      matched: row.matched,
       faceLibName: row.faceLibName,
-      direction: direction || null,
-      source: "backfill",
+      direction: options.direction || null,
+      deviceEventId: row.deviceEventId,
+      source: "catchup",
     });
-    if (saved?.id != null) {
+    if (saved?.inserted && saved.id != null) {
       inserted += 1;
       if (row.picturePath) {
         const pic = await downloadIsapiPicture(client, row.picturePath);
@@ -207,36 +246,55 @@ async function runBackfill(job) {
       }
     }
   }
-  logger.info("人臉事件補齊完成", {
-    deviceId,
-    locationId,
-    windowSec: normalizeEventBackfillWindowSec(windowSec),
-    matched: matches.length,
-    inserted,
-  });
-  return { matched: matches.length, inserted };
-}
 
-function scheduleFaceContrastBackfill(options) {
-  const enabled = Boolean(options?.enabled);
-  if (!enabled) return;
-  const deviceId = Number(options.deviceId);
-  const locationId = Number(options.locationId);
-  if (!Number.isFinite(deviceId) || !Number.isFinite(locationId)) return;
-  const windowSec = normalizeEventBackfillWindowSec(options.windowSec);
-  scheduler.schedule(`face:${locationId}:${deviceId}`, () =>
-    runBackfill({
+  lastCatchupAt.set(key, end.getTime());
+
+  if (inserted > 0 || skippedNoId > 0) {
+    logger.info("人臉事件 catch-up 完成", {
       locationId,
       deviceId,
-      channelId: options.channelId,
-      direction: options.direction,
-      eventTime: options.eventTime,
-      windowSec,
-      deviceIp: options.deviceIp,
-    }).catch((e) => {
+      matched: rows.length,
+      inserted,
+      skippedNoId,
+    });
+  }
+  if (skippedNoId > 0) {
+    logger.warn("人臉 FCSearch 列缺少 deviceEventId，已略過", {
+      locationId,
+      deviceId,
+      skippedNoId,
+    });
+  }
+  return { matched: rows.length, inserted, skippedNoId };
+}
+
+/**
+ * @param {{
+ *   locationId: number,
+ *   deviceId: number,
+ *   channelId?: number,
+ *   direction?: 'entry'|'exit'|null,
+ *   eventTime?: string|Date|null,
+ *   deviceIp?: string,
+ * }} options
+ */
+function scheduleFaceContrastCatchup(options) {
+  const locationId = Number(options?.locationId);
+  const deviceId = Number(options?.deviceId);
+  if (
+    !Number.isFinite(locationId) ||
+    locationId <= 0 ||
+    !Number.isFinite(deviceId) ||
+    deviceId <= 0
+  ) {
+    return;
+  }
+  const key = `face-catchup:${locationId}:${deviceId}`;
+  scheduler.schedule(key, () =>
+    runCatchup(options).catch((e) => {
       logger.warn("人臉事件補齊失敗", {
-        deviceId,
         locationId,
+        deviceId,
         error: e?.message || String(e),
       });
     }),
@@ -244,6 +302,7 @@ function scheduleFaceContrastBackfill(options) {
 }
 
 module.exports = {
-  scheduleFaceContrastBackfill,
+  scheduleFaceContrastCatchup,
   parseFcSearchResult,
+  runCatchup,
 };

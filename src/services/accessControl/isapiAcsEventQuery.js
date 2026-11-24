@@ -1,6 +1,6 @@
 /**
  * 門禁機 AcsEvent 歷史查詢（JSON，與攝影機 FCSearch／Traffic 路徑不同）
- * 供訂閱補齊與 scripts/ops/importAccessEventsFromDevice 共用，避免兩套查詢漂移。
+ * 供訂閱 serialNo 補齊與 scripts/ops/importAccessEventsFromDevice 共用。
  */
 const db = require("../../database/db");
 
@@ -12,10 +12,18 @@ const asList = (value) => {
   return Array.isArray(value) ? value : [value];
 };
 
+/** @param {unknown} raw */
+function parseSerialNo(raw) {
+  if (raw == null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.trunc(n);
+}
+
 function toAcsEventPayload(item) {
   const employee = String(item.employeeNoString ?? item.employeeNo ?? "").trim();
   const name = String(item.name ?? item.personName ?? "").trim();
-  const serialNo = item.serialNo != null ? item.serialNo : null;
+  const serialNo = parseSerialNo(item.serialNo);
   return {
     majorEventType: Number(item.major ?? item.majorEventType),
     subEventType: Number(item.minor ?? item.subEventType),
@@ -35,11 +43,27 @@ function toAcsEventPayload(item) {
 
 /**
  * @param {{ request: Function }} client
- * @param {{ startTime: string, endTime: string, pageSize?: number, maxPages?: number, onPictureUnsupported?: () => void }} options
+ * @param {{
+ *   startTime?: string,
+ *   endTime?: string,
+ *   beginSerialNo?: number|null,
+ *   endSerialNo?: number|null,
+ *   pageSize?: number,
+ *   maxPages?: number,
+ *   onPictureUnsupported?: () => void
+ * }} options
  */
 async function fetchAcsEvents(client, options) {
-  const startTime = String(options?.startTime || "");
-  const endTime = String(options?.endTime || "");
+  const startTime =
+    options?.startTime != null && String(options.startTime).trim()
+      ? String(options.startTime).trim()
+      : "";
+  const endTime =
+    options?.endTime != null && String(options.endTime).trim()
+      ? String(options.endTime).trim()
+      : "";
+  const beginSerialNo = parseSerialNo(options?.beginSerialNo);
+  const endSerialNo = parseSerialNo(options?.endSerialNo);
   const pageSize = Math.max(1, Number(options?.pageSize) || DEFAULT_PAGE_SIZE);
   const maxPages = Math.max(1, Number(options?.maxPages) || 10);
   const searchID = `ba-acs-${Date.now()}`;
@@ -48,15 +72,20 @@ async function fetchAcsEvents(client, options) {
   let withPicture = true;
 
   for (let page = 0; page < maxPages; page += 1) {
+    /** @type {Record<string, unknown>} */
     const cond = {
       searchID,
       searchResultPosition: position,
       maxResults: pageSize,
       major: 5,
       minor: 0,
-      startTime,
-      endTime,
     };
+    if (startTime) cond.startTime = startTime;
+    if (endTime) cond.endTime = endTime;
+    // 對齊 SDK NET_DVR_ACS_EVENT_COND.dwBeginSerialNo / dwEndSerialNo
+    if (beginSerialNo != null) cond.beginSerialNo = beginSerialNo;
+    if (endSerialNo != null && endSerialNo > 0) cond.endSerialNo = endSerialNo;
+
     let res;
     try {
       res = await client.request({
@@ -98,47 +127,22 @@ async function fetchAcsEvents(client, options) {
   return events;
 }
 
-async function findExistingAccessEvent(deviceId, eventTime, payload) {
-  const serial = payload.serialNo != null ? String(payload.serialNo) : "";
-  const who = String(
-    payload.employeeNoString ||
-      payload.employeeNo ||
-      payload.personName ||
-      payload.cardNo ||
-      "",
-  ).trim();
+/**
+ * 去重：device_id + serialNo（嚴格）。無 serialNo 則視為無法比對。
+ * @param {number} deviceId
+ * @param {object} payload
+ */
+async function findExistingAccessEvent(deviceId, payload) {
+  const serial = parseSerialNo(payload?.serialNo);
+  if (serial == null) return { id: null, hasPicture: false };
   const rows = await db.query(
     `SELECT id, picture_path
      FROM isapi_access_events
      WHERE device_id = ?
-       AND date_trunc('second', event_time) = date_trunc('second', ?::timestamptz)
-       AND COALESCE(payload->>'subEventType', '') = ?
-       AND (
-         COALESCE(payload->>'serialNo', '') = ?
-         OR COALESCE(payload->>'serialNo', '') = ''
-         OR ? = ''
-       )
-       AND (
-         ? = ''
-         OR COALESCE(
-           NULLIF(payload->>'employeeNoString', ''),
-           NULLIF(payload->>'employeeNo', ''),
-           NULLIF(payload->>'personName', ''),
-           NULLIF(payload->>'cardNo', ''),
-           ''
-         ) IN ('', ?)
-       )
+       AND COALESCE(payload->>'serialNo', '') = ?
      ORDER BY id
      LIMIT 1`,
-    [
-      deviceId,
-      eventTime,
-      String(payload.subEventType ?? ""),
-      serial,
-      serial,
-      who,
-      who,
-    ],
+    [deviceId, String(serial)],
   );
   const row = rows?.[0];
   if (!row) return { id: null, hasPicture: false };
@@ -148,9 +152,30 @@ async function findExistingAccessEvent(deviceId, eventTime, payload) {
   };
 }
 
+/**
+ * 該設備已入庫的最大 serialNo（可重啟恢復的水位）。
+ * @param {number} deviceId
+ * @returns {Promise<number|null>}
+ */
+async function getMaxStoredSerialNo(deviceId) {
+  const id = Number(deviceId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const rows = await db.query(
+    `SELECT MAX((payload->>'serialNo')::bigint) AS max_serial
+     FROM isapi_access_events
+     WHERE device_id = ?
+       AND COALESCE(payload->>'serialNo', '') ~ '^[0-9]+$'`,
+    [id],
+  );
+  const raw = rows?.[0]?.max_serial;
+  return parseSerialNo(raw);
+}
+
 module.exports = {
   ACS_EVENT_PATH,
+  parseSerialNo,
   toAcsEventPayload,
   fetchAcsEvents,
   findExistingAccessEvent,
+  getMaxStoredSerialNo,
 };

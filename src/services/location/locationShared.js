@@ -480,8 +480,6 @@ function formatSystem(system) {
             config.exit_event_camera_nvr_track_id,
           ),
           ...(isFace ? { faceSimilarityThreshold: cameras.faceSimilarityThreshold } : {}),
-          eventBackfillEnabled: cameras.eventBackfillEnabled === true,
-          eventBackfillWindowSec: cameras.eventBackfillWindowSec,
           statLabels: normalizePeopleCountingStatLabels(config.stat_labels),
         },
       };
@@ -523,12 +521,10 @@ function formatSystem(system) {
       } = require("../vehicleAccess/logDisplayColumns");
       const {
         normalizeOperationMode,
-        parseVehicleAccessConfigFields,
       } = require("../vehicleAccess/vehicleAccessConfig");
       const {
         normalizeVehicleAccessStatLabels,
       } = require("../entryExit/statLabels");
-      const vaFields = parseVehicleAccessConfigFields(config);
       return {
         ...baseSystem,
         config: {
@@ -556,8 +552,6 @@ function formatSystem(system) {
                 .map((id) => Number(id))
                 .filter((n) => Number.isFinite(n) && n > 0)
             : [],
-          eventBackfillEnabled: vaFields.eventBackfillEnabled === true,
-          eventBackfillWindowSec: vaFields.eventBackfillWindowSec,
           logDisplayColumns: normalizeLogDisplayColumns(
             config.log_display_columns,
           ),
