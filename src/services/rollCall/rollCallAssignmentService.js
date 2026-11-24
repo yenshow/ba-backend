@@ -13,7 +13,7 @@ const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 const assertLocationIsRollCall = async (locationId) => {
   const rows = await db.query(
-    `SELECT 1 FROM location_systems
+    `SELECT 1 FROM active_location_systems
      WHERE location_id = ? AND system_type = 'roll_call'
      LIMIT 1`,
     [locationId],
@@ -222,7 +222,8 @@ const applyRosterPartitionToSession = async (
       `INSERT INTO roll_call_attendance
         (session_id, person_id, employee_no, full_name, status)
        VALUES (?, ?, ?, ?, 'pending')
-       ON CONFLICT (session_id, person_id) DO NOTHING`,
+       ON CONFLICT (session_id, person_id) DO UPDATE SET roster_removed_at = NULL
+       WHERE roll_call_attendance.roster_removed_at IS NOT NULL`,
       [sid, personId, employeeNo, person.full_name || null],
     );
     await db.query(
@@ -242,7 +243,8 @@ const applyRosterPartitionToSession = async (
       `INSERT INTO roll_call_attendance
         (session_id, person_id, employee_no, full_name, status)
        VALUES (?, ?, ?, ?, 'leave')
-       ON CONFLICT (session_id, person_id) DO NOTHING`,
+       ON CONFLICT (session_id, person_id) DO UPDATE SET roster_removed_at = NULL
+       WHERE roll_call_attendance.roster_removed_at IS NOT NULL`,
       [sid, personId, employeeNo, person.full_name || null],
     );
     await db.query(
@@ -255,12 +257,19 @@ const applyRosterPartitionToSession = async (
 
   const keepIds = [...collectPartitionPersonIds(working, dayOff)];
   if (keepIds.length === 0) {
-    await db.query(`DELETE FROM roll_call_attendance WHERE session_id = ?`, [sid]);
+    await db.query(
+      `UPDATE roll_call_attendance SET roster_removed_at = CURRENT_TIMESTAMP
+       WHERE session_id = ? AND status = 'pending' AND roster_removed_at IS NULL
+       AND person_id IN (SELECT id FROM active_persons)`,
+      [sid],
+    );
     return;
   }
   await db.query(
-    `DELETE FROM roll_call_attendance
-     WHERE session_id = ?
+    `UPDATE roll_call_attendance SET roster_removed_at = CURRENT_TIMESTAMP
+     WHERE session_id = ? AND roster_removed_at IS NULL
+       AND status = 'pending'
+       AND person_id IN (SELECT id FROM active_persons)
        AND person_id NOT IN (${keepIds.map(() => "?").join(",")})`,
     [sid, ...keepIds],
   );
@@ -390,7 +399,7 @@ const replaceAssignments = async (locationId, body = {}) => {
 
   const rawList = Array.isArray(body.assignments) ? body.assignments : [];
   const ruleRows = await db.query(
-    `SELECT id FROM roll_call_rules WHERE location_id = ?`,
+    `SELECT id FROM active_roll_call_rules WHERE location_id = ?`,
     [id],
   );
   const ruleIds = new Set(

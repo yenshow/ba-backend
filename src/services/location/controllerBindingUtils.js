@@ -30,7 +30,7 @@ const CONTROLLER_DEVICE_ID_SQL = `
         WHEN ls.system_type = 'elevator' THEN (ls.system_config->'ladder_device'->>'device_id')::int
         ELSE (ls.system_config->'device_ids'->>0)::int
       END AS device_id
-    FROM location_systems ls
+    FROM active_location_systems ls
     WHERE ls.system_type = $1
   ) x
   WHERE device_id IS NOT NULL
@@ -42,7 +42,7 @@ async function isElevatorBoundDeviceId(deviceId) {
   if (!id) return false;
   const rows = await db.query(
     `SELECT 1
-     FROM location_systems ls
+     FROM active_location_systems ls
      WHERE ls.system_type = 'elevator'
        AND (
          (ls.system_config->'ladder_device'->>'device_id')::int = ?

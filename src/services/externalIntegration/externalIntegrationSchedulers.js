@@ -110,7 +110,7 @@ function startExternalSync() {
     loadJobs: async () => {
       const rows = await db.query(
         `SELECT event_type, push_mode, push_time, push_interval_seconds
-         FROM external_sync_configs
+         FROM active_external_sync_configs
          ORDER BY id ASC`,
         [],
       );
@@ -186,7 +186,7 @@ function startRecordExport() {
     loadJobs: async () => {
       const rules = await db.query(
         `SELECT id, export_time, schedule_freq, schedule_day
-         FROM record_export_rules WHERE enabled = TRUE ORDER BY id ASC`,
+         FROM active_record_export_rules WHERE enabled = TRUE ORDER BY id ASC`,
         [],
       );
       if (!rules?.length) return [];

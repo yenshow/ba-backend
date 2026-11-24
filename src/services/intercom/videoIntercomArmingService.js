@@ -164,7 +164,7 @@ const getManageStationIds = async () => {
   const rows = await db.query(
     `
     SELECT id
-    FROM devices
+    FROM active_devices
     WHERE type_code = 'video_intercom'
       AND COALESCE(config->>'unitType', '') = 'manage'
       ${sqlAndEnabled("enabled")}

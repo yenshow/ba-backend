@@ -5,6 +5,8 @@
 
 const RE_CONNECT_DELAY_MS = 10000;
 const CRLFCRLF = Buffer.from("\r\n\r\n");
+const MAX_MULTIPART_HEADER_BYTES = 64 * 1024;
+const MAX_MULTIPART_BODY_BYTES = 16 * 1024 * 1024;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,7 +29,7 @@ function isAbortError(error) {
  * @param {() => void|Promise<void>} [options.onBeforeResolve]
  * @param {boolean} [options.preferContentLength=true] 有 Content-Length 時先依長度切 body（門禁／人流）；車輛搜下一 boundary
  */
-function consumeMultipartEventStream(options) {
+async function consumeMultipartEventStream(options) {
   const {
     stream,
     contentType,
@@ -44,133 +46,130 @@ function consumeMultipartEventStream(options) {
   const rawBoundary = boundaryMatch
     ? (boundaryMatch[1] || boundaryMatch[2]).trim()
     : null;
-  if (!rawBoundary) {
-    return new Promise((resolve, reject) => {
-      stream.on("data", () => {});
-      stream.on("error", reject);
-      stream.on("end", () => resolve());
-      stream.on("close", () => resolve());
-    });
-  }
-
-  const boundary = rawBoundary.replace(/^["']|["']$/g, "");
-  const sep = Buffer.from(`--${boundary}`, "utf8");
-  const sepWithCRLF = Buffer.from(`\r\n--${boundary}`, "utf8");
+  const boundary = rawBoundary?.replace(/^["']|["']$/g, "");
+  const sep = boundary ? Buffer.from(`--${boundary}`, "utf8") : null;
+  const sepWithCRLF = boundary ? Buffer.from(`\r\n--${boundary}`, "utf8") : null;
   let buffer = Buffer.alloc(0);
-  let partQueue = Promise.resolve();
+  let spare = Buffer.alloc(0);
 
-  const enqueuePart = (headerStr, body) => {
-    partQueue = partQueue
-      .then(() => onPart(headerStr, body))
-      .catch((err) => {
-        if (typeof onPartError === "function") {
-          onPartError(err);
-        }
-      });
+  const appendChunk = (chunk) => {
+    // 必須複製：stream 可能重用 chunk 底層記憶體。
+    if (buffer.length === 0) {
+      buffer = Buffer.from(chunk);
+      spare = Buffer.alloc(0);
+      return;
+    }
+    if (spare.length < chunk.length) {
+      const storage = Buffer.allocUnsafe(
+        Math.max(buffer.length * 2, buffer.length + chunk.length),
+      );
+      buffer.copy(storage);
+      spare = storage.subarray(buffer.length);
+      buffer = storage.subarray(0, buffer.length);
+    }
+    chunk.copy(spare);
+    buffer = Buffer.from(
+      buffer.buffer,
+      buffer.byteOffset,
+      buffer.length + chunk.length,
+    );
+    spare = spare.subarray(chunk.length);
   };
 
-  const tryConsumeOnePart = () => {
-    let start = buffer.indexOf(sepWithCRLF);
-    let skip = sepWithCRLF.length;
-    if (start === -1) {
-      if (
-        buffer.length >= sep.length &&
-        buffer.slice(0, sep.length).equals(sep)
-      ) {
-        start = 0;
-        skip = sep.length;
-      } else {
-        return false;
-      }
-    } else if (start > 0) {
-      buffer = buffer.slice(start);
-      start = 0;
-      skip = sepWithCRLF.length;
+  const assertPartSize = (length, limit, name) => {
+    if (length > limit) {
+      const error = new Error(`ISAPI multipart ${name} exceeds ${limit} bytes`);
+      onPartError?.(error);
+      throw error;
+    }
+  };
+
+  const readPart = () => {
+    const startsWithBoundary = buffer.subarray(0, sep.length).equals(sep);
+    const start = startsWithBoundary ? 0 : buffer.indexOf(sepWithCRLF);
+    if (start < 0) {
+      // 保留可能跨 chunk 的 boundary 前綴。
+      buffer = buffer.subarray(Math.max(0, buffer.length - sepWithCRLF.length + 1));
+      return null;
+    }
+    buffer = buffer.subarray(start);
+    const skip = startsWithBoundary ? sep.length : sepWithCRLF.length;
+    if (buffer[skip] === 0x2d && buffer[skip + 1] === 0x2d) {
+      buffer = Buffer.alloc(0);
+      return null;
     }
 
-    const afterBoundary = buffer.slice(skip);
+    const afterBoundary = buffer.subarray(skip);
     const headEnd = afterBoundary.indexOf(CRLFCRLF);
-    if (headEnd === -1) return false;
-    const headerStr = afterBoundary.slice(0, headEnd).toString("utf8");
+    if (headEnd === -1) {
+      assertPartSize(afterBoundary.length, MAX_MULTIPART_HEADER_BYTES + 3, "header");
+      return null;
+    }
+    assertPartSize(headEnd, MAX_MULTIPART_HEADER_BYTES, "header");
+    const headerStr = afterBoundary.subarray(0, headEnd).toString("utf8");
     const bodyStart = skip + headEnd + CRLFCRLF.length;
-    let bodyEnd;
-
-    if (preferContentLength) {
-      const contentLengthMatch = headerStr.match(/Content-Length:\s*(\d+)/i);
-      const contentLength = contentLengthMatch
-        ? parseInt(contentLengthMatch[1], 10)
-        : 0;
-      if (contentLength > 0) {
-        bodyEnd = bodyStart + contentLength;
-        if (bodyEnd > buffer.length) return false;
-      } else {
-        const nextB = buffer.indexOf(sepWithCRLF, bodyStart);
-        const nextB2 = buffer.indexOf(sep, bodyStart);
-        const next =
-          nextB !== -1
-            ? nextB2 !== -1
-              ? Math.min(nextB, nextB2)
-              : nextB
-            : nextB2;
-        if (next === -1) return false;
-        bodyEnd = next;
-        const trim =
-          buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d ? 2 : 0;
-        if (trim) bodyEnd -= trim;
-      }
-      const body = buffer.slice(bodyStart, bodyEnd);
-      enqueuePart(headerStr, body);
-      buffer = buffer.slice(bodyEnd);
-      return true;
+    const length = preferContentLength
+      ? Number(headerStr.match(/Content-Length:\s*(\d+)/i)?.[1] ?? 0)
+      : 0;
+    if (length > 0) {
+      assertPartSize(length, MAX_MULTIPART_BODY_BYTES, "body");
+      const bodyEnd = bodyStart + length;
+      if (bodyEnd > buffer.length) return null;
+      const body = buffer.subarray(bodyStart, bodyEnd);
+      buffer = buffer.subarray(bodyEnd);
+      return { headerStr, body };
     }
 
     let next = buffer.indexOf(sepWithCRLF, bodyStart);
     if (next === -1) next = buffer.indexOf(sep, bodyStart);
-    if (next === -1) return false;
-    bodyEnd = next;
-    if (buffer[bodyEnd - 1] === 0x0a && buffer[bodyEnd - 2] === 0x0d) {
-      bodyEnd -= 2;
+    if (next === -1) {
+      assertPartSize(
+        buffer.length - bodyStart,
+        MAX_MULTIPART_BODY_BYTES + sepWithCRLF.length,
+        "body",
+      );
+      return null;
     }
-    const body = buffer.slice(bodyStart, bodyEnd);
-    enqueuePart(headerStr, body);
-    buffer = buffer.slice(next);
-    return true;
+    assertPartSize(next - bodyStart, MAX_MULTIPART_BODY_BYTES, "body");
+    const body = buffer.subarray(bodyStart, next);
+    buffer = buffer.subarray(next);
+    return { headerStr, body };
   };
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      const done = () => {
-        Promise.resolve(onBeforeResolve ? onBeforeResolve() : undefined)
-          .catch(() => {})
-          .then(() => resolve());
-      };
-      partQueue.then(done).catch(done);
-    };
-
-    const abortHandler = () => {
-      try {
-        stream.destroy(new Error("ABORTED"));
-      } catch (_e) {
-        /* ignore */
-      }
-    };
-    if (abortSignal) {
-      if (abortSignal.aborted) abortHandler();
-      else abortSignal.addEventListener("abort", abortHandler, { once: true });
+  const abortError = new Error("ABORTED");
+  const abortHandler = () => stream.destroy(abortError);
+  abortSignal?.addEventListener("abort", abortHandler, { once: true });
+  try {
+    if (abortSignal?.aborted) {
+      stream.destroy();
+      throw abortError;
     }
-
-    stream.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length > 0 && tryConsumeOnePart()) {}
-      if (buffer.length > 1024 * 1024) buffer = buffer.slice(-512 * 1024);
-    });
-    stream.on("error", reject);
-    stream.on("end", finish);
-    stream.on("close", finish);
-  });
+    for await (const chunk of stream) {
+      if (!boundary) continue;
+      appendChunk(chunk);
+      // Await persistence before reading more chunks so the stream can apply backpressure.
+      while (buffer.length > 0) {
+        if (abortSignal?.aborted) throw abortError;
+        const part = readPart();
+        if (!part) break;
+        try {
+          await onPart(part.headerStr, part.body);
+        } catch (error) {
+          onPartError?.(error);
+        }
+      }
+    }
+  } catch (error) {
+    if (abortSignal?.aborted) throw abortError;
+    if (error?.code !== "ERR_STREAM_PREMATURE_CLOSE") throw error;
+  } finally {
+    abortSignal?.removeEventListener("abort", abortHandler);
+  }
+  try {
+    if (boundary) await onBeforeResolve?.();
+  } catch (_error) {
+    // Stream completion remains successful if final bookkeeping fails.
+  }
 }
 
 /**

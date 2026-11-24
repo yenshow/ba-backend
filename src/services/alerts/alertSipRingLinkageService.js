@@ -36,7 +36,7 @@ const { getByRuleId, getByRuleIds, upsertForRule, deleteForRule } = crud;
 
 const INDOOR_DEVICE_SELECT = `
   SELECT id, name, type_code, config
-  FROM devices
+  FROM active_devices
   WHERE type_code = 'video_intercom'
     AND COALESCE(config->>'unitType', '') = 'indoor'
 `;

@@ -74,7 +74,7 @@ async function getAccessCredentialCapabilitiesByDeviceIds(deviceIds) {
 
   const rows = await db.query(
     `SELECT d.id, dm.config AS model_config
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON d.model_id = dm.id
      WHERE d.id = ANY(?::int[])`,
     [ids.map((x) => Math.trunc(x))],

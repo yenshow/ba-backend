@@ -425,8 +425,8 @@ router.delete(
   requirePermission("system.personnel.person.delete"),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
-    await personnelService.deletePerson(parseInt(req.params.id, 10));
-    res.sendSuccess({ ok: true });
+    const result = await personnelService.deletePerson(parseInt(req.params.id, 10));
+    res.sendSuccess({ ok: true, deviceSyncPending: result.deviceSyncPending });
   }),
 );
 

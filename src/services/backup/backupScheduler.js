@@ -13,7 +13,6 @@ const environmentReadingsService = require("../environment/environmentReadingsSe
 const environmentAggregationService = require("../environment/environmentAggregationService");
 const runtimeConfigService = require("../platform/runtimeConfigService");
 const effectiveFeaturesCache = require("../license/effectiveFeaturesCache");
-const db = require("../../database/db");
 const {
   transformAlertsToReportFormat,
   transformEnvironmentReadingsToReportFormat,
@@ -55,7 +54,7 @@ async function runOptionalSync(label, syncFns) {
     try {
       await fn();
     } catch (error) {
-      backupLogger.warn(`${label}同步略過（仍嘗試備份／刪除既有 DB 資料）`, {
+      backupLogger.warn(`${label}同步略過，繼續歸檔`, {
         error: error?.message || String(error),
         module: "backupScheduler",
       });
@@ -67,7 +66,7 @@ async function runBackupJob(label, job) {
   try {
     return await job();
   } catch (error) {
-    backupLogger.error(`${label}備份失敗（DB 可能未刪除過期資料）`, {
+    backupLogger.error(`${label}歸檔失敗`, {
       error: error?.message || String(error),
       module: "backupScheduler",
     });
@@ -75,54 +74,8 @@ async function runBackupJob(label, job) {
   }
 }
 
-function sumCounts(...results) {
-  return results.reduce(
-    (acc, r) => ({
-      backed: acc.backed + (r?.count || 0),
-      deleted: acc.deleted + (r?.deletedCount || 0),
-    }),
-    { backed: 0, deleted: 0 },
-  );
-}
-
-const buildDeleteSql = (table, dateCol, extraWhere = "") => ({
-  buildDeleteDaySql: (start, end, deleteBefore) => ({
-    sql: `DELETE FROM ${table} WHERE ${dateCol} >= $1 AND ${dateCol} < $2 AND ${dateCol} < $3 ${extraWhere}`,
-    params: [start, end, deleteBefore],
-  }),
-});
-
-async function selectVehiclePictures(start, end, dataSource) {
-  const rows = await db.query(
-    `SELECT picture_path FROM vehicle_passageway_logs
-     WHERE trigger_time >= $1 AND trigger_time < $2
-       AND data_source = $3 AND picture_path IS NOT NULL`,
-    [start, end, dataSource],
-  );
-  return (rows || []).map((r) => r.picture_path).filter(Boolean);
-}
-
-async function selectAccessPictures(start, end) {
-  const rows = await db.query(
-    `SELECT picture_path FROM isapi_access_events
-     WHERE event_time >= $1 AND event_time < $2 AND picture_path IS NOT NULL`,
-    [start, end],
-  );
-  return (rows || []).map((r) => r.picture_path).filter(Boolean);
-}
-
-async function selectFaceContrastPictures(start, end) {
-  const rows = await db.query(
-    `SELECT picture_path FROM isapi_face_contrast_events
-     WHERE event_time >= $1 AND event_time < $2 AND picture_path IS NOT NULL`,
-    [start, end],
-  );
-  return (rows || []).map((r) => r.picture_path).filter(Boolean);
-}
-
 async function runBackup() {
-  const { archiveBeforeDate, deleteBeforeDate } =
-    backupService.getRetentionContext();
+  const { archiveBeforeDate, archiveStartDate } = backupService.getRetentionContext();
   const onlineDays = getBackupConfig().retention.onlineRetentionDays;
 
   try {
@@ -135,34 +88,22 @@ async function runBackup() {
       });
     }
 
-    const envDelete = buildDeleteSql("environment_readings", "recorded_at");
-    const envResult = await backupService.backupTableDual({
+    const envResult = await backupService.archiveTableByDay({
       tableName: "environment_readings",
       rows: await environmentReadingsService.getReadingsForBackup(
-        archiveBeforeDate,
+        archiveBeforeDate, archiveStartDate,
       ),
       dateField: "recorded_at",
       category: "environmentReadings",
       csvTransform: transformEnvironmentReadingsToReportFormat,
-      selectColdTimestampsSql: `SELECT recorded_at FROM environment_readings WHERE recorded_at < $1`,
-      selectColdParams: [deleteBeforeDate],
-      ...envDelete,
     });
 
-    const alertDelete = buildDeleteSql(
-      "alerts",
-      "updated_at",
-      "AND status = 'resolved'",
-    );
-    const alertResult = await backupService.backupTableDual({
+    const alertResult = await backupService.archiveTableByDay({
       tableName: "alerts",
-      rows: await alertService.getResolvedAlertsForBackup(archiveBeforeDate),
+      rows: await alertService.getResolvedAlertsForBackup(archiveBeforeDate, archiveStartDate),
       dateField: "updated_at",
       category: "alerts",
       csvTransform: transformAlertsToReportFormat,
-      selectColdTimestampsSql: `SELECT updated_at FROM alerts WHERE status = 'resolved' AND updated_at < $1`,
-      selectColdParams: [deleteBeforeDate],
-      ...alertDelete,
     });
 
     const peopleModuleLabel =
@@ -180,7 +121,7 @@ async function runBackup() {
       ]);
       peopleYscpResult = await runBackupJob(`${peopleModuleLabel}（YSCP）`, async () => {
         const peopleRows =
-          await backupService.getPeopleCountingForBackup(archiveBeforeDate);
+          await backupService.getPeopleCountingForBackup(archiveBeforeDate, archiveStartDate);
         const physicalIds = [
           ...new Set(peopleRows.map((r) => r.physical_id).filter(Boolean)),
         ];
@@ -188,11 +129,8 @@ async function runBackup() {
           peopleCountingSyncService.getDoorNamesByPhysicalIds(physicalIds),
           peopleCountingSyncService.getPhysicalIdToDirectionMap(),
         ]);
-        const peopleDelete = buildDeleteSql(
-          "people_counting_logs",
-          "swip_card_rev_time",
-        );
-        return backupService.backupTableDual({
+
+        return backupService.archiveTableByDay({
           tableName: "people_counting_logs",
           rows: peopleRows,
           dateField: "swip_card_rev_time",
@@ -204,25 +142,21 @@ async function runBackup() {
               directionMap,
               peopleReportOpts,
             ),
-          selectColdTimestampsSql: `SELECT swip_card_rev_time FROM people_counting_logs WHERE swip_card_rev_time < $1`,
-          selectColdParams: [deleteBeforeDate],
-          ...peopleDelete,
         });
       });
     }
 
     const peopleCountingCtx = await loadPeopleCountingBackupContext();
 
-    const accessDelete = buildDeleteSql("isapi_access_events", "event_time");
     const peopleAccessIsapiResult = await runBackupJob(
       `${peopleModuleLabel}門禁（ISAPI）`,
       async () => {
         const accessRows =
-          await backupService.getIsapiAccessEventsForBackup(archiveBeforeDate);
+          await backupService.getIsapiAccessEventsForBackup(archiveBeforeDate, archiveStartDate);
         const personByEmployeeNo = await loadPersonsByEmployeeNos(
           collectAccessEmployeeNos(accessRows),
         );
-        return backupService.backupTableDual({
+        return backupService.archiveTableByDay({
           tableName: "isapi_access_events",
           rows: accessRows,
           dateField: "event_time",
@@ -235,25 +169,17 @@ async function runBackup() {
             }),
           attachmentSubdir: "people_counting/attachments",
           attachmentNamePrefix: "access_",
-          selectColdTimestampsSql: `SELECT event_time FROM isapi_access_events WHERE event_time < $1`,
-          selectColdParams: [deleteBeforeDate],
-          selectPicturesForDay: (start, end) => selectAccessPictures(start, end),
-          ...accessDelete,
         });
       },
     );
 
-    const cameraDelete = buildDeleteSql(
-      "isapi_people_counting_events",
-      "event_time",
-    );
     const peopleCameraIsapiResult = await runBackupJob(
       `${peopleModuleLabel}攝影機（ISAPI）`,
       async () =>
-        backupService.backupTableDual({
+        backupService.archiveTableByDay({
           tableName: "isapi_people_counting_events",
           rows: await backupService.getIsapiPeopleCountingEventsForBackup(
-            archiveBeforeDate,
+            archiveBeforeDate, archiveStartDate,
           ),
           dateField: "event_time",
           category: "peopleCounting",
@@ -262,22 +188,15 @@ async function runBackup() {
               dayRows,
               peopleReportOpts,
             ),
-          selectColdTimestampsSql: `SELECT event_time FROM isapi_people_counting_events WHERE event_time < $1`,
-          selectColdParams: [deleteBeforeDate],
-          ...cameraDelete,
         }),
     );
 
-    const faceContrastDelete = buildDeleteSql(
-      "isapi_face_contrast_events",
-      "event_time",
-    );
     const peopleFaceContrastIsapiResult = await runBackupJob(
       `${peopleModuleLabel}人臉比對（ISAPI）`,
       async () => {
         const faceRows =
           await backupService.getIsapiFaceContrastEventsForBackup(
-            archiveBeforeDate,
+            archiveBeforeDate, archiveStartDate,
           );
         const employeeNos = (faceRows || [])
           .map((r) =>
@@ -286,7 +205,7 @@ async function runBackup() {
           .filter(Boolean);
         const personByEmployeeNo =
           await loadPersonsByEmployeeNos(employeeNos);
-        return backupService.backupTableDual({
+        return backupService.archiveTableByDay({
           tableName: "isapi_face_contrast_events",
           rows: faceRows,
           dateField: "event_time",
@@ -299,11 +218,6 @@ async function runBackup() {
             }),
           attachmentSubdir: "people_counting/attachments",
           attachmentNamePrefix: "face_",
-          selectColdTimestampsSql: `SELECT event_time FROM isapi_face_contrast_events WHERE event_time < $1`,
-          selectColdParams: [deleteBeforeDate],
-          selectPicturesForDay: (start, end) =>
-            selectFaceContrastPictures(start, end),
-          ...faceContrastDelete,
         });
       },
     );
@@ -318,40 +232,28 @@ async function runBackup() {
         () => vehicleAccessSyncService.syncYesterday(),
         () => vehicleAccessSyncService.syncDayAgo(onlineDays + 1),
       ]);
-      const vehicleYscpDelete = buildDeleteSql(
-        "vehicle_passageway_logs",
-        "trigger_time",
-        "AND COALESCE(data_source, 'yscp') = 'yscp'",
-      );
+
       vehicleYscpResult = await runBackupJob("車輛進出（YSCP）", async () =>
-        backupService.backupTableDual({
+        backupService.archiveTableByDay({
           tableName: "vehicle_passageway_logs",
           rows: await backupService.getVehiclePassagewayForBackup(
             archiveBeforeDate,
-            "yscp",
+            "yscp", archiveStartDate,
           ),
           dateField: "trigger_time",
           category: "vehicleAccess",
           csvTransform: (dayRows) =>
             transformVehicleAccessToReportFormat(dayRows, vehicleReportOpts),
-          selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND COALESCE(data_source, 'yscp') = 'yscp'`,
-          selectColdParams: [deleteBeforeDate],
-          ...vehicleYscpDelete,
         }),
       );
     }
 
-    const vehicleIsapiDelete = buildDeleteSql(
-      "vehicle_passageway_logs",
-      "trigger_time",
-      "AND data_source = 'isapi_camera'",
-    );
     const vehicleIsapiResult = await runBackupJob("車輛進出（ISAPI）", async () =>
-      backupService.backupTableDual({
+      backupService.archiveTableByDay({
         tableName: "vehicle_passageway_logs_isapi",
         rows: await backupService.getVehiclePassagewayForBackup(
           archiveBeforeDate,
-          "isapi_camera",
+          "isapi_camera", archiveStartDate,
         ),
         dateField: "trigger_time",
         category: "vehicleAccess",
@@ -359,80 +261,51 @@ async function runBackup() {
           transformVehicleAccessToReportFormat(dayRows, vehicleReportOpts),
         attachmentSubdir: "vehicle_access/attachments",
         attachmentNamePrefix: "vehicle_",
-        selectColdTimestampsSql: `SELECT trigger_time FROM vehicle_passageway_logs WHERE trigger_time < $1 AND data_source = 'isapi_camera'`,
-        selectColdParams: [deleteBeforeDate],
-        selectPicturesForDay: (start, end) =>
-          selectVehiclePictures(start, end, "isapi_camera"),
-        ...vehicleIsapiDelete,
       }),
     );
 
     let ladderResult = { skipped: true };
     if (effectiveFeaturesCache.hasCachedLicensedFeature("elevator")) {
-      const ladderDelete = buildDeleteSql("ladder_sdk_events", "event_time");
+
       ladderResult = await runBackupJob("梯控（SDK）", async () =>
-        backupService.backupTableDual({
+        backupService.archiveTableByDay({
           tableName: "ladder_sdk_events",
           rows: await backupService.getLadderSdkEventsForBackup(
-            archiveBeforeDate,
+            archiveBeforeDate, archiveStartDate,
           ),
           dateField: "event_time",
           category: "elevator",
           csvTransform: transformLadderSdkEventsToReportFormat,
-          selectColdTimestampsSql: `SELECT event_time FROM ladder_sdk_events WHERE event_time < $1`,
-          selectColdParams: [deleteBeforeDate],
-          ...ladderDelete,
         }),
       );
     }
 
     let energyResult = { skipped: true };
     if (effectiveFeaturesCache.hasCachedLicensedFeature("energy")) {
-      const energyDelete = buildDeleteSql("energy_readings", "recorded_at");
+
       energyResult = await runBackupJob("能源讀數", async () =>
-        backupService.backupTableDual({
+        backupService.archiveTableByDay({
           tableName: "energy_readings",
           rows: await energyReadingsService.getReadingsForBackup(
-            archiveBeforeDate,
+            archiveBeforeDate, archiveStartDate,
           ),
           dateField: "recorded_at",
           category: "energyReadings",
           csvTransform: transformEnergyReadingsToReportFormat,
-          selectColdTimestampsSql: `SELECT recorded_at FROM energy_readings WHERE recorded_at < $1`,
-          selectColdParams: [deleteBeforeDate],
-          ...energyDelete,
         }),
       );
     }
 
-    const opDelete = buildDeleteSql("operational_events", "created_at");
     const operationalResult = await runBackupJob("營運事件", async () =>
-      backupService.backupTableDual({
+      backupService.archiveTableByDay({
         tableName: "operational_events",
         rows: await backupService.getOperationalEventsForBackup(
-          archiveBeforeDate,
+          archiveBeforeDate, archiveStartDate,
         ),
         dateField: "created_at",
         category: "operationalEvents",
         csvTransform: transformOperationalEventsToReportFormat,
-        selectColdTimestampsSql: `SELECT created_at FROM operational_events WHERE created_at < $1`,
-        selectColdParams: [deleteBeforeDate],
-        ...opDelete,
       }),
-    );
-
-    const { backed, deleted } = sumCounts(
-      envResult,
-      alertResult,
-      peopleYscpResult,
-      peopleAccessIsapiResult,
-      peopleCameraIsapiResult,
-      peopleFaceContrastIsapiResult,
-      vehicleYscpResult,
-      vehicleIsapiResult,
-      ladderResult,
-      energyResult,
-      operationalResult,
     );
 
     const results = {
@@ -449,13 +322,12 @@ async function runBackup() {
       operational_events: operationalResult,
     };
 
-    const noopBackup = backed === 0 && deleted === 0;
+    const backed = Object.values(results).reduce((total, result) => total + (result?.count || 0), 0);
     const backupMeta = {
       totalBacked: backed,
-      totalDeleted: deleted,
       module: "backupScheduler",
     };
-    if (noopBackup) {
+    if (backed === 0) {
       backupLogger.debug("備份完成（無資料異動）", backupMeta);
     } else {
       backupLogger.info("備份完成", backupMeta);

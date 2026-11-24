@@ -43,9 +43,9 @@ async function loadDeviceLocationMap() {
         l.name AS location_name,
         z.name AS zone_name,
         ls.system_config
-      FROM location_systems ls
-      INNER JOIN locations l ON l.id = ls.location_id
-      INNER JOIN zones z ON z.id = l.zone_id
+      FROM active_location_systems ls
+      INNER JOIN active_locations l ON l.id = ls.location_id
+      INNER JOIN active_zones z ON z.id = l.zone_id
       WHERE ls.system_type = 'vehicle_access'
         AND COALESCE(ls.system_config->>'data_source', 'yscp') = 'isapi_camera'
     `,

@@ -77,14 +77,6 @@ async function ensureExternalIntegrationTables(pool) {
     'access_control','energy','operational','vehicle','alerts','environment'
   )`;
 
-  // 移除已廢棄的 YSCP 人流匯出類型（對接／轉存）
-  await pool.query(`
-    DELETE FROM external_sync_configs WHERE event_type = 'people_counting'
-  `);
-  await pool.query(`
-    DELETE FROM record_export_rules WHERE event_type = 'people_counting'
-  `);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_sync_configs (
       id SERIAL PRIMARY KEY,
@@ -127,6 +119,11 @@ async function ensureExternalIntegrationTables(pool) {
       ALTER COLUMN push_time DROP NOT NULL
   `);
   await pool.query(`
+    ALTER TABLE external_sync_configs ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+    UPDATE external_sync_configs SET archived_at = CURRENT_TIMESTAMP
+      WHERE event_type = 'people_counting' AND archived_at IS NULL;
+  `);
+  await pool.query(`
     DO $$
     DECLARE r record;
     BEGIN
@@ -150,7 +147,7 @@ async function ensureExternalIntegrationTables(pool) {
       END LOOP;
       ALTER TABLE external_sync_configs
         ADD CONSTRAINT external_sync_configs_event_type_check
-        CHECK (event_type IN ${EVENT_TYPE_CHECK});
+        CHECK (archived_at IS NOT NULL OR event_type IN ${EVENT_TYPE_CHECK});
       ALTER TABLE external_sync_configs
         ADD CONSTRAINT external_sync_configs_push_mode_check
         CHECK (push_mode IN ('fixed','realtime'));
@@ -280,6 +277,11 @@ async function ensureExternalIntegrationTables(pool) {
       DROP COLUMN IF EXISTS description
   `);
   await pool.query(`
+    ALTER TABLE record_export_rules ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+    UPDATE record_export_rules SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE
+      WHERE event_type = 'people_counting' AND archived_at IS NULL;
+  `);
+  await pool.query(`
     DO $$
     DECLARE r record;
     BEGIN
@@ -298,7 +300,7 @@ async function ensureExternalIntegrationTables(pool) {
       END LOOP;
       ALTER TABLE record_export_rules
         ADD CONSTRAINT record_export_rules_event_type_check
-        CHECK (event_type IN ${EVENT_TYPE_CHECK});
+        CHECK (archived_at IS NOT NULL OR event_type IN ${EVENT_TYPE_CHECK});
     END $$;
   `);
   await createUpdatedAtTrigger(pool, "record_export_rules");
@@ -1177,27 +1179,8 @@ async function ensureRollCallTables(pool) {
   );
 
   // 2) 舊欄位／約束遷移（失敗只記 log，不擋開機）
-  await runPatchStep("roll_call_rules null location cleanup", async () => {
-    await pool.query(`DELETE FROM roll_call_rules WHERE location_id IS NULL`);
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name = 'roll_call_rules'
-            AND column_name = 'location_id'
-            AND is_nullable = 'YES'
-        ) THEN
-          ALTER TABLE roll_call_rules ALTER COLUMN location_id SET NOT NULL;
-        END IF;
-      END $$
-    `);
-  });
   await runPatchStep("drop roll_call_rules.device_ids", () =>
     pool.query(`ALTER TABLE roll_call_rules DROP COLUMN IF EXISTS device_ids`),
-  );
-  await runPatchStep("drop roll_call_rule_groups", () =>
-    pool.query(`DROP TABLE IF EXISTS roll_call_rule_groups`),
   );
   await runPatchStep("roll_call_rules window_neq check", () =>
     pool.query(`
@@ -1356,10 +1339,6 @@ async function ensurePersonsCustomFieldsColumn(pool) {
 }
 
 /** 既有庫：devices.enabled（預設啟用；停用後略過背景訂閱／佈防／探測） */
-/** 既有庫：廢除 lighting_categories（照明已改地點系統） */
-async function dropLightingCategoriesTable(pool) {
-  await pool.query(`DROP TABLE IF EXISTS lighting_categories`);
-}
 
 /** 既有庫：人流 system_config 移除 accessControlGroups（門禁名單改 person_location_access） */
 async function stripPeopleCountingAccessControlGroups(pool) {
@@ -1524,7 +1503,6 @@ async function applySchemaPatches(pool) {
   await ensureExternalIntegrationTables(pool);
   await ensureOperationalEventsTable(pool);
   await ensureVideoIntercomTypeCode(pool);
-  await dropLightingCategoriesTable(pool);
   await stripPeopleCountingAccessControlGroups(pool);
   await ensureDevicesEnabledColumn(pool);
   await ensurePersonsCustomFieldsColumn(pool);
@@ -1573,7 +1551,6 @@ module.exports = {
   ensureOperationalEventsTable,
   migrateLegacyNvrTypeCodeToCamera,
   ensureVideoIntercomTypeCode,
-  dropLightingCategoriesTable,
   stripPeopleCountingAccessControlGroups,
   ensureDevicesEnabledColumn,
   ensurePersonsCustomFieldsColumn,

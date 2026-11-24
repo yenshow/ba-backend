@@ -7,16 +7,19 @@
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
 const modbusBatchService = require("./modbusBatchService");
+const { runWithPriority } = require("./modbusGlobalLimiter");
 const bitStore = require("./modbusBitStore");
 const { resolveIoModules } = require("./modbusIoModules");
 const { parseConfig, isHcnetSdkController } = require("../../utils/deviceHelpers");
 const { sqlAndEnabled } = require("./deviceEnabledFilter");
+const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
 const websocketService = require("../websocket/websocketService");
 const systemAlertHelper = require("../alerts/systemAlertHelper");
 
 const plannerLogger = logger.createLogger("modbusPollPlanner");
 
 const MAX_RANGE = 125;
+const CONTROLLER_CONCURRENCY = 4;
 
 /** deviceId -> 上次推播簽章（含 online + 各模組 status） */
 const lastBroadcastSig = new Map();
@@ -50,7 +53,7 @@ async function loadModbusControllers() {
   const rows = await db.query(
     `
     SELECT d.id, d.config, d.model_id, dm.config AS model_config
-    FROM devices d
+    FROM active_devices d
     LEFT JOIN device_models dm ON dm.id = d.model_id
     WHERE d.type_code = 'controller'
       ${sqlAndEnabled("d.enabled")}
@@ -96,8 +99,9 @@ async function pollControllers({
 
   const statusUpdates = [];
 
-  await Promise.allSettled(
-    controllers.map(async (ctrl) => {
+  await mapWithConcurrency(
+    controllers,
+    async (ctrl) => {
       const { deviceId, deviceConfig, modules } = ctrl;
 
       /** @type {Array<{ moduleId: number, registerType: string, start: number, length: number, reqIndex: number }>} */
@@ -129,7 +133,7 @@ async function pollControllers({
 
       const results =
         requests.length > 0
-          ? await modbusBatchService.batchRead(requests)
+          ? await runWithPriority(() => modbusBatchService.batchRead(requests))
           : [];
       const readAt = Date.now();
 
@@ -234,7 +238,8 @@ async function pollControllers({
           modules: publicModules,
         });
       }
-    }),
+    },
+    { concurrency: CONTROLLER_CONCURRENCY },
   );
 
   if (broadcastStatus && statusUpdates.length > 0) {

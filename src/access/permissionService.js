@@ -46,7 +46,7 @@ async function getEffectivePermissionsForUser(userId, role = null) {
 
   let userRole = role;
   if (userRole == null) {
-    const users = await db.query("SELECT role FROM users WHERE id = ?", [userId]);
+    const users = await db.query("SELECT role FROM active_users WHERE id = ?", [userId]);
     if (users.length === 0) return { codes: [], granted: new Set() };
     userRole = users[0].role;
   }
@@ -87,16 +87,21 @@ const hasPermissionCode = (codes, requiredCode) =>
   Array.isArray(codes) && codes.includes(requiredCode);
 
 async function replaceUserPermissionOverrides(userId, overrides, clientQuery) {
-  await clientQuery("DELETE FROM user_permission_overrides WHERE user_id = ?", [
-    userId,
-  ]);
-  for (const o of overrides) {
-    if (o.permission_id == null || o.granted !== true) continue;
-    await clientQuery(
-      "INSERT INTO user_permission_overrides (user_id, permission_id, granted) VALUES (?, ?, TRUE)",
-      [userId, Number(o.permission_id)],
-    );
-  }
+  const ids = [...new Set(overrides
+    .filter(({ permission_id, granted }) => permission_id != null && granted === true)
+    .map(({ permission_id }) => Number(permission_id)))];
+  await clientQuery("SELECT id FROM users WHERE id = ? FOR NO KEY UPDATE", [userId]);
+  await clientQuery(
+    "DELETE FROM user_permission_overrides WHERE user_id = ? AND NOT (permission_id = ANY(?::int[]))",
+    [userId, ids],
+  );
+  await clientQuery(
+    `INSERT INTO user_permission_overrides (user_id, permission_id, granted)
+     SELECT ?, permission_id, TRUE FROM unnest(?::int[]) AS permissions(permission_id)
+     ON CONFLICT (user_id, permission_id) DO UPDATE SET granted = TRUE
+     WHERE user_permission_overrides.granted IS DISTINCT FROM TRUE`,
+    [userId, ids],
+  );
 }
 
 async function setUserPermissionOverrides(userId, overrides) {
@@ -107,7 +112,7 @@ async function setUserPermissionOverrides(userId, overrides) {
 }
 
 async function getUserPermissionOverrides(userId) {
-  const users = await db.query("SELECT role FROM users WHERE id = ?", [userId]);
+  const users = await db.query("SELECT role FROM active_users WHERE id = ?", [userId]);
   if (users.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
   }

@@ -8,8 +8,8 @@ const db = require("../../database/db");
 
 async function getEnvironmentLocationIds() {
   const rows = await db.query(`
-    SELECT l.id FROM locations l
-    INNER JOIN location_systems ls ON l.id = ls.location_id
+    SELECT l.id FROM active_locations l
+    INNER JOIN active_location_systems ls ON l.id = ls.location_id
     WHERE ls.system_type = 'environment'
       AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
   `);

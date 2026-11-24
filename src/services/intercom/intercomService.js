@@ -56,8 +56,8 @@ async function resolveLocationByIndoorDeviceId(deviceId) {
   const rows = await db.query(
     `
     SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
-    FROM location_systems ls
-    INNER JOIN locations l ON l.id = ls.location_id
+    FROM active_location_systems ls
+    INNER JOIN active_locations l ON l.id = ls.location_id
     WHERE ls.system_type = 'intercom'
       AND NULLIF(ls.system_config->>'indoor_device_id', '')::int = ?
     LIMIT 1
@@ -92,9 +92,9 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
     const rows = await db.query(
       `
       SELECT ls.location_id, ls.id AS system_id, l.name AS location_name
-      FROM location_systems ls
-      INNER JOIN locations l ON l.id = ls.location_id
-      INNER JOIN devices d
+      FROM active_location_systems ls
+      INNER JOIN active_locations l ON l.id = ls.location_id
+      INNER JOIN active_devices d
         ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
       WHERE ls.system_type = 'intercom'
         AND d.type_code = 'video_intercom'
@@ -115,9 +115,9 @@ async function resolveLocationByVoipOrHost({ voipNumber, host } = {}) {
   const hostRows = await db.query(
     `
     SELECT ls.location_id, ls.id AS system_id, l.name AS location_name, d.config
-    FROM location_systems ls
-    INNER JOIN locations l ON l.id = ls.location_id
-    INNER JOIN devices d
+    FROM active_location_systems ls
+    INNER JOIN active_locations l ON l.id = ls.location_id
+    INNER JOIN active_devices d
       ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
     WHERE ls.system_type = 'intercom'
       AND d.type_code = 'video_intercom'
@@ -165,10 +165,10 @@ async function getSites() {
       d.id AS indoor_device_id,
       d.name AS indoor_device_name,
       ls.system_config AS system_config
-    FROM location_systems ls
-    INNER JOIN locations l ON l.id = ls.location_id
-    INNER JOIN zones z ON z.id = l.zone_id
-    LEFT JOIN devices d
+    FROM active_location_systems ls
+    INNER JOIN active_locations l ON l.id = ls.location_id
+    INNER JOIN active_zones z ON z.id = l.zone_id
+    LEFT JOIN active_devices d
       ON d.id = NULLIF(ls.system_config->>'indoor_device_id', '')::int
     WHERE ls.system_type = 'intercom'
     ORDER BY z.sort_order NULLS LAST, z.id, l.sort_order NULLS LAST, l.id
@@ -220,7 +220,7 @@ async function getMainStations() {
   const rows = await db.query(
     `
     SELECT id, name, config
-    FROM devices
+    FROM active_devices
     WHERE type_code = 'video_intercom'
       AND COALESCE(config->>'unitType', '') = 'manage'
     ORDER BY id
@@ -252,8 +252,8 @@ async function resolveIndoorDeviceForLocation(locationId) {
   const rows = await db.query(
     `
     SELECT ls.id AS system_id, ls.system_config, l.name AS location_name
-    FROM location_systems ls
-    INNER JOIN locations l ON l.id = ls.location_id
+    FROM active_location_systems ls
+    INNER JOIN active_locations l ON l.id = ls.location_id
     WHERE ls.location_id = $1 AND ls.system_type = 'intercom'
     LIMIT 1
     `,
@@ -273,7 +273,7 @@ async function resolveIndoorDeviceForLocation(locationId) {
   }
 
   const devices = await db.query(
-    `SELECT id, name, type_code, config FROM devices WHERE id = $1`,
+    `SELECT id, name, type_code, config FROM active_devices WHERE id = $1`,
     [indoorId],
   );
   if (!devices?.length) {

@@ -1785,11 +1785,11 @@ const ALERT_BACKUP_SELECT = `
  * 取得已解決的過期警報（含關聯資訊）供備份使用
  * @param {Date} beforeDate - 備份此日期之前的已解決警報
  */
-async function getResolvedAlertsForBackup(beforeDate) {
+async function getResolvedAlertsForBackup(beforeDate, startDate = "-infinity") {
   const query = `${ALERT_BACKUP_SELECT}
-    WHERE a.status = 'resolved' AND a.updated_at < ?
+    WHERE a.status = 'resolved' AND a.updated_at < ? AND a.updated_at >= ?
     ORDER BY a.updated_at ASC`;
-  const result = await db.query(query, [beforeDate]);
+  const result = await db.query(query, [beforeDate, startDate]);
   return (result || []).map((row) =>
     enrichAlert({
       ...row,

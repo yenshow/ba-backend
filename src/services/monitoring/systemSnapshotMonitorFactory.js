@@ -128,21 +128,21 @@ function createSystemSnapshotMonitor(options) {
 
   const monitorLogger = logger.createLogger(loggerName);
   const lastDeviceStatus = new Map(); // key: `${systemKey}:${sourceId}` -> 'online' | 'offline'
+  let previousItems = null;
 
   const check = async () => {
     try {
+      const version = monitoringSnapshotCache.beginSnapshotRead();
       const snapshot = await getSnapshot();
-      const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
-      const fetchedAt = new Date().toISOString();
+      const baseline = previousItems ?? monitoringSnapshotCache.getSnapshot(systemKey)?.items;
+      if (!monitoringSnapshotCache.setSnapshot(systemKey, snapshot, { version })) return;
 
-      const hadPriorSnapshot = monitoringSnapshotCache.hasSnapshot(systemKey);
-      const changedItems = monitoringSnapshotCache.diffChangedItems(
-        systemKey,
-        items,
-      );
-      monitoringSnapshotCache.setSnapshot(systemKey, { items });
-
-      if (hadPriorSnapshot && changedItems.length > 0) {
+      const { items, fetchedAt } = monitoringSnapshotCache.getSnapshot(systemKey);
+      const changedItems = baseline
+        ? monitoringSnapshotCache.diffChangedItems(baseline, items)
+        : [];
+      previousItems = items;
+      if (changedItems.length > 0) {
         websocketService.emitMonitoringSnapshotUpdated({
           system: systemKey,
           items: changedItems,

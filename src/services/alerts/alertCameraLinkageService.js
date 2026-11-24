@@ -55,7 +55,7 @@ async function alignNvrTrackIds(deviceIds, trackIds) {
   if (deviceIds.length === 0) return aligned;
 
   const rows = await db.query(
-    `SELECT id, config FROM devices WHERE id = ANY(?)`,
+    `SELECT id, config FROM active_devices WHERE id = ANY(?)`,
     [deviceIds],
   );
   const parseCfg = (raw) => {

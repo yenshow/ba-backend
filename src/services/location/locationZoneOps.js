@@ -46,7 +46,7 @@ const locationLogger = logger.createLogger("locationZoneOps");
 
 async function getZones(filters = {}) {
   try {
-    let sql = "SELECT * FROM zones WHERE 1=1";
+    let sql = "SELECT * FROM active_zones WHERE 1=1";
     const params = [];
 
     // 支援 systemType 或 locationType 篩選（向後兼容）
@@ -57,8 +57,8 @@ async function getZones(filters = {}) {
       sql += `
         AND id IN (
           SELECT DISTINCT l.zone_id 
-          FROM locations l
-          INNER JOIN location_systems ls ON l.id = ls.location_id
+          FROM active_locations l
+          INNER JOIN active_location_systems ls ON l.id = ls.location_id
           WHERE ls.system_type = $1
         )
       `;
@@ -93,8 +93,8 @@ async function getZones(filters = {}) {
         ls.system_config,
         ls.created_at as system_created_at,
         ls.updated_at as system_updated_at
-      FROM locations l
-      LEFT JOIN location_systems ls ON l.id = ls.location_id
+      FROM active_locations l
+      LEFT JOIN active_location_systems ls ON l.id = ls.location_id
       WHERE l.zone_id = ANY($1::int[])
     `;
     const locationsParams = [zoneIds];
@@ -102,7 +102,7 @@ async function getZones(filters = {}) {
     if (systemType) {
       // 只返回有該系統類型的地點
       locationsSql += ` AND EXISTS (
-        SELECT 1 FROM location_systems ls2 
+        SELECT 1 FROM active_location_systems ls2 
         WHERE ls2.location_id = l.id AND ls2.system_type = $2
       )`;
       locationsParams.push(systemType);
@@ -149,7 +149,7 @@ async function getZones(filters = {}) {
  */
 async function getZoneById(id, systemTypeOrLocationType = null) {
   try {
-    const zones = await db.query("SELECT * FROM zones WHERE id = $1", [id]);
+    const zones = await db.query("SELECT * FROM active_zones WHERE id = $1", [id]);
 
     if (zones.length === 0) {
       throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
@@ -195,7 +195,7 @@ async function createZone(zoneData, userId, options = {}) {
 
     // 檢查區域名稱是否已存在
     const existingZone = await db.query(
-      "SELECT id FROM zones WHERE name = $1",
+      "SELECT id FROM active_zones WHERE name = $1",
       [trimmedName],
     );
 
@@ -235,7 +235,7 @@ async function createZone(zoneData, userId, options = {}) {
       if (updates.length > 0) {
         params.push(zoneId);
         await db.query(
-          `UPDATE zones SET ${updates.join(
+          `UPDATE active_zones SET ${updates.join(
             ", ",
           )}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`,
           params,
@@ -250,7 +250,7 @@ async function createZone(zoneData, userId, options = {}) {
       }
       if (zoneSortVal === undefined) {
         const r = await db.query(
-          `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM zones`,
+          `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM active_zones`,
         );
         zoneSortVal = r[0]?.n ?? 0;
       }
@@ -287,7 +287,7 @@ async function createZone(zoneData, userId, options = {}) {
         }
         for (let i = 0; i < orderedLocationIds.length; i++) {
           await query(
-            `UPDATE locations SET sort_order = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND zone_id = $3`,
+            `UPDATE active_locations SET sort_order = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND zone_id = $3`,
             [i, orderedLocationIds[i], zoneId],
           );
         }
@@ -330,7 +330,7 @@ async function updateZone(id, zoneData, userId, options = {}) {
 
     // 檢查區域是否存在
     const existing = await db.query(
-      "SELECT id, name FROM zones WHERE id = $1",
+      "SELECT id, name FROM active_zones WHERE id = $1",
       [id],
     );
     if (existing.length === 0) {
@@ -437,7 +437,7 @@ async function updateZone(id, zoneData, userId, options = {}) {
       if (updates.length > 0) {
         params.push(id);
         await query(
-          `UPDATE zones 
+          `UPDATE active_zones 
            SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP
            WHERE id = $${paramIndex}`,
           params,
@@ -449,7 +449,7 @@ async function updateZone(id, zoneData, userId, options = {}) {
         const validLocations = getValidLocations(locations);
 
         const existingLocations = await query(
-          "SELECT id FROM locations WHERE zone_id = $1",
+          "SELECT id FROM active_locations WHERE zone_id = $1",
           [id],
         );
         const existingLocationIds = new Set(
@@ -487,7 +487,7 @@ async function updateZone(id, zoneData, userId, options = {}) {
 
         for (let i = 0; i < orderedLocationIds.length; i++) {
           await query(
-            `UPDATE locations SET sort_order = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND zone_id = $3`,
+            `UPDATE active_locations SET sort_order = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND zone_id = $3`,
             [i, orderedLocationIds[i], id],
           );
         }
@@ -536,35 +536,27 @@ async function updateZone(id, zoneData, userId, options = {}) {
  */
 async function deleteZone(id) {
   try {
-    const result = await db.query(
-      "DELETE FROM zones WHERE id = $1 RETURNING id",
-      [id],
-    );
-
-    if (result.length === 0) {
-      throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
-    }
+    await db.transaction(async (query) => {
+      const zones = await query("SELECT id FROM active_zones WHERE id = $1 FOR UPDATE", [id]);
+      if (!zones.length) throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
+      const archived = await query(
+        `UPDATE zones SET archived_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM active_locations WHERE zone_id = $1)
+         RETURNING id`,
+        [id],
+      );
+      if (!archived.length) {
+        throwApiError(C.LOCATION_ZONE_DELETE_FORBIDDEN, "請先移除或刪除區域內仍在使用的地點");
+      }
+    });
 
     shared.refreshAfterLocationOrZoneDelete(locationLogger);
 
     return {
-      message: "區域刪除成功",
+      message: "區域已刪除",
     };
   } catch (error) {
     rethrowIfApiError(error);
-    if (error.code === "23503") {
-      locationLogger.error("刪除區域被外鍵阻擋", {
-        id,
-        code: error.code,
-        constraint: error.constraint,
-        detail: error.detail,
-        module: "locationService",
-      });
-      throwApiError(
-        C.LOCATION_ZONE_DELETE_FORBIDDEN,
-        "無法刪除區域：仍有地點關聯到此區域",
-      );
-    }
     locationLogger.error("刪除區域失敗", {
       id,
       error: error?.message || String(error),

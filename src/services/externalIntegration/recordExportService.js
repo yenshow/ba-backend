@@ -7,6 +7,7 @@ const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const { getAdapter, requireEventType } = require("./eventTypeRegistry");
+const replaceFieldMappings = require("./replaceFieldMappings");
 const {
   normalizeScheduleFreq,
   normalizeScheduleDay,
@@ -102,7 +103,7 @@ function parseFilterJson(raw) {
 
 async function listRules(eventType) {
   const params = [];
-  let sql = "SELECT * FROM record_export_rules";
+  let sql = "SELECT * FROM active_record_export_rules";
   if (eventType) {
     const type = requireEventType(eventType);
     sql += " WHERE event_type = ?";
@@ -293,7 +294,7 @@ async function upsertRule(ruleId, payload) {
       sftpPasswordEnc = encryptSecret(normalized.sftp.password);
     } else if (id) {
       const rows = await db.query(
-        "SELECT sftp_password_enc FROM record_export_rules WHERE id = ? LIMIT 1",
+        "SELECT sftp_password_enc FROM active_record_export_rules WHERE id = ? LIMIT 1",
         [id],
       );
       sftpPasswordEnc = rows?.[0]?.sftp_password_enc ?? null;
@@ -337,40 +338,30 @@ async function upsertRule(ruleId, payload) {
       id = rows?.[0]?.id ?? null;
     } else {
       params.push(id);
-      await q(
+      const updated = await q(
         `
           UPDATE record_export_rules
           SET event_type = ?, name = ?, enabled = ?, filename_prefix = ?, date_format = ?, time_format = ?, output_format = ?, column_delimiter = ?, export_time = ?::time,
               schedule_freq = ?, schedule_day = ?,
               storage_type = ?, local_dir = ?, sftp_host = ?, sftp_port = ?, sftp_username = ?, sftp_password_enc = ?, sftp_remote_dir = ?,
               filter_json = ?::jsonb, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = ? AND archived_at IS NULL
+          RETURNING id
         `,
         params,
       );
+      if (!updated.length) throwApiError(C.NOT_FOUND, "找不到可編輯的轉存規則");
     }
 
     if (!id) {
       throwApiError(C.INTERNAL_ERROR, "儲存規則失敗", { statusCode: 500 });
     }
 
-    await q("DELETE FROM record_export_field_mappings WHERE rule_id = ?", [id]);
-    let sortOrder = 0;
-    for (const f of normalized.fields) {
-      sortOrder += 1;
-      await q(
-        `INSERT INTO record_export_field_mappings
-           (rule_id, field_key, header_label, format, sort_order)
-         VALUES (?, ?, ?, ?, ?)`,
-        [
-          id,
-          String(f.fieldKey).trim(),
-          f.headerLabel != null ? String(f.headerLabel).trim() : null,
-          f.format != null ? String(f.format).trim() : null,
-          sortOrder,
-        ],
-      );
-    }
+    await replaceFieldMappings(q, "recordExport", id, normalized.fields.map((field) => ({
+      fieldKey: String(field.fieldKey).trim(),
+      label: field.headerLabel != null ? String(field.headerLabel).trim() : null,
+      format: field.format != null ? String(field.format).trim() : null,
+    })));
 
     return { id };
   });
@@ -379,7 +370,7 @@ async function upsertRule(ruleId, payload) {
 async function deleteRule(ruleId) {
   const id = Number(ruleId);
   if (!Number.isFinite(id) || id <= 0) return;
-  await db.query("DELETE FROM record_export_rules WHERE id = ?", [id]);
+  await db.query("UPDATE record_export_rules SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE id = ? AND archived_at IS NULL", [id]);
 }
 
 function buildExportFilename(rule, now) {
@@ -447,7 +438,7 @@ async function writeRuleOutputSftp(rule, filename, content, password) {
 
 async function getRuleSftpPassword(ruleId) {
   const rows = await db.query(
-    "SELECT sftp_password_enc FROM record_export_rules WHERE id = ? LIMIT 1",
+    "SELECT sftp_password_enc FROM active_record_export_rules WHERE id = ? LIMIT 1",
     [ruleId],
   );
   const enc = rows?.[0]?.sftp_password_enc ?? "";
@@ -455,7 +446,7 @@ async function getRuleSftpPassword(ruleId) {
 }
 
 async function runRecordExportRule(ruleId) {
-  const rules = await db.query("SELECT * FROM record_export_rules WHERE id = ? LIMIT 1", [
+  const rules = await db.query("SELECT * FROM active_record_export_rules WHERE id = ? LIMIT 1", [
     ruleId,
   ]);
   const rule = rules?.[0];

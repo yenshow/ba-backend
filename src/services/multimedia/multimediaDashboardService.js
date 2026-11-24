@@ -407,7 +407,7 @@ async function readDeviceEnvSnapshotViaModbus(deviceId, deviceConfigRaw) {
 async function buildMultimediaEnvReadingsSnapshot(deviceIds) {
   const rows = await db.query(
     `SELECT id, config as device_config
-     FROM devices
+     FROM active_devices
      WHERE id = ANY($1::int[])
        AND type_code = 'sensor'
        AND config->>'protocol' = 'modbus'`,

@@ -93,8 +93,8 @@ async function resolveTargetSystems(rule) {
   const rows = await db.query(
     `SELECT ls.id AS system_id,
             (ls.system_config->'device_ids'->>0)::integer AS device_id
-     FROM location_systems ls
-     JOIN locations l ON l.id = ls.location_id
+     FROM active_location_systems ls
+     JOIN active_locations l ON l.id = ls.location_id
      WHERE ls.system_type = ? ${whereClause}
        AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0`,
     params,
@@ -117,9 +117,9 @@ async function loadConfiguredDiDoPoints() {
       ls.system_config,
       l.name AS location_name,
       z.name AS zone_name
-    FROM location_systems ls
-    LEFT JOIN locations l ON l.id = ls.location_id
-    LEFT JOIN zones z ON l.zone_id = z.id
+    FROM active_location_systems ls
+    LEFT JOIN active_locations l ON l.id = ls.location_id
+    LEFT JOIN active_zones z ON l.zone_id = z.id
     WHERE ls.system_type IN (${placeholders})
       AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
     `,

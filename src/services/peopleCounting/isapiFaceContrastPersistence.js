@@ -34,7 +34,7 @@ async function resolveEmployeeNoByPersonName(personName) {
   const name = personName != null ? String(personName).trim() : "";
   if (!name) return null;
   const rows = await db.query(
-    `SELECT employee_no FROM persons
+    `SELECT employee_no FROM active_persons
      WHERE full_name = ? AND status = 'active'
      ORDER BY id ASC
      LIMIT 2`,

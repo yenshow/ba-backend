@@ -357,7 +357,7 @@ async function getDeviceIdFromConfig(deviceConfig) {
     // 查詢匹配的設備
     const result = await db.query(
       `SELECT d.id
-      FROM devices d
+      FROM active_devices d
       WHERE (
           (d.config::jsonb->>'protocol' = 'modbus'
             AND (d.config::jsonb->>'host')::text = ?
@@ -389,9 +389,9 @@ async function getSourceInfoByType(systemId, systemType) {
       `SELECT ls.id, ls.system_type,
               (ls.system_config->'device_ids'->>0) as device_id,
               l.name, l.zone_id, z.name as zone_name
-       FROM location_systems ls
-       INNER JOIN locations l ON ls.location_id = l.id
-       INNER JOIN zones z ON l.zone_id = z.id
+       FROM active_location_systems ls
+       INNER JOIN active_locations l ON ls.location_id = l.id
+       INNER JOIN active_zones z ON l.zone_id = z.id
        WHERE ls.id = ? AND ls.system_type = ?`,
       [systemId, systemType],
     );
@@ -432,7 +432,7 @@ async function getDeviceInfo(deviceId) {
   try {
     const result = await db.query(
       `SELECT d.id, d.name, d.type_code as device_type_code
-      FROM devices d
+      FROM active_devices d
       WHERE d.id = ?`,
       [deviceId],
     );
@@ -520,7 +520,7 @@ function parseDeviceIdsFromSystemConfig(systemConfigRaw) {
 
 async function fetchLocationSystemConfig(systemId, systemType) {
   const result = await db.query(
-    `SELECT system_config FROM location_systems WHERE id = ? AND system_type = ?`,
+    `SELECT system_config FROM active_location_systems WHERE id = ? AND system_type = ?`,
     [systemId, systemType],
   );
   return result?.length ? result[0].system_config : null;
@@ -601,7 +601,7 @@ const getDeviceIdFromSecurity = (systemId) =>
 async function getLocationSystemIdsByDeviceId(deviceId, systemType) {
   try {
     const result = await db.query(
-      `SELECT id FROM location_systems
+      `SELECT id FROM active_location_systems
        WHERE system_type = $1
          AND COALESCE(system_config->'device_ids', '[]'::jsonb) @> to_jsonb(ARRAY[$2]::int[])`,
       [systemType, deviceId],
@@ -977,8 +977,8 @@ async function loadLocationSystemScope(systemKey, sourceId) {
   if (!systemType || !Number.isFinite(sid)) return null;
   const rows = await db.query(
     `SELECT ls.id AS system_id, ls.location_id, l.zone_id
-     FROM location_systems ls
-     JOIN locations l ON l.id = ls.location_id
+     FROM active_location_systems ls
+     JOIN active_locations l ON l.id = ls.location_id
      WHERE ls.id = ? AND ls.system_type = ?
      LIMIT 1`,
     [sid, systemType],

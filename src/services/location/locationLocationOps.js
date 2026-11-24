@@ -34,7 +34,7 @@ const locationLogger = logger.createLogger("locationLocationOps");
 
 async function getLocationById(id) {
   try {
-    const locations = await db.query("SELECT * FROM locations WHERE id = $1", [
+    const locations = await db.query("SELECT * FROM active_locations WHERE id = $1", [
       id,
     ]);
 
@@ -83,9 +83,9 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
         COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb) AS exit_camera_device_ids,
         COALESCE(ls.system_config->>'data_source', '') AS data_source,
         COALESCE(ls.system_config->>'camera_mode', 'people_counting') AS camera_mode
-      FROM locations l
-      INNER JOIN zones z ON l.zone_id = z.id
-      INNER JOIN location_systems ls
+      FROM active_locations l
+      INNER JOIN active_zones z ON l.zone_id = z.id
+      INNER JOIN active_location_systems ls
         ON l.id = ls.location_id
        AND ls.system_type IN ('people_counting', 'roll_call')
       WHERE (
@@ -170,7 +170,7 @@ async function getPeopleCountingSyncableLocationsWithAccessControlDevices() {
     const devRows = await db.query(
       `
         SELECT id, name
-        FROM devices
+        FROM active_devices
         WHERE id = ANY($1::int[])
           AND type_code = $2
       `,
@@ -220,9 +220,9 @@ async function getVehicleAccessSyncableLocationsWithIsapiCameras() {
         z.name AS zone_name,
         COALESCE(ls.system_config->'entry_camera_device_ids', '[]'::jsonb) AS entry_camera_device_ids,
         COALESCE(ls.system_config->'exit_camera_device_ids', '[]'::jsonb) AS exit_camera_device_ids
-      FROM locations l
-      INNER JOIN zones z ON l.zone_id = z.id
-      INNER JOIN location_systems ls
+      FROM active_locations l
+      INNER JOIN active_zones z ON l.zone_id = z.id
+      INNER JOIN active_location_systems ls
         ON l.id = ls.location_id AND ls.system_type = 'vehicle_access'
       WHERE COALESCE(ls.system_config->>'data_source', '') = 'isapi_camera'
         AND (
@@ -266,7 +266,7 @@ async function getVehicleAccessSyncableLocationsWithIsapiCameras() {
     const devRows = await db.query(
       `
         SELECT id, name
-        FROM devices
+        FROM active_devices
         WHERE id = ANY($1::int[])
           AND type_code = 'camera'
       `,
@@ -346,7 +346,7 @@ async function createLocation(locationData, userId) {
 async function updateLocation(id, locationData, userId, options = {}) {
   try {
     // 檢查地點是否存在
-    const existing = await db.query("SELECT * FROM locations WHERE id = $1", [
+    const existing = await db.query("SELECT * FROM active_locations WHERE id = $1", [
       id,
     ]);
     if (existing.length === 0) {
@@ -360,7 +360,7 @@ async function updateLocation(id, locationData, userId, options = {}) {
 
       // 檢查地點是否已被刪除（因為變成無系統）
       const locationCheck = await query(
-        "SELECT id FROM locations WHERE id = $1",
+        "SELECT id FROM active_locations WHERE id = $1",
         [id],
       );
       locationDeleted = locationCheck.length === 0;
@@ -373,6 +373,7 @@ async function updateLocation(id, locationData, userId, options = {}) {
 
     // 如果地點已被刪除（因為變成無系統），返回特殊訊息
     if (locationDeleted) {
+      shared.refreshAfterLocationOrZoneDelete(locationLogger);
       return {
         message: "地點已刪除（無系統關聯）",
         location: null,
@@ -406,19 +407,22 @@ async function updateLocation(id, locationData, userId, options = {}) {
  */
 async function deleteLocation(id) {
   try {
-    const result = await db.query(
-      "DELETE FROM locations WHERE id = $1 RETURNING id",
-      [id],
-    );
-
-    if (result.length === 0) {
-      throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
-    }
+    await db.transaction(async (query) => {
+      const locations = await query("SELECT id FROM active_locations WHERE id = $1 FOR UPDATE", [id]);
+      if (!locations.length) throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
+      const archived = await query(
+        `UPDATE locations SET archived_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM active_location_systems WHERE location_id = $1)
+         RETURNING id`,
+        [id],
+      );
+      if (!archived.length) throwApiError(C.CONFLICT, "請先移除地點內仍在使用的系統");
+    });
 
     shared.refreshAfterLocationOrZoneDelete(locationLogger);
 
     return {
-      message: "地點刪除成功",
+      message: "地點已刪除",
       id: String(id),
     };
   } catch (error) {

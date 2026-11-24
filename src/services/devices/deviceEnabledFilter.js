@@ -1,6 +1,6 @@
 /**
  * 設備啟用過濾（僅非 production／開發環境生效）。
- * 正式環境（NODE_ENV=production）略過 enabled，視所有設備為啟用。
+ * 封存設備在所有環境都會排除。
  */
 const db = require("../../database/db");
 const config = require("../../config");
@@ -21,12 +21,13 @@ const normalizeDeviceIds = (deviceIds) => {
 const isDeviceEnableFeatureActive = () => Boolean(config.deviceEnableFeature);
 
 /**
- * SQL 片段：正式環境回空字串；開發環境回 ` AND <col> IS TRUE`
+ * SQL 片段：一律排除封存設備，開發環境再檢查 enabled。
  * @param {string} [columnRef="enabled"]
  */
 const sqlAndEnabled = (columnRef = "enabled") => {
-  if (!isDeviceEnableFeatureActive()) return "";
-  return ` AND ${columnRef} IS TRUE`;
+  const archiveColumn = columnRef.replace(/enabled$/, "archived_at");
+  const enabled = isDeviceEnableFeatureActive() ? ` AND ${columnRef} IS TRUE` : "";
+  return ` AND ${archiveColumn} IS NULL${enabled}`;
 };
 
 /**
@@ -36,14 +37,12 @@ const sqlAndEnabled = (columnRef = "enabled") => {
 async function filterEnabledDeviceIds(deviceIds) {
   const ids = normalizeDeviceIds(deviceIds);
   if (ids.length === 0) return [];
-  if (!isDeviceEnableFeatureActive()) return ids;
 
   const rows = await db.query(
     `
       SELECT id
       FROM devices
-      WHERE id = ANY(?::int[])
-        AND enabled IS TRUE
+      WHERE id = ANY(?::int[])${sqlAndEnabled()}
       ORDER BY id ASC
     `,
     [ids],
@@ -61,12 +60,11 @@ async function filterEnabledDeviceIds(deviceIds) {
 async function isDeviceEnabled(deviceId) {
   const id = parsePositiveInt(deviceId);
   if (!id) return false;
-  if (!isDeviceEnableFeatureActive()) return true;
   const rows = await db.query(
-    `SELECT enabled FROM devices WHERE id = ? LIMIT 1`,
+    `SELECT id FROM devices WHERE id = ?${sqlAndEnabled()} LIMIT 1`,
     [id],
   );
-  return Boolean(rows?.[0]?.enabled);
+  return Boolean(rows?.[0]);
 }
 
 module.exports = {

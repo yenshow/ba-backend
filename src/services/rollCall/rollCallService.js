@@ -89,7 +89,7 @@ const mapRule = (row) => ({
 const assertLocationIsRollCall = async (locationId) => {
   const rows = await db.query(
     `SELECT ls.system_config
-     FROM location_systems ls
+     FROM active_location_systems ls
      WHERE ls.location_id = ? AND ls.system_type = 'roll_call'
      LIMIT 1`,
     [locationId],
@@ -145,7 +145,7 @@ const loadLocationMembers = async (locationId) => {
 
 const getRuleById = async (ruleId) => {
   const rows = await db.query(
-    `SELECT * FROM roll_call_rules WHERE id = ? LIMIT 1`,
+    `SELECT * FROM active_roll_call_rules WHERE id = ? LIMIT 1`,
     [ruleId],
   );
   if (!rows?.length) throwApiError(C.NOT_FOUND, "找不到規則");
@@ -154,7 +154,7 @@ const getRuleById = async (ruleId) => {
 
 const listRules = async (locationId) => {
   const params = [];
-  let sql = `SELECT * FROM roll_call_rules`;
+  let sql = `SELECT * FROM active_roll_call_rules`;
   if (locationId) {
     params.push(locationId);
     sql += ` WHERE location_id = ?`;
@@ -183,7 +183,7 @@ const insertRuleRow = async (locationId, input) => {
 
 const updateRuleRow = async (ruleId, input) => {
   await db.query(
-    `UPDATE roll_call_rules
+    `UPDATE active_roll_call_rules
      SET name = ?, window_start = ?::time, window_end = ?::time,
          enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
@@ -218,7 +218,7 @@ const updateRule = async (ruleId, body) => {
 
 const deleteRule = async (ruleId) => {
   const rows = await db.query(
-    `DELETE FROM roll_call_rules WHERE id = ? RETURNING id`,
+    `UPDATE roll_call_rules SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE id = ? AND archived_at IS NULL RETURNING id`,
     [ruleId],
   );
   if (!rows?.length) throwApiError(C.NOT_FOUND, "找不到規則");
@@ -250,7 +250,7 @@ const enqueueLocationRulesWrite = (locationId, fn) => {
 const replaceLocationRulesOnce = async (id, parsed) => {
   await db.transaction(async (tx) => {
     const existing = await tx(
-      `SELECT id FROM roll_call_rules WHERE location_id = ?`,
+      `SELECT id FROM active_roll_call_rules WHERE location_id = ?`,
       [id],
     );
     const existingIds = new Set(
@@ -264,7 +264,7 @@ const replaceLocationRulesOnce = async (id, parsed) => {
       let ruleId = input.id && existingIds.has(input.id) ? input.id : null;
       if (ruleId) {
         await tx(
-          `UPDATE roll_call_rules
+          `UPDATE active_roll_call_rules
            SET name = ?, window_start = ?::time, window_end = ?::time,
                enabled = ?, updated_at = CURRENT_TIMESTAMP
            WHERE id = ? AND location_id = ?`,
@@ -298,7 +298,7 @@ const replaceLocationRulesOnce = async (id, parsed) => {
 
     const toDelete = [...existingIds].filter((ruleId) => !keepIds.has(ruleId));
     if (toDelete.length) {
-      await tx(`DELETE FROM roll_call_rules WHERE id = ANY(?::int[])`, [
+      await tx(`UPDATE roll_call_rules SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE id = ANY(?::int[]) AND archived_at IS NULL`, [
         toDelete,
       ]);
     }
@@ -374,7 +374,7 @@ const loadRollCallOeContext = async (locationId) => {
   const id = place.locationId;
   if (!id) return { ...place, systemId: null };
   const rows = await db.query(
-    `SELECT id FROM location_systems
+    `SELECT id FROM active_location_systems
      WHERE location_id = ? AND system_type = 'roll_call'
      LIMIT 1`,
     [id],
@@ -445,7 +445,7 @@ const applyFaceMatches = async (
   );
   const attendance = await db.query(
     `SELECT id, employee_no, full_name, status, source
-     FROM roll_call_attendance
+     FROM included_roll_call_attendance
      WHERE session_id = ?`,
     [sessionId],
   );
@@ -464,7 +464,7 @@ const applyFaceMatches = async (
     const row = byNo.get(employeeNo);
     if (!row || row.status === "present") continue;
     const updated = await db.query(
-      `UPDATE roll_call_attendance
+      `UPDATE included_roll_call_attendance
        SET status = 'present', source = 'face', checked_in_at = ?, event_id = ?
        WHERE id = ?
          AND status <> 'present'
@@ -517,7 +517,7 @@ const applyFaceMatches = async (
 const closeSession = async (sessionId, oeCtx = null) => {
   const pendingRows = await db.query(
     `SELECT COUNT(*)::int AS n
-     FROM roll_call_attendance
+     FROM included_roll_call_attendance
      WHERE session_id = ? AND status = 'pending'`,
     [sessionId],
   );
@@ -530,7 +530,7 @@ const closeSession = async (sessionId, oeCtx = null) => {
     [sessionId],
   );
   await db.query(
-    `UPDATE roll_call_attendance
+    `UPDATE included_roll_call_attendance
      SET status = 'absent'
      WHERE session_id = ? AND status = 'pending'`,
     [sessionId],
@@ -621,8 +621,8 @@ const reconcileRule = async (rule, deviceIds, now = new Date()) => {
 const loadEnabledRules = async () => {
   const rows = await db.query(
     `SELECT r.*, ls.system_config
-     FROM roll_call_rules r
-     INNER JOIN location_systems ls
+     FROM active_roll_call_rules r
+     INNER JOIN active_location_systems ls
        ON ls.location_id = r.location_id AND ls.system_type = 'roll_call'
      WHERE r.enabled = TRUE`,
     [],
@@ -653,7 +653,7 @@ const countBySession = async (sessionIds) => {
     `SELECT session_id,
             COUNT(*) FILTER (WHERE status <> 'leave')::int AS expected,
             COUNT(*) FILTER (WHERE status = 'present')::int AS present
-     FROM roll_call_attendance
+     FROM included_roll_call_attendance
      WHERE session_id = ANY(?::int[])
      GROUP BY session_id`,
     [sessionIds],
@@ -680,7 +680,7 @@ const unitsBySession = async (sessionIds) => {
             COALESCE(NULLIF(BTRIM(MAX(pg.name)), ''), ?) AS group_name,
             COUNT(*) FILTER (WHERE a.status <> 'leave')::int AS expected,
             COUNT(*) FILTER (WHERE a.status = 'present')::int AS present
-     FROM roll_call_attendance a
+     FROM included_roll_call_attendance a
      INNER JOIN persons p ON p.id = a.person_id
      LEFT JOIN person_groups pg ON pg.id = p.person_group_id
      WHERE a.session_id = ANY(?::int[])
@@ -745,8 +745,8 @@ const getToday = async () => {
   const locations = await db.query(
     `SELECT l.id, l.name, z.name AS zone_name, ls.system_config
      FROM locations l
-     INNER JOIN zones z ON z.id = l.zone_id
-     INNER JOIN location_systems ls
+     LEFT JOIN zones z ON z.id = l.zone_id
+     INNER JOIN active_location_systems ls
        ON ls.location_id = l.id AND ls.system_type = 'roll_call'
      ORDER BY z.sort_order NULLS LAST, z.name, l.sort_order NULLS LAST, l.name`,
     [],
@@ -757,7 +757,7 @@ const getToday = async () => {
     `SELECT s.*, r.name AS rule_name, r.location_id,
             r.window_start, r.window_end
      FROM roll_call_sessions s
-     INNER JOIN roll_call_rules r ON r.id = s.rule_id
+     INNER JOIN active_roll_call_rules r ON r.id = s.rule_id
      WHERE s.session_date IN (?::date, ?::date)`,
     [parts.date, yesterday],
   );
@@ -879,7 +879,7 @@ const resetLocationToday = async (locationId, options = {}) => {
     `SELECT s.id, s.session_date, r.id AS rule_id, r.name,
             r.window_start, r.window_end, r.location_id
      FROM roll_call_sessions s
-     INNER JOIN roll_call_rules r ON r.id = s.rule_id
+     INNER JOIN active_roll_call_rules r ON r.id = s.rule_id
      WHERE r.location_id = ? AND s.session_date IN (?::date, ?::date)`,
     [id, parts.date, yesterday],
   );
@@ -901,7 +901,7 @@ const resetLocationToday = async (locationId, options = {}) => {
   for (const row of sessions) {
     const sessionId = Number(row.id);
     await db.query(
-      `UPDATE roll_call_attendance
+      `UPDATE included_roll_call_attendance
        SET status = 'pending', source = NULL, checked_in_at = NULL, event_id = NULL
        WHERE session_id = ? AND status <> 'leave'`,
       [sessionId],
@@ -944,8 +944,8 @@ const resetLocationToday = async (locationId, options = {}) => {
   });
   const rules = await db.query(
     `SELECT r.*, ls.system_config
-     FROM roll_call_rules r
-     INNER JOIN location_systems ls
+     FROM active_roll_call_rules r
+     INNER JOIN active_location_systems ls
        ON ls.location_id = r.location_id AND ls.system_type = 'roll_call'
      WHERE r.location_id = ? AND r.enabled = TRUE`,
     [id],
@@ -976,7 +976,7 @@ const getSession = async (sessionId, options = {}) => {
             l.name AS location_name, z.name AS zone_name
      FROM roll_call_sessions s
      INNER JOIN roll_call_rules r ON r.id = s.rule_id
-     INNER JOIN locations l ON l.id = r.location_id
+     LEFT JOIN locations l ON l.id = r.location_id
      INNER JOIN zones z ON z.id = l.zone_id
      WHERE s.id = ?
      LIMIT 1`,
@@ -995,7 +995,7 @@ const getSession = async (sessionId, options = {}) => {
             p.person_group_id, pg.name AS group_name, p.face_url,
             a.status, a.source, a.checked_in_at,
             e.picture_path AS event_picture_path, e.payload AS event_payload
-     FROM roll_call_attendance a
+     FROM included_roll_call_attendance a
      INNER JOIN persons p ON p.id = a.person_id
      LEFT JOIN person_groups pg ON pg.id = p.person_group_id
      LEFT JOIN isapi_access_events e ON e.id = a.event_id
@@ -1160,7 +1160,7 @@ const getReport = async ({ startDate, endDate, locationId } = {}) => {
             p.person_group_id, pg.name AS group_name, p.face_url,
             a.status, a.source, a.checked_in_at,
             e.picture_path AS event_picture_path, e.payload AS event_payload
-     FROM roll_call_attendance a
+     FROM included_roll_call_attendance a
      INNER JOIN persons p ON p.id = a.person_id
      LEFT JOIN person_groups pg ON pg.id = p.person_group_id
      LEFT JOIN isapi_access_events e ON e.id = a.event_id
@@ -1233,7 +1233,7 @@ const setAttendanceLeave = async (
   const sessions = await db.query(
     `SELECT s.id, s.status, r.location_id, r.name AS rule_name, r.id AS rule_id
      FROM roll_call_sessions s
-     INNER JOIN roll_call_rules r ON r.id = s.rule_id
+     INNER JOIN active_roll_call_rules r ON r.id = s.rule_id
      WHERE s.id = ?
      LIMIT 1`,
     [sid],
@@ -1242,7 +1242,7 @@ const setAttendanceLeave = async (
   const session = sessions[0];
   const rows = await db.query(
     `SELECT id, status, full_name, employee_no
-     FROM roll_call_attendance
+     FROM included_roll_call_attendance
      WHERE session_id = ? AND person_id = ?
      LIMIT 1`,
     [sid, pid],
@@ -1253,7 +1253,7 @@ const setAttendanceLeave = async (
   if (wantLeave) {
     if (row.status !== "leave") {
       await db.query(
-        `UPDATE roll_call_attendance
+        `UPDATE included_roll_call_attendance
          SET status = 'leave', source = 'manual', checked_in_at = NULL, event_id = NULL
          WHERE id = ?`,
         [row.id],
@@ -1262,7 +1262,7 @@ const setAttendanceLeave = async (
   } else if (row.status === "leave") {
     const nextStatus = session.status === "closed" ? "absent" : "pending";
     await db.query(
-      `UPDATE roll_call_attendance
+      `UPDATE included_roll_call_attendance
        SET status = ?, source = NULL, checked_in_at = NULL, event_id = NULL
        WHERE id = ?`,
       [nextStatus, row.id],

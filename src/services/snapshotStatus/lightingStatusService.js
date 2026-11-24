@@ -78,9 +78,9 @@ async function fetchLightingSystems(zoneIds = []) {
       ls.id AS system_id,
       (ls.system_config->'device_ids'->>0)::int AS device_id,
       ls.system_config->'modbus_config' AS modbus_config
-    FROM location_systems ls
-    INNER JOIN locations l ON l.id = ls.location_id
-    INNER JOIN zones z ON z.id = l.zone_id
+    FROM active_location_systems ls
+    INNER JOIN active_locations l ON l.id = ls.location_id
+    INNER JOIN active_zones z ON z.id = l.zone_id
     WHERE ls.system_type = 'lighting'
       AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
       AND (ls.system_config->'device_ids'->>0) ~ '^[0-9]+$'

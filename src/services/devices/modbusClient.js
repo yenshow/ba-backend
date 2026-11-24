@@ -43,11 +43,17 @@ class ModbusClient extends EventEmitter {
     );
     this.clientConnections.delete(key);
     this.lastConnectedAt.delete(key);
-    this.inflightReads.forEach((_p, readKey) => {
-      if (readKey.startsWith(`${key}|`)) {
-        this.inflightReads.delete(readKey);
-      }
-    });
+    this.invalidateReads(deviceConfig);
+  }
+
+  invalidateReads(deviceConfig, registerType = null) {
+    const { host, port, unitId } = deviceConfig;
+    const key = this.getConnectionKey(host, port, unitId);
+    const kind = registerType === "coil" ? "coils" : registerType;
+    const prefix = kind ? `${key}|${kind}|` : `${key}|`;
+    for (const readKey of this.inflightReads.keys()) {
+      if (readKey.startsWith(prefix)) this.inflightReads.delete(readKey);
+    }
   }
 
   // 處理操作錯誤（連接斷開檢測）
@@ -270,12 +276,6 @@ class ModbusClient extends EventEmitter {
   }
 
   async readWithCoalescing(kind, address, length, deviceConfig, reader, timeoutMsg) {
-    const connKey = this.getConnectionKey(
-      deviceConfig.host,
-      deviceConfig.port,
-      deviceConfig.unitId,
-    );
-
     const readKey = this.getReadKey(kind, address, length, deviceConfig);
     if (this.inflightReads.has(readKey)) {
       return this.inflightReads.get(readKey);
@@ -299,10 +299,12 @@ class ModbusClient extends EventEmitter {
           throw createApiError(C.MODBUS_READ_TIMEOUT, timeoutMsg);
         }
         this.handleOperationError(error, client, deviceConfig, "read");
-      } finally {
+      }
+    })().finally(() => {
+      if (this.inflightReads.get(readKey) === promise) {
         this.inflightReads.delete(readKey);
       }
-    })();
+    });
 
     this.inflightReads.set(readKey, promise);
     return promise;

@@ -27,7 +27,7 @@ async function getAllSettings() {
     () =>
       db.query(
         `SELECT id, key, value, description, created_at, updated_at 
-			 FROM system_settings 
+			 FROM active_system_settings 
 			 ORDER BY key ASC`,
       ),
     {
@@ -43,7 +43,7 @@ async function getSettingByKey(key, options = {}) {
     async () => {
       const result = await db.query(
         `SELECT id, key, value, description, created_at, updated_at 
-			 FROM system_settings 
+			 FROM active_system_settings 
 			 WHERE key = $1`,
         [key],
       );
@@ -77,7 +77,7 @@ async function getSettingsByKeys(keys) {
       const placeholders = keys.map((_, index) => `$${index + 1}`).join(", ");
       const result = await db.query(
         `SELECT key, value 
-			 FROM system_settings 
+			 FROM active_system_settings 
 			 WHERE key IN (${placeholders})`,
         keys,
       );
@@ -106,7 +106,7 @@ async function upsertSetting(key, value, description = null) {
       const result = await db.query(
         `INSERT INTO system_settings (key, value, description)
 			 VALUES ($1, $2, $3)
-			 ON CONFLICT (key) 
+			 ON CONFLICT (key) WHERE archived_at IS NULL
 			 DO UPDATE SET 
 			   value = EXCLUDED.value,
 			   description = COALESCE(EXCLUDED.description, system_settings.description),
@@ -141,7 +141,7 @@ async function updateSetting(key, value) {
   return runDb(
     async () => {
       const result = await db.query(
-        `UPDATE system_settings 
+        `UPDATE active_system_settings 
 			 SET value = $1, updated_at = CURRENT_TIMESTAMP
 			 WHERE key = $2
 			 RETURNING id, key, value, description, created_at, updated_at`,
@@ -174,8 +174,8 @@ async function deleteSetting(key) {
   return runDb(
     () =>
       db.query(
-        `DELETE FROM system_settings 
-			 WHERE key = $1
+        `UPDATE system_settings SET archived_at = CURRENT_TIMESTAMP 
+			 WHERE key = $1 AND archived_at IS NULL
 			 RETURNING id`,
         [key],
       ).then((result) => result.length > 0),

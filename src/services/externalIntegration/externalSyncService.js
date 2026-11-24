@@ -7,6 +7,7 @@ const { throwApiError } = require("../../utils/apiErrors");
 const { encryptSecret, decryptSecret } = require("../../utils/secretCrypto");
 const { getAdapter, requireEventType, listEventTypes } = require("./eventTypeRegistry");
 const { normalizeOptionsGrain } = require("./eventAdapters");
+const replaceFieldMappings = require("./replaceFieldMappings");
 const {
   PUSH_MODE_FIXED,
   PUSH_MODE_REALTIME,
@@ -282,7 +283,7 @@ function mapConfigRow(config, mapRows) {
 async function getConfig(eventType = "access_control") {
   const type = requireEventType(eventType);
   const rows = await db.query(
-    "SELECT * FROM external_sync_configs WHERE event_type = ? LIMIT 1",
+    "SELECT * FROM active_external_sync_configs WHERE event_type = ? LIMIT 1",
     [type],
   );
   const config = rows?.[0] ?? null;
@@ -296,7 +297,7 @@ async function getConfig(eventType = "access_control") {
 
 async function listConfigs() {
   const rows = await db.query(
-    "SELECT * FROM external_sync_configs ORDER BY event_type ASC",
+    "SELECT * FROM active_external_sync_configs ORDER BY event_type ASC",
   );
   if (!rows?.length) return [];
   const ids = rows.map((r) => r.id);
@@ -336,7 +337,7 @@ async function upsertConfig(payload) {
   );
 
   const existingRows = await db.query(
-    "SELECT password_enc FROM external_sync_configs WHERE event_type = ? LIMIT 1",
+    "SELECT password_enc FROM active_external_sync_configs WHERE event_type = ? LIMIT 1",
     [eventType],
   );
   const passwordRaw = String(payload.password ?? "").trim();
@@ -356,7 +357,7 @@ async function upsertConfig(payload) {
           (event_type, push_mode, push_time, push_interval_seconds, db_type, host, port, database_name, username, password_enc, target_table, options_json)
         VALUES
           (?, ?, ?::time, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
-        ON CONFLICT (event_type) DO UPDATE
+        ON CONFLICT (event_type) WHERE archived_at IS NULL DO UPDATE
         SET push_mode = EXCLUDED.push_mode,
             push_time = EXCLUDED.push_time,
             push_interval_seconds = EXCLUDED.push_interval_seconds,
@@ -390,22 +391,13 @@ async function upsertConfig(payload) {
     if (!configId) {
       throwApiError(C.INTERNAL_ERROR, "儲存資料庫對接設定失敗", { statusCode: 500 });
     }
-    await q("DELETE FROM external_sync_field_mappings WHERE config_id = ?", [configId]);
-    let sortOrder = 0;
-    for (const [fieldKey, cfg] of Object.entries(payload.mappings || {})) {
-      sortOrder += 1;
-      await q(
-        `INSERT INTO external_sync_field_mappings (config_id, field_key, target_column, format, sort_order)
-         VALUES (?, ?, ?, ?, ?)`,
-        [
-          configId,
-          fieldKey,
-          String(cfg.targetColumn).trim(),
-          cfg.format != null ? String(cfg.format).trim() : null,
-          sortOrder,
-        ],
-      );
-    }
+    await replaceFieldMappings(q, "externalSync", configId,
+      Object.entries(payload.mappings || {}).map(([fieldKey, cfg]) => ({
+        fieldKey,
+        label: String(cfg.targetColumn).trim(),
+        format: cfg.format != null ? String(cfg.format).trim() : null,
+      })),
+    );
     return { id: configId };
   });
 }
@@ -414,7 +406,7 @@ async function loadConfigWithMappings(eventType) {
   const type = requireEventType(eventType);
   const cfgRows = await db.query(
     `SELECT *, cursor_ts::text AS cursor_ts_text
-     FROM external_sync_configs WHERE event_type = ? LIMIT 1`,
+     FROM active_external_sync_configs WHERE event_type = ? LIMIT 1`,
     [type],
   );
   const cfg = cfgRows?.[0] ?? null;
@@ -516,7 +508,7 @@ async function runExternalSyncOnce(eventType = "access_control") {
 
 async function deleteConfig(eventType) {
   const type = requireEventType(eventType);
-  await db.query("DELETE FROM external_sync_configs WHERE event_type = ?", [type]);
+  await db.query("UPDATE external_sync_configs SET archived_at = CURRENT_TIMESTAMP WHERE event_type = ? AND archived_at IS NULL", [type]);
 }
 
 module.exports = {

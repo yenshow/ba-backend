@@ -42,9 +42,9 @@ const ELEVATOR_LOCATION_SELECT = `
     z.name AS zone_name,
     ls.id AS system_id,
     ls.system_config
-  FROM location_systems ls
-  INNER JOIN locations l ON l.id = ls.location_id
-  LEFT JOIN zones z ON l.zone_id = z.id
+  FROM active_location_systems ls
+  INNER JOIN active_locations l ON l.id = ls.location_id
+  LEFT JOIN active_zones z ON l.zone_id = z.id
   WHERE ls.system_type = 'elevator'
 `;
 

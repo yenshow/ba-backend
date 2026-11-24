@@ -47,8 +47,8 @@ async function getLocationIngestPolicy(locationId) {
   }
   const locRows = await db.query(
     `SELECT l.created_at, ls.system_config
-     FROM locations l
-     JOIN location_systems ls ON ls.location_id = l.id AND ls.system_type = 'vehicle_access'
+     FROM active_locations l
+     JOIN active_location_systems ls ON ls.location_id = l.id AND ls.system_type = 'vehicle_access'
      WHERE l.id = ?`,
     [locationId],
   );

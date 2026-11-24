@@ -36,6 +36,10 @@ npm run probe:video-intercom
 npm run gen:perm
 npm run test:data-export
 npm run test:data-export:sample-all
+node scripts/integration/monitoring-load.js mixed
+node scripts/integration/monitoring-load.js burst
 ```
+
+`monitoring-load.js` 使用後端與 Central 的已安裝依賴，啟動隨機埠的 loopback HTTP／Socket.IO，設備與資料庫使用模擬回應。詳見 [壓力／穩定性測試報告](../../docs/00-decisions/load-test-report.md)。
 
 改路徑時請同步：`package.json`、`windows/BaSetupWizard`、`scripts/generate-windows-services.cjs`、`scripts/start-nuxt-frontend.mjs`、`scripts/build-and-package.ps1`、相關 docs。

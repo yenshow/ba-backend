@@ -336,7 +336,7 @@ async function findBindingsByPlates(plateNumbers) {
       SELECT plp.plate_normalized, plp.plate_number, plp.person_id,
              p.employee_no, p.full_name
       FROM person_license_plates plp
-      INNER JOIN persons p ON p.id = plp.person_id
+      INNER JOIN active_persons p ON p.id = plp.person_id
       WHERE plp.plate_normalized IN (${placeholders})
     `,
     normalized,

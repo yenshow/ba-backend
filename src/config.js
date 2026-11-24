@@ -105,6 +105,7 @@ const database = {
   user: getEnv("DB_USER", "postgres"),
   password: getEnv("DB_PASSWORD", "postgres"),
   database: getEnv("DB_NAME", "ba_system"),
+  runSchemaPatches: getEnv("DB_RUN_SCHEMA_PATCHES", "true") !== "false",
   connectionLimit: 10,
   waitForConnections: true,
   queueLimit: 0,
@@ -276,7 +277,7 @@ const ladderSdk = {
 
 /**
  * 營運事件保留（已棄用獨立直刪）
- * 冷刪改由備份雙層保留（BACKUP_ONLINE_RETENTION_DAYS）；見 backupScheduler。
+ * 事件持續保留。排程僅產出報表歸檔。
  * OPERATIONAL_EVENTS_RETENTION_DAYS 僅相容讀取，不再驅動排程。
  */
 const operationalEvents = {

@@ -44,7 +44,7 @@ async function getLocationSystemSyncFlags(locationId) {
   const rows = await db.query(
     `
       SELECT system_type, system_config
-      FROM location_systems
+      FROM active_location_systems
       WHERE location_id = ?
     `,
     [locationId],
@@ -113,7 +113,7 @@ async function ensureLocationExists(locationId) {
   if (!Number.isFinite(id)) {
     throwApiError(C.PERSONNEL_VALIDATION_FAILED, "無效的地點 ID");
   }
-  const rows = await db.query(`SELECT id FROM locations WHERE id = ? LIMIT 1`, [id]);
+  const rows = await db.query(`SELECT id FROM active_locations WHERE id = ? LIMIT 1`, [id]);
   if (!rows?.[0]) {
     throwApiError(C.PERSONNEL_VALIDATION_FAILED, "地點不存在");
   }
@@ -126,7 +126,7 @@ async function ensureLocationAllowsAccessMembers(locationId) {
   const rows = await db.query(
     `
       SELECT ls.system_type, ls.system_config
-      FROM location_systems ls
+      FROM active_location_systems ls
       WHERE ls.location_id = ?
     `,
     [id],
@@ -259,7 +259,7 @@ async function getPersonsByLocationIdPaged(locationId, options = {}) {
     `
       SELECT COUNT(*)::int AS total
       FROM person_location_access pla
-      INNER JOIN persons p ON pla.person_id = p.id
+      INNER JOIN active_persons p ON pla.person_id = p.id
       ${whereSql}
     `,
     params,
@@ -270,8 +270,8 @@ async function getPersonsByLocationIdPaged(locationId, options = {}) {
     `
       SELECT p.*, pg.name AS group_name
       FROM person_location_access pla
-      INNER JOIN persons p ON pla.person_id = p.id
-      LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+      INNER JOIN active_persons p ON pla.person_id = p.id
+      LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
       ${whereSql}
       ORDER BY p.employee_no ASC
       LIMIT ? OFFSET ?
@@ -295,7 +295,7 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
 
   if (nextIds.length > 0) {
     const rows = await db.query(
-      `SELECT id FROM persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
+      `SELECT id FROM active_persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
       nextIds,
     );
     const existing = new Set((rows || []).map((r) => r.id));
@@ -310,7 +310,10 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
   }
 
   await db.transaction(async (query) => {
-    await query("DELETE FROM person_location_access WHERE location_id = ?", [id]);
+    await query(
+      "DELETE FROM person_location_access WHERE location_id = ? AND person_id IN (SELECT id FROM active_persons)",
+      [id],
+    );
     if (nextIds.length > 0) {
       const valuesSql = nextIds.map(() => "(?, ?)").join(", ");
       const params = nextIds.flatMap((pid) => [pid, id]);
@@ -336,7 +339,7 @@ async function replaceLocationMembers(locationId, memberPersonIds = []) {
   // 時段簽到：門禁縮減後裁掉場次殘留（與排班儲存同一套 applyRosterPartition）
   try {
     const rollCallRows = await db.query(
-      `SELECT 1 FROM location_systems
+      `SELECT 1 FROM active_location_systems
        WHERE location_id = ? AND system_type = 'roll_call'
        LIMIT 1`,
       [id],
@@ -376,8 +379,8 @@ async function getPersonsWithAccessByLocationId(locationId) {
     `SELECT p.id, p.employee_no, p.full_name, p.status, p.face_url, p.config,
             p.person_group_id, pg.name AS group_name
      FROM person_location_access pla
-     INNER JOIN persons p ON pla.person_id = p.id
-     LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+     INNER JOIN active_persons p ON pla.person_id = p.id
+     LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
      WHERE pla.location_id = ? AND p.status = 'active'
      ORDER BY p.employee_no`,
     [locationId],
@@ -405,7 +408,7 @@ async function listLicensePlatesByLocationId(locationId) {
         p.status AS person_status
       FROM person_license_plates plp
       INNER JOIN person_location_access pla ON pla.person_id = plp.person_id
-      INNER JOIN persons p ON p.id = plp.person_id
+      INNER JOIN active_persons p ON p.id = plp.person_id
       WHERE pla.location_id = ?
       ORDER BY p.employee_no ASC, plp.id ASC
     `,

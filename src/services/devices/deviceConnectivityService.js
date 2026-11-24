@@ -464,7 +464,7 @@ async function checkAndBroadcastConnectivity({ type_code } = {}) {
   const rows = await db.query(
     `
       SELECT d.id, d.type_code, d.config, dm.config AS model_config, dm.port AS model_port
-      FROM devices d
+      FROM active_devices d
       LEFT JOIN device_models dm ON dm.id = d.model_id
       ${where}${sqlAndEnabled("d.enabled")}
       ORDER BY d.id ASC
@@ -570,7 +570,7 @@ async function checkAndBroadcastConnectivityByDeviceIds(deviceIds = []) {
   const rows = await db.query(
     `
       SELECT d.id, d.type_code, d.config, dm.config AS model_config, dm.port AS model_port
-      FROM devices d
+      FROM active_devices d
       LEFT JOIN device_models dm ON dm.id = d.model_id
       WHERE d.id = ANY($1::int[])
       ${sqlAndEnabled("d.enabled")}
@@ -691,7 +691,7 @@ async function getConnectivitySnapshot(params = {}) {
   // 如果指定 type_code：直接查 DB 取 id 清單再回 snapshot（避免前端漏傳）
   if (typeCode) {
     const rows = await db.query(
-      `SELECT id FROM devices WHERE LOWER(type_code) = ? ORDER BY id ASC`,
+      `SELECT id FROM active_devices WHERE LOWER(type_code) = ? ORDER BY id ASC`,
       [typeCode],
     );
     const ids = (rows || [])

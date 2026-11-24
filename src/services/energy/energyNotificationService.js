@@ -44,7 +44,7 @@ async function getDeviceOfflineIncidents(deviceIds) {
            a.severity, a.message, a.status, a.created_at, a.updated_at,
            d.name AS device_name
     FROM alerts a
-    INNER JOIN devices d ON d.id = a.source_id
+    INNER JOIN active_devices d ON d.id = a.source_id
     WHERE a.status = 'active'
       AND a.source = 'device'
       AND a.alert_type = 'offline'

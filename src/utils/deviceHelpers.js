@@ -403,7 +403,7 @@ const getDeviceNameByIds = async (deviceIds) => {
   ];
   if (ids.length === 0) return new Map();
   const rows = await db.query(
-    "SELECT id, name FROM devices WHERE id = ANY(?::int[])",
+    "SELECT id, name FROM active_devices WHERE id = ANY(?::int[])",
     [ids.map((x) => Math.trunc(x))],
   );
   const map = new Map();

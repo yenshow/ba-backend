@@ -35,7 +35,7 @@ const assertCamerasHaveCategory = async (
 
   const rows = await query(
     `SELECT d.id, d.type_code, dm.category_code
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON dm.id = d.model_id
      WHERE d.id = ANY(?::int[])`,
     [ids],

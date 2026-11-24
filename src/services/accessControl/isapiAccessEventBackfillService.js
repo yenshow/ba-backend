@@ -53,7 +53,7 @@ async function resolveAccessBackfillForDevice(deviceId) {
   }
   const rows = await db.query(
     `SELECT system_config
-     FROM location_systems
+     FROM active_location_systems
      WHERE system_type = 'people_counting'
        AND (
          EXISTS (

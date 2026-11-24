@@ -27,7 +27,7 @@ async function listAccessDevices() {
   const rows = await db.query(
     `
     SELECT id, name, config
-    FROM devices
+    FROM active_devices
     WHERE type_code = 'access_control'
     ORDER BY name ASC
     `,

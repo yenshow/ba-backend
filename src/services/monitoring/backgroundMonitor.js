@@ -21,10 +21,11 @@ const BASE_INTERVAL_MS = STANDARD_POLL_MS;
 const SCHEDULER_TICK_MIN_MS = 200;
 
 const monitoringTasks = [];
+const runningTasks = new Map();
 
 let monitoringTimer = null;
-let stopRequested = false;
-let resolveStopped = null;
+let scheduledWakeAtMs = null;
+let schedulerRunning = false;
 
 /**
  * @param {string} systemName
@@ -79,19 +80,20 @@ function registerMonitoringTask(
     currentIntervalMs: baseIntervalMs,
     nextRunAtMs: Date.now() + startOffsetMs,
     lastRun: null,
-    lastStartedAtMs: 0,
-    isRunning: false,
+    lastStartedAtMs: null,
+    lastScheduleDelayMs: null,
+    lastDurationMs: null,
     errorCount: 0,
   });
 
   monitorLogger.debug(`已註冊監控任務: ${systemName}`);
+  scheduleNextTick();
 }
 
 async function runTask(task) {
   const startTime = Date.now();
   task.lastStartedAtMs = startTime;
-  task.isRunning = true;
-
+  task.lastScheduleDelayMs = Math.max(0, startTime - task.nextRunAtMs);
   try {
     monitorLogger.debug(`開始執行: ${task.systemName}`);
 
@@ -108,16 +110,13 @@ async function runTask(task) {
         : null;
     task.currentIntervalMs =
       suggested != null ? suggested : task.baseIntervalMs;
-
-    task.nextRunAtMs = Date.now() + task.currentIntervalMs;
-    return { ok: true, durationMs: Date.now() - startTime };
   } catch (error) {
     task.errorCount++;
     const duration = Date.now() - startTime;
 
     monitorLogger.warn(
       `${task.systemName} 監控失敗（錯誤次數: ${task.errorCount}, 耗時: ${duration}ms）`,
-      { error: error.message },
+      { error: error?.message ?? String(error) },
     );
 
     if (task.errorCount >= 5) {
@@ -127,92 +126,72 @@ async function runTask(task) {
     }
 
     task.currentIntervalMs = task.baseIntervalMs;
-    task.nextRunAtMs = Date.now() + task.baseIntervalMs;
-    return { ok: false, durationMs: duration, error };
   } finally {
-    task.isRunning = false;
+    const finishedAt = Date.now();
+    task.lastDurationMs = Math.max(0, finishedAt - startTime);
+    task.nextRunAtMs = finishedAt + task.currentIntervalMs;
   }
 }
 
-function getDueTasks(now) {
-  return monitoringTasks.filter((t) => !t.isRunning && t.nextRunAtMs <= now);
+function clearScheduledTick() {
+  if (monitoringTimer) clearTimeout(monitoringTimer);
+  monitoringTimer = null;
+  scheduledWakeAtMs = null;
 }
 
-function getNextWakeAtMs(now) {
-  if (monitoringTasks.length === 0) return now + 60_000;
-  let next = Infinity;
-  for (const t of monitoringTasks) {
-    const when = t.isRunning ? now + t.currentIntervalMs : t.nextRunAtMs;
-    if (when < next) next = when;
-  }
-  if (!Number.isFinite(next)) return now + 60_000;
-  return Math.max(now + SCHEDULER_TICK_MIN_MS, next);
-}
-
-async function runSchedulerTick() {
-  if (monitoringTasks.length === 0) {
-    return;
-  }
-
-  if (stopRequested) {
-    return;
-  }
-
-  const startTime = Date.now();
-
-  try {
-    const now = Date.now();
-    const due = getDueTasks(now);
-    if (due.length === 0) {
-      return;
-    }
-
-    const dueSummary = `本輪執行任務數: ${due.length}（${due
+function runSchedulerTick() {
+  clearScheduledTick();
+  if (!schedulerRunning) return;
+  const now = Date.now();
+  const due = monitoringTasks.filter(
+    (task) => !runningTasks.has(task.taskId) && task.nextRunAtMs <= now,
+  );
+  if (due.length > 0) {
+    monitorLogger.debug(`本輪執行任務數: ${due.length}（${due
       .map((t) => t.systemName)
-      .join("、")}）`;
-    monitorLogger.debug(dueSummary);
-
-    await Promise.all(due.map((task) => runTask(task)));
-
-    const totalDuration = Date.now() - startTime;
-    monitorLogger.debug(`本輪到期任務完成（總耗時: ${totalDuration}ms）`);
-  } catch (error) {
-    monitorLogger.error("執行監控任務時發生未預期的錯誤", {
-      error: error?.message || error,
-      stack: error?.stack,
-    });
-  } finally {
-    if (stopRequested && !monitoringTimer && resolveStopped) {
-      const resolve = resolveStopped;
-      resolveStopped = null;
-      stopRequested = false;
-      resolve();
+      .join("、")}）`);
+    for (const task of due) {
+      const run = Promise.resolve()
+        .then(() => runTask(task))
+        .catch((error) => {
+          monitorLogger.error("執行監控任務時發生未預期的錯誤", {
+            error: error?.message ?? String(error),
+            stack: error?.stack,
+          });
+        })
+        .finally(() => {
+          runningTasks.delete(task.taskId);
+          scheduleNextTick();
+        });
+      runningTasks.set(task.taskId, run);
     }
   }
+  scheduleNextTick();
 }
 
 function scheduleNextTick() {
-  if (stopRequested) return;
-  if (monitoringTimer) clearTimeout(monitoringTimer);
-  const now = Date.now();
-  const wakeAt = getNextWakeAtMs(now);
-  const delay = Math.max(SCHEDULER_TICK_MIN_MS, wakeAt - now);
-  monitoringTimer = setTimeout(async () => {
-    try {
-      await runSchedulerTick();
-    } finally {
-      scheduleNextTick();
+  if (!schedulerRunning) return;
+  let nextRunAtMs = Infinity;
+  for (const task of monitoringTasks) {
+    if (!runningTasks.has(task.taskId)) {
+      nextRunAtMs = Math.min(nextRunAtMs, task.nextRunAtMs);
     }
-  }, delay);
+  }
+  if (scheduledWakeAtMs === nextRunAtMs) return;
+  clearScheduledTick();
+  if (!Number.isFinite(nextRunAtMs)) return;
+
+  const now = Date.now();
+  const delay = Math.max(SCHEDULER_TICK_MIN_MS, nextRunAtMs - now);
+  scheduledWakeAtMs = nextRunAtMs;
+  monitoringTimer = setTimeout(runSchedulerTick, delay);
 }
 
 function startMonitoring({ quiet = false } = {}) {
-  if (monitoringTimer) {
+  if (schedulerRunning) {
     monitorLogger.warn("監控服務已在運行中");
     return;
   }
-
-  stopRequested = false;
 
   if (monitoringTasks.length === 0) {
     monitorLogger.warn("沒有註冊任何監控任務，跳過啟動");
@@ -230,37 +209,17 @@ function startMonitoring({ quiet = false } = {}) {
     );
   }
 
+  schedulerRunning = true;
   scheduleNextTick();
 }
 
-function stopMonitoring() {
-  if (monitoringTimer) {
-    clearTimeout(monitoringTimer);
-    monitoringTimer = null;
+async function stopMonitoring() {
+  if (schedulerRunning) {
     monitorLogger.info("背景監控服務已停止");
   }
-
-  stopRequested = true;
-
-  const anyRunning = monitoringTasks.some((t) => t.isRunning);
-  if (!anyRunning) {
-    stopRequested = false;
-    return Promise.resolve();
-  }
-
-  if (resolveStopped) {
-    return new Promise((resolve) => {
-      const previousResolve = resolveStopped;
-      resolveStopped = () => {
-        previousResolve();
-        resolve();
-      };
-    });
-  }
-
-  return new Promise((resolve) => {
-    resolveStopped = resolve;
-  });
+  schedulerRunning = false;
+  clearScheduledTick();
+  await Promise.allSettled(runningTasks.values());
 }
 
 function getRegisteredTaskIds() {
@@ -290,13 +249,14 @@ function syncMonitoringTasks(desiredTasks) {
       task.options,
       task.taskId,
     );
+    existingIds.add(task.taskId);
   }
 
-  const wasRunning = !!monitoringTimer;
+  const wasRunning = schedulerRunning;
   const taskNames = monitoringTasks.map((task) => task.systemName).filter(Boolean);
   if (monitoringTasks.length === 0) {
     if (wasRunning) {
-      stopMonitoring();
+      void stopMonitoring();
     }
     return {
       taskCount: 0,
@@ -310,13 +270,15 @@ function syncMonitoringTasks(desiredTasks) {
   const startedNow = !wasRunning;
   if (startedNow) {
     startMonitoring({ quiet: true });
+  } else {
+    scheduleNextTick();
   }
 
   return {
     taskCount: monitoringTasks.length,
     taskIds: getRegisteredTaskIds(),
     taskNames,
-    schedulerRunning: !!monitoringTimer,
+    schedulerRunning,
     startedNow,
   };
 }
@@ -324,11 +286,18 @@ function syncMonitoringTasks(desiredTasks) {
 function getMonitoringStatus() {
   const now = Date.now();
   return {
-    isRunning: !!monitoringTimer,
+    isRunning: schedulerRunning,
     taskCount: monitoringTasks.length,
     tasks: monitoringTasks.map((task) => ({
+      taskId: task.taskId,
       systemName: task.systemName,
       lastRun: task.lastRun,
+      lastRunAgeMs: task.lastRun === null ? null : Math.max(0, now - task.lastRun.getTime()),
+      runningForMs: runningTasks.has(task.taskId) && task.lastStartedAtMs !== null
+        ? Math.max(0, now - task.lastStartedAtMs)
+        : null,
+      lastScheduleDelayMs: task.lastScheduleDelayMs,
+      lastDurationMs: task.lastDurationMs,
       errorCount: task.errorCount,
       currentIntervalMs: task.currentIntervalMs,
       nextRunInMs: Math.max(0, (task.nextRunAtMs || now) - now),

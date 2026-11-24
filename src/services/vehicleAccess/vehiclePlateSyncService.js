@@ -45,45 +45,22 @@ function buildIsapiTimesFromRow(row) {
  * @param {number} personId
  * @returns {Promise<Array<{ locationId: number, deviceIds: number[], channelId: number }>>}
  */
-async function resolveIsapiTargetsForPersonId(personId) {
+async function resolveIsapiTargetsForPersonId(personId, { includeArchived = false } = {}) {
   const pid = Number(personId);
   if (!Number.isFinite(pid)) return [];
 
-  const accessRows = await db.query(
-    `SELECT location_id FROM person_location_access WHERE person_id = ?`,
-    [pid],
-  );
-  const locationIds = (accessRows || [])
-    .map((r) => Number(r.location_id))
-    .filter((n) => Number.isFinite(n) && n > 0);
-  if (locationIds.length === 0) return [];
-
-  const placeholders = locationIds.map(() => "?").join(",");
+  const systems = includeArchived ? "location_systems" : "active_location_systems";
   const rows = await db.query(
     `
-      SELECT ls.location_id, ls.system_config
-      FROM location_systems ls
-      WHERE ls.system_type = 'vehicle_access'
-        AND ls.location_id IN (${placeholders})
+      SELECT DISTINCT ls.location_id, ls.system_config
+      FROM person_location_access pla
+      JOIN ${systems} ls ON ls.location_id = pla.location_id
+      WHERE pla.person_id = ? AND ls.system_type = 'vehicle_access'
     `,
-    locationIds,
+    [pid],
   );
 
-  const targets = [];
-  for (const row of rows || []) {
-    const cfg = parseConfig(row.system_config);
-    if (cfg.dataSource !== "isapi_camera") continue;
-    const deviceIds = Array.from(
-      new Set([...(cfg.entryCameraDeviceIds || []), ...(cfg.exitCameraDeviceIds || [])]),
-    );
-    if (deviceIds.length === 0) continue;
-    targets.push({
-      locationId: Number(row.location_id),
-      deviceIds,
-      channelId: cfg.cameraChannelId ?? 1,
-    });
-  }
-  return targets;
+  return rows.map((row) => resolveTargetForLocation(row.location_id, row.system_config)).filter(Boolean);
 }
 
 function resolveTargetForLocation(locationId, systemConfig) {
@@ -106,7 +83,7 @@ async function loadVehicleAccessTarget(locationId) {
   const rows = await db.query(
     `
       SELECT system_config
-      FROM location_systems
+      FROM active_location_systems
       WHERE location_id = ? AND system_type = 'vehicle_access'
       LIMIT 1
     `,
@@ -333,7 +310,7 @@ async function syncPlatesForLocation(locationId) {
       SELECT plp.id
       FROM person_license_plates plp
       INNER JOIN person_location_access pla ON pla.person_id = plp.person_id
-      INNER JOIN persons p ON p.id = plp.person_id
+      INNER JOIN active_persons p ON p.id = plp.person_id
       WHERE pla.location_id = ? AND p.status = 'active'
       ORDER BY plp.id ASC
     `,
@@ -345,7 +322,7 @@ async function syncPlatesForLocation(locationId) {
       SELECT plp.plate_number
       FROM person_license_plates plp
       INNER JOIN person_location_access pla ON pla.person_id = plp.person_id
-      INNER JOIN persons p ON p.id = plp.person_id
+      INNER JOIN active_persons p ON p.id = plp.person_id
       WHERE pla.location_id = ? AND p.status != 'active'
     `,
     [locId],
@@ -495,7 +472,7 @@ async function reconcileAfterPersonChange(personId, context = {}) {
       const rows = await db.query(
         `
           SELECT system_config
-          FROM location_systems
+          FROM active_location_systems
           WHERE location_id = ? AND system_type = 'vehicle_access'
           LIMIT 1
         `,
@@ -525,7 +502,8 @@ async function reconcileAfterPersonChange(personId, context = {}) {
  */
 async function purgePersonPlatesFromDevices(personId) {
   const plates = await personLicensePlateService.listByPersonId(personId);
-  const targets = await resolveIsapiTargetsForPersonId(personId);
+  if (!plates.length) return { failures: [] };
+  const targets = await resolveIsapiTargetsForPersonId(personId, { includeArchived: true });
   const failures = [];
   for (const plate of plates) {
     await removePlateFromTargets(plate.plate_number, targets, failures);
@@ -553,7 +531,7 @@ async function reconcileLocationMemberChange(locationId, removedPersonIds = []) 
   const rows = await db.query(
     `
       SELECT system_config
-      FROM location_systems
+      FROM active_location_systems
       WHERE location_id = ? AND system_type = 'vehicle_access'
       LIMIT 1
     `,

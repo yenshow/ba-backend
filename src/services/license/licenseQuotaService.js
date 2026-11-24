@@ -276,7 +276,7 @@ const countDevicesByResolvedFeature = async (featureKey, opts = {}) => {
   const excludeIds = normalizeExcludeIds(opts);
   const rows = await db.query(
     `SELECT d.id, d.type_code, d.config, dm.category_code, dm.config AS model_config
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON dm.id = d.model_id
      WHERE (cardinality(?::int[]) = 0 OR NOT (d.id = ANY(?::int[])))`,
     [excludeIds, excludeIds],
@@ -299,7 +299,7 @@ const countSensorPointsForFeature = async (featureKey, opts = {}) => {
   const extraPoints = Number(opts.extraPoints) || 0;
   const rows = await db.query(
     `SELECT d.id, d.config, dm.config AS model_config
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON dm.id = d.model_id
      WHERE d.type_code = 'sensor'
        AND (cardinality(?::int[]) = 0 OR NOT (d.id = ANY(?::int[])))`,
@@ -324,7 +324,7 @@ const countRollCallBoundDevices = async ({
 } = {}) => {
   const rows = await query(
     `SELECT system_config
-     FROM location_systems
+     FROM active_location_systems
      WHERE system_type = 'roll_call'
        AND ($1::int IS NULL OR id <> $1)`,
     [excludeSystemId != null ? Number(excludeSystemId) : null],
@@ -354,7 +354,7 @@ const sumLocationPoints = async ({
 } = {}) => {
   const rows = await query(
     `SELECT system_config
-     FROM location_systems
+     FROM active_location_systems
      WHERE system_type = $1
        AND ($2::int IS NULL OR id <> $2)`,
     [systemType, excludeSystemId != null ? Number(excludeSystemId) : null],
@@ -391,7 +391,7 @@ const getUsedDevicesCount = async (featureKey, opts = {}) => {
 const tallyResolvedDeviceFeatures = async () => {
   const rows = await db.query(
     `SELECT d.type_code, d.config, dm.category_code, dm.config AS model_config
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON dm.id = d.model_id`,
   );
   const counts = Object.create(null);
@@ -411,7 +411,7 @@ const tallyResolvedDeviceFeatures = async () => {
 const tallyLocationUsage = async () => {
   const rows = await db.query(
     `SELECT system_type, system_config
-     FROM location_systems
+     FROM active_location_systems
      WHERE system_type = ANY($1::text[])`,
     [LOCATION_USAGE_SYSTEM_TYPES],
   );
@@ -440,7 +440,7 @@ const tallyLocationUsage = async () => {
 const tallySensorPoints = async () => {
   const rows = await db.query(
     `SELECT d.config, dm.config AS model_config
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON dm.id = d.model_id
      WHERE d.type_code = 'sensor'`,
   );
@@ -572,7 +572,7 @@ const assertModelQuotaReclass = async ({
 } = {}) => {
   const rows = await db.query(
     `SELECT d.id, d.type_code, d.config
-     FROM devices d
+     FROM active_devices d
      WHERE d.model_id = ?`,
     [modelId],
   );

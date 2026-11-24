@@ -9,6 +9,7 @@ const { resolveDiDoParts } = require("../devices/modbusDiDoConfig");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const loggerFactory = require("../../utils/logger");
+const scheduleRulesUnchanged = require("./scheduleRulesUnchanged");
 const {
   recordControlWriteEvent,
   markCoilControlWrite,
@@ -149,7 +150,7 @@ function createDoScheduleService(opts) {
   async function listAll() {
     const rules = await db.query(
       `SELECT id, name, days_of_week, on_time, off_time, enabled, created_at, updated_at
-       FROM ${rulesTable}
+       FROM active_${rulesTable}
        ORDER BY id ASC`,
     );
     if (!rules?.length) return [];
@@ -177,7 +178,7 @@ function createDoScheduleService(opts) {
     }
     const rows = await query(
       `SELECT DISTINCT location_id
-       FROM location_systems
+       FROM active_location_systems
        WHERE system_type = ? AND location_id = ANY(?)`,
       [systemType, ids],
     );
@@ -210,28 +211,34 @@ function createDoScheduleService(opts) {
     }
 
     await db.transaction(async (query) => {
-      for (const r of list) {
-        await assertSystemLocationIds(r.locationIds, query);
+      const prepared = [];
+      for (const rule of list) {
+        prepared.push({
+          name: rule.name != null ? String(rule.name).slice(0, 80) : null,
+          days: normalizeDays(rule.daysOfWeek),
+          start: String(rule.onTime),
+          end: String(rule.offTime),
+          enabled: rule.enabled !== false,
+          locationIds: (await assertSystemLocationIds(rule.locationIds, query)).sort((a, b) => a - b),
+        });
       }
-      await query(`DELETE FROM ${rulesTable}`);
-      for (const r of list) {
-        const locationIds = normalizeLocationIds(r.locationIds);
+      if (await scheduleRulesUnchanged(query, {
+        rulesTable, locationsTable, startColumn: "on_time", endColumn: "off_time",
+      }, prepared)) return;
+      await query(`UPDATE ${rulesTable} SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE archived_at IS NULL`);
+      for (const r of prepared) {
         const inserted = await query(
           `INSERT INTO ${rulesTable}
             (name, days_of_week, on_time, off_time, enabled)
            VALUES (?, ?::int[], ?::time, ?::time, ?)
            RETURNING id`,
           [
-            r.name != null ? String(r.name).slice(0, 80) : null,
-            normalizeDays(r.daysOfWeek),
-            String(r.onTime),
-            String(r.offTime),
-            r.enabled !== false,
+            r.name, r.days, r.start, r.end, r.enabled,
           ],
         );
         const ruleId = inserted?.[0]?.id;
         if (!ruleId) continue;
-        for (const lid of locationIds) {
+        for (const lid of r.locationIds) {
           await query(
             `INSERT INTO ${locationsTable} (rule_id, location_id)
              VALUES (?, ?)`,
@@ -268,7 +275,7 @@ function createDoScheduleService(opts) {
       SELECT
         (ls.system_config->'device_ids'->>0)::int AS device_id,
         ls.system_config->'modbus_config' AS modbus_config
-      FROM location_systems ls
+      FROM active_location_systems ls
       WHERE ls.system_type = ?
         AND ls.location_id = ?
         AND jsonb_array_length(COALESCE(ls.system_config->'device_ids', '[]'::jsonb)) > 0
@@ -373,7 +380,7 @@ function createDoScheduleService(opts) {
 
     const rules = await db.query(
       `SELECT id, days_of_week, on_time, off_time
-       FROM ${rulesTable}
+       FROM active_${rulesTable}
        WHERE enabled = TRUE`,
     );
     if (!rules?.length) return { fired: 0 };

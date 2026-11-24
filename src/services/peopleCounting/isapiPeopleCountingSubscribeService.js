@@ -97,7 +97,7 @@ async function getCameraSubscriptions() {
     `SELECT
        ls.location_id AS location_id,
        ls.system_config AS system_config
-     FROM location_systems ls
+     FROM active_location_systems ls
      WHERE ls.system_type = 'people_counting'
        AND (ls.system_config->>'data_source') = 'isapi_camera'`,
     [],

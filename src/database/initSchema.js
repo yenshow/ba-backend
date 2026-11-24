@@ -1,6 +1,7 @@
 const { Pool } = require("pg");
 const config = require("../config");
 const logger = require("../utils/logger");
+const { ensureArchiveSchema } = require("./archiveSchema");
 
 const schemaLogger = logger.createLogger("initSchema");
 const syncDefinitions = require("../access/syncDefinitions");
@@ -483,7 +484,6 @@ async function initSchema() {
     });
 
     // 舊版車輛在場物化表已廢除：在場改由 session／營運日放行 logs + transition 推算
-    await targetPool.query(`DROP TABLE IF EXISTS vehicle_presence`);
 
     // 停車場統計 Reset 稽核（可選）
     await targetPool.query(`
@@ -895,7 +895,6 @@ async function initSchema() {
     });
 
     // 舊版照明分類表已廢除：照明改 zones／locations／location_systems
-    await targetPool.query(`DROP TABLE IF EXISTS lighting_categories`);
 
     // ========== 人員主檔與門禁權限（本系統） ==========
     await targetPool.query(`
@@ -1763,8 +1762,8 @@ async function initSchema() {
     `);
     schemaLogger.info("multimedia_wall_seats 表已建立", { module: "initSchema" });
 
+    await ensureArchiveSchema(targetPool);
     await targetPool.end();
-
     schemaLogger.info("資料庫 Schema 初始化完成", { module: "initSchema" });
   } catch (error) {
     schemaLogger.error("初始化資料庫 Schema 失敗", {

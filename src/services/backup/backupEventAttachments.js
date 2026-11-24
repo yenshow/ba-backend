@@ -70,13 +70,6 @@ const removeUploadPicture = (picturePath) => {
   }
 };
 
-const removeUploadPictures = (picturePaths) => {
-  for (const p of picturePaths || []) {
-    if (p) removeUploadPicture(p);
-  }
-};
-
 module.exports = {
   copyPicturesForRows,
-  removeUploadPictures,
 };

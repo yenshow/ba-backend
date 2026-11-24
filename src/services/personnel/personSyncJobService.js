@@ -294,7 +294,7 @@ function normalizePositiveIntIds(list) {
  */
 async function getPeopleCountingDevicesForLocation(locationId) {
   const pcRows = await db.query(
-    "SELECT system_config FROM location_systems WHERE location_id = ? AND system_type = 'people_counting' LIMIT 1",
+    "SELECT system_config FROM active_location_systems WHERE location_id = ? AND system_type = 'people_counting' LIMIT 1",
     [locationId],
   );
   if (pcRows && pcRows.length > 0) {
@@ -331,7 +331,7 @@ async function getPeopleCountingDevicesForLocation(locationId) {
   }
 
   const rcRows = await db.query(
-    "SELECT system_config FROM location_systems WHERE location_id = ? AND system_type = 'roll_call' LIMIT 1",
+    "SELECT system_config FROM active_location_systems WHERE location_id = ? AND system_type = 'roll_call' LIMIT 1",
     [locationId],
   );
   if (!rcRows || rcRows.length === 0) return null;
@@ -350,7 +350,7 @@ async function getPeopleCountingDevicesForLocation(locationId) {
 
 async function getLocationName(locationId) {
   const rows = await db.query(
-    "SELECT name FROM locations WHERE id = ? LIMIT 1",
+    "SELECT name FROM active_locations WHERE id = ? LIMIT 1",
     [locationId],
   );
   return rows?.[0]?.name ?? null;
@@ -362,9 +362,9 @@ async function getLocationName(locationId) {
 async function getSyncableLocations() {
   const rows = await db.query(
     `SELECT l.id, l.name, z.name AS zone_name
-     FROM locations l
-     INNER JOIN zones z ON l.zone_id = z.id
-     INNER JOIN location_systems ls ON l.id = ls.location_id
+     FROM active_locations l
+     INNER JOIN active_zones z ON l.zone_id = z.id
+     INNER JOIN active_location_systems ls ON l.id = ls.location_id
      WHERE (
        ls.system_type = 'people_counting'
        AND (

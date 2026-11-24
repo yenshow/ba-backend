@@ -264,7 +264,7 @@ async function revertLinkagesForDailyRollover(activeAlerts) {
     const linkages = await db.query(
       `
       SELECT *
-      FROM alert_linkages
+      FROM active_alert_linkages
       WHERE enabled = true
         AND rule_id = ?
       ORDER BY id ASC
@@ -313,7 +313,7 @@ async function revertLinkagesForResolvedAlerts(resolvedAlerts) {
     const linkages = await db.query(
       `
       SELECT *
-      FROM alert_linkages
+      FROM active_alert_linkages
       WHERE enabled = true
         AND rule_id = ?
       ORDER BY id ASC
@@ -384,7 +384,7 @@ async function assertRuleExists(ruleId) {
     throwApiError(C.ALERT_LINKAGE_RULE_ID_INVALID, "rule_id 不合法");
   }
   const rows = await db.query(
-    `SELECT id FROM alert_rules WHERE id = ? LIMIT 1`,
+    `SELECT id FROM active_alert_rules WHERE id = ? LIMIT 1`,
     [id],
   );
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -416,8 +416,8 @@ async function listLinkages() {
         r.condition_config AS r_condition_config,
         r.target_type AS r_target_type,
         r.target_id AS r_target_id
-      FROM alert_linkages l
-      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      FROM active_alert_linkages l
+      LEFT JOIN active_alert_rules r ON r.id = l.rule_id
       ORDER BY l.id DESC
     `,
   );
@@ -487,8 +487,8 @@ async function createLinkage(payload, userId = null) {
         r.condition_config AS r_condition_config,
         r.target_type AS r_target_type,
         r.target_id AS r_target_id
-      FROM alert_linkages l
-      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      FROM active_alert_linkages l
+      LEFT JOIN active_alert_rules r ON r.id = l.rule_id
       WHERE l.id = ?
     `,
     [created.id],
@@ -558,8 +558,8 @@ async function updateLinkage(id, updates, _userId = null) {
         r.condition_config AS r_condition_config,
         r.target_type AS r_target_type,
         r.target_id AS r_target_id
-      FROM alert_linkages l
-      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      FROM active_alert_linkages l
+      LEFT JOIN active_alert_rules r ON r.id = l.rule_id
       WHERE l.id = ?
     `,
       [linkageId],
@@ -570,7 +570,7 @@ async function updateLinkage(id, updates, _userId = null) {
   params.push(linkageId);
   await db.query(
     `
-      UPDATE alert_linkages
+      UPDATE active_alert_linkages
       SET ${setParts.join(", ")}, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `,
@@ -600,8 +600,8 @@ async function updateLinkage(id, updates, _userId = null) {
         r.condition_config AS r_condition_config,
         r.target_type AS r_target_type,
         r.target_id AS r_target_id
-      FROM alert_linkages l
-      LEFT JOIN alert_rules r ON r.id = l.rule_id
+      FROM active_alert_linkages l
+      LEFT JOIN active_alert_rules r ON r.id = l.rule_id
       WHERE l.id = ?
     `,
     [linkageId],
@@ -616,7 +616,7 @@ async function deleteLinkage(id) {
   }
 
   const rows = await db.query(
-    `DELETE FROM alert_linkages WHERE id = ? RETURNING *`,
+    `UPDATE alert_linkages SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE id = ? AND archived_at IS NULL RETURNING *`,
     [linkageId],
   );
   return rows?.[0] || null;
@@ -630,7 +630,7 @@ async function processLinkagesForNewAlert(alert, { createdBy = null } = {}) {
   const linkages = await db.query(
     `
       SELECT *
-      FROM alert_linkages
+      FROM active_alert_linkages
       WHERE enabled = true
         AND rule_id = ?
       ORDER BY id ASC
@@ -671,7 +671,7 @@ async function manualTriggerLinkage(linkageId, userId = null) {
   }
 
   const rows = await db.query(
-    `SELECT * FROM alert_linkages WHERE id = ? LIMIT 1`,
+    `SELECT * FROM active_alert_linkages WHERE id = ? LIMIT 1`,
     [id],
   );
   const linkage = rows?.[0] || null;
@@ -702,7 +702,7 @@ async function getSingleLinkageByRuleId(ruleId) {
   const rows = await db.query(
     `
     SELECT *
-    FROM alert_linkages
+    FROM active_alert_linkages
     WHERE rule_id = ?
     ORDER BY id DESC
     LIMIT 1
@@ -728,7 +728,7 @@ async function getLatestLinkagesByRuleIds(ruleIds) {
   const rows = await db.query(
     `
     SELECT DISTINCT ON (rule_id) *
-    FROM alert_linkages
+    FROM active_alert_linkages
     WHERE rule_id = ANY(?)
     ORDER BY rule_id ASC, id DESC
     `,
@@ -741,7 +741,7 @@ async function deleteAllLinkagesForRule(ruleId) {
   const id = Number(ruleId);
   if (!Number.isInteger(id) || id <= 0) return { deleted: 0 };
   const rows = await db.query(
-    `DELETE FROM alert_linkages WHERE rule_id = ? RETURNING id`,
+    `UPDATE alert_linkages SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE rule_id = ? AND archived_at IS NULL RETURNING id`,
     [id],
   );
   return { deleted: rows?.length || 0 };

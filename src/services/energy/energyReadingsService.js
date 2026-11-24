@@ -107,14 +107,14 @@ async function getDeviceAvgPowerFactor(deviceIds, startTime, endTime) {
   return rows || [];
 }
 
-async function getReadingsForBackup(beforeDate) {
+async function getReadingsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT er.id, er.device_id, er.recorded_at, er.data, d.name AS device_name
      FROM energy_readings er
      INNER JOIN devices d ON d.id = er.device_id
-     WHERE er.recorded_at < $1
+     WHERE er.recorded_at < $1 AND er.recorded_at >= $2
      ORDER BY er.recorded_at ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }

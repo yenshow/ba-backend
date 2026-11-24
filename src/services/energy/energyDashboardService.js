@@ -82,7 +82,7 @@ async function listElectricityDeviceIds(ids) {
   if (!ids.length) return [];
   const devices = await db.query(
     `SELECT d.id, dm.config AS model_config
-     FROM devices d
+     FROM active_devices d
      LEFT JOIN device_models dm ON dm.id = d.model_id
      WHERE d.id = ANY($1::int[])`,
     [ids],

@@ -7,22 +7,18 @@ const runtimeConfigService = require("../platform/runtimeConfigService");
 const getBackupTimezone = () =>
   runtimeConfigService.getAlerts().dailyRolloverTimezone || "Asia/Taipei";
 
-const subtractDays = (days) => {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d;
-};
-
 const getRetentionCutoffs = (retention) => {
   const archiveAfterDays = Math.max(1, retention.archiveAfterDays);
   const onlineRetentionDays = Math.max(
     archiveAfterDays + 1,
     retention.onlineRetentionDays,
   );
+  const timezone = getBackupTimezone();
+  const today = DateTime.now().setZone(timezone).startOf("day");
   return {
-    archiveBeforeDate: subtractDays(archiveAfterDays),
-    deleteBeforeDate: subtractDays(onlineRetentionDays),
-    timezone: getBackupTimezone(),
+    archiveBeforeDate: today.minus({ days: archiveAfterDays }).toJSDate(),
+    archiveStartDate: today.minus({ days: onlineRetentionDays }).toJSDate(),
+    timezone,
     archiveAfterDays,
     onlineRetentionDays,
   };
@@ -32,17 +28,6 @@ const toDayKey = (value, timezone) => {
   const dt = DateTime.fromJSDate(new Date(value), { zone: timezone });
   if (!dt.isValid) return null;
   return dt.toFormat("yyyy-MM-dd");
-};
-
-const dayKeyToUtcRange = (dayKey, timezone) => {
-  const start = DateTime.fromFormat(dayKey, "yyyy-MM-dd", { zone: timezone }).startOf(
-    "day",
-  );
-  const end = start.plus({ days: 1 });
-  return {
-    start: start.toUTC().toJSDate(),
-    end: end.toUTC().toJSDate(),
-  };
 };
 
 const groupRowsByDayKey = (rows, dateField, timezone) => {
@@ -64,7 +49,6 @@ const buildDayXlsxFilename = (tableName, dayKey) => `${tableName}_${dayKey}.xlsx
 module.exports = {
   getRetentionCutoffs,
   toDayKey,
-  dayKeyToUtcRange,
   groupRowsByDayKey,
   buildDayCsvFilename,
   buildDayXlsxFilename,

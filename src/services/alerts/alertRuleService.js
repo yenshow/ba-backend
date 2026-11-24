@@ -51,7 +51,7 @@ async function getZoneLocationPairByLocationSystemId(locationSystemId) {
   }
   const r = await db.query(
     `SELECT z.name AS zone_name, l.name AS location_name
-     FROM location_systems ls
+     FROM active_location_systems ls
      JOIN locations l ON l.id = ls.location_id
      JOIN zones z ON z.id = l.zone_id
      WHERE ls.id = ?
@@ -114,7 +114,7 @@ async function resolveSourceDisplayNameForRule(rule, sourceId) {
     return "";
   }
   if (rule.source === "device" || rule.source === "energy") {
-    const r = await db.query("SELECT name FROM devices WHERE id = ? LIMIT 1", [
+    const r = await db.query("SELECT name FROM active_devices WHERE id = ? LIMIT 1", [
       sourceId,
     ]);
     return formatDeviceFallbackName(sourceId, r?.[0]?.name);
@@ -353,7 +353,7 @@ function clearEnergyRulesCacheIfNeeded(source) {
 async function getAlertRules(source, alertType, enabled = true) {
   try {
     let query = `
-      SELECT * FROM alert_rules
+      SELECT * FROM active_alert_rules
       WHERE source = ? AND alert_type = ?
     `;
     const params = [source, alertType];
@@ -393,7 +393,7 @@ async function getThresholdRules(source, parameter = null) {
     // 如果緩存不存在，從資料庫查詢並緩存
     if (!cached) {
       const query = `
-        SELECT * FROM alert_rules
+        SELECT * FROM active_alert_rules
         WHERE source = ? 
           AND alert_type = 'threshold'
           AND condition_type = 'threshold'
@@ -441,7 +441,7 @@ async function getThresholdRules(source, parameter = null) {
 async function getAllRulesForSource(source, enabled = true) {
   try {
     let query = `
-      SELECT * FROM alert_rules
+      SELECT * FROM active_alert_rules
       WHERE source = ?
     `;
     const params = [source];
@@ -534,7 +534,7 @@ function deriveRuleDimensionKey({
 async function getErrorCountRule(source, alertType) {
   try {
     const query = `
-      SELECT * FROM alert_rules
+      SELECT * FROM active_alert_rules
       WHERE source = ?
         AND alert_type = ?
         AND condition_type = 'error_count'
@@ -645,7 +645,7 @@ async function createAlertRule(payload) {
  */
 async function updateAlertRule(id, updates) {
   const existingResult = await db.query(
-    "SELECT * FROM alert_rules WHERE id = ? LIMIT 1",
+    "SELECT * FROM active_alert_rules WHERE id = ? LIMIT 1",
     [id],
   );
   const existingRule = existingResult?.[0] || null;
@@ -764,7 +764,7 @@ async function updateAlertRule(id, updates) {
   params.push(id);
 
   const query = `
-    UPDATE alert_rules
+    UPDATE active_alert_rules
     SET ${fields.join(", ")}
     WHERE id = ?
     RETURNING *
@@ -801,7 +801,7 @@ async function updateAlertRule(id, updates) {
  */
 async function deleteAlertRule(id) {
   const result = await db.query(
-    "DELETE FROM alert_rules WHERE id = ? RETURNING *",
+    "UPDATE alert_rules SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE id = ? AND archived_at IS NULL RETURNING *",
     [id],
   );
   const deletedRule = result?.[0] || null;
@@ -941,7 +941,7 @@ function matchRule(rules, conditionType, sourceId) {
 async function getEnabledDiDoRules() {
   try {
     const rows = await db.query(
-      `SELECT * FROM alert_rules
+      `SELECT * FROM active_alert_rules
        WHERE alert_type IN ('di', 'do')
          AND condition_type = 'bit_state'
          AND enabled = TRUE
@@ -966,7 +966,7 @@ async function getEnabledDiDoRules() {
 async function getAllRules(enabled = true) {
   try {
     let query = `
-      SELECT * FROM alert_rules
+      SELECT * FROM active_alert_rules
       WHERE 1=1
     `;
     const params = [];

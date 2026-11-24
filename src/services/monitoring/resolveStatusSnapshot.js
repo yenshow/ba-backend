@@ -32,8 +32,9 @@ async function resolveStatusSnapshot(systemKey, statusService, query = {}) {
     }
   }
 
+  const version = monitoringSnapshotCache.beginSnapshotRead();
   const result = await statusService.getStatusSnapshot({ zoneIds });
-  monitoringSnapshotCache.setSnapshot(systemKey, result);
+  monitoringSnapshotCache.setSnapshot(systemKey, result, { version, zoneIds });
   const entry = monitoringSnapshotCache.getSnapshot(systemKey, { zoneIds });
   return {
     items: entry?.items ?? result.items ?? [],
@@ -54,33 +55,28 @@ async function resolveZoneStatusSnapshot(
   zoneId,
   query = {},
 ) {
+  const numericZoneId = parseInt(String(zoneId), 10);
   const noCache = parseNoCache(query);
 
   if (!noCache) {
-    const cached = monitoringSnapshotCache.getZoneSnapshot(systemKey, zoneId);
+    const cached = monitoringSnapshotCache.getZoneSnapshot(systemKey, numericZoneId);
     if (cached) {
-      return cached;
+      return { ...cached, zoneId: String(zoneId) };
     }
   }
 
+  const version = monitoringSnapshotCache.beginSnapshotRead();
   const result = await statusService.getZoneStatusSnapshot(
-    parseInt(String(zoneId), 10),
+    numericZoneId,
     {},
   );
   if (Array.isArray(result?.items)) {
-    const full = monitoringSnapshotCache.getSnapshot(systemKey);
-    if (full) {
-      const merged = [...full.items];
-      const zid = String(zoneId);
-      const rest = merged.filter((it) => String(it?.zoneId ?? "") !== zid);
-      monitoringSnapshotCache.setSnapshot(systemKey, {
-        items: [...rest, ...result.items],
-      });
-    } else {
-      monitoringSnapshotCache.setSnapshot(systemKey, { items: result.items });
-    }
+    monitoringSnapshotCache.setSnapshot(systemKey, result, {
+      version,
+      zoneIds: [numericZoneId],
+    });
   }
-  const entry = monitoringSnapshotCache.getZoneSnapshot(systemKey, zoneId);
+  const entry = monitoringSnapshotCache.getZoneSnapshot(systemKey, numericZoneId);
   return {
     zoneId: String(zoneId),
     items: entry?.items ?? result.items ?? [],

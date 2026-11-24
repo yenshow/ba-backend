@@ -630,7 +630,7 @@ function formatZone(zone, locations = []) {
  */
 async function loadLocationSystems(locationId) {
   const systems = await db.query(
-    `SELECT * FROM location_systems WHERE location_id = $1 ORDER BY created_at ASC`,
+    `SELECT * FROM active_location_systems WHERE location_id = $1 ORDER BY created_at ASC`,
     [locationId],
   );
   return systems;
@@ -698,8 +698,8 @@ async function loadZoneLocations(zoneId, systemType = null) {
       ls.system_config,
       ls.created_at as system_created_at,
       ls.updated_at as system_updated_at
-    FROM locations l
-    LEFT JOIN location_systems ls ON l.id = ls.location_id
+    FROM active_locations l
+    LEFT JOIN active_location_systems ls ON l.id = ls.location_id
     WHERE l.zone_id = $1
   `;
   const params = [zoneId];
@@ -707,7 +707,7 @@ async function loadZoneLocations(zoneId, systemType = null) {
   if (systemType) {
     // 只返回有該系統類型的地點
     sql += ` AND EXISTS (
-      SELECT 1 FROM location_systems ls2 
+      SELECT 1 FROM active_location_systems ls2 
       WHERE ls2.location_id = l.id AND ls2.system_type = $2
     )`;
     params.push(systemType);
@@ -738,9 +738,9 @@ function getValidLocations(locations) {
  */
 async function deleteLocationsWithoutSystems(query, zoneId) {
   await query(
-    `DELETE FROM locations 
-     WHERE zone_id = $1 
-     AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
+    `UPDATE locations SET archived_at = CURRENT_TIMESTAMP 
+     WHERE zone_id = $1 AND archived_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM active_location_systems WHERE location_id = locations.id)`,
     [zoneId],
   );
 }
@@ -751,9 +751,9 @@ async function deleteLocationsWithoutSystems(query, zoneId) {
 async function deleteLocationsByIdsWithoutSystems(query, locationIds) {
   if (locationIds.length === 0) return;
   await query(
-    `DELETE FROM locations 
-     WHERE id = ANY($1::int[]) 
-     AND NOT EXISTS (SELECT 1 FROM location_systems WHERE location_id = locations.id)`,
+    `UPDATE locations SET archived_at = CURRENT_TIMESTAMP 
+     WHERE id = ANY($1::int[]) AND archived_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM active_location_systems WHERE location_id = locations.id)`,
     [locationIds],
   );
 }
@@ -763,17 +763,17 @@ async function deleteLocationsByIdsWithoutSystems(query, locationIds) {
  */
 async function deleteLocationIfNoSystemsRemain(query, locationId) {
   const remainingSystems = await query(
-    "SELECT id FROM location_systems WHERE location_id = $1",
+    "SELECT id FROM active_location_systems WHERE location_id = $1",
     [locationId],
   );
   if (remainingSystems.length > 0) return false;
 
   const locationInfo = await query(
-    "SELECT zone_id FROM locations WHERE id = $1",
+    "SELECT zone_id FROM active_locations WHERE id = $1",
     [locationId],
   );
   const zoneId = locationInfo[0]?.zone_id;
-  await query("DELETE FROM locations WHERE id = $1", [locationId]);
+  await query("UPDATE locations SET archived_at = CURRENT_TIMESTAMP WHERE id = $1 AND archived_at IS NULL", [locationId]);
   if (zoneId) {
     await deleteEmptyZoneIfNeeded(query, zoneId);
   }
@@ -785,11 +785,11 @@ async function deleteLocationIfNoSystemsRemain(query, locationId) {
  */
 async function deleteEmptyZoneIfNeeded(query, zoneId) {
   const remainingLocations = await query(
-    "SELECT id FROM locations WHERE zone_id = $1",
+    "SELECT id FROM active_locations WHERE zone_id = $1",
     [zoneId],
   );
   if (remainingLocations.length === 0) {
-    await query("DELETE FROM zones WHERE id = $1", [zoneId]);
+    await query("UPDATE zones SET archived_at = CURRENT_TIMESTAMP WHERE id = $1 AND archived_at IS NULL", [zoneId]);
     return true;
   }
   return false;

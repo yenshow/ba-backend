@@ -27,9 +27,6 @@ const {
   getDeviceTypeName,
 } = require("../../constants/deviceTypes");
 const {
-  removeDeviceReferences,
-} = require("../location/deviceReferenceCleanup");
-const {
   invalidateDeviceLoggingConfig,
 } = require("./deviceLoggingConfig");
 const {
@@ -288,7 +285,7 @@ async function getDevices(filters = {}) {
 				d.*,
 				dm.name as model_name,
         dm.category_code as model_category_code
-			FROM devices d
+			FROM active_devices d
 			LEFT JOIN device_models dm ON d.model_id = dm.id
 			WHERE 1=1
 		`;
@@ -331,7 +328,7 @@ async function getDevices(filters = {}) {
     // 取得總數
     let countQuery = `
 			SELECT COUNT(*) as total
-			FROM devices d
+			FROM active_devices d
 			WHERE 1=1
 		`;
     const countParams = [];
@@ -389,7 +386,7 @@ async function getDeviceById(id) {
 				dm.port as model_port,
         dm.category_code as model_category_code,
 				dm.config as model_config
-			FROM devices d
+			FROM active_devices d
 			LEFT JOIN device_models dm ON d.model_id = dm.id
 			WHERE d.id = ?
 		`,
@@ -459,7 +456,7 @@ async function createDevice(deviceData, userId) {
 
     // 驗證設備型號是否存在且類型匹配
     const models = await db.query(
-      "SELECT id, type_code, category_code, port, unit_id, config FROM device_models WHERE id = ?",
+      "SELECT id, type_code, category_code, port, unit_id, config FROM active_device_models WHERE id = ?",
       [model_id],
     );
     if (models.length === 0) {
@@ -682,7 +679,7 @@ async function updateDevice(id, deviceData, userId) {
     const { name, model_id, description, config, type_code, enabled } = deviceData;
 
     // 檢查設備是否存在
-    const existing = await db.query("SELECT * FROM devices WHERE id = ?", [id]);
+    const existing = await db.query("SELECT * FROM active_devices WHERE id = ?", [id]);
     if (existing.length === 0) {
       throwApiError(C.DEVICE_NOT_FOUND, "設備不存在");
     }
@@ -722,7 +719,7 @@ async function updateDevice(id, deviceData, userId) {
 
       // 驗證設備型號是否存在
       const models = await db.query(
-        "SELECT id, type_code, port, unit_id FROM device_models WHERE id = ?",
+        "SELECT id, type_code, port, unit_id FROM active_device_models WHERE id = ?",
         [model_id],
       );
       if (models.length === 0) {
@@ -768,7 +765,7 @@ async function updateDevice(id, deviceData, userId) {
       let modelCategoryCode = null;
       if (finalModelId) {
         const models = await db.query(
-          "SELECT port, unit_id, config, category_code FROM device_models WHERE id = ?",
+          "SELECT port, unit_id, config, category_code FROM active_device_models WHERE id = ?",
           [finalModelId],
         );
         if (models.length > 0) {
@@ -947,7 +944,7 @@ async function updateDevice(id, deviceData, userId) {
     params.push(id);
 
     await db.query(
-      `UPDATE devices SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      `UPDATE active_devices SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       params,
     );
 
@@ -1029,7 +1026,7 @@ async function deleteDevice(id, userId = null) {
     const devices = await db.query(
       `
       SELECT d.id, d.type_code, d.config
-      FROM devices d
+      FROM active_devices d
       WHERE d.id = ?
       LIMIT 1
       `,
@@ -1042,19 +1039,13 @@ async function deleteDevice(id, userId = null) {
     const isCamera = String(devices[0]?.type_code || "").toLowerCase() === "camera";
     const isVideoIntercom = String(devices[0]?.type_code || "") === "video_intercom";
 
-    // 先自地點設定／警報聯動移除引用，並刷新 ISAPI／梯控訂閱（避免訂閱已刪設備 ID）
-    try {
-      await removeDeviceReferences(id);
-    } catch (cleanupError) {
-      deviceLogger.warn("移除已刪設備之地點引用失敗", {
-        deviceId: id,
-        error: cleanupError?.message || String(cleanupError),
-        module: "deviceService",
-      });
-    }
-
-    await db.query("DELETE FROM devices WHERE id = ?", [id]);
+    const archived = await db.query(
+      "UPDATE devices SET archived_at = CURRENT_TIMESTAMP WHERE id = ? AND archived_at IS NULL RETURNING id",
+      [id],
+    );
+    if (!archived.length) throwApiError(C.DEVICE_NOT_FOUND, "設備不存在");
     invalidateDeviceLoggingConfig(id);
+    await reconcileAfterDeviceEnabledChange(id, false, userId);
 
     // 攝影機：刪除後更新 generated 檔（runtime 不主動 removePath，避免 reload）
     try {
@@ -1104,7 +1095,7 @@ async function getCameraGroups() {
   try {
     const query = `
       SELECT DISTINCT d.config->>'group' AS group_name
-      FROM devices d
+      FROM active_devices d
       WHERE d.type_code = ?
         AND d.config->>'group' IS NOT NULL
         AND TRIM(d.config->>'group') != ''

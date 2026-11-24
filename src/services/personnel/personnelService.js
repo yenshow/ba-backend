@@ -67,7 +67,7 @@ async function ensurePersonGroupExists(personGroupId) {
   const id = Number(personGroupId);
   if (Number.isNaN(id)) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組無效");
   const rows = await db.query(
-    "SELECT id, parent_id FROM person_groups WHERE id = ? LIMIT 1",
+    "SELECT id, parent_id FROM active_person_groups WHERE id = ? LIMIT 1",
     [id],
   );
   if (!rows || rows.length === 0) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"群組不存在");
@@ -106,7 +106,7 @@ async function getPersonGroups(filters = {}) {
   const tree = normalizeBoolean(filters.tree);
   const parentId = normalizeOptionalInt(filters.parentId);
 
-  let sql = "SELECT * FROM person_groups WHERE 1=1";
+  let sql = "SELECT * FROM active_person_groups WHERE 1=1";
   const params = [];
   if (filters.name) {
     params.push(`%${filters.name}%`);
@@ -141,7 +141,7 @@ async function getPersonGroups(filters = {}) {
 }
 
 async function getPersonGroupById(id) {
-  const rows = await db.query("SELECT * FROM person_groups WHERE id = ?", [id]);
+  const rows = await db.query("SELECT * FROM active_person_groups WHERE id = ?", [id]);
   if (!rows || rows.length === 0) {
     throwApiError(C.PERSONNEL_PERSON_GROUP_NOT_FOUND, "人員群組不存在", {
       statusCode: 404,
@@ -194,53 +194,32 @@ async function updatePersonGroup(id, data) {
   if (updates.length === 0) return getPersonGroupById(id);
   params.push(id);
   await db.query(
-    `UPDATE person_groups SET ${updates.join(", ")} WHERE id = ?`,
+    `UPDATE active_person_groups SET ${updates.join(", ")} WHERE id = ?`,
     params,
   );
   return getPersonGroupById(id);
 }
 
 async function deletePersonGroup(id) {
-  const group = await getPersonGroupById(id);
-
-  if (group.parent_id == null) {
-    const children = await db.query(
-      "SELECT id FROM person_groups WHERE parent_id = ?",
-      [id],
-    );
-    const childIds = (children || []).map((r) => r.id);
-    // 僅擋子群組尚有人員；直接掛在主群組屬非法，DELETE 時由 FK ON DELETE SET NULL 清掉
-    if (childIds.length > 0) {
-      const refs = await db.query(
-        `SELECT id FROM persons WHERE person_group_id IN (${childIds.map(() => "?").join(",")}) LIMIT 1`,
-        childIds,
-      );
-      if (refs && refs.length > 0) {
-        throwApiError(
-          C.PERSONNEL_VALIDATION_FAILED,
-          "該主群組下的子群組尚有人員，無法刪除",
-        );
-      }
-    }
-    await db.query("DELETE FROM person_groups WHERE id = ?", [id]);
-    return { success: true };
-  }
-
-  const refs = await db.query(
-    "SELECT id FROM persons WHERE person_group_id = ? LIMIT 1",
+  const rows = await db.query(
+    `UPDATE person_groups SET archived_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND archived_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM active_person_groups WHERE parent_id = person_groups.id)
+       AND NOT EXISTS (SELECT 1 FROM active_persons WHERE person_group_id = person_groups.id)
+     RETURNING id`,
     [id],
   );
-  if (refs && refs.length > 0) {
-    throwApiError(C.PERSONNEL_VALIDATION_FAILED, "該群組下尚有人員，無法刪除");
+  if (!rows.length) {
+    await getPersonGroupById(id);
+    throwApiError(C.CONFLICT, "請先移出群組中的人員或刪除子群組");
   }
-  await db.query("DELETE FROM person_groups WHERE id = ?", [id]);
   return { success: true };
 }
 
 async function ensureLocationExists(locationId) {
   const id = Number(locationId);
   if (Number.isNaN(id)) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"地點無效");
-  const rows = await db.query("SELECT id FROM locations WHERE id = ? LIMIT 1", [
+  const rows = await db.query("SELECT id FROM active_locations WHERE id = ? LIMIT 1", [
     id,
   ]);
   if (!rows || rows.length === 0) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"地點不存在");
@@ -252,8 +231,8 @@ async function ensureLocationIsSyncable(locationId) {
   const rows = await db.query(
     `
       SELECT l.id
-      FROM locations l
-      INNER JOIN location_systems ls
+      FROM active_locations l
+      INNER JOIN active_location_systems ls
         ON l.id = ls.location_id AND ls.system_type = 'people_counting'
       WHERE l.id = ?
         AND (
@@ -317,7 +296,7 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
   const countRows = await db.query(
     `
       SELECT COUNT(*)::int AS total
-      FROM persons p
+      FROM active_persons p
       WHERE ${whereParts.join(" AND ")}
     `,
     params,
@@ -330,8 +309,8 @@ async function getPersonsByGroupId(personGroupId, options = {}) {
         p.*,
         pg.name AS group_name,
         COALESCE(lp.license_plates, '[]'::json) AS license_plates
-      FROM persons p
-      LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+      FROM active_persons p
+      LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
       LEFT JOIN LATERAL (
         SELECT json_agg(
           json_build_object(
@@ -368,7 +347,7 @@ async function getPersonGroupMemberIds(personGroupId) {
   const group = await ensureChildPersonGroup(personGroupId);
   const rows = await db.query(
     `SELECT id
-     FROM persons
+     FROM active_persons
      WHERE person_group_id = ?
      ORDER BY employee_no ASC`,
     [group.id],
@@ -381,7 +360,7 @@ async function getChildGroupIdsByMainGroupId(mainGroupId) {
   // 二層規則：主群組的 parent_id 必須為 null
   if (row.parent_id != null) throwApiError(C.PERSONNEL_VALIDATION_FAILED,"主群組無效");
   const rows = await db.query(
-    "SELECT id FROM person_groups WHERE parent_id = ?",
+    "SELECT id FROM active_person_groups WHERE parent_id = ?",
     [row.id],
   );
   return (rows || []).map((r) => r.id);
@@ -399,7 +378,7 @@ function normalizeMemberPersonIds(memberPersonIds = []) {
 async function assertPersonIdsExist(nextIds) {
   if (nextIds.length === 0) return;
   const rows = await db.query(
-    `SELECT id FROM persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
+    `SELECT id FROM active_persons WHERE id IN (${nextIds.map(() => "?").join(",")})`,
     nextIds,
   );
   const existing = new Set((rows || []).map((r) => r.id));
@@ -430,12 +409,12 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
     // 移出原本在此群組但不在 nextIds 的人
     if (nextIds.length === 0) {
       await query(
-        "UPDATE persons SET person_group_id = NULL WHERE person_group_id = ?",
+        "UPDATE active_persons SET person_group_id = NULL WHERE person_group_id = ?",
         [id],
       );
     } else {
       await query(
-        `UPDATE persons
+        `UPDATE active_persons
          SET person_group_id = NULL
          WHERE person_group_id = ?
            AND id NOT IN (${nextIds.map(() => "?").join(",")})`,
@@ -446,7 +425,7 @@ async function replacePersonGroupMembers(personGroupId, memberPersonIds = []) {
     // 加入/移轉：將 nextIds 全部設為該群組（批次一次更新）
     if (nextIds.length > 0) {
       await query(
-        `UPDATE persons SET person_group_id = ? WHERE id IN (${nextIds
+        `UPDATE active_persons SET person_group_id = ? WHERE id IN (${nextIds
           .map(() => "?")
           .join(",")})`,
         [id, ...nextIds],
@@ -507,12 +486,12 @@ async function replacePersonGroupMembersBatch(assignments = {}) {
     for (const [childId, nextIds] of entries) {
       if (nextIds.length === 0) {
         await query(
-          "UPDATE persons SET person_group_id = NULL WHERE person_group_id = ?",
+          "UPDATE active_persons SET person_group_id = NULL WHERE person_group_id = ?",
           [childId],
         );
       } else {
         await query(
-          `UPDATE persons
+          `UPDATE active_persons
            SET person_group_id = NULL
            WHERE person_group_id = ?
              AND id NOT IN (${nextIds.map(() => "?").join(",")})`,
@@ -524,7 +503,7 @@ async function replacePersonGroupMembersBatch(assignments = {}) {
     for (const [childId, nextIds] of entries) {
       if (nextIds.length === 0) continue;
       await query(
-        `UPDATE persons SET person_group_id = ? WHERE id IN (${nextIds
+        `UPDATE active_persons SET person_group_id = ? WHERE id IN (${nextIds
           .map(() => "?")
           .join(",")})`,
         [childId, ...nextIds],
@@ -540,8 +519,8 @@ async function replacePersonGroupMembersBatch(assignments = {}) {
 async function getPersons(filters = {}) {
   let sql = `
     SELECT p.*, pg.name AS group_name
-    FROM persons p
-    LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+    FROM active_persons p
+    LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
     WHERE 1=1
   `;
   const params = [];
@@ -657,7 +636,7 @@ async function getPersonsPaged(filters = {}, options = {}) {
   const countRows = await db.query(
     `
       SELECT COUNT(*)::int AS total
-      FROM persons p
+      FROM active_persons p
       ${whereSql}
     `,
     params,
@@ -674,8 +653,8 @@ async function getPersonsPaged(filters = {}, options = {}) {
         EXISTS (
           SELECT 1 FROM person_ladder_cards plc WHERE plc.person_id = p.id
         ) AS has_ladder_card
-      FROM persons p
-      LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+      FROM active_persons p
+      LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
       LEFT JOIN LATERAL (
         SELECT json_agg(
           json_build_object(
@@ -687,8 +666,8 @@ async function getPersonsPaged(filters = {}, options = {}) {
           ORDER BY z.name, l.name
         ) AS access_locations
         FROM person_location_access pla
-        INNER JOIN locations l ON pla.location_id = l.id
-        INNER JOIN zones z ON l.zone_id = z.id
+        INNER JOIN active_locations l ON pla.location_id = l.id
+        INNER JOIN active_zones z ON l.zone_id = z.id
         WHERE pla.person_id = p.id
       ) al ON TRUE
       LEFT JOIN LATERAL (
@@ -709,8 +688,8 @@ async function getPersonsPaged(filters = {}, options = {}) {
 async function getPersonById(id) {
   const rows = await db.query(
     `SELECT p.*, pg.name AS group_name
-     FROM persons p
-     LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+     FROM active_persons p
+     LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
      WHERE p.id = ?`,
     [id],
   );
@@ -724,7 +703,7 @@ async function getPersonById(id) {
 }
 
 async function getPersonByEmployeeNo(employeeNo) {
-  const rows = await db.query("SELECT * FROM persons WHERE employee_no = ?", [
+  const rows = await db.query("SELECT * FROM active_persons WHERE employee_no = ?", [
     String(employeeNo),
   ]);
   return rows && rows.length > 0 ? rows[0] : null;
@@ -897,7 +876,7 @@ async function updatePerson(id, data) {
   if (updates.length > 0) {
     params.push(id);
     await db.query(
-      `UPDATE persons SET ${updates.join(", ")} WHERE id = ?`,
+      `UPDATE active_persons SET ${updates.join(", ")} WHERE id = ?`,
       params,
     );
   }
@@ -1012,7 +991,7 @@ async function setPersonAccessControlConfig(personId, params = {}) {
     );
   }
 
-  await db.query("UPDATE persons SET config = ? WHERE id = ?", [
+  await db.query("UPDATE active_persons SET config = ? WHERE id = ?", [
     JSON.stringify(config),
     personId,
   ]);
@@ -1062,13 +1041,20 @@ async function replacePersonLicensePlates(
 }
 
 async function deletePerson(id) {
-  const person = await getPersonById(id);
-  await vehiclePlateSyncService.purgePersonPlatesFromDevices(id);
-  await db.query("DELETE FROM person_location_access WHERE person_id = ?", [
-    id,
-  ]);
-  await db.query("DELETE FROM persons WHERE id = ?", [id]);
-  return { success: true };
+  await db.transaction(async (query) => {
+    const rows = await query(
+      "UPDATE persons SET archived_at = CURRENT_TIMESTAMP WHERE id = ? AND archived_at IS NULL RETURNING id",
+      [id],
+    );
+    if (!rows.length) throwApiError(C.NOT_FOUND, "找不到人員");
+    await query(
+      `INSERT INTO archived_person_revocations (person_id) VALUES (?)
+       ON CONFLICT (person_id) DO UPDATE SET attempts = 0, completed_at = NULL,
+         next_attempt_at = CURRENT_TIMESTAMP`,
+      [id],
+    );
+  });
+  return { success: true, deviceSyncPending: true };
 }
 
 module.exports = {

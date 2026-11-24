@@ -138,7 +138,7 @@ async function checkEnergyMeters() {
 
   const devices = await db.query(
     `SELECT d.id, d.name, d.config as device_config
-     FROM devices d
+     FROM active_devices d
      WHERE d.id = ANY($1::int[])
        AND d.type_code = 'sensor'
        ${sqlAndEnabled("d.enabled")}`,

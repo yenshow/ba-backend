@@ -10,7 +10,7 @@ const {
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 
-async function getReadingsForBackup(beforeDate) {
+async function getReadingsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT er.recorded_at, er.data,
        l.name as location_name, z.name as zone_name, d.config as device_config
@@ -18,9 +18,9 @@ async function getReadingsForBackup(beforeDate) {
      INNER JOIN locations l ON er.location_id = l.id
      INNER JOIN zones z ON l.zone_id = z.id
      LEFT JOIN devices d ON er.device_id = d.id
-     WHERE er.recorded_at < $1
+     WHERE er.recorded_at < $1 AND er.recorded_at >= $2
      ORDER BY er.recorded_at ASC`,
-    [beforeDate]
+    [beforeDate, startDate]
   );
   return rows || [];
 }

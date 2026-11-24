@@ -56,8 +56,8 @@ async function getActivePersonsWithLadderFloors() {
   const rows = await db.query(
     `SELECT p.id, p.employee_no, p.full_name, p.person_group_id, pg.name AS group_name,
             plc.floors
-     FROM persons p
-     LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+     FROM active_persons p
+     LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
      INNER JOIN person_ladder_cards plc ON plc.person_id = p.id
      WHERE p.status = 'active'
      ORDER BY p.employee_no ASC`,
@@ -183,7 +183,7 @@ async function replaceFloorAccess(locationId, assignments = []) {
   if (pairs.length > 0) {
     const personIds = Array.from(new Set(pairs.map((p) => p.personId)));
     const rows = await db.query(
-      `SELECT id, employee_no, full_name, config FROM persons WHERE id IN (${personIds.map(() => "?").join(",")}) AND status = 'active'`,
+      `SELECT id, employee_no, full_name, config FROM active_persons WHERE id IN (${personIds.map(() => "?").join(",")}) AND status = 'active'`,
       personIds,
     );
     const existing = new Set((rows || []).map((r) => Number(r.id)));
@@ -387,7 +387,7 @@ async function syncLadderFloorsFromLocationAssignments(
   const personConfigById = new Map();
   if (needInsertIds.length) {
     const personRows = await db.query(
-      `SELECT id, config FROM persons WHERE id IN (${needInsertIds.map(() => "?").join(",")})`,
+      `SELECT id, config FROM active_persons WHERE id IN (${needInsertIds.map(() => "?").join(",")})`,
       needInsertIds,
     );
     for (const row of personRows || []) {
@@ -516,8 +516,8 @@ async function getPersonsWithFloorAccess(locationId) {
     `SELECT DISTINCT p.id, p.employee_no, p.full_name, p.status, p.person_group_id,
             p.face_url, p.config, pg.name AS group_name
      FROM person_elevator_floor_access pefa
-     INNER JOIN persons p ON p.id = pefa.person_id
-     LEFT JOIN person_groups pg ON p.person_group_id = pg.id
+     INNER JOIN active_persons p ON p.id = pefa.person_id
+     LEFT JOIN active_person_groups pg ON p.person_group_id = pg.id
      WHERE pefa.location_id = ? AND p.status = 'active'
      ORDER BY p.employee_no ASC`,
     [Number(locationId)],

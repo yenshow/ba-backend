@@ -1,11 +1,14 @@
 const express = require("express");
 const asyncHandler = require("../utils/asyncHandler");
 const { disableHttpCache } = require("../middleware/common");
-const { authenticate } = require("../middleware/authMiddleware");
+const { authenticate, requireAdmin } = require("../middleware/authMiddleware");
 const { hasPermissionCode } = require("../access/permissionService");
 const licenseService = require("../services/license/licenseService");
 const locationService = require("../services/location/locationService");
 const { getMonitoringOverviewSystems } = require("./snapshotSystems");
+const modbusGlobalLimiter = require("../services/devices/modbusGlobalLimiter");
+const { getMonitoringStatus } = require("../services/monitoring/backgroundMonitor");
+const { getFullSnapshotAges } = require("../services/monitoring/monitoringSnapshotCache");
 const {
 	resolveStatusSnapshot,
 } = require("../services/monitoring/resolveStatusSnapshot");
@@ -23,6 +26,15 @@ const canReadSystemStatusForOverview = (req, systemPermissionCode) =>
 module.exports = (() => {
 	const router = express.Router();
 	router.use(authenticate);
+
+	router.get("/diagnostics", requireAdmin, (_req, res) => {
+		res.set("Cache-Control", "no-store");
+		res.sendSuccess({
+			modbus: modbusGlobalLimiter.getStats(),
+			scheduler: getMonitoringStatus(),
+			snapshots: getFullSnapshotAges(),
+		});
+	});
 
 	/**
 	 * Central 總覽聚合：一次回傳多個系統的 zones + status items。

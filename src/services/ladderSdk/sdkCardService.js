@@ -21,7 +21,7 @@ const enrichLadderCardName = async (card) => {
   const rows = await db.query(
     `SELECT p.full_name, p.employee_no
      FROM person_ladder_cards plc
-     INNER JOIN persons p ON p.id = plc.person_id
+     INNER JOIN active_persons p ON p.id = plc.person_id
      WHERE plc.card_no = ?
      LIMIT 1`,
     [cardNo],

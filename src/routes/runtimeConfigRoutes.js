@@ -28,7 +28,7 @@ const FORM_SCHEMA = {
         },
         {
           key: "BACKUP_ONLINE_RETENTION_DAYS",
-          label: "線上資料保留天數",
+          label: "歸檔回溯天數",
           kind: "number",
         },
       ],

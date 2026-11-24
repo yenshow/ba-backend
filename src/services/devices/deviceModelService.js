@@ -70,7 +70,7 @@ async function getAllDeviceModels(filters = {}) {
     let query = `
 			SELECT 
 				dm.*
-			FROM device_models dm
+			FROM active_device_models dm
 			WHERE 1=1
 		`;
     const params = [];
@@ -111,7 +111,7 @@ async function getDeviceModelById(id) {
       `
 			SELECT 
 				dm.*
-			FROM device_models dm
+			FROM active_device_models dm
 			WHERE dm.id = ?
 		`,
       [id],
@@ -319,7 +319,7 @@ async function createDeviceModel(data, userId) {
       `
 			SELECT 
 				dm.*
-			FROM device_models dm
+			FROM active_device_models dm
 			WHERE dm.id = ?
 		`,
       [result[0].id],
@@ -348,7 +348,7 @@ async function updateDeviceModel(id, data, userId) {
     const { name, type_code, category_code, port, unit_id, description, config } =
       data;
 
-    const existing = await db.query("SELECT * FROM device_models WHERE id = ?", [
+    const existing = await db.query("SELECT * FROM active_device_models WHERE id = ?", [
       id,
     ]);
 
@@ -386,7 +386,7 @@ async function updateDeviceModel(id, data, userId) {
     const wantsChangeType = inputTypeCode && inputTypeCode !== currentTypeCode;
     if (wantsChangeType) {
       const devices = await db.query(
-        "SELECT id FROM devices WHERE model_id = ? LIMIT 1",
+        "SELECT id FROM active_devices WHERE model_id = ? LIMIT 1",
         [id],
       );
       if (devices.length > 0) {
@@ -478,7 +478,7 @@ async function updateDeviceModel(id, data, userId) {
     params.push(id);
 
     await db.query(
-      `UPDATE device_models SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      `UPDATE active_device_models SET ${updates.join(", ")}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       params,
     );
 
@@ -493,7 +493,7 @@ async function updateDeviceModel(id, data, userId) {
       `
 			SELECT 
 				dm.*
-			FROM device_models dm
+			FROM active_device_models dm
 			WHERE dm.id = ?
 		`,
       [id],
@@ -520,7 +520,7 @@ async function updateDeviceModel(id, data, userId) {
 
 async function deleteDeviceModel(id) {
   try {
-    const models = await db.query("SELECT id FROM device_models WHERE id = ?", [
+    const models = await db.query("SELECT id FROM active_device_models WHERE id = ?", [
       id,
     ]);
 
@@ -536,7 +536,7 @@ async function deleteDeviceModel(id) {
       throwApiError(C.DEVICE_MODEL_IN_USE, "無法刪除：仍有設備使用此型號");
     }
 
-    await db.query("DELETE FROM device_models WHERE id = ?", [id]);
+    await db.query("UPDATE device_models SET archived_at = CURRENT_TIMESTAMP WHERE id = ? AND archived_at IS NULL", [id]);
 
     return {
       message: "設備型號已刪除",

@@ -148,7 +148,7 @@ const getByPersonId = async (personId) => {
 };
 
 const upsertForPerson = async (personId, input = {}) => {
-  const personRows = await db.query(`SELECT config FROM persons WHERE id = ?`, [
+  const personRows = await db.query(`SELECT config FROM active_persons WHERE id = ?`, [
     Number(personId),
   ]);
   const personRow = personRows?.[0] || null;
@@ -250,7 +250,7 @@ const getPersonIdByCardNo = async (cardNo) => {
   if (ladderPersonId != null) return Number(ladderPersonId);
 
   const configRows = await db.query(
-    `SELECT id FROM persons
+    `SELECT id FROM active_persons
      WHERE config IS NOT NULL
        AND (
          config->'access_control'->>'cardNo' = ?

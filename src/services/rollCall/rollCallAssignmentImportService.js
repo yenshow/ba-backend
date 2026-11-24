@@ -66,7 +66,7 @@ const isDayHeaderMatch = (header, day) => {
 const loadLocationRulesByName = async (locationId) => {
   const rows = await db.query(
     `SELECT id, name, window_start, window_end
-     FROM roll_call_rules
+     FROM active_roll_call_rules
      WHERE location_id = ?
      ORDER BY window_start, id`,
     [locationId],
@@ -84,7 +84,7 @@ const loadMembersByEmployeeNo = async (locationId) => {
   const rows = await db.query(
     `SELECT p.id, p.employee_no, p.full_name
      FROM person_location_access pla
-     INNER JOIN persons p ON p.id = pla.person_id
+     INNER JOIN active_persons p ON p.id = pla.person_id
      WHERE pla.location_id = ? AND p.status = 'active'
      ORDER BY p.employee_no NULLS LAST, p.id`,
     [locationId],

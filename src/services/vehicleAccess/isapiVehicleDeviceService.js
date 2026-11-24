@@ -175,7 +175,7 @@ async function assertDeviceBelongsToSite(deviceId, siteId) {
   const rows = await db.query(
     `
       SELECT system_config
-      FROM location_systems
+      FROM active_location_systems
       WHERE location_id = ? AND system_type = 'vehicle_access'
       LIMIT 1
     `,

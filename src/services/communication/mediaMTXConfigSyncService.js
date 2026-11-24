@@ -76,7 +76,7 @@ const listCameraRtspItems = async () => {
   const rows = await db.query(
     `
     SELECT d.id, d.config
-    FROM devices d
+    FROM active_devices d
     WHERE LOWER(COALESCE(d.type_code, '')) = 'camera'
     ORDER BY d.id ASC
     `,

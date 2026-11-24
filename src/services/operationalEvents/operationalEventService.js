@@ -4,7 +4,6 @@
  */
 const db = require("../../database/db");
 const logger = require("../../utils/logger");
-const config = require("../../config");
 const websocketService = require("../websocket/websocketService");
 
 const opLogger = logger.createLogger("operationalEvents");
@@ -206,11 +205,7 @@ async function listEvents(filters = {}) {
   const lim = Math.min(Math.max(toIntOrNull(filters.limit) ?? 50, 1), 5000);
   const off = Math.max(toIntOrNull(filters.offset) ?? 0, 0);
 
-  const [countRows, events, byKind] = await Promise.all([
-    db.query(
-      `SELECT COUNT(*)::int AS total FROM operational_events oe ${where}`,
-      params,
-    ),
+  const [events, byKind] = await Promise.all([
     db.query(
       `
       SELECT
@@ -248,38 +243,14 @@ async function listEvents(filters = {}) {
 
   return {
     events: events || [],
-    total: countRows?.[0]?.total ?? 0,
+    total: byKind?.reduce((total, row) => total + row.count, 0) ?? 0,
     limit: lim,
     offset: off,
     byKind: byKind || [],
   };
 }
 
-/**
- * @deprecated 營運事件改由備份雙層保留冷刪（BACKUP_ONLINE_RETENTION_DAYS）。
- * 保留函式供手動／相容呼叫；日常排程已停用。
- */
-async function purgeExpiredEvents(retentionDays) {
-  const days =
-    toIntOrNull(retentionDays) ?? config.operationalEvents?.retentionDays ?? 90;
-  const safeDays = Math.max(days, 1);
-  const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
-  const result = await db.query(
-    `DELETE FROM operational_events WHERE created_at < ?`,
-    [cutoff.toISOString()],
-  );
-  const deleted = result?.rowCount ?? 0;
-  if (deleted > 0) {
-    opLogger.info("營運事件過期清理完成（deprecated 直刪）", {
-      deleted,
-      retentionDays: safeDays,
-    });
-  }
-  return { deleted, retentionDays: safeDays };
-}
-
 module.exports = {
   recordEvent,
   listEvents,
-  purgeExpiredEvents,
 };

@@ -10,6 +10,7 @@ const {
   recordFailedLoginAttempt,
 } = require("../middleware/rateLimitMiddleware");
 const C = require("../utils/apiErrorCodes");
+const loginLogger = require("../utils/logger").createLogger("login");
 const {
   validateRequired,
   validateIntegers,
@@ -22,6 +23,7 @@ router.post(
   asyncHandler(async (req, res) => {
     try {
       const result = await userService.loginUser(req.body);
+      loginLogger.info("登入成功", { userId: result.user.id, requestId: res.getHeader("X-Request-Id") });
       res.sendSuccess(result);
     } catch (error) {
       if (error?.code === C.USER_AUTH_FAILED) {

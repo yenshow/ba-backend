@@ -157,7 +157,7 @@ async function resolveDoorControlConfig(deviceId, locationId) {
     if (!Number.isFinite(id) || id <= 0) return null;
     const rows = await db.query(
       `SELECT location_id
-       FROM location_systems
+       FROM active_location_systems
        WHERE system_type = 'elevator'
          AND (system_config->'ladder_device'->>'device_id')::int = ?
        LIMIT 1`,

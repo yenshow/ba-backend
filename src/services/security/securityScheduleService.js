@@ -5,6 +5,7 @@
 const db = require("../../database/db");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
+const scheduleRulesUnchanged = require("../schedule/scheduleRulesUnchanged");
 
 const DOW_SUNDAY = 0;
 
@@ -139,7 +140,7 @@ function mapRuleRow(row, locationIds = []) {
 async function listAll() {
   const rules = await db.query(
     `SELECT id, name, days_of_week, window_start, window_end, enabled, created_at, updated_at
-     FROM security_schedule_rules
+     FROM active_security_schedule_rules
      ORDER BY id ASC`,
   );
   if (!rules?.length) return [];
@@ -167,7 +168,7 @@ async function assertSecurityLocationIds(locationIds, query = db.query) {
   }
   const rows = await query(
     `SELECT DISTINCT location_id
-     FROM location_systems
+     FROM active_location_systems
      WHERE system_type = 'security' AND location_id = ANY(?)`,
     [ids],
   );
@@ -204,28 +205,35 @@ async function replaceAll(rules) {
   }
 
   await db.transaction(async (query) => {
-    for (const r of list) {
-      await assertSecurityLocationIds(r.locationIds, query);
+    const prepared = [];
+    for (const rule of list) {
+      prepared.push({
+        name: rule.name != null ? String(rule.name).slice(0, 80) : null,
+        days: normalizeDays(rule.daysOfWeek),
+        start: String(rule.windowStart),
+        end: String(rule.windowEnd),
+        enabled: rule.enabled !== false,
+        locationIds: (await assertSecurityLocationIds(rule.locationIds, query)).sort((a, b) => a - b),
+      });
     }
-    await query(`DELETE FROM security_schedule_rules`);
-    for (const r of list) {
-      const locationIds = normalizeLocationIds(r.locationIds);
+    if (await scheduleRulesUnchanged(query, {
+      rulesTable: "security_schedule_rules", locationsTable: "security_schedule_rule_locations",
+      startColumn: "window_start", endColumn: "window_end",
+    }, prepared)) return;
+    await query(`UPDATE security_schedule_rules SET archived_at = CURRENT_TIMESTAMP, enabled = FALSE WHERE archived_at IS NULL`);
+    for (const r of prepared) {
       const inserted = await query(
         `INSERT INTO security_schedule_rules
           (name, days_of_week, window_start, window_end, enabled)
          VALUES (?, ?::int[], ?::time, ?::time, ?)
          RETURNING id`,
         [
-          r.name != null ? String(r.name).slice(0, 80) : null,
-          normalizeDays(r.daysOfWeek),
-          String(r.windowStart),
-          String(r.windowEnd),
-          r.enabled !== false,
+          r.name, r.days, r.start, r.end, r.enabled,
         ],
       );
       const ruleId = inserted?.[0]?.id;
       if (!ruleId) continue;
-      for (const lid of locationIds) {
+      for (const lid of r.locationIds) {
         await query(
           `INSERT INTO security_schedule_rule_locations (rule_id, location_id)
            VALUES (?, ?)`,
@@ -245,7 +253,7 @@ async function isPermittedNow(locationId, at = new Date()) {
   if (!Number.isFinite(lid) || lid <= 0) return true;
   const rows = await db.query(
     `SELECT r.days_of_week, r.window_start, r.window_end
-     FROM security_schedule_rules r
+     FROM active_security_schedule_rules r
      INNER JOIN security_schedule_rule_locations rl ON rl.rule_id = r.id
      WHERE rl.location_id = ? AND r.enabled = TRUE`,
     [lid],
@@ -264,7 +272,7 @@ async function isPermittedNow(locationId, at = new Date()) {
 
 async function resolveLocationIdBySystemId(systemId) {
   const rows = await db.query(
-    `SELECT location_id FROM location_systems WHERE id = ? AND system_type = 'security'`,
+    `SELECT location_id FROM active_location_systems WHERE id = ? AND system_type = 'security'`,
     [Number(systemId)],
   );
   return rows?.[0]?.location_id != null ? Number(rows[0].location_id) : null;
@@ -285,7 +293,7 @@ async function getArmingConfigBySystemId(systemId) {
   if (!Number.isFinite(sid) || sid <= 0) return null;
   const rows = await db.query(
     `SELECT id, location_id, system_config
-     FROM location_systems
+     FROM active_location_systems
      WHERE id = ? AND system_type = 'security'`,
     [sid],
   );
@@ -311,8 +319,8 @@ async function listSecurityLocationsByAccessDeviceId(deviceId) {
   if (!Number.isFinite(did) || did <= 0) return [];
   const rows = await db.query(
     `SELECT ls.id AS system_id, ls.location_id, l.name AS location_name
-     FROM location_systems ls
-     INNER JOIN locations l ON l.id = ls.location_id
+     FROM active_location_systems ls
+     INNER JOIN active_locations l ON l.id = ls.location_id
      WHERE ls.system_type = 'security'
        AND ls.system_config->'access_device_ids' IS NOT NULL
        AND EXISTS (

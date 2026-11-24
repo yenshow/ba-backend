@@ -44,7 +44,7 @@ async function listIsapiCapableDevices() {
   const rows = await db.query(
     `
       SELECT d.id, d.name, d.type_code, d.config
-      FROM devices d
+      FROM active_devices d
       WHERE (
           d.type_code = 'access_control'
           OR d.type_code = 'camera'

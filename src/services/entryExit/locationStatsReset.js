@@ -26,7 +26,7 @@ function parseActorUserId(userId) {
 async function writeLocationStatsResetAt(systemType, locationId, notFoundMessage) {
   const resetAt = new Date().toISOString();
   const rows = await db.query(
-    `SELECT id, system_config FROM location_systems
+    `SELECT id, system_config FROM active_location_systems
      WHERE location_id = ? AND system_type = ?`,
     [locationId, systemType],
   );

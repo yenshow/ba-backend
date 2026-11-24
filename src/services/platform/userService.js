@@ -42,7 +42,7 @@ function verifyToken(token) {
 }
 
 async function getUserTokenVersion(userId) {
-  const rows = await db.query("SELECT token_version FROM users WHERE id = ?", [
+  const rows = await db.query("SELECT token_version FROM active_users WHERE id = ? AND status = 'active'", [
     userId,
   ]);
   if (rows.length === 0) {
@@ -151,7 +151,7 @@ async function createBootstrapAdminUser({ username, password }) {
     [username, passwordHash],
   );
   const user = await db.query(
-    "SELECT id, username, role, status, created_at, updated_at FROM users WHERE id = ?",
+    "SELECT id, username, role, status, created_at, updated_at FROM active_users WHERE id = ?",
     [result[0].id],
   );
   return user[0];
@@ -167,7 +167,7 @@ async function loginUser(credentials) {
     );
   }
 
-  const users = await db.query("SELECT * FROM users WHERE username = ?", [
+  const users = await db.query("SELECT * FROM active_users WHERE username = ?", [
     username,
   ]);
   if (users.length === 0) {
@@ -203,7 +203,7 @@ async function loginUser(credentials) {
  * @param {object} decoded - 已驗證的 JWT payload（含 id、exp、tokenVersion）
  */
 async function refreshUserSession(decoded) {
-  const rows = await db.query("SELECT * FROM users WHERE id = ?", [decoded.id]);
+  const rows = await db.query("SELECT * FROM active_users WHERE id = ?", [decoded.id]);
   if (rows.length === 0) {
     throwApiError(C.AUTH_TOKEN_INVALID, "無效的 Token", { statusCode: 401 });
   }
@@ -267,10 +267,10 @@ async function getUsers(filters = {}) {
     : "created_at";
   const validOrder = order === "asc" || order === "desc" ? order : "desc";
 
-  const query = `SELECT id, username, role, status, created_at, updated_at FROM users ${scopedWhere} ORDER BY ${validOrderBy} ${validOrder} LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
+  const query = `SELECT id, username, role, status, created_at, updated_at FROM active_users ${scopedWhere} ORDER BY ${validOrderBy} ${validOrder} LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
   const users = await db.query(query, scopedParams);
   const total = (
-    await db.query(`SELECT COUNT(*) as total FROM users ${scopedWhere}`, scopedParams)
+    await db.query(`SELECT COUNT(*) as total FROM active_users ${scopedWhere}`, scopedParams)
   )[0].total;
 
   return { users, total, limit: parsedLimit, offset: parsedOffset };
@@ -278,7 +278,7 @@ async function getUsers(filters = {}) {
 
 async function getUserById(userId) {
   const users = await db.query(
-    "SELECT id, username, role, status, created_at, updated_at FROM users WHERE id = ?",
+    "SELECT id, username, role, status, created_at, updated_at FROM active_users WHERE id = ?",
     [userId],
   );
   if (users.length === 0) {
@@ -338,7 +338,7 @@ async function updateUser(userId, updateData, currentUser) {
   const { username, role, status } = updateData;
 
   const existingRows = await db.query(
-    "SELECT id, role, username FROM users WHERE id = ?",
+    "SELECT id, role, username, status FROM active_users WHERE id = ?",
     [userId],
   );
   if (existingRows.length === 0) {
@@ -384,17 +384,27 @@ async function updateUser(userId, updateData, currentUser) {
     params.push(status);
   }
 
+  const roleChanged = role !== undefined && role !== previousRole;
+  const revoke = roleChanged ||
+    (username !== undefined && username !== targetUser.username) ||
+    (status !== undefined && status !== targetUser.status);
+  if (revoke) updates.push("token_version = token_version + 1");
+
   if (updates.length === 0) {
     return await getUserById(userId);
   }
 
   params.push(userId);
-  await db.query(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`, params);
-
-  if (role !== undefined && role !== previousRole) {
-    await permissionService.clearUserPermissionOverrides(userId);
-    permissionService.invalidateUserPermissionCache(userId);
-  }
+  await db.transaction(async (query) => {
+    const rows = await query(
+      `UPDATE active_users SET ${updates.join(", ")} WHERE id = ? RETURNING id`,
+      params,
+    );
+    if (!rows.length) throwApiError(C.USER_NOT_FOUND, "用戶不存在");
+    if (roleChanged) await permissionService.clearUserPermissionOverrides(userId, query);
+  });
+  if (revoke) disconnectUserSockets(userId);
+  if (roleChanged) permissionService.invalidateUserPermissionCache(userId);
 
   return await getUserById(userId);
 }
@@ -433,7 +443,7 @@ async function updatePassword(userId, oldPassword, newPassword, currentUser) {
     throwApiError(C.USER_PASSWORD_TOO_SHORT, "新密碼長度至少需要 6 個字元");
   }
 
-  const users = await db.query("SELECT * FROM users WHERE id = ?", [userId]);
+  const users = await db.query("SELECT * FROM active_users WHERE id = ?", [userId]);
   if (users.length === 0) {
     throwApiError(C.USER_NOT_FOUND, "用戶不存在");
   }
@@ -471,6 +481,10 @@ async function updatePassword(userId, oldPassword, newPassword, currentUser) {
   return { message: "密碼已更新" };
 }
 
+function disconnectUserSockets(userId) {
+  require("../websocket/websocketService").getIO()?.in("user:" + userId)?.disconnectSockets(true);
+}
+
 async function deleteUser(userId, currentUser) {
   if (currentUser.role !== "admin") {
     throwApiError(C.USER_FORBIDDEN_DELETE, "只有管理員可以刪除用戶");
@@ -481,7 +495,7 @@ async function deleteUser(userId, currentUser) {
   }
 
   const existing = await db.query(
-    "SELECT id, role, username FROM users WHERE id = ?",
+    "SELECT id, role, username FROM active_users WHERE id = ?",
     [userId],
   );
   if (existing.length === 0) {
@@ -495,7 +509,12 @@ async function deleteUser(userId, currentUser) {
     throwApiError(C.USER_FORBIDDEN_DELETE, "無法刪除其他管理員帳號");
   }
 
-  await db.query("DELETE FROM users WHERE id = ?", [userId]);
+  const archived = await db.query(
+    "UPDATE users SET archived_at = CURRENT_TIMESTAMP, status = 'inactive', token_version = token_version + 1 WHERE id = ? AND archived_at IS NULL RETURNING id",
+    [userId],
+  );
+  if (!archived.length) throwApiError(C.USER_NOT_FOUND, "用戶不存在");
+  disconnectUserSockets(userId);
 
   return { message: "用戶已刪除" };
 }

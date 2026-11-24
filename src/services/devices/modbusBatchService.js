@@ -1,6 +1,8 @@
 const modbusClient = require("./modbusClient");
+const { STANDARD_CONCURRENCY } = require("./modbusGlobalLimiter");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
+const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
 
 /**
  * 批次 Modbus 讀取服務
@@ -16,8 +18,7 @@ const MAX_LENGTH = 125;
 const MAX_GAP = 0;
 const { MODBUS_BATCH_CACHE_TTL_MS: CACHE_TTL } = require("../../config/realtimeTiming");
 
-const cache = new Map(); // key -> { ts, data }
-const inflight = new Map(); // key -> Promise
+const cache = new Map(); // key -> { cached, latestRead, sharedRead }
 
 const normalizeRegisterType = (raw) => {
   const t = String(raw || "").trim().toLowerCase();
@@ -35,32 +36,9 @@ const invalidateDeviceCache = (deviceConfig, registerType = null) => {
   const deviceKey = buildDeviceKey(deviceConfig);
   const prefix = registerType ? `${deviceKey}|${registerType}|` : `${deviceKey}|`;
   for (const k of cache.keys()) {
-    if (String(k).startsWith(prefix)) {
-      cache.delete(k);
-    }
+    if (k.startsWith(prefix)) cache.delete(k);
   }
-  // 寫入後也同步清除 inflight，避免「寫入前的讀取」稍後落地回快取
-  for (const k of inflight.keys()) {
-    if (String(k).startsWith(prefix)) {
-      inflight.delete(k);
-    }
-  }
-};
-
-const nowMs = () => Date.now();
-
-const getCached = (key) => {
-  const hit = cache.get(key);
-  if (!hit) return null;
-  if (nowMs() - hit.ts > CACHE_TTL) {
-    cache.delete(key);
-    return null;
-  }
-  return hit.data;
-};
-
-const setCached = (key, data) => {
-  cache.set(key, { ts: nowMs(), data });
+  modbusClient.invalidateReads(deviceConfig, registerType);
 };
 
 const readByType = async (registerType, address, length, deviceConfig) => {
@@ -73,6 +51,39 @@ const readByType = async (registerType, address, length, deviceConfig) => {
     `unsupported registerType: ${registerType}`,
   );
 };
+
+async function readRange(key, read, bypassCache) {
+  let entry = cache.get(key);
+  if (!entry) {
+    entry = { cached: null, latestRead: null, sharedRead: null };
+    cache.set(key, entry);
+  }
+  if (entry.cached && Date.now() - entry.cached.ts > CACHE_TTL) {
+    entry.cached = null;
+  }
+  if (!bypassCache) {
+    if (entry.cached) return entry.cached.data;
+    if (entry.sharedRead) return entry.sharedRead;
+  }
+
+  const pending = read();
+  entry.latestRead = pending;
+  if (!bypassCache) entry.sharedRead = pending;
+  try {
+    const data = await pending;
+    // 寫入可能已清除 entry，或同一範圍已有較新的讀取。
+    if (cache.get(key) === entry && entry.latestRead === pending) {
+      entry.cached = { ts: Date.now(), data };
+    }
+    return data;
+  } finally {
+    if (entry.latestRead === pending) entry.latestRead = null;
+    if (entry.sharedRead === pending) entry.sharedRead = null;
+    if (cache.get(key) === entry && !entry.cached && !entry.latestRead && !entry.sharedRead) {
+      cache.delete(key);
+    }
+  }
+}
 
 /**
  * 把同 device+registerType 的單點讀取合併為 range
@@ -132,7 +143,6 @@ async function batchRead(requests) {
   const results = new Array(reqList.length);
 
   const groups = new Map(); // key -> { deviceConfig, registerType, points: [{address,length,idx,meta}] }
-  const bypassCacheByIndex = new Set();
 
   reqList.forEach((r, idx) => {
     const deviceConfig = {
@@ -161,10 +171,6 @@ async function batchRead(requests) {
       return;
     }
 
-    if (r?.meta && typeof r.meta === "object" && r.meta.noCache === true) {
-      bypassCacheByIndex.add(idx);
-    }
-
     const deviceKey = buildDeviceKey(deviceConfig);
     const groupKey = `${deviceKey}|${registerType}`;
     if (!groups.has(groupKey)) {
@@ -178,67 +184,21 @@ async function batchRead(requests) {
    * 多電表／閘道並行 FC03 易逾時（A21：電能 0x1400、需量 0x3006 常被擠掉）。
    * 不同 device 群組仍可並行。
    */
-  const groupEntries = Array.from(groups.values());
-  await Promise.allSettled(
-    groupEntries.map(async (g) => {
+  await mapWithConcurrency(
+    [...groups.values()],
+    async (g) => {
       const deviceKey = buildDeviceKey(g.deviceConfig);
       const ranges = coalesceToRanges(g.points);
 
       for (const range of ranges) {
         const cacheKey = buildCacheKey(deviceKey, g.registerType, range.start, range.length);
 
-        const shouldBypass = range.members.some((m) => bypassCacheByIndex.has(m.idx));
-
-        const cached = shouldBypass ? null : getCached(cacheKey);
-        if (cached) {
-          range.members.forEach((m) => {
-            results[m.idx] = {
-              ok: true,
-              data: cached.slice(m.offset, m.offset + m.length),
-              device: g.deviceConfig,
-              registerType: g.registerType,
-              address: m.address,
-              length: m.length,
-              meta: m.meta,
-            };
-          });
-          continue;
-        }
-
-        if (!shouldBypass && inflight.has(cacheKey)) {
-          try {
-            const data = await inflight.get(cacheKey);
-            range.members.forEach((m) => {
-              results[m.idx] = {
-                ok: true,
-                data: data.slice(m.offset, m.offset + m.length),
-                device: g.deviceConfig,
-                registerType: g.registerType,
-                address: m.address,
-                length: m.length,
-                meta: m.meta,
-              };
-            });
-          } catch (e) {
-            const msg = e?.message || String(e);
-            range.members.forEach((m) => {
-              results[m.idx] = { ok: false, error: msg, meta: m.meta };
-            });
-          }
-          continue;
-        }
-
-        const p = (async () => {
-          const data = await readByType(g.registerType, range.start, range.length, g.deviceConfig);
-          setCached(cacheKey, data);
-          return data;
-        })();
-
-        if (!shouldBypass) {
-          inflight.set(cacheKey, p);
-        }
         try {
-          const data = await p;
+          const data = await readRange(
+            cacheKey,
+            () => readByType(g.registerType, range.start, range.length, g.deviceConfig),
+            range.members.some((member) => member.meta?.noCache === true),
+          );
           range.members.forEach((m) => {
             results[m.idx] = {
               ok: true,
@@ -255,13 +215,10 @@ async function batchRead(requests) {
           range.members.forEach((m) => {
             results[m.idx] = { ok: false, error: msg, meta: m.meta };
           });
-        } finally {
-          if (!shouldBypass) {
-            inflight.delete(cacheKey);
-          }
         }
       }
-    }),
+    },
+    { concurrency: STANDARD_CONCURRENCY },
   );
 
   // 填補任何未寫入的結果（理論上不會發生）

@@ -70,7 +70,7 @@ async function getDeviceLoggingConfig(deviceId) {
   try {
     const rows = await db.query(
       `SELECT d.config, dm.config as model_config, d.type_code as type_code
-       FROM devices d
+       FROM active_devices d
        LEFT JOIN device_models dm ON d.model_id = dm.id
        WHERE d.id = $1`,
       [deviceId]

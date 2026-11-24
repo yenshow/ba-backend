@@ -63,8 +63,9 @@ const { requireFeature } = require("./middleware/licenseMiddleware");
 const db = require("./database/db");
 const yscpRuntimeService = require("./services/yscp/yscpRuntimeService");
 const websocketService = require("./services/websocket/websocketService");
-const syncDefinitions = require("./access/syncDefinitions");
-const { applySchemaPatches } = require("./database/schemaPatches");
+const migrateSchema = require("./database/migrateSchema");
+const { assertArchiveRuntimeAccess } = require("./database/archiveSchema");
+const { auditContext } = require("./utils/auditContext");
 
 // 背景監控與 License Runtime
 const licenseRuntimeService = require("./services/license/licenseRuntimeService");
@@ -134,6 +135,7 @@ app.get("/api/health", async (req, res) => {
 
 // API 限流（登入路由在 userRoutes 內另掛更嚴格 limiter）
 app.use("/api", apiRateLimiter);
+app.use("/api", auditContext);
 
 // 請求體解析（10MB 限制）
 app.use(express.json({ limit: "10mb" }));
@@ -165,6 +167,7 @@ app.use("/api/pda", pdaScanRoutes);
 // 註冊路由：業務模組寫入以 requirePermission + requireFeature；平台管理以 requireAdmin
 app.use("/api/modbus", modbusRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/data-archive", require("./routes/dataArchiveRoutes"));
 app.use("/api/license", licenseRoutes);
 app.use("/api/modules", moduleRegistryRoutes);
 app.use("/api/devices", deviceRoutes);
@@ -284,12 +287,11 @@ async function startServer() {
       return;
     }
 
-    await applySchemaPatches(db.pool).catch((err) =>
-      serverLogger.warn("schema patches 失敗", { error: err.message }),
-    );
-    await syncDefinitions(db.pool).catch((err) =>
-      serverLogger.warn("權限定義同步失敗", { error: err.message }),
-    );
+    if (config.database.runSchemaPatches) {
+      await migrateSchema(db.pool);
+    } else {
+      await assertArchiveRuntimeAccess(db.pool);
+    }
     await bootstrapRuntimeInfrastructure();
     await licenseRuntimeService.reconcileBackgroundServices({ reason: "boot" });
 
@@ -327,6 +329,8 @@ async function startServer() {
     });
 
     global.__backupSchedulerHandle = backupScheduler.startScheduler();
+    global.__archivedPersonRevocations = require("./services/personnel/archivedPersonRevocation")
+      .startArchivedPersonRevocations();
     global.__isapiTimeSyncHandle = isapiTimeSyncScheduler.startScheduler();
     serverLogger.info("ISAPI 設備校時排程已啟用（依 runtime 營運設定）");
 
@@ -413,6 +417,7 @@ async function gracefulShutdown(signal) {
       global.__backupSchedulerHandle.stop();
       global.__backupSchedulerHandle = null;
     }
+    global.__archivedPersonRevocations?.stop();
 
     if (global.__isapiTimeSyncHandle?.stop) {
       global.__isapiTimeSyncHandle.stop();

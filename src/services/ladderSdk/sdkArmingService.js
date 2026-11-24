@@ -129,7 +129,7 @@ const getLadderDeviceIds = async () => {
   const rows = await db.query(
     `
       SELECT DISTINCT (ls.system_config->'ladder_device'->>'device_id')::int AS id
-      FROM location_systems ls
+      FROM active_location_systems ls
       WHERE ls.system_type = 'elevator'
         AND ls.system_config ? 'ladder_device'
         AND (ls.system_config->'ladder_device'->>'device_id') ~ '^[0-9]+$'

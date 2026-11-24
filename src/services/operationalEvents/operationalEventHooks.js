@@ -133,7 +133,7 @@ async function resolveControlWriteTargets({
   const rows = await db.query(
     `
     SELECT ls.id AS system_id, ls.location_id
-    FROM location_systems ls
+    FROM active_location_systems ls
     WHERE EXISTS (
       SELECT 1
       FROM jsonb_array_elements_text(
@@ -369,7 +369,7 @@ async function resolveElevatorContextByDeviceId(deviceId) {
       ls.system_config,
       l.name AS location_name,
       z.name AS zone_name
-    FROM location_systems ls
+    FROM active_location_systems ls
     LEFT JOIN locations l ON ls.location_id = l.id
     LEFT JOIN zones z ON l.zone_id = z.id
     WHERE ls.system_type = 'elevator'

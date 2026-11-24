@@ -26,6 +26,7 @@
     "test:video-intercom-sip-early": "node scripts/probe/testVideoIntercomSipEarlyMedia.js",
     "test:video-intercom-voip-write": "node scripts/probe/testVideoIntercomVoipWrite.js",
     "db:init": "node src/database/initSchema.js",
+    "db:migrate": "node src/database/migrateSchema.js",
     "db:sync-perms": "node src/access/syncDefinitions.js",
     "gen:perm": "node scripts/codegen/generate-permission-codes.mjs",
     "db:test": "node -e \"require('./src/database/db').testConnection().then(() => process.exit(0)).catch(() => process.exit(1))\"",

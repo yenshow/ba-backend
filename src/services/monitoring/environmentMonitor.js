@@ -126,9 +126,9 @@ async function checkEnvironmentLocations() {
 				z.name as zone_name,
 				ls.id as system_id,
 				ls.system_config
-			FROM locations l
-			INNER JOIN zones z ON l.zone_id = z.id
-			INNER JOIN location_systems ls ON l.id = ls.location_id
+			FROM active_locations l
+			INNER JOIN active_zones z ON l.zone_id = z.id
+			INNER JOIN active_location_systems ls ON l.id = ls.location_id
 			WHERE ls.system_type = 'environment'
 		`);
 
@@ -170,7 +170,7 @@ async function checkEnvironmentLocations() {
         ? []
         : await db.query(
             `SELECT d.id, d.config as device_config
-             FROM devices d
+             FROM active_devices d
              WHERE d.id = ANY($1::int[])
                AND d.type_code = 'sensor'
                AND d.config->>'protocol' = 'modbus'

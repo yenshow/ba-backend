@@ -76,7 +76,7 @@ async function assertIoModuleAddresses(query, systemType, systemConfig) {
   if (deviceIds.length === 0) return;
 
   const rows = await query(
-    `SELECT id, config FROM devices WHERE id = ANY($1::int[])`,
+    `SELECT id, config FROM active_devices WHERE id = ANY($1::int[])`,
     [deviceIds],
   );
   const byId = new Map();
@@ -96,7 +96,7 @@ async function assertIoModuleAddresses(query, systemType, systemConfig) {
 
 async function loadLocationContextForValidation(query, locationId) {
   const rows = await query(
-    "SELECT name, zone_id FROM locations WHERE id = $1",
+    "SELECT name, zone_id FROM active_locations WHERE id = $1",
     [locationId],
   );
   if (rows.length === 0) return null;
@@ -603,7 +603,7 @@ async function validateIntercomConfig(query, systemConfig, { excludeSystemId = n
   }
 
   const deviceRows = await query(
-    `SELECT id, type_code, config FROM devices WHERE id = $1`,
+    `SELECT id, type_code, config FROM active_devices WHERE id = $1`,
     [indoorDeviceId],
   );
   if (!deviceRows?.length) {
@@ -636,7 +636,7 @@ async function validateIntercomConfig(query, systemConfig, { excludeSystemId = n
   const dup = await query(
     `
     SELECT ls.id, ls.location_id
-    FROM location_systems ls
+    FROM active_location_systems ls
     WHERE ls.system_type = 'intercom'
       AND (ls.system_config->>'indoor_device_id')::int = $1
       AND ($2::int IS NULL OR ls.id <> $2::int)
@@ -658,7 +658,7 @@ async function validateIntercomConfig(query, systemConfig, { excludeSystemId = n
   }
 
   const manageRows = await query(
-    `SELECT id, type_code, config FROM devices WHERE id = $1`,
+    `SELECT id, type_code, config FROM active_devices WHERE id = $1`,
     [manageDeviceId],
   );
   if (!manageRows?.length) {
@@ -702,7 +702,7 @@ async function assertRollCallAccessDevices(query, deviceIds) {
     throwApiError(C.VALIDATION_REQUIRED, "時段簽到地點必須綁定至少一台門禁機");
   }
   const rows = await query(
-    `SELECT id, type_code FROM devices WHERE id = ANY($1::int[])`,
+    `SELECT id, type_code FROM active_devices WHERE id = ANY($1::int[])`,
     [ids],
   );
   const byId = new Map((rows || []).map((row) => [Number(row.id), row]));
@@ -724,6 +724,9 @@ async function createSystem(query, locationId, system) {
   const { systemType, config = {} } = system;
 
   assertValidSystemType(systemType);
+
+  const locations = await query("SELECT id FROM active_locations WHERE id = $1 FOR SHARE", [locationId]);
+  if (!locations.length) throwApiError(C.LOCATION_NOT_FOUND, "地點不存在");
 
   let systemConfig = buildSystemConfig(systemType, config);
 
@@ -811,7 +814,7 @@ async function updateSystem(query, systemId, system) {
 
   // 檢查系統是否存在
   const existing = await query(
-    "SELECT system_type, system_config FROM location_systems WHERE id = $1",
+    "SELECT system_type, system_config FROM active_location_systems WHERE id = $1",
     [systemId],
   );
   if (existing.length === 0) {
@@ -851,7 +854,7 @@ async function updateSystem(query, systemId, system) {
   let systemConfig = buildSystemConfig(targetSystemType, effectiveConfig);
 
   const locRows = await query(
-    "SELECT location_id FROM location_systems WHERE id = $1",
+    "SELECT location_id FROM active_location_systems WHERE id = $1",
     [systemId],
   );
   const vaLocationId =
@@ -903,7 +906,7 @@ async function updateSystem(query, systemId, system) {
   });
 
   await query(
-    `UPDATE location_systems
+    `UPDATE active_location_systems
      SET system_type = $1, system_config = $2, updated_at = CURRENT_TIMESTAMP
      WHERE id = $3`,
     [targetSystemType, JSON.stringify(systemConfig), systemId],
@@ -1101,9 +1104,12 @@ async function createLocationWithSystems(
 
   const trimmedName = validateName(name, "地點名稱");
 
+  const parentZone = await query("SELECT id FROM active_zones WHERE id = $1 FOR SHARE", [zoneId]);
+  if (!parentZone.length) throwApiError(C.LOCATION_ZONE_NOT_FOUND, "區域不存在");
+
   // 檢查地點是否已存在（同一區域內）
   const existingLocation = await query(
-    "SELECT id, description FROM locations WHERE zone_id = $1 AND name = $2",
+    "SELECT id, description FROM active_locations WHERE zone_id = $1 AND name = $2",
     [zoneId, trimmedName],
   );
 
@@ -1119,7 +1125,7 @@ async function createLocationWithSystems(
       description !== existingLocation[0].description
     ) {
       await query(
-        `UPDATE locations SET description = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        `UPDATE active_locations SET description = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
         [description || null, locationId],
       );
     }
@@ -1130,7 +1136,7 @@ async function createLocationWithSystems(
       if (!Number.isNaN(so) && so >= 0) sortOrderToInsert = so;
     } else {
       const maxRow = await query(
-        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM locations WHERE zone_id = $1`,
+        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM active_locations WHERE zone_id = $1`,
         [zoneId],
       );
       sortOrderToInsert = maxRow[0]?.n ?? 0;
@@ -1164,7 +1170,7 @@ async function createLocationWithSystems(
 
     // 檢查該地點是否已有相同類型的系統
     const existingSystem = await query(
-      "SELECT id FROM location_systems WHERE location_id = $1 AND system_type = $2",
+      "SELECT id FROM active_location_systems WHERE location_id = $1 AND system_type = $2",
       [locationId, systemType],
     );
 
@@ -1203,7 +1209,7 @@ async function updateLocationWithSystems(
 
     // 檢查當前地點的名稱
     const currentLocation = await query(
-      "SELECT name FROM locations WHERE id = $1",
+      "SELECT name FROM active_locations WHERE id = $1",
       [locationId],
     );
     const currentLocationName = (currentLocation[0]?.name || "").trim();
@@ -1212,7 +1218,7 @@ async function updateLocationWithSystems(
     if (trimmedName !== currentLocationName) {
       // 檢查是否有其他地點使用相同名稱（同一區域內）
       const nameCheck = await query(
-        "SELECT id FROM locations WHERE zone_id = (SELECT zone_id FROM locations WHERE id = $1) AND name = $2 AND id != $1",
+        "SELECT id FROM active_locations WHERE zone_id = (SELECT zone_id FROM active_locations WHERE id = $1) AND name = $2 AND id != $1",
         [locationId, trimmedName],
       );
       if (nameCheck.length > 0) {
@@ -1235,7 +1241,7 @@ async function updateLocationWithSystems(
   if (updates.length > 0) {
     params.push(locationId);
     await query(
-      `UPDATE locations SET ${updates.join(
+      `UPDATE active_locations SET ${updates.join(
         ", ",
       )}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`,
       params,
@@ -1249,7 +1255,7 @@ async function updateLocationWithSystems(
       : systems;
 
     const existingSystems = await query(
-      "SELECT id, system_type FROM location_systems WHERE location_id = $1",
+      "SELECT id, system_type FROM active_location_systems WHERE location_id = $1",
       [locationId],
     );
 
@@ -1264,7 +1270,7 @@ async function updateLocationWithSystems(
         .filter((s) => s.system_type === systemTypeScope)
         .map((s) => s.id);
       if (systemsToDelete.length > 0) {
-        await query(`DELETE FROM location_systems WHERE id = ANY($1::int[])`, [
+        await query(`UPDATE location_systems SET archived_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[]) AND archived_at IS NULL`, [
           systemsToDelete,
         ]);
       }
@@ -1324,7 +1330,7 @@ async function updateLocationWithSystems(
           .map((s) => String(s.id))
       : Array.from(existingSystemIds).filter((id) => !updatedSystemIds.has(id));
     if (systemsToDelete.length > 0) {
-      await query(`DELETE FROM location_systems WHERE id = ANY($1::int[])`, [
+      await query(`UPDATE location_systems SET archived_at = CURRENT_TIMESTAMP WHERE id = ANY($1::int[]) AND archived_at IS NULL`, [
         systemsToDelete.map((id) => parseInt(id)),
       ]);
     }

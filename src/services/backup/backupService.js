@@ -12,14 +12,12 @@ const logger = require("../../utils/logger");
 const {
   getRetentionCutoffs,
   groupRowsByDayKey,
-  dayKeyToUtcRange,
   buildDayCsvFilename,
   buildDayXlsxFilename,
   toDayKey,
 } = require("./backupDayUtils");
 const {
   copyPicturesForRows,
-  removeUploadPictures,
 } = require("./backupEventAttachments");
 
 const backupLogger = logger.createLogger("backupService");
@@ -170,90 +168,7 @@ function getRetentionContext() {
   return getRetentionCutoffs(getBackupConfig().retention);
 }
 
-async function collectColdDayKeys({
-  dateField,
-  deleteBeforeDate,
-  timezone,
-  selectTimestampsSql,
-  selectParams = [],
-}) {
-  const rows = await db.query(selectTimestampsSql, selectParams);
-  const keys = new Set();
-  for (const row of rows || []) {
-    const ts = row[dateField];
-    if (!ts) continue;
-    if (new Date(ts) >= deleteBeforeDate) continue;
-    const key = toDayKey(ts, timezone);
-    if (key) keys.add(key);
-  }
-  return [...keys];
-}
-
-async function purgeColdDays({
-  tableName,
-  deleteBeforeDate,
-  timezone,
-  outputDir,
-  dayKeys,
-  buildDeleteDaySql,
-  selectPicturesForDay,
-}) {
-  let deletedTotal = 0;
-
-  for (const dayKey of dayKeys) {
-    if (!hasValidDayBackup(outputDir, tableName, dayKey)) {
-      continue;
-    }
-
-    const { start, end } = dayKeyToUtcRange(dayKey, timezone);
-    if (start >= deleteBeforeDate) {
-      continue;
-    }
-
-    let picturePaths = [];
-    if (selectPicturesForDay) {
-      try {
-        picturePaths = await selectPicturesForDay(start, end);
-      } catch (error) {
-        backupLogger.warn("查詢冷資料附圖失敗", {
-          tableName,
-          dayKey,
-          error: error?.message || String(error),
-          module: "backupService",
-        });
-      }
-    }
-
-    try {
-      const { sql, params } = buildDeleteDaySql(start, end, deleteBeforeDate);
-      const result = await db.query(sql, params);
-      const n = result?.rowCount ?? result?.length ?? 0;
-      deletedTotal += n;
-      if (n > 0 && picturePaths.length) {
-        removeUploadPictures(picturePaths);
-      }
-    } catch (error) {
-      backupLogger.error("冷資料按日刪除失敗", {
-        tableName,
-        dayKey,
-        error: error?.message || String(error),
-        module: "backupService",
-      });
-      throwApiError(
-        C.BACKUP_DELETE_AFTER_SUCCESS_FAILED,
-        `備份歸檔後刪除失敗: ${error.message}`,
-        { statusCode: 500, details: error.message },
-      );
-    }
-  }
-
-  return deletedTotal;
-}
-
-/**
- * 雙層保留：按日匯出 CSV（溫資料仍留 DB），冷資料按日刪除
- */
-async function backupTableDual(options) {
+async function archiveTableByDay(options) {
   const {
     tableName,
     rows,
@@ -263,13 +178,9 @@ async function backupTableDual(options) {
     attachmentSubdir = null,
     attachmentNamePrefix = "",
     picturePathField = "picture_path",
-    selectColdTimestampsSql,
-    selectColdParams = [],
-    buildDeleteDaySql,
-    selectPicturesForDay,
   } = options;
 
-  const { archiveBeforeDate, deleteBeforeDate, timezone } = getRetentionContext();
+  const { archiveBeforeDate, timezone } = getRetentionContext();
   const outputDir = getCategoryDir(category);
   const archiveRows = (rows || []).filter(
     (r) => r?.[dateField] && new Date(r[dateField]) < archiveBeforeDate,
@@ -323,34 +234,15 @@ async function backupTableDual(options) {
     }
   }
 
-  const coldDayKeys = await collectColdDayKeys({
-    dateField,
-    deleteBeforeDate,
-    timezone,
-    selectTimestampsSql: selectColdTimestampsSql,
-    selectParams: selectColdParams,
-  });
-
-  const deletedCount = await purgeColdDays({
-    tableName,
-    deleteBeforeDate,
-    timezone,
-    outputDir,
-    dayKeys: coldDayKeys,
-    buildDeleteDaySql,
-    selectPicturesForDay,
-  });
-
   return {
     tableName,
     count: exportedCount,
-    deletedCount,
     files: { csv: files },
     success: true,
   };
 }
 
-async function getPeopleCountingForBackup(beforeDate) {
+async function getPeopleCountingForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT 
        p.*,
@@ -359,25 +251,25 @@ async function getPeopleCountingForBackup(beforeDate) {
      FROM people_counting_logs p
      LEFT JOIN locations l ON p.location_id = l.id
      LEFT JOIN zones z ON l.zone_id = z.id
-     WHERE p.swip_card_rev_time < $1
+     WHERE p.swip_card_rev_time < $1 AND p.swip_card_rev_time >= $2
      ORDER BY p.swip_card_rev_time ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
-async function getIsapiAccessEventsForBackup(beforeDate) {
+async function getIsapiAccessEventsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT id, device_id, device_ip, event_time, event_type, payload, file_count, picture_path
      FROM isapi_access_events
-     WHERE event_time < $1
+     WHERE event_time < $1 AND event_time >= $2
      ORDER BY event_time ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
-async function getIsapiFaceContrastEventsForBackup(beforeDate) {
+async function getIsapiFaceContrastEventsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT
        e.id,
@@ -400,14 +292,14 @@ async function getIsapiFaceContrastEventsForBackup(beforeDate) {
      FROM isapi_face_contrast_events e
      LEFT JOIN locations l ON e.location_id = l.id
      LEFT JOIN zones z ON l.zone_id = z.id
-     WHERE e.event_time < $1
+     WHERE e.event_time < $1 AND e.event_time >= $2
      ORDER BY e.event_time ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
-async function getIsapiPeopleCountingEventsForBackup(beforeDate) {
+async function getIsapiPeopleCountingEventsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT
        e.id,
@@ -424,14 +316,14 @@ async function getIsapiPeopleCountingEventsForBackup(beforeDate) {
      FROM isapi_people_counting_events e
      LEFT JOIN locations l ON e.location_id = l.id
      LEFT JOIN zones z ON l.zone_id = z.id
-     WHERE e.event_time < $1
+     WHERE e.event_time < $1 AND e.event_time >= $2
      ORDER BY e.event_time ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
-async function getVehiclePassagewayForBackup(beforeDate, dataSource = "yscp") {
+async function getVehiclePassagewayForBackup(beforeDate, dataSource = "yscp", startDate = "-infinity") {
   const isIsapi = dataSource === "isapi_camera";
   const rows = await db.query(
     `SELECT 
@@ -440,19 +332,19 @@ async function getVehiclePassagewayForBackup(beforeDate, dataSource = "yscp") {
        zone_name, location_name, location_id, data_source,
        device_id, anpr_line, picture_path
      FROM vehicle_passageway_logs
-     WHERE trigger_time < $1
+     WHERE trigger_time < $1 AND trigger_time >= $2
        AND ${
          isIsapi
            ? "data_source = 'isapi_camera'"
            : "COALESCE(data_source, 'yscp') = 'yscp'"
        }
      ORDER BY trigger_time ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
-async function getLadderSdkEventsForBackup(beforeDate) {
+async function getLadderSdkEventsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT e.*,
             d.name AS device_name,
@@ -462,14 +354,14 @@ async function getLadderSdkEventsForBackup(beforeDate) {
      LEFT JOIN devices d ON d.id = e.device_id
      LEFT JOIN person_ladder_cards plc ON plc.card_no = e.card_no
      LEFT JOIN persons p ON p.id = plc.person_id
-     WHERE e.event_time < $1
+     WHERE e.event_time < $1 AND e.event_time >= $2
      ORDER BY e.event_time ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
-async function getOperationalEventsForBackup(beforeDate) {
+async function getOperationalEventsForBackup(beforeDate, startDate = "-infinity") {
   const rows = await db.query(
     `SELECT e.*,
             d.name AS device_name,
@@ -481,15 +373,15 @@ async function getOperationalEventsForBackup(beforeDate) {
      LEFT JOIN locations l ON l.id = e.location_id
      LEFT JOIN zones z ON z.id = l.zone_id
      LEFT JOIN users u ON u.id = e.actor_user_id
-     WHERE e.created_at < $1
+     WHERE e.created_at < $1 AND e.created_at >= $2
      ORDER BY e.created_at ASC`,
-    [beforeDate],
+    [beforeDate, startDate],
   );
   return rows || [];
 }
 
 module.exports = {
-  backupTableDual,
+  archiveTableByDay,
   validateBackup,
   getRetentionContext,
   getPeopleCountingForBackup,

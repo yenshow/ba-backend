@@ -1,6 +1,7 @@
 const { Pool, Client } = require("pg");
 const config = require("../config");
 const logger = require("../utils/logger");
+const { getAuditContext } = require("../utils/auditContext");
 
 const dbLogger = logger.createLogger("db");
 
@@ -117,6 +118,10 @@ function convertQueryParams(sql, params) {
 // 執行查詢（使用連線池）
 async function query(sql, params = []) {
   try {
+    const audit = getAuditContext();
+    if (audit && /^\s*(INSERT|UPDATE|DELETE|WITH)\b/i.test(sql)) {
+      return await transaction((queryInTransaction) => queryInTransaction(sql, params), audit);
+    }
     const { sql: convertedSql, params: convertedParams } = convertQueryParams(
       sql,
       params,
@@ -136,7 +141,7 @@ async function query(sql, params = []) {
 }
 
 // 執行事務
-async function transaction(callback) {
+async function transaction(callback, audit = getAuditContext()) {
   const client = await pool.connect();
 
   // 為 client 提供包裝的 query 方法，支援參數轉換並返回 rows + rowCount
@@ -153,6 +158,15 @@ async function transaction(callback) {
 
   try {
     await client.query("BEGIN");
+    if (audit) {
+      await client.query(
+        `SELECT set_config('ba.actor_id', $1, true),
+                set_config('ba.actor_username', $2, true),
+                set_config('ba.request_id', $3, true),
+                set_config('ba.reason', $4, true)`,
+        [audit.actorId, audit.actorUsername, audit.requestId, audit.reason],
+      );
+    }
     const result = await callback(clientQuery);
     await client.query("COMMIT");
     return result;
