@@ -11,6 +11,9 @@ const personnelService = require("../services/personnel/personnelService");
 const locationMemberService = require("../services/personnel/locationMemberService");
 const personLicensePlateService = require("../services/personnel/personLicensePlateService");
 const personSyncJobService = require("../services/personnel/personSyncJobService");
+const personEntitlementService = require("../services/personnel/personEntitlementService");
+const personScopedSyncJobService = require("../services/personnel/personScopedSyncJobService");
+const personOnboardingService = require("../services/personnel/personOnboardingService");
 const { finalizeFaceUpload } = require("../services/personnel/personFaceUploadService");
 const personImportService = require("../services/personnel/personImportService");
 const personnelProfileSchema = require("../services/personnel/personnelProfileSchema");
@@ -367,7 +370,10 @@ router.put(
  */
 router.put(
   "/persons/:id/ladder-card",
-  requirePermission("system.personnel.person.update"),
+  requireAnyPermission([
+    "system.personnel.person.update",
+    "system.elevator.floor.manage",
+  ]),
   validateIntegers("id"),
   asyncHandler(async (req, res) => {
     const personId = parseInt(req.params.id, 10);
@@ -380,7 +386,157 @@ router.put(
       personId,
       shouldClear ? null : body.ladderCard ?? body,
     );
+    let deviceSync = { triggered: false, jobId: null };
+    if (body.sync === true && !shouldClear) {
+      const started = await personScopedSyncJobService.startPersonSyncJob(
+        personId,
+        { domains: ["elevator"] },
+      );
+      deviceSync = { triggered: true, jobId: started.jobId };
+    }
+    res.sendSuccess({ ...result, deviceSync });
+  }),
+);
+
+/**
+ * 人員授權總覽（地點／電梯／憑證／進行中 job）
+ * GET /api/personnel/persons/:id/entitlements
+ */
+router.get(
+  "/persons/:id/entitlements",
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const data = await personEntitlementService.getPersonEntitlements(
+      parseInt(req.params.id, 10),
+    );
+    res.sendSuccess(data);
+  }),
+);
+
+/**
+ * 電梯候選地點（人員 Hub 樓層勾選用）
+ * GET /api/personnel/elevator-candidate-locations
+ */
+router.get(
+  "/elevator-candidate-locations",
+  asyncHandler(async (_req, res) => {
+    const items = await personEntitlementService.listElevatorCandidateLocations();
+    res.sendSuccess({ items });
+  }),
+);
+
+/**
+ * 增量加入／移除地點授權（不蓋同地點其他人）
+ * POST /api/personnel/persons/:id/location-access
+ * Body: { grantLocationIds?, revokeLocationIds?, sync? }
+ */
+router.post(
+  "/persons/:id/location-access",
+  requireAnyPermission([
+    "system.people_counting.sync.edit",
+    "system.roll_call.sync.edit",
+    "system.vehicle_access.plate.manage",
+  ]),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const personId = parseInt(req.params.id, 10);
+    const body = req.body || {};
+    const grantLocationIds = Array.isArray(body.grantLocationIds)
+      ? body.grantLocationIds
+      : [];
+    const revokeLocationIds = Array.isArray(body.revokeLocationIds)
+      ? body.revokeLocationIds
+      : [];
+    const touched = [...new Set([...grantLocationIds, ...revokeLocationIds])];
+    for (const locationId of touched) {
+      await assertLocationAccessByKind(req, locationId, "members");
+    }
+    const result = await personEntitlementService.patchPersonLocationAccess(
+      personId,
+      {
+        grantLocationIds,
+        revokeLocationIds,
+        sync: body.sync !== false,
+      },
+    );
     res.sendSuccess(result);
+  }),
+);
+
+/**
+ * 一人同步（僅此人已授權地點／樓層）
+ * POST /api/personnel/persons/:id/sync
+ */
+router.post(
+  "/persons/:id/sync",
+  requireAnyPermission([
+    "system.people_counting.device_sync",
+    "system.roll_call.device_sync",
+    "system.vehicle_access.plate.manage",
+    "system.elevator.floor.manage",
+  ]),
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const personId = parseInt(req.params.id, 10);
+    const body = req.body || {};
+    const { jobId, reused } = await personScopedSyncJobService.startPersonSyncJob(
+      personId,
+      {
+        locationIds: body.locationIds ?? null,
+        domains: body.domains,
+      },
+    );
+    res.sendSuccess({ jobId, reused }, 202);
+  }),
+);
+
+/**
+ * 一人同步 job 狀態（與地點 job 同表；可輪詢）
+ * GET /api/personnel/persons/:id/sync/jobs/:jobId
+ */
+router.get(
+  "/persons/:id/sync/jobs/:jobId",
+  validateIntegers("id"),
+  asyncHandler(async (req, res) => {
+    const includeIssues = String(req.query.includeIssues || "").trim() === "1";
+    const includeTail = String(req.query.includeTail || "").trim() === "1";
+    const job = await personScopedSyncJobService.getPersonSyncJobView(
+      req.params.jobId,
+      { includeIssues, includeTail },
+    );
+    if (!job) {
+      throwApiError(C.PERSONNEL_SYNC_JOB_NOT_FOUND, "同步工作不存在", {
+        statusCode: 404,
+      });
+    }
+    const expectedPersonId = Number(job.progress?.personId);
+    const routePersonId = parseInt(req.params.id, 10);
+    if (
+      Number.isFinite(expectedPersonId) &&
+      expectedPersonId > 0 &&
+      expectedPersonId !== routePersonId
+    ) {
+      throwApiError(C.PERSONNEL_SYNC_JOB_NOT_FOUND, "同步工作不存在", {
+        statusCode: 404,
+      });
+    }
+    res.sendSuccess(job);
+  }),
+);
+
+/**
+ * 新人建檔整條龍編排
+ * POST /api/personnel/onboarding
+ */
+router.post(
+  "/onboarding",
+  requirePermission("system.personnel.person.create"),
+  asyncHandler(async (req, res) => {
+    const result = await personOnboardingService.runOnboarding(
+      req.body || {},
+      req.user || {},
+    );
+    res.sendSuccess(result, result?.personId && result.completedSteps?.includes("profile") ? 201 : 200);
   }),
 );
 

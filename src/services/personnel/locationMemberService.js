@@ -282,6 +282,117 @@ async function getPersonsByLocationIdPaged(locationId, options = {}) {
   return { items: rows || [], total, limit, offset };
 }
 
+/**
+ * 人員中心增量加入／移除地點名單（不蓋掉同地點其他人）
+ * @returns {Promise<{ granted: number[], revoked: number[], locationIdsTouched: number[] }>}
+ */
+async function patchPersonLocationAccess(personId, { grantLocationIds = [], revokeLocationIds = [] } = {}) {
+  const pid = Number(personId);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED, "無效的人員 ID");
+  }
+  const personRows = await db.query(
+    `SELECT id, status FROM active_persons WHERE id = ? LIMIT 1`,
+    [pid],
+  );
+  if (!personRows?.[0]) {
+    throwApiError(C.PERSONNEL_VALIDATION_FAILED, "人員不存在");
+  }
+
+  const toPositiveIds = (list) =>
+    [
+      ...new Set(
+        (Array.isArray(list) ? list : [])
+          .map((x) => Number.parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+          .map((n) => Math.trunc(n)),
+      ),
+    ];
+
+  const grantIds = toPositiveIds(grantLocationIds);
+  const revokeIds = toPositiveIds(revokeLocationIds);
+  const overlap = grantIds.filter((id) => revokeIds.includes(id));
+  if (overlap.length) {
+    throwApiError(
+      C.PERSONNEL_VALIDATION_FAILED,
+      `同一地點不可同時加入與移除：${overlap.join(", ")}`,
+    );
+  }
+
+  for (const locationId of [...grantIds, ...revokeIds]) {
+    await ensureLocationAllowsAccessMembers(locationId);
+  }
+
+  const existingRows = await db.query(
+    `SELECT location_id FROM person_location_access WHERE person_id = ?`,
+    [pid],
+  );
+  const existing = new Set(
+    (existingRows || [])
+      .map((r) => Number(r.location_id))
+      .filter((n) => Number.isFinite(n) && n > 0),
+  );
+
+  const granted = grantIds.filter((id) => !existing.has(id));
+  const revoked = revokeIds.filter((id) => existing.has(id));
+
+  if (granted.length || revoked.length) {
+    await db.transaction(async (query) => {
+      if (revoked.length) {
+        await query(
+          `DELETE FROM person_location_access
+           WHERE person_id = ? AND location_id IN (${revoked.map(() => "?").join(",")})`,
+          [pid, ...revoked],
+        );
+      }
+      if (granted.length) {
+        const valuesSql = granted.map(() => "(?, ?)").join(", ");
+        const params = granted.flatMap((lid) => [pid, lid]);
+        await query(
+          `INSERT INTO person_location_access (person_id, location_id) VALUES ${valuesSql}
+           ON CONFLICT (person_id, location_id) DO NOTHING`,
+          params,
+        );
+      }
+    });
+  }
+
+  for (const locationId of revoked) {
+    try {
+      const vehiclePlateSyncService = require("../vehicleAccess/vehiclePlateSyncService");
+      await vehiclePlateSyncService.reconcileLocationMemberChange(locationId, [pid]);
+    } catch {
+      // 不阻擋授權寫入
+    }
+    try {
+      const rollCallRows = await db.query(
+        `SELECT 1 FROM active_location_systems
+         WHERE location_id = ? AND system_type = 'roll_call'
+         LIMIT 1`,
+        [locationId],
+      );
+      if (rollCallRows?.length) {
+        const {
+          syncOpenSessionsAfterMemberChange,
+        } = require("../rollCall/rollCallAssignmentService");
+        await syncOpenSessionsAfterMemberChange(locationId);
+      }
+    } catch (err) {
+      logger.warn("增量撤權後對齊時段簽到場次失敗", {
+        locationId,
+        personId: pid,
+        message: err?.message || String(err),
+      });
+    }
+  }
+
+  return {
+    granted,
+    revoked,
+    locationIdsTouched: [...new Set([...granted, ...revoked])],
+  };
+}
+
 async function replaceLocationMembers(locationId, memberPersonIds = []) {
   const id = await ensureLocationAllowsAccessMembers(locationId);
   const previousIds = await getPersonIdsByLocationId(id);
@@ -441,12 +552,15 @@ async function onPersonStatusChange(personId, prevStatus, nextStatus) {
 module.exports = {
   ensureLocationAllowsAccessMembers,
   getLocationSystemSyncFlags,
+  isPeopleCountingSyncableConfig,
+  isRollCallSyncableConfig,
   resolveMemberEditPermissionCodes,
   resolveDeviceSyncPermissionCodes,
   assertLocationScopedAccessPermission,
   getPersonIdsByLocationId,
   getPersonsByLocationIdPaged,
   replaceLocationMembers,
+  patchPersonLocationAccess,
   getLocationMemberIds,
   getPersonsWithAccessByLocationId,
   listLicensePlatesByLocationId,

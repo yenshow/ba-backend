@@ -30,7 +30,7 @@
 | `externalData/` | YSCP／外部 DB handler 與車輛群組彙總 |
 | `externalIntegration/` | 資料庫對接／記錄轉存（`externalSync`、`recordExport`） |
 | `communication/` | MediaMTX 串流（license `surveillance`） |
-| `personnel/` | 人員、匯入、人臉；同步 Job 編排＝`personSyncJobService`；門禁／攝影機設備寫入＝`personSyncDeviceOps`；Job 持久化＝`personSyncJobStore` |
+| `personnel/` | 人員、匯入、人臉；地點名單＝`locationMemberService`；授權編排＝`personEntitlementService`／`personOnboardingService`；地點同步＝`personSyncJobService`；一人同步＝`personScopedSyncJobService`；設備寫入＝`personSyncDeviceOps`；Job 持久化＝`personSyncJobStore` |
 | `yscp/` | YSCP Artemis 客戶端、事件訂閱、Runtime |
 | `pda/` | PDA 掃碼、工服檢查、ISUP 監聽、Agent 連線與警報控制 |
 | `websocket/` | WebSocket 推播、`wsEventPermissions` |

@@ -47,6 +47,7 @@ const runSkipTests = () => {
     "/api/personnel/sync-location/jobs/syncloc_1/items",
     "/api/personnel/sync-location/jobs/syncloc_1/items?type=tail&limit=200",
     "/api/personnel/sync-all-locations/jobs/syncall_1",
+    "/api/personnel/persons/12/sync/jobs/personsync_abc",
     "/api/elevator/sync-location/jobs/elevator_sync_1",
   ]) {
     expectSkip(mockReq({ url, authorization: AUTH }), true, `skip ${url}`);

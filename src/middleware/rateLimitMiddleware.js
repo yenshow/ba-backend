@@ -36,6 +36,7 @@ const isAuthenticatedDeviceSyncJobGet = (req) => {
   return (
     /^\/api\/personnel\/sync-location\/jobs\/[^/]+(?:\/items)?$/.test(path) ||
     /^\/api\/personnel\/sync-all-locations\/jobs\/[^/]+$/.test(path) ||
+    /^\/api\/personnel\/persons\/\d+\/sync\/jobs\/[^/]+$/.test(path) ||
     /^\/api\/elevator\/sync-location\/jobs\/[^/]+$/.test(path)
   );
 };

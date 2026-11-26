@@ -1113,7 +1113,7 @@ async function initSchema() {
     await targetPool.query(`
       CREATE TABLE IF NOT EXISTS person_sync_jobs (
         job_id VARCHAR(80) PRIMARY KEY,
-        job_type VARCHAR(24) NOT NULL CHECK (job_type IN ('sync_location', 'sync_all_locations', 'elevator_sync_location')),
+        job_type VARCHAR(24) NOT NULL CHECK (job_type IN ('sync_location', 'sync_all_locations', 'elevator_sync_location', 'person_sync')),
         location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         status VARCHAR(16) NOT NULL CHECK (status IN ('queued','running','completed')),
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

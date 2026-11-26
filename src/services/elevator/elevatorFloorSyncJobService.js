@@ -94,9 +94,11 @@ async function syncLocationToDevice(
   job = null,
   deviceNameById = null,
   floorCtx = null,
+  personsOverride = null,
 ) {
-  const persons =
-    await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
+  const persons = Array.isArray(personsOverride)
+    ? personsOverride
+    : await elevatorFloorAccessService.getPersonsWithFloorAccess(locationId);
   const warnings = [];
   const deviceName = deviceNameById?.get(Number(deviceId)) ?? null;
 
@@ -593,9 +595,81 @@ async function getSyncCandidatesForLocation(locationId) {
   };
 }
 
+/**
+ * 僅同步指定人員至該電梯地點（人員中心 person_sync 用；不刪其他人）
+ */
+async function syncPersonsOnLocation(
+  locationId,
+  persons,
+  job = null,
+  floorCtx = null,
+  deviceNameById = null,
+) {
+  const list = Array.isArray(persons) ? persons : [];
+  if (!list.length) return { warnings: [] };
+
+  const { location } = await elevatorService.getElevatorLocationById(locationId);
+  const { ladderDevice, accessDeviceIds } =
+    elevatorService.getElevatorConfig(location);
+  const ladderDeviceIds = ladderDevice?.deviceId ? [ladderDevice.deviceId] : [];
+  if (!ladderDeviceIds.length && !(accessDeviceIds || []).length) {
+    return { warnings: [] };
+  }
+
+  const names =
+    deviceNameById ||
+    (await getDeviceNameByIds([
+      ...ladderDeviceIds,
+      ...(accessDeviceIds || []),
+    ]));
+
+  let resolvedFloorCtx = floorCtx;
+  if (!resolvedFloorCtx) {
+    const configFloors = getElevatorConfigFromLocation(location).floors || [];
+    const accessIndexByPerson =
+      await elevatorFloorAccessService.getFloorAccessIndexByPerson(locationId);
+    resolvedFloorCtx = { configFloors, accessIndexByPerson };
+  }
+
+  const allWarnings = [];
+  for (const deviceId of ladderDeviceIds) {
+    const { warnings } = await syncLocationToDevice(
+      locationId,
+      deviceId,
+      job,
+      names,
+      resolvedFloorCtx,
+      list,
+    );
+    allWarnings.push(...warnings);
+  }
+
+  if ((accessDeviceIds || []).length) {
+    const personSyncDeviceOps = require("../personnel/personSyncDeviceOps");
+    for (const person of list) {
+      const target = {
+        employeeNo: String(person.employee_no),
+        name: person.full_name || person.employee_no,
+        face_url: person.face_url || null,
+        config: person.config || null,
+      };
+      await personSyncDeviceOps.syncSinglePersonToAccessDevices(
+        accessDeviceIds,
+        target,
+        allWarnings,
+        null,
+        { forceUserInfo: true, locationId },
+      );
+    }
+  }
+
+  return { warnings: allWarnings };
+}
+
 module.exports = {
   startLocationSyncJob,
   getJob,
   syncLocationCards,
+  syncPersonsOnLocation,
   getSyncCandidatesForLocation,
 };

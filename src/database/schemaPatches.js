@@ -1496,6 +1496,43 @@ async function ensureHvacScheduleTables(pool) {
   `);
 }
 
+async function ensurePersonSyncJobTypePersonSync(pool) {
+  await pool.query(`
+    DO $$
+    DECLARE
+      r RECORD;
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'person_sync_jobs'
+      ) THEN
+        RETURN;
+      END IF;
+      FOR r IN
+        SELECT con.conname AS cname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'person_sync_jobs'
+          AND con.contype = 'c'
+          AND (
+            con.conname ILIKE '%job_type%'
+            OR pg_get_constraintdef(con.oid) ILIKE '%job_type%'
+          )
+      LOOP
+        EXECUTE format('ALTER TABLE person_sync_jobs DROP CONSTRAINT %I', r.cname);
+      END LOOP;
+      ALTER TABLE person_sync_jobs
+        ADD CONSTRAINT person_sync_jobs_job_type_check
+        CHECK (job_type IN (
+          'sync_location',
+          'sync_all_locations',
+          'elevator_sync_location',
+          'person_sync'
+        ));
+    END $$;
+  `);
+}
+
 async function applySchemaPatches(pool) {
   if (!pool) return;
   await ensureAlertSourceEnumValues(pool);
@@ -1511,6 +1548,7 @@ async function applySchemaPatches(pool) {
   await ensureLightingScheduleTables(pool);
   await ensureHvacScheduleTables(pool);
   await ensureRollCallTables(pool);
+  await ensurePersonSyncJobTypePersonSync(pool);
   const deviceSyncStatusNorm = await normalizePersonDeviceSyncStatuses(pool);
   await ensureAlertAccessDoorDeviceIds(pool);
   await ensureAlertCameraLinkageNvrTrackIds(pool);

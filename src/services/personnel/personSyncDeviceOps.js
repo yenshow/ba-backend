@@ -1761,9 +1761,365 @@ async function syncCameraDevicesWithPersons(
   }
 }
 
+/**
+ * 單人同步至門禁設備（不刪除設備上其他人）
+ */
+async function syncSinglePersonToAccessDevices(
+  deviceIds,
+  person,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const normalizedDeviceIds = normalizePositiveIntIds(deviceIds);
+  if (!normalizedDeviceIds.length || !person?.employeeNo) return;
+  const credentialsByDeviceId =
+    await getAccessCredentialCapabilitiesByDeviceIds(normalizedDeviceIds);
+  const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
+  const validVariantByDevice = options.validVariantByDevice || new Map();
+  const employeeNo = String(person.employeeNo);
+  const stateMaps = await Promise.all(
+    normalizedDeviceIds.map((deviceId) =>
+      personDeviceSyncStateService.getStatesForDevice(deviceId, [employeeNo]),
+    ),
+  );
+  for (let i = 0; i < normalizedDeviceIds.length; i++) {
+    const deviceId = normalizedDeviceIds[i];
+    reporter?.markDevice?.({
+      deviceId,
+      deviceIndex: i + 1,
+      deviceTotal: normalizedDeviceIds.length,
+    });
+    if (reporter && typeof reporter === "object") {
+      reporter.__stateByEmployeeNo = stateMaps[i] || new Map();
+    }
+    const startedAt = reporter?.startOp
+      ? reporter.startOp({
+          employeeNo,
+          deviceId,
+          action: "update",
+          stage: "person",
+        })
+      : null;
+    try {
+      await syncPersonToDevice(deviceId, person, warnings, reporter, {
+        forceUserInfo: Boolean(options.forceUserInfo),
+        deviceNameById,
+        credentials: credentialsByDeviceId.get(Number(deviceId)),
+        validVariantByDevice,
+      });
+      reporter?.finishOp?.({
+        employeeNo,
+        deviceId,
+        action: "update",
+        stage: "person",
+        startedAt,
+        ok: true,
+      });
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      pushPersonSyncWarning(warnings, person, {
+        type: "update",
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        message: `更新失敗：${message}`,
+      });
+      reporter?.finishOp?.({
+        employeeNo,
+        deviceId,
+        action: "update",
+        stage: "person",
+        startedAt,
+        ok: false,
+        message,
+      });
+    }
+    if (SYNC_DELAY_MS > 0) await delay(SYNC_DELAY_MS);
+  }
+  if (reporter && typeof reporter === "object") {
+    reporter.__stateByEmployeeNo = null;
+  }
+}
+
+/**
+ * 單人同步至人臉攝影機（不刪除設備上其他人）
+ */
+async function syncSinglePersonToCameraDevices(
+  deviceIds,
+  person,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const normalizedDeviceIds = normalizePositiveIntIds(deviceIds);
+  if (!normalizedDeviceIds.length || !person?.employeeNo) return;
+  const channelId =
+    options.cameraChannelId != null ? Number(options.cameraChannelId) : 1;
+  const locationId =
+    options.locationId != null ? Number(options.locationId) : null;
+  const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
+
+  for (let i = 0; i < normalizedDeviceIds.length; i++) {
+    const deviceId = normalizedDeviceIds[i];
+    reporter?.markDevice?.({
+      deviceId,
+      deviceIndex: i + 1,
+      deviceTotal: normalizedDeviceIds.length,
+    });
+
+    let libMeta = null;
+    try {
+      libMeta = await withTransientRetry(
+        () => isapiCameraFdLibService.ensureFaceLib(deviceId),
+        { deviceId, stage: "ensureFaceLib" },
+      );
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      warnings.push({
+        type: "sync",
+        ...(locationId != null ? { locationId } : {}),
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        message: `攝影機人臉庫準備失敗：${message}`,
+      });
+      continue;
+    }
+
+    try {
+      await withTransientRetry(
+        () =>
+          isapiCameraFdLibService.ensureFaceContrast(deviceId, {
+            channelId,
+            FDID: libMeta.FDID,
+            faceLibType: libMeta.faceLibType,
+          }),
+        { deviceId, stage: "ensureFaceContrast" },
+      );
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      warnings.push({
+        type: "sync",
+        ...(locationId != null ? { locationId } : {}),
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        message: `faceContrast 設定失敗（人臉仍會上傳）：${message}`,
+      });
+    }
+
+    const stateMap = await personDeviceSyncStateService.getStatesForDevice(
+      deviceId,
+      [person.employeeNo],
+    );
+    if (reporter && typeof reporter === "object") {
+      reporter.__stateByEmployeeNo = stateMap;
+    }
+
+    const startedAt = reporter?.startOp
+      ? reporter.startOp({
+          employeeNo: person.employeeNo,
+          deviceId,
+          action: "update",
+          stage: "person",
+        })
+      : null;
+    try {
+      await syncPersonFaceToCamera(deviceId, person, warnings, reporter, {
+        libMeta,
+        deviceNameById,
+      });
+      reporter?.finishOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "update",
+        stage: "person",
+        startedAt,
+        ok: true,
+      });
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      pushPersonSyncWarning(warnings, person, {
+        type: "face",
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        message,
+      });
+      reporter?.finishOp?.({
+        employeeNo: person.employeeNo,
+        deviceId,
+        action: "update",
+        stage: "person",
+        startedAt,
+        ok: false,
+        message,
+      });
+    }
+    if (SYNC_DELAY_MS > 0) await delay(SYNC_DELAY_MS);
+  }
+  if (reporter && typeof reporter === "object") {
+    reporter.__stateByEmployeeNo = null;
+  }
+}
+
+/**
+ * 自門禁設備移除單人（僅該工號）
+ */
+async function removeSinglePersonFromAccessDevices(
+  deviceIds,
+  employeeNo,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const normalizedDeviceIds = normalizePositiveIntIds(deviceIds);
+  const no = String(employeeNo || "").trim();
+  if (!normalizedDeviceIds.length || !no) return;
+  const locationId =
+    options.locationId != null ? Number(options.locationId) : null;
+  const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
+
+  for (let i = 0; i < normalizedDeviceIds.length; i++) {
+    const deviceId = normalizedDeviceIds[i];
+    reporter?.markDevice?.({
+      deviceId,
+      deviceIndex: i + 1,
+      deviceTotal: normalizedDeviceIds.length,
+    });
+    const startedAt = reporter?.startOp
+      ? reporter.startOp({
+          employeeNo: no,
+          deviceId,
+          action: "delete",
+          stage: "person",
+        })
+      : null;
+    try {
+      await deviceOp(
+        () =>
+          accessControlService.deleteUserInfo(deviceId, {
+            employeeNoList: [no],
+          }),
+        { deviceId, employeeNo: no, stage: "deleteUserInfo" },
+      );
+      await clearAccessSyncStatesForEmployees(deviceId, [no]);
+      reporter?.finishOp?.({
+        employeeNo: no,
+        deviceId,
+        action: "delete",
+        stage: "person",
+        startedAt,
+        ok: true,
+      });
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      warnings.push({
+        type: "delete",
+        ...(locationId != null ? { locationId } : {}),
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        employeeNo: no,
+        message: `刪除失敗：${message}`,
+      });
+      reporter?.finishOp?.({
+        employeeNo: no,
+        deviceId,
+        action: "delete",
+        stage: "person",
+        startedAt,
+        ok: false,
+        message,
+      });
+    }
+    if (SYNC_DELAY_MS > 0) await delay(SYNC_DELAY_MS);
+  }
+}
+
+/**
+ * 自人臉攝影機移除單人
+ */
+async function removeSinglePersonFromCameraDevices(
+  deviceIds,
+  employeeNo,
+  warnings,
+  reporter = null,
+  options = {},
+) {
+  const normalizedDeviceIds = normalizePositiveIntIds(deviceIds);
+  const no = String(employeeNo || "").trim();
+  if (!normalizedDeviceIds.length || !no) return;
+  const locationId =
+    options.locationId != null ? Number(options.locationId) : null;
+  const deviceNameById = await getDeviceNameByIds(normalizedDeviceIds);
+
+  for (let i = 0; i < normalizedDeviceIds.length; i++) {
+    const deviceId = normalizedDeviceIds[i];
+    reporter?.markDevice?.({
+      deviceId,
+      deviceIndex: i + 1,
+      deviceTotal: normalizedDeviceIds.length,
+    });
+    let libMeta = null;
+    try {
+      libMeta = await withTransientRetry(
+        () => isapiCameraFdLibService.ensureFaceLib(deviceId),
+        { deviceId, stage: "ensureFaceLib" },
+      );
+    } catch {
+      libMeta = null;
+    }
+    const startedAt = reporter?.startOp
+      ? reporter.startOp({
+          employeeNo: no,
+          deviceId,
+          action: "delete",
+          stage: "person",
+        })
+      : null;
+    try {
+      await deviceOp(
+        () =>
+          isapiCameraFdLibService.deleteByCustomHumanId(deviceId, no, libMeta),
+        { deviceId, employeeNo: no, stage: "fdLibDelete" },
+      );
+      await personDeviceSyncStateService.deleteSyncStates(deviceId, [no]);
+      reporter?.finishOp?.({
+        employeeNo: no,
+        deviceId,
+        action: "delete",
+        stage: "person",
+        startedAt,
+        ok: true,
+      });
+    } catch (err) {
+      const message = normalizeIsapiErrorMessage(toMessage(err));
+      warnings.push({
+        type: "delete",
+        ...(locationId != null ? { locationId } : {}),
+        deviceId,
+        deviceName: deviceNameById.get(Number(deviceId)) || null,
+        employeeNo: no,
+        message: `攝影機刪除失敗：${message}`,
+      });
+      reporter?.finishOp?.({
+        employeeNo: no,
+        deviceId,
+        action: "delete",
+        stage: "person",
+        startedAt,
+        ok: false,
+        message,
+      });
+    }
+    if (SYNC_DELAY_MS > 0) await delay(SYNC_DELAY_MS);
+  }
+}
+
 module.exports = {
   normalizePositiveIntIds,
   resolveFaceUrlToBuffer,
   syncAccessDevicesWithPersons,
   syncCameraDevicesWithPersons,
+  syncSinglePersonToAccessDevices,
+  syncSinglePersonToCameraDevices,
+  removeSinglePersonFromAccessDevices,
+  removeSinglePersonFromCameraDevices,
 };
