@@ -1,33 +1,31 @@
 const modbusClient = require("./modbusClient");
 const { markCoilControlWrite } = require("./modbusBitStore");
 const { STANDARD_CONCURRENCY } = require("./modbusGlobalLimiter");
+const { normalizeModbusRegisterType } = require("./modbusDiDoConfig");
 const C = require("../../utils/apiErrorCodes");
 const { throwApiError } = require("../../utils/apiErrors");
 const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
+const {
+  MODBUS_BATCH_CACHE_TTL_MS: CACHE_TTL,
+  MODBUS_MAX_LENGTH: MAX_LENGTH,
+} = require("../../config/realtimeTiming");
 
 /**
  * 批次 Modbus 讀取服務
  * - 目標：把「多次讀單點」合併為「一次讀一段範圍」
  * - 提供 TTL snapshot cache 與 inflight coalescing，讓 UI 與背景監控共用
+ * - 同設備（含跨 registerType）串列；跨設備最多 STANDARD_CONCURRENCY 並行
  *
  * 注意：
- * - 目前依照 modbusRoutes 的限制，單次讀取 length 上限為 125
+ * - 單次讀取 length 上限為 MODBUS_MAX_LENGTH（125）
  * - 合併策略預設以「連續 address」為主（MAX_GAP=0）
  */
 
-const MAX_LENGTH = 125;
 const MAX_GAP = 0;
-const { MODBUS_BATCH_CACHE_TTL_MS: CACHE_TTL } = require("../../config/realtimeTiming");
 
 const cache = new Map(); // key -> { cached, latestRead, sharedRead }
 
-const normalizeRegisterType = (raw) => {
-  const t = String(raw || "").trim().toLowerCase();
-  if (t === "di") return "discrete";
-  if (t === "do") return "coil";
-  if (t === "coil" || t === "discrete" || t === "holding" || t === "input") return t;
-  return null;
-};
+const normalizeRegisterType = normalizeModbusRegisterType;
 
 const buildDeviceKey = (d) => `${d.host}:${d.port}:${d.unitId}`;
 const buildCacheKey = (deviceKey, registerType, address, length) =>
@@ -128,7 +126,6 @@ function coalesceToRanges(points) {
     const nextStart = addr;
     const nextEnd = addr + len - 1;
 
-    // 合併策略：允許小 gap（預設 0=僅連續）
     const gap = nextStart - lastEnd - 1;
     if (gap >= 0 && gap <= MAX_GAP && nextEnd - last.start + 1 <= MAX_LENGTH) {
       const newLength = nextEnd - last.start + 1;
@@ -148,6 +145,48 @@ function coalesceToRanges(points) {
 }
 
 /**
+ * @param {{ deviceConfig: object, byType: Map<string, Array> }} deviceGroup
+ */
+async function readDeviceSerial(deviceGroup) {
+  const deviceKey = buildDeviceKey(deviceGroup.deviceConfig);
+  for (const [registerType, points] of deviceGroup.byType) {
+    const ranges = coalesceToRanges(points);
+    for (const range of ranges) {
+      const cacheKey = buildCacheKey(deviceKey, registerType, range.start, range.length);
+      try {
+        const data = await readRange(
+          cacheKey,
+          () =>
+            readByType(
+              registerType,
+              range.start,
+              range.length,
+              deviceGroup.deviceConfig,
+            ),
+          range.members.some((member) => member.meta?.noCache === true),
+        );
+        range.members.forEach((m) => {
+          deviceGroup.results[m.idx] = {
+            ok: true,
+            data: data.slice(m.offset, m.offset + m.length),
+            device: deviceGroup.deviceConfig,
+            registerType,
+            address: m.address,
+            length: m.length,
+            meta: m.meta,
+          };
+        });
+      } catch (e) {
+        const msg = e?.message || String(e);
+        range.members.forEach((m) => {
+          deviceGroup.results[m.idx] = { ok: false, error: msg, meta: m.meta };
+        });
+      }
+    }
+  }
+}
+
+/**
  * 批次讀取
  * @param {Array<{host:string,port:number,unitId:number,registerType:string,address:number,length?:number,meta?:any}>} requests
  * @returns {Promise<Array<{ok:true,data:any[],device:any,registerType:string,address:number,length:number,meta?:any} | {ok:false,error:string,meta?:any}>>}
@@ -156,7 +195,8 @@ async function batchRead(requests) {
   const reqList = Array.isArray(requests) ? requests : [];
   const results = new Array(reqList.length);
 
-  const groups = new Map(); // key -> { deviceConfig, registerType, points: [{address,length,idx,meta}] }
+  /** @type {Map<string, { deviceConfig: object, byType: Map<string, Array>, results: any[] }>} */
+  const devices = new Map();
 
   reqList.forEach((r, idx) => {
     const deviceConfig = {
@@ -186,56 +226,30 @@ async function batchRead(requests) {
     }
 
     const deviceKey = buildDeviceKey(deviceConfig);
-    const groupKey = `${deviceKey}|${registerType}`;
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, { deviceConfig, registerType, points: [] });
+    if (!devices.has(deviceKey)) {
+      devices.set(deviceKey, {
+        deviceConfig,
+        byType: new Map(),
+        results,
+      });
     }
-    groups.get(groupKey).points.push({ address, length, idx, meta: r?.meta });
+    const deviceGroup = devices.get(deviceKey);
+    if (!deviceGroup.byType.has(registerType)) {
+      deviceGroup.byType.set(registerType, []);
+    }
+    deviceGroup.byType.get(registerType).push({ address, length, idx, meta: r?.meta });
   });
 
   /**
-   * 同一 device+registerType 的 ranges 必須串列讀取。
-   * 多電表／閘道並行 FC03 易逾時（A21：電能 0x1400、需量 0x3006 常被擠掉）。
-   * 不同 device 群組仍可並行。
+   * 同設備所有 registerType／ranges 串列（避免同閘道並行 FC 互擠逾時）。
+   * 跨設備最多 STANDARD_CONCURRENCY 並行。
    */
   await mapWithConcurrency(
-    [...groups.values()],
-    async (g) => {
-      const deviceKey = buildDeviceKey(g.deviceConfig);
-      const ranges = coalesceToRanges(g.points);
-
-      for (const range of ranges) {
-        const cacheKey = buildCacheKey(deviceKey, g.registerType, range.start, range.length);
-
-        try {
-          const data = await readRange(
-            cacheKey,
-            () => readByType(g.registerType, range.start, range.length, g.deviceConfig),
-            range.members.some((member) => member.meta?.noCache === true),
-          );
-          range.members.forEach((m) => {
-            results[m.idx] = {
-              ok: true,
-              data: data.slice(m.offset, m.offset + m.length),
-              device: g.deviceConfig,
-              registerType: g.registerType,
-              address: m.address,
-              length: m.length,
-              meta: m.meta,
-            };
-          });
-        } catch (e) {
-          const msg = e?.message || String(e);
-          range.members.forEach((m) => {
-            results[m.idx] = { ok: false, error: msg, meta: m.meta };
-          });
-        }
-      }
-    },
+    [...devices.values()],
+    (deviceGroup) => readDeviceSerial(deviceGroup),
     { concurrency: STANDARD_CONCURRENCY },
   );
 
-  // 填補任何未寫入的結果（理論上不會發生）
   for (let i = 0; i < results.length; i++) {
     if (!results[i]) results[i] = { ok: false, error: "未知錯誤", meta: reqList[i]?.meta };
   }
@@ -252,4 +266,3 @@ module.exports = {
     coalesceToRanges,
   },
 };
-

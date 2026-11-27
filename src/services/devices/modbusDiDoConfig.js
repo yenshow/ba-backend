@@ -5,22 +5,49 @@
  */
 
 /**
- * @param {string} raw
- * @returns {"discrete" | "coil" | null}
+ * 全功能碼 registerType 正規化（batch／quota／snapshot 共用）。
+ * @param {unknown} raw
+ * @returns {"coil"|"discrete"|"holding"|"input"|null}
  */
-function normalizeBitRegisterType(raw) {
+function normalizeModbusRegisterType(raw) {
   const t = String(raw || "")
     .toLowerCase()
     .trim();
   if (
-    t === "di" ||
+    t === "holding" ||
+    t === "holdingregister" ||
+    t === "holding_register" ||
+    t === "holdingregisters"
+  ) {
+    return "holding";
+  }
+  if (
+    t === "input" ||
+    t === "inputregister" ||
+    t === "input_register" ||
+    t === "inputregisters"
+  ) {
+    return "input";
+  }
+  if (t === "coil" || t === "coils" || t === "do") return "coil";
+  if (
     t === "discrete" ||
     t === "discreteinput" ||
-    t === "discrete_input"
+    t === "discrete_input" ||
+    t === "di"
   ) {
     return "discrete";
   }
-  if (t === "do" || t === "coil") return "coil";
+  return null;
+}
+
+/**
+ * @param {string} raw
+ * @returns {"discrete" | "coil" | null}
+ */
+function normalizeBitRegisterType(raw) {
+  const t = normalizeModbusRegisterType(raw);
+  if (t === "coil" || t === "discrete") return t;
   return null;
 }
 
@@ -206,6 +233,8 @@ function collectConfiguredBitPointsFromSystemConfig(systemConfig) {
 
 module.exports = {
   parseBitAddress,
+  normalizeModbusRegisterType,
+  normalizeBitRegisterType,
   resolveDiDoParts,
   collectLightingDiDoReadSpecs,
   pickPrimaryDiDoBitRead,

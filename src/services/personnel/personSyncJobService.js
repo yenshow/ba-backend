@@ -12,6 +12,7 @@ const logger = require("../../utils/logger").createLogger("PersonSyncService");
 const personDeviceSyncStateService = require("./personDeviceSyncStateService");
 const { normalizePersistedStatus, API: SYNC_STATUS } = require("./syncStatusCodes");
 const personSyncJobStore = require("./personSyncJobStore");
+const personSyncJobConflictWait = require("./personSyncJobConflictWait");
 const {
   normalizePositiveIntIds,
   resolveFaceUrlToBuffer,
@@ -423,9 +424,19 @@ async function startPersistedSyncJob(params, run) {
   return { jobId };
 }
 
-function startSyncLocationJob(locationId) {
-  const jobId = `syncloc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+async function startSyncLocationJob(locationId) {
   const locId = Number(locationId);
+  if (Number.isFinite(locId) && locId > 0) {
+    const existing = await personSyncJobStore.findRunningJobByTypeAndLocation(
+      "sync_location",
+      locId,
+    );
+    if (existing) {
+      return { jobId: existing, reused: true };
+    }
+  }
+
+  const jobId = `syncloc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
   const progress = {
     total: 0,
@@ -441,6 +452,7 @@ function startSyncLocationJob(locationId) {
     currentEmployeeNo: null,
     currentAction: null,
     currentStage: null,
+    waitMessage: null,
   };
 
   return startPersistedSyncJob({
@@ -460,6 +472,13 @@ function startSyncLocationJob(locationId) {
     };
 
     try {
+      if (Number.isFinite(locId) && locId > 0) {
+        job.progress.waitMessage = "等待人員同步釋放設備…";
+        job._flushProgress?.(true);
+        await personSyncJobConflictWait.waitForConflictingPersonSyncJobs(locId);
+        job.progress.waitMessage = null;
+        job._flushProgress?.(true);
+      }
       const reporter = createLocationJobReporter(job, job.locationId);
       const result = await syncLocation(job.locationId, reporter);
 
@@ -469,6 +488,7 @@ function startSyncLocationJob(locationId) {
       job.progress.currentEmployeeNo = null;
       job.progress.currentAction = null;
       job.progress.currentStage = null;
+      job.progress.waitMessage = null;
     }
   });
 }

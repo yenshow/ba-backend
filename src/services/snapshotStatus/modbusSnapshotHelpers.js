@@ -3,7 +3,10 @@
  */
 
 const { resolveModbusDeviceConfig } = require("../devices/modbusDeviceConfig");
-const { parseBitAddress } = require("../devices/modbusDiDoConfig");
+const {
+  parseBitAddress,
+  normalizeModbusRegisterType,
+} = require("../devices/modbusDiDoConfig");
 const { applyDefTransform } = require("../../utils/modbusTransform");
 
 const ALLOWED_REGISTER_TYPES = new Set([
@@ -31,12 +34,12 @@ async function resolveDeviceConfig(deviceId, modbus, options = {}) {
 }
 
 function normalizeRegisterType(pointDef) {
-  let registerType = String(pointDef.registerType || pointDef.type || "")
-    .toLowerCase()
-    .trim();
-  if (registerType === "di") registerType = "discrete";
-  if (registerType === "do") registerType = "coil";
-  return registerType;
+  return (
+    normalizeModbusRegisterType(pointDef.registerType || pointDef.type) ||
+    String(pointDef.registerType || pointDef.type || "")
+      .toLowerCase()
+      .trim()
+  );
 }
 
 /**

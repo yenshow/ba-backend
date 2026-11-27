@@ -40,7 +40,8 @@ const FEATURE_KEYS_CENTRAL = [
 ];
 
 /**
- * 工地管理平台（construction）：僅子集；與 `ba-frontend-construction` 授權模組對齊。
+ * 工地管理平台（construction）UI／文件對照子集；與 `ba-frontend-construction` 導覽對齊。
+ * **非**後端 gate 縮減：`getActiveFeatureKeys()` 不用此陣列。
  */
 const FEATURE_KEYS_CONSTRUCTION = [
   "people_counting",
@@ -295,6 +296,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
     return {
       features: [...getActiveFeatureKeys()],
       quotas: {},
+      // 買斷制：到期欄位預留，目前固定未過期
       expired: false,
       serialNumber: null,
       licenseKey: null,
@@ -310,6 +312,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
     return {
       features: cached.features,
       quotas: cached.quotas,
+      // 買斷制：到期欄位預留，目前固定未過期
       expired: false,
       serialNumber: cached.serialNumber,
       licenseKey: cached.licenseKey,
@@ -372,6 +375,7 @@ async function getLicenseState({ bypassCache = false } = {}) {
   return {
     features,
     quotas,
+    // 買斷制：到期欄位預留，目前固定未過期
     expired: false,
     serialNumber,
     licenseKey,

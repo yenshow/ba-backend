@@ -44,6 +44,27 @@ test("person_sync jobType is accepted by personSyncJobStore", async (t) => {
   await flush();
 });
 
+test("startPersonSyncJob stores grant／revoke for conflict wait", async (t) => {
+  const inserted = [];
+  t.mock.method(store, "createJob", async (params) => {
+    inserted.push(params);
+    return { jobId: params.jobId, jobType: params.jobType, status: params.status };
+  });
+  t.mock.method(store, "updateJob", async () => ({}));
+  t.mock.method(store, "replaceWarnings", async () => {});
+  t.mock.method(personnelService, "getPersonById", async () => null);
+
+  await scoped.startPersonSyncJob(99, {
+    domains: ["access", "plates", "elevator"],
+    grantLocationIds: [2, 4],
+    revokeLocationIds: [5],
+  });
+  assert.deepEqual(inserted[0].progress.grantLocationIds, [2, 4]);
+  assert.deepEqual(inserted[0].progress.revokeLocationIds, [5]);
+  assert.deepEqual(inserted[0].progress.domains, ["access", "plates", "elevator"]);
+  await flush();
+});
+
 test("startPersonSyncJob reuses an in-flight person_sync job", async (t) => {
   const db = require("../../src/database/db");
   t.mock.method(db, "query", async (sql) => {

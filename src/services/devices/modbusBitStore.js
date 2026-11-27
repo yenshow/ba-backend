@@ -3,12 +3,14 @@
  * key: host:port:unitId|registerType|address
  */
 
-const { BIT_STORE_FRESHNESS_MS } = require("../../config/realtimeTiming");
+const {
+  BIT_STORE_FRESHNESS_MS,
+  MODBUS_COIL_SUPPRESS_MS: COIL_SUPPRESS_MS,
+} = require("../../config/realtimeTiming");
 
 /** @type {Map<string, { value: boolean, readAt: number, ok: boolean }>} */
 const bitMap = new Map();
 const coilWriteSuppressUntil = new Map();
-const COIL_SUPPRESS_MS = 20_000;
 
 /**
  * deviceKey -> Map<moduleId, health>

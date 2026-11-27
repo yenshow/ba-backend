@@ -16,11 +16,12 @@ const { normalizeModbusEndpoint } = require("./modbusDeviceConfig");
 const { mapWithConcurrency } = require("../../utils/mapWithConcurrency");
 const websocketService = require("../websocket/websocketService");
 const systemAlertHelper = require("../alerts/systemAlertHelper");
+const {
+  MODBUS_MAX_LENGTH: MAX_RANGE,
+  MODBUS_CONTROLLER_CONCURRENCY: CONTROLLER_CONCURRENCY,
+} = require("../../config/realtimeTiming");
 
 const plannerLogger = logger.createLogger("modbusPollPlanner");
-
-const MAX_RANGE = 125;
-const CONTROLLER_CONCURRENCY = 4;
 
 /** deviceId -> 上次推播簽章（含 online + 各模組 status） */
 const lastBroadcastSig = new Map();

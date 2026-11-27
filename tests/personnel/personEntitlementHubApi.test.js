@@ -1,6 +1,9 @@
 /**
  * 人員授權 Hub／增量授權／一人同步／onboarding API 整合測試
  *
+ * 套用授權產品語意：location-access／ladder-card 用 sync:false，再一次 POST .../sync。
+ * （本檔 incremental 測試已用 sync:false；person_sync 另測手動 start。）
+ *
  *   node tests/personnel/personEntitlementHubApi.test.js
  *
  * 前置：後端已啟動（預設 http://127.0.0.1:4000）

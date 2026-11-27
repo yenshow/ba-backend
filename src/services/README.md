@@ -76,7 +76,7 @@
 - **跨域**：優先 `require("../<domain>/...")`，避免在 `routes` 外再包一層 `systems`。
 - **快照監控**：`monitoring/snapshotTaskRegistry` 註冊各 `snapshotStatus/*`；共用欄位語意見 `monitoring/systemSnapshotStatusFields.js`。
 - **人流統計**：**不**註冊於 `monitoringTaskRegistry`／`backgroundMonitor`；即時刷新依 YSCP 事件（`yscpEventRoutes`）、門禁／攝影機 ISAPI 訂閱與 WS 提示 → REST 校準（見 `docs/40-systems/people-counting.md`）。舊版定時輪詢 `peopleCountingMonitor.js` 已移除，勿恢復。
-- **Modbus DI/DO**：位址解析位於 `devices/modbusDiDoConfig.js`，設備連線設定位於 `devices/modbusDeviceConfig.js`。快照單點由 `snapshotStatus/modbusSnapshotHelpers.js` 統一檢查模組健康、讀 BitStore 與批次補讀。DI/DO 監控直接使用本輪 PollPlanner 的設備端點。手動控制、照明／空調排程及警報聯動共用 `modbusBatchService.writeCoilValues`，設備確認成功後先在 BitStore 標記狀態異動抑制，再清除 coil 讀取快取。
+- **Modbus DI/DO**：位址解析位於 `devices/modbusDiDoConfig.js`，設備連線設定位於 `devices/modbusDeviceConfig.js`。快照單點由 `snapshotStatus/modbusSnapshotHelpers.js` 統一檢查模組健康、讀 BitStore 與批次補讀。DI/DO 監控直接使用本輪 PollPlanner 的設備端點。手動控制、照明／空調排程及警報聯動共用 `modbusBatchService.writeCoilValues`，設備確認成功後先在 BitStore 標記狀態異動抑制，再清除 coil 讀取快取。讀／寫皆經 `modbusClient` 端點 FIFO 與 `modbusGlobalLimiter`（連線與 FC 共用一席）；batch 同設備串列、跨設備最多 `STANDARD_CONCURRENCY`。
 
 ## 新增子系統時放哪裡？
 

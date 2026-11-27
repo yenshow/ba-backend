@@ -3,6 +3,7 @@ const licenseService = require("./licenseService");
 const { parseConfig } = require("../../utils/deviceHelpers");
 const {
   collectConfiguredBitPointsFromSystemConfig,
+  normalizeModbusRegisterType: normalizeRegisterType,
 } = require("../devices/modbusDiDoConfig");
 const { isValidEnergyParameterKey } = require("../../constants/energyParameterCatalog");
 const C = require("../../utils/apiErrorCodes");
@@ -135,33 +136,6 @@ const countEnabledSensorPoints = (deviceConfig, modelConfig) => {
     if (energy) return isValidEnergyParameterKey(p.type);
     return true;
   }).length;
-};
-
-const normalizeRegisterType = (raw) => {
-  const t = String(raw || "")
-    .toLowerCase()
-    .trim();
-  if (
-    t === "holding" ||
-    t === "holdingregister" ||
-    t === "holding_register" ||
-    t === "holdingregisters"
-  ) {
-    return "holding";
-  }
-  if (t === "input" || t === "inputregister" || t === "input_register") {
-    return "input";
-  }
-  if (t === "coil" || t === "coils" || t === "do") return "coil";
-  if (
-    t === "discrete" ||
-    t === "discreteinput" ||
-    t === "discrete_input" ||
-    t === "di"
-  ) {
-    return "discrete";
-  }
-  return null;
 };
 
 const primaryDeviceIdFromSystemConfig = (systemConfig) => {
@@ -525,6 +499,8 @@ const assertSystemQuotaWithinLimit = async ({
   const key = normalizeFeatureKey(systemType);
   if (!key) return;
 
+  await assertFeatureLicensed(key);
+
   const license = await licenseService.getLicenseState();
   if (license?.activationMethod === "open_all") return;
 
@@ -657,6 +633,7 @@ const assertCameraStreamLicensed = async (device) => {
 module.exports = {
   applyQuotaFeatureToConfig,
   getUsageMap,
+  assertFeatureLicensed,
   assertDeviceWriteQuota,
   assertSystemQuotaWithinLimit,
   assertModelQuotaReclass,

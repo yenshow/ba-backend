@@ -16,6 +16,7 @@ const {
 const elevatorFloorAccessService = require("./elevatorFloorAccessService");
 const personSyncJobService = require("../personnel/personSyncJobService");
 const personSyncJobStore = require("../personnel/personSyncJobStore");
+const personSyncJobConflictWait = require("../personnel/personSyncJobConflictWait");
 const { getDeviceNameByIds } = require("../../utils/deviceHelpers");
 const { pushPersonSyncWarning } = require("../../utils/personDisplayUtils");
 
@@ -397,9 +398,19 @@ const toElevatorJobView = (stored) => {
 };
 
 async function startLocationSyncJob(locationId, _userId) {
-  const jobId = randomJobId();
   const locId = Number(locationId);
-  const progress = { doneOps: 0, totalOps: 0 };
+  if (Number.isFinite(locId) && locId > 0) {
+    const existing = await personSyncJobStore.findRunningJobByTypeAndLocation(
+      "elevator_sync_location",
+      locId,
+    );
+    if (existing) {
+      return { jobId: existing, reused: true };
+    }
+  }
+
+  const jobId = randomJobId();
+  const progress = { doneOps: 0, totalOps: 0, waitMessage: null };
 
   await personSyncJobStore.createJob({
     jobId,
@@ -435,6 +446,13 @@ async function startLocationSyncJob(locationId, _userId) {
         startedAt,
         progress,
       });
+      if (Number.isFinite(locId) && locId > 0) {
+        job.progress.waitMessage = "等待人員同步釋放設備…";
+        await job._flushProgress(true);
+        await personSyncJobConflictWait.waitForConflictingPersonSyncJobs(locId);
+        job.progress.waitMessage = null;
+        await job._flushProgress(true);
+      }
       const result = await syncLocationCards(locId, job);
       const finishedAt = Date.now();
       job.status = "completed";

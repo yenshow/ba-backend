@@ -8,6 +8,8 @@ const personSyncJobStore = require("./personSyncJobStore");
 const personSyncJobService = require("./personSyncJobService");
 const personSyncDeviceOps = require("./personSyncDeviceOps");
 const personnelService = require("./personnelService");
+const personSyncJobConflictWait = require("./personSyncJobConflictWait");
+const { sleep, toPositiveIds } = personSyncJobConflictWait;
 const {
   PROGRESS_FLUSH_MS,
   STEP_DELAY_MS,
@@ -16,19 +18,7 @@ const logger = require("../../utils/logger").createLogger(
   "PersonScopedSyncJobService",
 );
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const toMessage = (err) => err?.message ?? String(err);
-
-const toPositiveIds = (list) =>
-  [
-    ...new Set(
-      (Array.isArray(list) ? list : [])
-        .map((x) => Number(x))
-        .filter((n) => Number.isFinite(n) && n > 0)
-        .map((n) => Math.trunc(n)),
-    ),
-  ];
 
 function trackJobWrite(job, promise) {
   if (!job?.pendingWrites) return promise;
@@ -124,34 +114,6 @@ async function findRunningPersonSyncJob(personId) {
     [pid],
   );
   return rows?.[0]?.job_id || null;
-}
-
-async function waitForConflictingLocationJobs(locationIds, { timeoutMs = 120_000 } = {}) {
-  const ids = toPositiveIds(locationIds);
-  if (!ids.length) return;
-  const started = Date.now();
-  for (;;) {
-    const rows = await db.query(
-      `
-        SELECT job_id, job_type, location_id, status
-        FROM person_sync_jobs
-        WHERE status IN ('queued', 'running')
-          AND job_type IN ('sync_location', 'elevator_sync_location')
-          AND location_id = ANY(?::int[])
-        LIMIT 5
-      `,
-      [ids],
-    );
-    if (!rows?.length) return;
-    if (Date.now() - started > timeoutMs) {
-      throwApiError(
-        C.PERSONNEL_SYNC_JOB_INVALID_REQUEST,
-        "地點同步進行中，請稍後再同步此人",
-        { statusCode: 409 },
-      );
-    }
-    await sleep(2000);
-  }
 }
 
 async function resolveAccessLocationIdsForPerson(personId, locationIdsFilter) {
@@ -333,11 +295,12 @@ async function runPersonSync(job, params) {
   const waitIds = [
     ...new Set([...accessSyncList, ...elevatorLocIds, ...revokeLocationIds]),
   ];
+  job.progress.touchLocationIds = waitIds;
   job.progress.waitMessage = waitIds.length
     ? "等待地點同步釋放設備…"
     : null;
   job._flushProgress?.(true);
-  await waitForConflictingLocationJobs(waitIds);
+  await personSyncJobConflictWait.waitForConflictingLocationJobs(waitIds);
   job.progress.waitMessage = null;
   job._flushProgress?.(true);
 

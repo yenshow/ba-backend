@@ -1,5 +1,4 @@
 const db = require("../../database/db");
-const licenseService = require("../license/licenseService");
 const licenseQuotaService = require("../license/licenseQuotaService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
@@ -625,23 +624,9 @@ function buildSystemConfig(systemType, config) {
   }
 }
 
+/** 地點 system_type → Feature Gate（委派 licenseQuotaService.assertFeatureLicensed） */
 async function assertSystemLicensed(systemType) {
-  const license = await licenseService.getLicenseState();
-  const openAll = license?.activationMethod === "open_all";
-  if (openAll) return;
-
-  const activeKeys = licenseService.getActiveFeatureKeys();
-  if (!activeKeys.includes(systemType)) {
-    throw createApiError(C.DEVICE_UNSUPPORTED_FEATURE, `不支援的 system_type：${systemType}`);
-  }
-
-  const licensed =
-    Array.isArray(license?.features) && license.features.includes(systemType);
-  if (!licensed) {
-    throw createApiError(C.FEATURE_NOT_LICENSED, `未授權功能：${systemType}`, {
-      details: { feature: systemType },
-    });
-  }
+  await licenseQuotaService.assertFeatureLicensed(systemType);
 }
 
 async function validateIntercomConfig(query, systemConfig, { excludeSystemId = null } = {}) {

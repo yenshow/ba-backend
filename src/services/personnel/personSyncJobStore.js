@@ -123,6 +123,31 @@ async function getJob(jobId) {
   return toJobRow(rows?.[0] || null);
 }
 
+/**
+ * 同 jobType + location_id 的進行中 job（single-flight 用）
+ * @param {string} jobType
+ * @param {number} locationId
+ * @returns {Promise<string|null>} jobId
+ */
+async function findRunningJobByTypeAndLocation(jobType, locationId) {
+  const type = String(jobType || "").trim();
+  const locId = Number(locationId);
+  if (!JOB_TYPES.has(type) || !Number.isFinite(locId) || locId <= 0) return null;
+  const rows = await db.query(
+    `
+      SELECT job_id
+      FROM person_sync_jobs
+      WHERE status IN ('queued', 'running')
+        AND job_type = ?
+        AND location_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [type, Math.trunc(locId)],
+  );
+  return rows?.[0]?.job_id || null;
+}
+
 async function bumpItemsMetaCounter(jobId, key, n = 1) {
   const id = String(jobId || "").trim();
   if (!id) return;
@@ -240,6 +265,7 @@ module.exports = {
   createJob,
   updateJob,
   getJob,
+  findRunningJobByTypeAndLocation,
 
   appendItem,
   listItems,

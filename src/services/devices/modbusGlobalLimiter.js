@@ -1,10 +1,14 @@
-/** 跨系統共用 Modbus 連線與讀取容量，為 DI/DO 保留席位。 */
+/** 跨系統共用 Modbus 連線與讀寫容量，為 DI/DO 保留席位。 */
 
 const { AsyncLocalStorage } = require("node:async_hooks");
 const { performance } = require("node:perf_hooks");
+const {
+  MODBUS_GLOBAL_CONCURRENCY,
+  MODBUS_RESERVED_PRIORITY_SLOTS,
+} = require("../../config/realtimeTiming");
 
-const GLOBAL_CONCURRENCY = 12;
-const RESERVED_PRIORITY_SLOTS = 2;
+const GLOBAL_CONCURRENCY = MODBUS_GLOBAL_CONCURRENCY;
+const RESERVED_PRIORITY_SLOTS = MODBUS_RESERVED_PRIORITY_SLOTS;
 const STANDARD_CONCURRENCY = GLOBAL_CONCURRENCY - RESERVED_PRIORITY_SLOTS;
 const WAIT_SAMPLE_LIMIT = 128;
 const priorityContext = new AsyncLocalStorage();
@@ -77,4 +81,3 @@ function getStats() {
 }
 
 module.exports = { run, runWithPriority, getStats, STANDARD_CONCURRENCY };
-

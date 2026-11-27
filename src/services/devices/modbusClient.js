@@ -8,23 +8,44 @@ const { createApiError } = require("../../utils/apiErrors");
 class ModbusClient extends EventEmitter {
   constructor(modbusConfig) {
     super();
-    this.client = new ModbusRTU();
     this.timeout = modbusConfig?.timeout ?? 10000;
-    this.connecting = new Map(); // 追蹤每個連接的連線狀態
-    this.lastConnectedAt = new Map(); // 追蹤每個連接的最後連線時間
-    this.clientConnections = new Map(); // 儲存多個設備連接
-    this.inflightReads = new Map(); // key -> Promise（避免同設備同讀取被重複打爆）
-    this.client.on("error", (err) => {
-      this.emit("error", err);
-    });
+    this.connecting = new Map();
+    this.lastConnectedAt = new Map();
+    this.clientConnections = new Map();
+    this.inflightReads = new Map();
+    /** @type {Map<string, Promise<void>>} host:port:unitId → 尾端 chain */
+    this.endpointQueues = new Map();
   }
 
-  // 產生連接的 key
   getConnectionKey(host, port, unitId) {
     return `${host}:${port}:${unitId}`;
   }
 
-  // 檢查連接狀態
+  /**
+   * 同端點 FIFO；錯誤不打斷後續工作。
+   * @template T
+   * @param {{ host: string, port: number, unitId: number }} deviceConfig
+   * @param {() => Promise<T>} fn
+   * @returns {Promise<T>}
+   */
+  runOnEndpoint(deviceConfig, fn) {
+    const key = this.getConnectionKey(
+      deviceConfig.host,
+      deviceConfig.port,
+      deviceConfig.unitId,
+    );
+    const prev = this.endpointQueues.get(key) || Promise.resolve();
+    const run = prev.catch(() => {}).then(() => fn());
+    this.endpointQueues.set(
+      key,
+      run.then(
+        () => {},
+        () => {},
+      ),
+    );
+    return run;
+  }
+
   checkConnection(client, deviceConfig) {
     if (!client.isOpen) {
       throw createApiError(
@@ -34,7 +55,6 @@ class ModbusClient extends EventEmitter {
     }
   }
 
-  // 清理連接狀態
   cleanupConnection(deviceConfig) {
     const key = this.getConnectionKey(
       deviceConfig.host,
@@ -56,7 +76,6 @@ class ModbusClient extends EventEmitter {
     }
   }
 
-  // 處理操作錯誤（連接斷開檢測）
   handleOperationError(error, client, deviceConfig, operationType) {
     if (
       !client.isOpen ||
@@ -104,12 +123,10 @@ class ModbusClient extends EventEmitter {
     );
   }
 
-  /** 是否為 library 拋出的逾時錯誤（如 "Timed out"） */
   isTimeoutError(err) {
     return err?.message && /timed?\s*out/i.test(err.message);
   }
 
-  // 為 Promise 添加超時處理
   async withTimeout(promise, timeout, errorMessage, errorCode = C.MODBUS_CONNECTION_TIMEOUT) {
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
@@ -131,16 +148,12 @@ class ModbusClient extends EventEmitter {
     }
   }
 
-  // 取得或建立客戶端連接
   getClient(host, port, unitId) {
     const key = this.getConnectionKey(host, port, unitId);
-
-    // 如果已經有這個連接的客戶端，直接回傳
     if (this.clientConnections.has(key)) {
       return this.clientConnections.get(key);
     }
 
-    // 建立新的客戶端連接
     const newClient = new ModbusRTU();
     newClient.on("error", (err) => {
       this.emit("error", { connection: key, error: err });
@@ -150,6 +163,9 @@ class ModbusClient extends EventEmitter {
     return newClient;
   }
 
+  /**
+   * 建立或取得連線。呼叫端須已持有全域 limiter 席位（連線不另佔席）。
+   */
   async ensureConnection(deviceConfig) {
     if (
       !deviceConfig ||
@@ -168,49 +184,35 @@ class ModbusClient extends EventEmitter {
     const key = this.getConnectionKey(host, port, unitId);
 
     if (client.isOpen) {
-      // 如果已經連線，檢查是否需要更新 unitId
       if (client.getID() !== unitId) {
         client.setID(unitId);
       }
       return client;
     }
 
-    // 檢查是否正在連線中
     if (this.connecting.has(key)) {
       return this.connecting.get(key);
     }
 
-    // 創建帶有超時的連接 Promise
-    const connectPromise = modbusGlobalLimiter
-      .run(() =>
-        this.withTimeout(
-          client.connectTCP(host, { port }),
-          this.timeout,
-          `連接超時: 無法在 ${this.timeout}ms 內連接到 ${host}:${port}`,
-          C.MODBUS_CONNECTION_TIMEOUT,
-        ),
-      )
+    const connectPromise = this.withTimeout(
+      client.connectTCP(host, { port }),
+      this.timeout,
+      `連接超時: 無法在 ${this.timeout}ms 內連接到 ${host}:${port}`,
+      C.MODBUS_CONNECTION_TIMEOUT,
+    )
       .then(() => {
         client.setID(unitId);
         client.setTimeout(this.timeout);
         this.lastConnectedAt.set(key, new Date());
-        this.emit("connected", {
-          host,
-          port,
-          unitId,
-        });
+        this.emit("connected", { host, port, unitId });
         return client;
       })
       .catch((error) => {
-        // 連接失敗時，清理連接狀態
         if (client.isOpen) {
-          client.close().catch(() => {
-            // 忽略關閉錯誤
-          });
+          client.close().catch(() => {});
         }
         this.cleanupConnection({ host, port, unitId });
         this.emit("connection-error", { connection: key, error });
-        // 改善錯誤訊息，提供更友好的提示
         throw this.formatConnectionError(error, host, port);
       })
       .finally(() => {
@@ -218,8 +220,38 @@ class ModbusClient extends EventEmitter {
       });
 
     this.connecting.set(key, connectPromise);
-
     return connectPromise;
+  }
+
+  /**
+   * 在端點佇列＋全域 limiter 下執行一次 FC（含必要連線）。
+   * @param {object} args
+   * @param {{ host: string, port: number, unitId: number }} args.deviceConfig
+   * @param {"read"|"write"} args.operationType
+   * @param {string} args.timeoutMsg
+   * @param {string} args.timeoutCode
+   * @param {(client: import("modbus-serial")) => Promise<any>} args.execute
+   */
+  runFc({ deviceConfig, operationType, timeoutMsg, timeoutCode, execute }) {
+    return this.runOnEndpoint(deviceConfig, () =>
+      modbusGlobalLimiter.run(async () => {
+        const client = await this.ensureConnection(deviceConfig);
+        this.checkConnection(client, deviceConfig);
+        try {
+          return await this.withTimeout(
+            execute(client),
+            this.timeout,
+            timeoutMsg,
+            timeoutCode,
+          );
+        } catch (error) {
+          if (this.isTimeoutError(error) || error?.code === timeoutCode) {
+            throw createApiError(timeoutCode, timeoutMsg);
+          }
+          this.handleOperationError(error, client, deviceConfig, operationType);
+        }
+      }),
+    );
   }
 
   async readHoldingRegisters(address, length, deviceConfig) {
@@ -281,26 +313,16 @@ class ModbusClient extends EventEmitter {
       return this.inflightReads.get(readKey);
     }
 
-    const promise = (async () => {
-      const client = await this.ensureConnection(deviceConfig);
-      this.checkConnection(client, deviceConfig);
-      try {
-        const response = await modbusGlobalLimiter.run(() =>
-          this.withTimeout(
-            reader(client),
-            this.timeout,
-            timeoutMsg,
-            C.MODBUS_READ_TIMEOUT,
-          ),
-        );
+    const promise = this.runFc({
+      deviceConfig,
+      operationType: "read",
+      timeoutMsg,
+      timeoutCode: C.MODBUS_READ_TIMEOUT,
+      execute: async (client) => {
+        const response = await reader(client);
         return response.data;
-      } catch (error) {
-        if (this.isTimeoutError(error) || error?.code === C.MODBUS_READ_TIMEOUT) {
-          throw createApiError(C.MODBUS_READ_TIMEOUT, timeoutMsg);
-        }
-        this.handleOperationError(error, client, deviceConfig, "read");
-      }
-    })().finally(() => {
+      },
+    }).finally(() => {
       if (this.inflightReads.get(readKey) === promise) {
         this.inflightReads.delete(readKey);
       }
@@ -311,75 +333,54 @@ class ModbusClient extends EventEmitter {
   }
 
   async writeCoil(address, value, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
     const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入線圈。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.writeCoil(address, value),
-        this.timeout,
-        timeoutMsg,
-        C.MODBUS_WRITE_TIMEOUT,
-      );
-      // modbus-serial FC5 回傳 { address, state }；舊碼讀 value 會讓 ON 永遠誤判失敗
-      // （Boolean(undefined)===Boolean(true) → false），OFF 卻剛好通過
-      const echoed = response?.state ?? response?.value;
-      if (echoed === undefined) {
-        return response != null;
-      }
-      return Boolean(echoed) === Boolean(value);
-    } catch (error) {
-      if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
-        throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);
-      }
-      this.handleOperationError(error, client, deviceConfig, "write");
-    }
+    return this.runFc({
+      deviceConfig,
+      operationType: "write",
+      timeoutMsg,
+      timeoutCode: C.MODBUS_WRITE_TIMEOUT,
+      execute: async (client) => {
+        const response = await client.writeCoil(address, value);
+        // modbus-serial FC5 回傳 { address, state }；舊碼讀 value 會讓 ON 永遠誤判失敗
+        const echoed = response?.state ?? response?.value;
+        if (echoed === undefined) {
+          return response != null;
+        }
+        return Boolean(echoed) === Boolean(value);
+      },
+    });
   }
 
   async writeCoils(address, values, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
     const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入多個線圈。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.writeCoils(address, values),
-        this.timeout,
-        timeoutMsg,
-        C.MODBUS_WRITE_TIMEOUT,
-      );
-      return response.address === address && response.length === values.length;
-    } catch (error) {
-      if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
-        throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);
-      }
-      this.handleOperationError(error, client, deviceConfig, "write");
-    }
+    return this.runFc({
+      deviceConfig,
+      operationType: "write",
+      timeoutMsg,
+      timeoutCode: C.MODBUS_WRITE_TIMEOUT,
+      execute: async (client) => {
+        const response = await client.writeCoils(address, values);
+        return response.address === address && response.length === values.length;
+      },
+    });
   }
 
-  /** FC16：寫入單一 holding register */
   async writeRegister(address, value, deviceConfig) {
     return this.writeRegisters(address, [value], deviceConfig);
   }
 
-  /** FC16：寫入 holding registers */
   async writeRegisters(address, values, deviceConfig) {
-    const client = await this.ensureConnection(deviceConfig);
-    this.checkConnection(client, deviceConfig);
     const timeoutMsg = `寫入超時: 無法在 ${this.timeout}ms 內寫入暫存器。設備可能無回應或連接已斷開。`;
-    try {
-      const response = await this.withTimeout(
-        client.writeRegisters(address, values),
-        this.timeout,
-        timeoutMsg,
-        C.MODBUS_WRITE_TIMEOUT,
-      );
-      return response.address === address && response.length === values.length;
-    } catch (error) {
-      if (this.isTimeoutError(error) || error?.code === C.MODBUS_WRITE_TIMEOUT) {
-        throw createApiError(C.MODBUS_WRITE_TIMEOUT, timeoutMsg);
-      }
-      this.handleOperationError(error, client, deviceConfig, "write");
-    }
+    return this.runFc({
+      deviceConfig,
+      operationType: "write",
+      timeoutMsg,
+      timeoutCode: C.MODBUS_WRITE_TIMEOUT,
+      execute: async (client) => {
+        const response = await client.writeRegisters(address, values);
+        return response.address === address && response.length === values.length;
+      },
+    });
   }
 
   getStatus(deviceConfig) {
@@ -425,7 +426,6 @@ class ModbusClient extends EventEmitter {
       deviceConfig.port !== undefined &&
       deviceConfig.unitId !== undefined
     ) {
-      // 關閉特定連接
       const key = this.getConnectionKey(
         deviceConfig.host,
         deviceConfig.port,
@@ -438,29 +438,26 @@ class ModbusClient extends EventEmitter {
         this.cleanupConnection(deviceConfig);
         this.emit("closed", { connection: key });
       }
-    } else {
-      // 關閉所有連接
-      const closePromises = [];
-      for (const [key, client] of this.clientConnections.entries()) {
-        if (client.isOpen) {
-          const [host, port, unitId] = key.split(":");
-          closePromises.push(
-            client.close().then(() => {
-              this.cleanupConnection({
-                host,
-                port: parseInt(port, 10),
-                unitId: parseInt(unitId, 10),
-              });
-            }),
-          );
-        }
-      }
-      if (this.client.isOpen) {
-        closePromises.push(this.client.close());
-      }
-      await Promise.all(closePromises);
-      this.emit("closed");
+      return;
     }
+
+    const closePromises = [];
+    for (const [key, client] of this.clientConnections.entries()) {
+      if (client.isOpen) {
+        const [host, port, unitId] = key.split(":");
+        closePromises.push(
+          client.close().then(() => {
+            this.cleanupConnection({
+              host,
+              port: parseInt(port, 10),
+              unitId: parseInt(unitId, 10),
+            });
+          }),
+        );
+      }
+    }
+    await Promise.all(closePromises);
+    this.emit("closed");
   }
 }
 

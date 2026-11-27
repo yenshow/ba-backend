@@ -79,7 +79,7 @@ test("queued work keeps its lane when another lane frees capacity", async () => 
   }
 });
 
-test("batch reads admit up to ten groups and preserve result order", async (t) => {
+test("batch reads admit up to ten devices and preserve result order", async (t) => {
   const deviceRead = deferred();
   const reading = t.mock.method(client, "readHoldingRegisters", async (address) => {
     await deviceRead.wait;
@@ -100,6 +100,68 @@ test("batch reads admit up to ten groups and preserve result order", async (t) =
   assert.equal(results[3].error, "simulated device timeout");
   assert.deepEqual(results[23].data, [23]);
   assert.equal(results.filter((result) => result.ok).length, 23);
+});
+
+test("writes take a limiter seat and serialize behind reads on the same endpoint", async (t) => {
+  const device = { host: "write-admit-fixture", port: 502, unitId: 1 };
+  const readGate = deferred();
+  const order = [];
+  t.mock.method(client, "ensureConnection", async () => ({
+    isOpen: true,
+    readHoldingRegisters: async () => {
+      order.push("read-start");
+      await readGate.wait;
+      order.push("read-end");
+      return { data: [1] };
+    },
+    writeCoil: async () => {
+      order.push("write");
+      return { address: 0, state: true };
+    },
+  }));
+  const reading = client.readHoldingRegisters(0, 1, device);
+  await flush();
+  assert.equal(limiter.getStats().activeCount, 1);
+  const writing = client.writeCoil(0, true, device);
+  await flush();
+  assert.ok(!order.includes("write"));
+  readGate.release();
+  assert.deepEqual(await reading, [1]);
+  assert.equal(await writing, true);
+  assert.deepEqual(order, ["read-start", "read-end", "write"]);
+  await flush();
+  assert.equal(limiter.getStats().activeCount, 0);
+});
+
+test("batch serializes different register types on the same device", async (t) => {
+  const device = { host: "same-device-serial", port: 502, unitId: 1 };
+  const first = deferred();
+  const order = [];
+  const coilRead = t.mock.method(client, "readCoils", async () => {
+    order.push("coil-start");
+    await first.wait;
+    order.push("coil-end");
+    return [true];
+  });
+  const discreteRead = t.mock.method(client, "readDiscreteInputs", async () => {
+    order.push("discrete");
+    return [false];
+  });
+  const done = batch.batchRead([
+    { ...device, registerType: "coil", address: 0 },
+    { ...device, registerType: "discrete", address: 0 },
+  ]);
+  await flush();
+  assert.deepEqual(order, ["coil-start"]);
+  assert.equal(coilRead.mock.callCount(), 1);
+  assert.equal(discreteRead.mock.callCount(), 0);
+  first.release();
+  const results = await done;
+  assert.deepEqual(order, ["coil-start", "coil-end", "discrete"]);
+  assert.equal(results[0].ok, true);
+  assert.equal(results[1].ok, true);
+  assert.deepEqual(results[0].data, [true]);
+  assert.deepEqual(results[1].data, [false]);
 });
 
 test("successful single and multiple coil writes invalidate the coil read cache", async (t) => {
@@ -262,7 +324,7 @@ for (const noCache of [false, true]) {
     let reads = 0;
     t.mock.method(client, "ensureConnection", async () => ({
       isOpen: true,
-      readHoldingRegisters: () => ++reads === 1 ? oldRead.wait : nextRead.wait,
+      readHoldingRegisters: () => (++reads === 1 ? oldRead.wait : nextRead.wait),
     }));
     const device = { host: `invalidation-${noCache}`, port: 502, unitId: 1 };
     const request = { ...device, registerType: "holding", address: 0 };
@@ -272,9 +334,12 @@ for (const noCache of [false, true]) {
     const replacement = batch.batchRead([request]);
     try {
       await flush();
-      assert.equal(reads, 2);
+      // 同端點 FIFO：失效後補讀須等進行中 FC 結束才會開始第二筆
+      assert.equal(reads, 1);
       oldRead.release({ data: [1] });
       assert.deepEqual((await before)[0].data, [1]);
+      await flush();
+      assert.equal(reads, 2);
       const coalesced = batch.batchRead([request]);
       nextRead.release({ data: [2] });
       assert.deepEqual((await replacement)[0].data, [2]);

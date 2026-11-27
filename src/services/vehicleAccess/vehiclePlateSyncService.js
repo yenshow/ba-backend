@@ -7,6 +7,7 @@ const isapiVehicleDeviceService = require("./isapiVehicleDeviceService");
 const { normalizeListTypeToDevice } = require("./isapiVehicleXmlParser");
 const personLicensePlateService = require("../personnel/personLicensePlateService");
 const locationTemporaryPlateService = require("./locationTemporaryPlateService");
+const personSyncJobConflictWait = require("../personnel/personSyncJobConflictWait");
 
 const SYNC_STATUS = {
   SYNCED: "synced",
@@ -294,6 +295,8 @@ async function syncPlatesForLocation(locationId) {
   if (!Number.isFinite(locId)) {
     return { status: SYNC_STATUS.SKIPPED, warnings: [], failures: [] };
   }
+
+  await personSyncJobConflictWait.waitForConflictingPersonSyncJobs(locId);
 
   const target = await loadVehicleAccessTarget(locId);
 
