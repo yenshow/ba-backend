@@ -55,6 +55,15 @@ const run = () => {
     resolveActiveWindow(day, taipeiDate("2026-10-24", "18:00"))?.sessionDate,
     "2026-10-24",
   );
+  assert.equal(
+    resolveActiveWindow(day, taipeiDate("2026-10-23", "20:00")),
+    null,
+    "日班結束時刻起不再活躍",
+  );
+  assert.equal(
+    resolveActiveWindow(day, taipeiDate("2026-10-23", "20:01")),
+    null,
+  );
 };
 
 run();

@@ -138,8 +138,9 @@ const resolveActiveWindow = (rule, now = new Date()) => {
   const parts = taipeiParts(now);
   const overnight = isOvernightWindow(startMin, endMin);
 
+  // 日班：開始含、結束不含（對齊跨日分支 minutes < endMin；結場後勿再 reconcile）
   if (!overnight) {
-    if (parts.minutes < startMin) return null;
+    if (parts.minutes < startMin || parts.minutes >= endMin) return null;
     return {
       sessionDate: parts.date,
       startIso: taipeiInstant(parts.date, startMin),

@@ -413,6 +413,12 @@ const recordRollCallOperationalEvent = (input = {}) => {
   });
 };
 
+/** 人臉成功可否將出勤列改為 present（leave／已 present 不可） */
+const canFacePromoteAttendanceStatus = (status) => {
+  const s = status != null ? String(status) : "";
+  return s !== "present" && s !== "leave";
+};
+
 const applyFaceMatches = async (
   sessionId,
   deviceIds,
@@ -462,12 +468,12 @@ const applyFaceMatches = async (
     const employeeNo = identity.employeeNo;
     if (!employeeNo) continue;
     const row = byNo.get(employeeNo);
-    if (!row || row.status === "present") continue;
+    if (!row || !canFacePromoteAttendanceStatus(row.status)) continue;
     const updated = await db.query(
       `UPDATE included_roll_call_attendance
        SET status = 'present', source = 'face', checked_in_at = ?, event_id = ?
        WHERE id = ?
-         AND status <> 'present'
+         AND status IN ('pending', 'absent')
        RETURNING id`,
       [event.event_time, event.id, row.id],
     );
@@ -1297,6 +1303,57 @@ const setAttendanceLeave = async (
   return getSession(sid, { reconcile: false });
 };
 
+/**
+ * 尚未開場時預覽應到名單（門禁 ∩ 排班；狀態一律 pending／leave）。
+ */
+const getExpectedRosterPreview = async (locationId, ruleId, sessionDate) => {
+  const id = Number(locationId);
+  const rid = Number(ruleId);
+  if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(rid) || rid <= 0) {
+    throwApiError(C.VALIDATION_REQUIRED, "地點或規則無效");
+  }
+  const dateStr = formatPgDate(sessionDate);
+  if (!dateStr) throwApiError(C.VALIDATION_REQUIRED, "日期無效");
+  const {
+    resolveRosterPartition,
+  } = require("./rollCallAssignmentService");
+  const members = await loadLocationMembers(id);
+  const partition = await resolveRosterPartition(id, rid, dateStr, members);
+  const mapRow = (person, status) => {
+    const groupId =
+      person.person_group_id != null &&
+      Number.isFinite(Number(person.person_group_id))
+        ? Number(person.person_group_id)
+        : UNGROUPED_GROUP_ID;
+    return {
+      personId: Number(person.id),
+      employeeNo: person.employee_no != null ? String(person.employee_no) : "",
+      fullName: person.full_name || "",
+      groupId,
+      groupName:
+        groupId === UNGROUPED_GROUP_ID
+          ? UNGROUPED_GROUP_NAME
+          : person.group_name || UNGROUPED_GROUP_NAME,
+      status,
+      source: null,
+      checkedInAt: null,
+      photoUrl: normalizeMediaPath(person.face_url),
+    };
+  };
+  const attendance = [
+    ...partition.working.filter(personHasEmployeeNo).map((p) => mapRow(p, "pending")),
+    ...partition.dayOff.filter(personHasEmployeeNo).map((p) => mapRow(p, "leave")),
+  ];
+  return {
+    locationId: id,
+    ruleId: rid,
+    sessionDate: dateStr,
+    rosterActive: Boolean(partition.rosterActive),
+    expectedCount: partition.working.filter(personHasEmployeeNo).length,
+    attendance,
+  };
+};
+
 module.exports = {
   listRules,
   createRule,
@@ -1306,6 +1363,8 @@ module.exports = {
   getToday,
   resetLocationToday,
   getSession,
+  getExpectedRosterPreview,
+  canFacePromoteAttendanceStatus,
   getHistory,
   getReport,
   setAttendanceLeave,

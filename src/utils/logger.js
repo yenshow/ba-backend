@@ -56,12 +56,18 @@ const normalizeMeta = (meta = {}) => {
   return metaForPrint;
 };
 
+/** WinSW 出貨關閉 .out.log；BA_LOG_TO_STDERR=1 時全部寫 stderr → 只留 .err.log */
+const preferStderr = ["1", "true"].includes(
+  String(process.env.BA_LOG_TO_STDERR || "").toLowerCase(),
+);
+
 const writeLog = (level, consoleFn, message, meta = {}) => {
   if (!shouldLog(level)) return;
   const prefix = formatPrefix(level, meta.module);
   const metaForPrint = normalizeMeta(meta);
   const hasMeta = Object.keys(metaForPrint).length > 0;
-  consoleFn(`${prefix} ${message}`, hasMeta ? metaForPrint : "");
+  const sink = preferStderr ? console.error : consoleFn;
+  sink(`${prefix} ${message}`, hasMeta ? metaForPrint : "");
 };
 
 function error(message, meta = {}) {

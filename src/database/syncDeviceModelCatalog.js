@@ -4,6 +4,8 @@ const { listDeviceModels } = require("../constants/deviceModelCatalog");
  * 僅補入 catalog 中不存在的型號。
  * 現場可能已調整同名型號，因此禁止使用 DO UPDATE 覆寫既有資料。
  * repairDeviceModelCatalogConfig 僅補缺失的 catalog 欄位（如 unitType），不覆寫已有值。
+ *
+ * 須在 ensureArchiveSchema 之後呼叫（依賴 device_models.archived_at）。
  */
 async function syncDeviceModelCatalog(pool) {
   const models = listDeviceModels();

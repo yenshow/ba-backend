@@ -5,7 +5,6 @@ const logger = require("../utils/logger").createLogger("schemaPatches");
 const {
   isValidSensorParameterKey,
 } = require("../constants/environmentParameterCatalog");
-const { syncDeviceModelCatalog, repairDeviceModelCatalogConfig } = require("./syncDeviceModelCatalog");
 const {
   syncEnergyAlertRuleCatalog,
   migrateEnergySettingsToAlertRules,
@@ -1565,8 +1564,7 @@ async function applySchemaPatches(pool) {
   const energyAlertRuleSync = await syncEnergyAlertRuleCatalog(pool);
   const securityAlertRuleSync = await syncSecurityAlertRuleCatalog(pool);
   const migratedSensorModels = await migrateLegacySensorModelConfigs(pool);
-  const deviceModelSync = await syncDeviceModelCatalog(pool);
-  const deviceModelRepair = await repairDeviceModelCatalogConfig(pool);
+  // device_models catalog：見 migrateSchema（ensureArchiveSchema 之後）
   logger.info("schema patches 已套用", {
     module: "schemaPatches",
     clearedResolvedIgnored,
@@ -1575,8 +1573,6 @@ async function applySchemaPatches(pool) {
     energyAlertRuleSync,
     securityAlertRuleSync,
     migratedSensorModels,
-    ...deviceModelSync,
-    ...deviceModelRepair,
   });
 }
 

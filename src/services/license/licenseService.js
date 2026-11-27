@@ -640,10 +640,6 @@ module.exports = {
   FEATURE_KEYS_CENTRAL,
   FEATURE_KEYS_CONSTRUCTION,
   getActiveFeatureKeys,
-  /** @deprecated 請用 getActiveFeatureKeys()；保留舊名稱供少數腳本相容 */
-  get ALL_FEATURE_KEYS() {
-    return getActiveFeatureKeys();
-  },
   getLicenseState,
   setLicenseState,
   resetLicenseState,

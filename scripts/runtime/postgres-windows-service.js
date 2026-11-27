@@ -291,13 +291,19 @@ function stop(productCode) {
   }
 
   let r = run("sc.exe", ["stop", name]);
-  const out = `${r.stdout}\n${r.stderr}`;
-  // 1051：Backend 等仍相依／尚未完全停止 → 等待後重試
-  if (r.status !== 0 && /\b1051\b/.test(out)) {
+  // 1051：Backend 等仍相依／尚未完全停止（常見於 WinSW onfailure 重啟循環）→ 多次重試
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    const out = `${r.stdout}\n${r.stderr}`;
+    if (r.status === 0 || /\b1062\b/.test(out) || /already been stopped/i.test(out)) {
+      break;
+    }
+    if (!/\b1051\b/.test(out)) {
+      break;
+    }
     console.log(
-      `[postgres-svc] ${name} 仍有相依服務，等待後重試停止…`,
+      `[postgres-svc] ${name} 仍有相依服務，等待後重試停止（${attempt}/6）…`,
     );
-    sleepSeconds(4);
+    sleepSeconds(3);
     r = run("sc.exe", ["stop", name]);
   }
 

@@ -137,6 +137,20 @@ router.get(
   }),
 );
 
+/** 尚未開場：預覽應到名單（不建場次） */
+router.get(
+  "/locations/:locationId/expected-roster",
+  disableHttpCache,
+  asyncHandler(async (req, res) => {
+    const preview = await rollCallService.getExpectedRosterPreview(
+      Number(req.params.locationId),
+      Number(req.query.ruleId),
+      req.query.date || req.query.sessionDate,
+    );
+    res.sendSuccess(preview);
+  }),
+);
+
 router.post(
   "/sessions/:id/attendance/:personId/leave",
   requirePermission("system.roll_call.assignment.edit"),

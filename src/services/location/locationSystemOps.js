@@ -2,7 +2,7 @@ const db = require("../../database/db");
 const licenseQuotaService = require("../license/licenseQuotaService");
 const logger = require("../../utils/logger");
 const C = require("../../utils/apiErrorCodes");
-const { createApiError, throwApiError, rethrowIfApiError } = require("../../utils/apiErrors");
+const { throwApiError, rethrowIfApiError } = require("../../utils/apiErrors");
 const shared = require("./locationShared");
 
 const {

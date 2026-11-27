@@ -212,13 +212,6 @@ async function initSchema() {
 
     schemaLogger.info("device_models 表已建立", { module: "initSchema" });
 
-    // 產品型號 catalog：僅補入不存在資料，不覆寫現場既有設定。
-    const deviceModelSync = await syncDeviceModelCatalog(targetPool);
-    schemaLogger.info("device_models：產品型號 catalog 已同步", {
-      module: "initSchema",
-      ...deviceModelSync,
-    });
-
     // 建立 devices 表
     await targetPool.query(`
 			CREATE TABLE IF NOT EXISTS devices (
@@ -1760,6 +1753,14 @@ async function initSchema() {
     schemaLogger.info("multimedia_wall_seats 表已建立", { module: "initSchema" });
 
     await ensureArchiveSchema(targetPool);
+
+    // 產品型號 catalog：僅補入不存在資料，不覆寫現場既有設定（需 archived_at）
+    const deviceModelSync = await syncDeviceModelCatalog(targetPool);
+    schemaLogger.info("device_models：產品型號 catalog 已同步", {
+      module: "initSchema",
+      ...deviceModelSync,
+    });
+
     await targetPool.end();
     schemaLogger.info("資料庫 Schema 初始化完成", { module: "initSchema" });
   } catch (error) {

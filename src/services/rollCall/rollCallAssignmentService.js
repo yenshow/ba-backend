@@ -202,9 +202,44 @@ const collectPartitionPersonIds = (working = [], dayOff = []) => {
 };
 
 /**
- * 將 working／dayOff 寫入單一場次（補插＋對齊；不動 present）。
+ * Soft-remove 場次出勤列（設 roster_removed_at）。
+ * 門禁縮減／清空時須含 present／absent／leave，否則應到仍吃舊快照。
+ * @param {number} sessionId
+ * @param {number[]} [keepPersonIds] 仍保留的 person_id；空＝裁掉該場全部活躍人員列
+ */
+const softRemoveAttendanceOutsideKeep = async (sessionId, keepPersonIds = []) => {
+  const sid = Number(sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) return;
+  const keepIds = [
+    ...new Set(
+      (Array.isArray(keepPersonIds) ? keepPersonIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => Math.trunc(id)),
+    ),
+  ];
+
+  // 勿限 active_persons：封存／非 active 列若不裁仍會計入 included 應到
+  if (keepIds.length === 0) {
+    await db.query(
+      `UPDATE roll_call_attendance SET roster_removed_at = CURRENT_TIMESTAMP
+       WHERE session_id = ? AND roster_removed_at IS NULL`,
+      [sid],
+    );
+    return;
+  }
+  await db.query(
+    `UPDATE roll_call_attendance SET roster_removed_at = CURRENT_TIMESTAMP
+     WHERE session_id = ? AND roster_removed_at IS NULL
+       AND person_id NOT IN (${keepIds.map(() => "?").join(",")})`,
+    [sid, ...keepIds],
+  );
+};
+
+/**
+ * 將 working／dayOff 寫入單一場次（補插＋對齊）。
  * working → pending；dayOff → leave。
- * 最後裁掉不在本分區的舊列（門禁縮減／他班／過期快照殘留）。
+ * **仍在名單者**改休時不動既有 present；**已不在門禁∩本場分區者**一律 soft-remove（含曾 present／absent／leave）。
  */
 const applyRosterPartitionToSession = async (
   sessionId,
@@ -255,23 +290,9 @@ const applyRosterPartitionToSession = async (
     );
   }
 
-  const keepIds = [...collectPartitionPersonIds(working, dayOff)];
-  if (keepIds.length === 0) {
-    await db.query(
-      `UPDATE roll_call_attendance SET roster_removed_at = CURRENT_TIMESTAMP
-       WHERE session_id = ? AND status = 'pending' AND roster_removed_at IS NULL
-       AND person_id IN (SELECT id FROM active_persons)`,
-      [sid],
-    );
-    return;
-  }
-  await db.query(
-    `UPDATE roll_call_attendance SET roster_removed_at = CURRENT_TIMESTAMP
-     WHERE session_id = ? AND roster_removed_at IS NULL
-       AND status = 'pending'
-       AND person_id IN (SELECT id FROM active_persons)
-       AND person_id NOT IN (${keepIds.map(() => "?").join(",")})`,
-    [sid, ...keepIds],
+  await softRemoveAttendanceOutsideKeep(
+    sid,
+    [...collectPartitionPersonIds(working, dayOff)],
   );
 };
 
@@ -452,6 +473,9 @@ const replaceAssignments = async (locationId, body = {}) => {
     });
   }
 
+  const INSERT_CHUNK_SIZE = 500;
+  const assignmentRows = [...unique.values()];
+
   await db.transaction(async (tx) => {
     await tx(
       `DELETE FROM roll_call_assignments
@@ -460,12 +484,19 @@ const replaceAssignments = async (locationId, body = {}) => {
          AND assignment_date <= ?::date`,
       [id, start, end],
     );
-    for (const row of unique.values()) {
+    // 批次 INSERT：避免 200+ 人 × 7 日逐列 round-trip 拖過前端 timeout
+    for (let offset = 0; offset < assignmentRows.length; offset += INSERT_CHUNK_SIZE) {
+      const chunk = assignmentRows.slice(offset, offset + INSERT_CHUNK_SIZE);
+      const placeholders = chunk.map(() => "(?, ?, ?::date, ?)").join(", ");
+      const params = [];
+      for (const row of chunk) {
+        params.push(id, row.personId, row.assignmentDate, row.ruleId);
+      }
       await tx(
         `INSERT INTO roll_call_assignments
           (location_id, person_id, assignment_date, rule_id)
-         VALUES (?, ?, ?::date, ?)`,
-        [id, row.personId, row.assignmentDate, row.ruleId],
+         VALUES ${placeholders}`,
+        params,
       );
     }
     // 標記區間每日為排班日（即使全日休假、無 assignment 列）
@@ -504,6 +535,7 @@ module.exports = {
   filterExpectedMembers,
   partitionRosterMembers,
   collectPartitionPersonIds,
+  softRemoveAttendanceOutsideKeep,
   resolveRosterPartition,
   resolveExpectedMembers,
   applyRosterPartitionToSession,

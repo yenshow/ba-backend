@@ -18,10 +18,20 @@ const {
   isDayHeaderMatch,
   pickDayCell,
   listTemplateWeekStarts,
+  listTemplateDates,
+  formatDayColumnHeader,
+  parseDateFromHeader,
+  dayIndexFromYmd,
+  resolveDayCellValue,
+  findPriorWeekWithData,
+  colorForShiftName,
+  SHIFT_PALETTE,
+  OFF_COLOR,
 } = require("../../src/services/rollCall/rollCallAssignmentImportService");
 const {
   mondayOfYmd,
   addMonthsYmd,
+  addDaysYmd,
 } = require("../../src/services/rollCall/rollCallWindow");
 
 const run = () => {
@@ -124,6 +134,98 @@ const run = () => {
     mondayOfYmd(addMonthsYmd("2026-11-03", 2)),
   );
   assert.ok(weeks.length >= 8 && weeks.length <= 10);
+
+  assert.equal(findPriorWeekWithData("2026-11-16", ["2026-11-02", "2026-11-09"]), "2026-11-09");
+  assert.equal(findPriorWeekWithData("2026-11-02", ["2026-11-09"]), null);
+  assert.equal(findPriorWeekWithData("2026-11-09", []), null);
+
+  assert.equal(dayIndexFromYmd("2026-11-23"), 0);
+  assert.equal(dayIndexFromYmd("2026-11-29"), 6);
+  assert.equal(formatDayColumnHeader("2026-11-23"), "一\n2026-11-23");
+  assert.equal(formatDayColumnHeader("2026-11-29"), "日\n2026-11-29");
+  assert.equal(parseDateFromHeader("一\n2026-11-23"), "2026-11-23");
+  assert.equal(parseDateFromHeader("一 2026-11-23"), "2026-11-23");
+  assert.equal(parseDateFromHeader("2026-11-23"), "2026-11-23");
+  assert.equal(parseDateFromHeader("一"), null);
+  assert.equal(parseDateFromHeader("週起始"), null);
+
+  const dates = listTemplateDates("2026-11-23");
+  assert.equal(dates[0], "2026-11-23");
+  assert.equal(dates[6], "2026-11-29");
+  assert.equal(dates[7], "2026-11-30");
+  assert.equal(dates.length, listTemplateWeekStarts("2026-11-23").length * 7);
+
+  const assignmentByKey = new Map([
+    ["1|2026-11-02", "日班"],
+    ["1|2026-11-03", "晚班"],
+  ]);
+  const weeksWithData = new Set(["2026-11-02"]);
+  // 有資料日帶入；同週缺日＝休；空週沿用上週同星期；無歷史＝第一班別
+  assert.equal(
+    resolveDayCellValue({
+      personId: 1,
+      ymd: "2026-11-02",
+      defaultRule: "日班",
+      assignmentByKey,
+      weeksWithData,
+    }),
+    "日班",
+  );
+  assert.equal(
+    resolveDayCellValue({
+      personId: 1,
+      ymd: "2026-11-04",
+      defaultRule: "日班",
+      assignmentByKey,
+      weeksWithData,
+    }),
+    "休",
+  );
+  assert.equal(
+    resolveDayCellValue({
+      personId: 1,
+      ymd: "2026-11-09",
+      defaultRule: "日班",
+      assignmentByKey,
+      weeksWithData,
+    }),
+    "日班",
+  );
+  assert.equal(
+    resolveDayCellValue({
+      personId: 1,
+      ymd: addDaysYmd("2026-11-09", 1),
+      defaultRule: "日班",
+      assignmentByKey,
+      weeksWithData,
+    }),
+    "晚班",
+  );
+  assert.equal(
+    resolveDayCellValue({
+      personId: 9,
+      ymd: "2026-11-09",
+      defaultRule: "日班",
+      assignmentByKey: new Map(),
+      weeksWithData: new Set(),
+    }),
+    "日班",
+  );
+
+  const ruleNameToIndex = new Map([
+    ["日班", 0],
+    ["晚班", 1],
+  ]);
+  assert.equal(colorForShiftName("休", ruleNameToIndex), OFF_COLOR);
+  assert.equal(colorForShiftName("", ruleNameToIndex), OFF_COLOR);
+  assert.deepEqual(colorForShiftName("日班", ruleNameToIndex), SHIFT_PALETTE[0]);
+  assert.deepEqual(colorForShiftName("晚班", ruleNameToIndex), SHIFT_PALETTE[1]);
+
+  // 舊檔 pickDayCell 略過含完整日期的寬表頭
+  assert.equal(
+    pickDayCell({ "一\n2026-11-23": "晚班", 一: "早班" }, "一"),
+    "早班",
+  );
 
   console.log("rollCallAssignment.test.js OK");
 };

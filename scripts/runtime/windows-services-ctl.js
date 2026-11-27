@@ -139,6 +139,35 @@ function winswUninstall(installRoot, id) {
   return true;
 }
 
+const MANUAL_STOP_MARKER = ".manual-stopped";
+
+function manualStopMarkerPath(installRoot) {
+  return path.join(installRoot, "services", MANUAL_STOP_MARKER);
+}
+
+function setManualStopMarker(installRoot) {
+  try {
+    const servicesDir = path.join(installRoot, "services");
+    fs.mkdirSync(servicesDir, { recursive: true });
+    fs.writeFileSync(
+      manualStopMarkerPath(installRoot),
+      `stoppedAt=${new Date().toISOString()}\n`,
+      "utf8",
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function clearManualStopMarker(installRoot) {
+  try {
+    const p = manualStopMarkerPath(installRoot);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch {
+    // ignore
+  }
+}
+
 function startOne(name) {
   const q = scQuery(name);
   if (!q.exists) {
@@ -154,22 +183,51 @@ function startOne(name) {
   return true;
 }
 
-function stopOne(name) {
+function requestStop(installRoot, name) {
+  const exe = path.join(installRoot, "services", `${name}.exe`);
+  if (fs.existsSync(exe)) {
+    run(exe, ["stop"]);
+  }
+  return run("sc.exe", ["stop", name]);
+}
+
+function stopOne(installRoot, name) {
   const q = scQuery(name);
   if (!q.exists || (!q.running && !q.stopPending)) return true;
-  const r = run("sc.exe", ["stop", name]);
+
+  // WinSW stop 再 sc stop（較能壓住 onfailure 重啟中的 child）
+  let r = requestStop(installRoot, name);
+  const out = `${r.stdout}\n${r.stderr}`;
   if (
     r.status !== 0 &&
-    !/\b1062\b/.test(`${r.stdout}\n${r.stderr}`) &&
-    !/already been stopped/i.test(`${r.stdout}\n${r.stderr}`)
+    !/\b1062\b/.test(out) &&
+    !/already been stopped/i.test(out)
   ) {
     console.log(`[services] stop ${name}：${pgSvc.formatScFailure("stop", r)}`);
+    pgSvc.sleepSeconds(3);
+    r = requestStop(installRoot, name);
   }
+
   if (!pgSvc.waitServiceNotRunning(name, 90_000)) {
-    console.error(`[services] stop ${name} 逾時（仍在執行）`);
+    console.error(`[services] stop ${name} 逾時（仍在執行；WinSW onfailure 可能仍在重啟）`);
     return false;
   }
   return true;
+}
+
+function assertProductServicesStopped(installRoot) {
+  const product = resolveProductCode(installRoot);
+  const names = serviceNames(product);
+  const ids = [names.postgresql, ...winswServiceIds(installRoot)];
+  let ok = true;
+  for (const id of ids) {
+    const q = scQuery(id);
+    if (q.exists && (q.running || q.stopPending)) {
+      console.error(`[services] 停止後仍在執行：${id}`);
+      ok = false;
+    }
+  }
+  return ok;
 }
 
 /** 先停相依端（MediaMTX → Frontend → Backend），再停 PostgreSQL。 */
@@ -272,14 +330,15 @@ function cmdStart(installRoot) {
   for (const id of ordered) {
     if (!startOne(id)) return 1;
   }
+  clearManualStopMarker(installRoot);
   console.log(`[services] start OK`);
   return 0;
 }
 
-function cmdStop(installRoot) {
+function cmdStop(installRoot, { recordManualStop = true } = {}) {
   const product = resolveProductCode(installRoot);
   for (const id of orderedWinswStopIds(installRoot)) {
-    if (!stopOne(id)) {
+    if (!stopOne(installRoot, id)) {
       return 1;
     }
   }
@@ -288,6 +347,12 @@ function cmdStop(installRoot) {
   if (pgSvc.stop(product) !== 0) {
     return 1;
   }
+  if (!assertProductServicesStopped(installRoot)) {
+    return 1;
+  }
+  if (recordManualStop) {
+    setManualStopMarker(installRoot);
+  }
   console.log(`[services] stop OK (${product})`);
   return 0;
 }
@@ -295,7 +360,8 @@ function cmdStop(installRoot) {
 function cmdRestart(installRoot) {
   // 重產 WinSW XML（套用 .env 埠等）後再重啟
   const nodeExe = resolveNode(installRoot);
-  if (cmdStop(installRoot) !== 0) {
+  // restart 內部 stop 不寫手動停機標記（隨後 start 會清標記）
+  if (cmdStop(installRoot, { recordManualStop: false }) !== 0) {
     console.error(`[services] restart：停止階段失敗`);
     return 1;
   }
